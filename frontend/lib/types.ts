@@ -1,0 +1,80 @@
+// Types mirroring the FastAPI response models
+
+export type Site = "ao3" | "ffnet" | "wattpad" | "royalroad" | "spacebattles"
+export type Rating = "G" | "T" | "M" | "E" | "NR"
+export type Status = "complete" | "in_progress" | "abandoned" | "unknown"
+export type Category = "F/F" | "F/M" | "M/M" | "Gen" | "Other" | "Multi"
+export type CrossoverFilter = "include" | "exclude" | "only"
+
+export interface StoryCard {
+  id: string
+  site: Site
+  url: string
+  title: string
+  author: string
+  author_url?: string
+  summary?: string
+  language: string
+  rating?: Rating
+  status: Status
+  word_count: number
+  chapter_count: number
+  chapter_count_total?: number
+  kudos: number
+  hits: number
+  bookmarks: number
+  comments: number
+  fandoms: string[]
+  relationships: string[]
+  characters: string[]
+  tags: string[]
+  warnings: string[]
+  categories: string[]
+  genres: string[]
+  published_at?: string
+  updated_at?: string
+}
+
+export interface SearchResponse {
+  total: number
+  page: number
+  per_page: number
+  results: StoryCard[]
+  sites_searched: string[]
+}
+
+export interface SearchParams {
+  q?: string
+  sites?: string             // "ao3,ffnet"
+  // Include
+  fandoms?: string
+  characters?: string
+  relationships?: string
+  tags?: string
+  ratings?: string
+  warnings?: string
+  categories?: string
+  crossovers?: CrossoverFilter
+  // Exclude
+  exclude_fandoms?: string
+  exclude_characters?: string
+  exclude_relationships?: string
+  exclude_tags?: string
+  exclude_ratings?: string
+  exclude_warnings?: string
+  exclude_categories?: string
+  // More options
+  status?: string
+  language?: string
+  word_count_min?: number
+  word_count_max?: number
+  updated_after?: string
+  updated_before?: string
+  published_after?: string
+  explicit?: boolean
+  search_within?: string
+  // Pagination
+  sort?: string
+  page?: number
+  per_page?: number
+}
