@@ -230,25 +230,21 @@ function StoryCard({ story }: { story: StoryCard }) {
 }
 
 // ── Empty / loading states ────────────────────────────────────────────────────
-function EmptyState() {
+function EmptyState({ onPick }: { onPick: (q: string) => void }) {
+  const examples = [
+    "ship:Draco/Hermione >100k complete",
+    "fandom: Harry Potter marauders wip updated:2y",
+    "fandom: Harry Potter -tag:fluff rating:M complete words:>50k",
+  ]
   return (
     <div className="empty">
       <p className="empty__title">Search the fanfiction internet</p>
       <p className="empty__sub">AO3 · FF.net · FicAlley · and more</p>
       <div className="empty__examples">
         <p className="empty__examples-label">Try:</p>
-        <button className="empty__ex" onClick={() => {
-          const el = document.querySelector<HTMLInputElement>(".search-input")
-          if (el) { el.value = "ship:Draco/Hermione >100k complete"; el.dispatchEvent(new Event("input", {bubbles:true})) }
-        }}>ship:Draco/Hermione &gt;100k complete</button>
-        <button className="empty__ex" onClick={() => {
-          const el = document.querySelector<HTMLInputElement>(".search-input")
-          if (el) { el.value = "fandom: Harry Potter marauders wip updated:2y"; el.dispatchEvent(new Event("input", {bubbles:true})) }
-        }}>fandom: Harry Potter marauders wip updated:2y</button>
-        <button className="empty__ex" onClick={() => {
-          const el = document.querySelector<HTMLInputElement>(".search-input")
-          if (el) { el.value = "fandom: Harry Potter -tag:fluff rating:M complete words:>50k"; el.dispatchEvent(new Event("input", {bubbles:true})) }
-        }}>fandom: Harry Potter -tag:fluff rating:M complete words:&gt;50k</button>
+        {examples.map(ex => (
+          <button key={ex} className="empty__ex" onClick={() => onPick(ex)}>{ex}</button>
+        ))}
       </div>
     </div>
   )
@@ -377,6 +373,18 @@ export default function SearchPage() {
     fetch(`${API_BASE}/api/library/autopoll`, { method: "POST" }).catch(() => {})
   }, [])
 
+  // Apply saved default sites / sort from settings on a fresh landing (no URL params)
+  useEffect(() => {
+    if (rawParams.toString()) return  // user arrived with explicit params; respect them
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+    fetch(`${API_BASE}/api/settings`).then(r => r.json()).then(s => {
+      if (s.default_sites) setSites(s.default_sites.split(",").filter(Boolean))
+      if (s.default_sort) setSort(s.default_sort)
+      if (s.show_explicit === "true") setExplicit(true)
+    }).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -479,6 +487,7 @@ export default function SearchPage() {
         <span className="logo">Fic<em>Atlas</em></span>
         <div className="header__right">
           <Link href="/library" className="header__link">Library</Link>
+          <Link href="/settings" className="header__link">Settings</Link>
           <IndexStatus />
           <label className="toggle-label">
             <input type="checkbox" checked={explicit} onChange={e => setExplicit(e.target.checked)} className="sr-only" />
@@ -701,7 +710,20 @@ export default function SearchPage() {
               {refreshMsg && <div className="alert alert--success" style={{marginBottom:10}}>{refreshMsg}</div>}
 
               <div className="story-list">
-                {results.results.map(s => <StoryCard key={s.id} story={s} />)}
+                {results.results.length === 0 ? (
+                  <div className="no-results">
+                    <p className="no-results__title">No stories matched</p>
+                    <p className="no-results__sub">
+                      Try removing a filter, broadening the word count, or checking a different site.
+                      {sites.includes("ao3") && " You can also pull fresh AO3 results with Refresh above."}
+                    </p>
+                    <p className="no-results__hint">
+                      Have a specific story in mind? Paste its AO3 or FF.net URL into the search bar to import it.
+                    </p>
+                  </div>
+                ) : (
+                  results.results.map(s => <StoryCard key={s.id} story={s} />)
+                )}
               </div>
 
               {totalPages > 1 && (
@@ -718,7 +740,7 @@ export default function SearchPage() {
             </>
           )}
 
-          {!results && !loading && <EmptyState />}
+          {!results && !loading && <EmptyState onPick={(q) => { setQuery(q); setTimeout(() => doSearch(), 0) }} />}
         </main>
       </div>
     </div>

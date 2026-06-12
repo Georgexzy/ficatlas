@@ -62,6 +62,19 @@ export default function LibraryPage() {
     fetch(`${API_BASE}/api/library/hosted`).then(r => r.json()).then(setHosted).catch(() => {})
   }
 
+  const deleteHosted = async (id: string, title: string) => {
+    if (!confirm(`Remove "${title}" from your library? This deletes the stored text.`)) return
+    try {
+      const r = await fetch(`${API_BASE}/api/library/hosted/${id}`, { method: "DELETE" })
+      if (r.ok) {
+        setHosted(h => h.filter(s => s.id !== id))
+        // Also drop any bookmark/progress referencing it
+        const bm = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
+        localStorage.setItem("ficatlas:bookmarks", JSON.stringify(bm.filter((b: any) => b.id !== id)))
+      }
+    } catch {}
+  }
+
   useEffect(() => {
     setBookmarks(JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]"))
     setProgress(JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}"))
@@ -200,6 +213,8 @@ export default function LibraryPage() {
                       {s.tags.includes("user upload") && " · uploaded"}
                     </p>
                   </Link>
+                  <button className="library-item__remove" title="Remove from library"
+                    onClick={() => deleteHosted(s.id, s.title)}>✕</button>
                 </div>
               ))}
         </div>

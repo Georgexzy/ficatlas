@@ -443,3 +443,21 @@ async def autopoll(db: Session = Depends(get_db)):
         return {"ok": True, "fandom": fandom, "found": len(entries), "newly_indexed": inserted}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
+
+
+# ── Delete hosted stories ────────────────────────────────────────────────────
+
+@router.delete("/hosted/{story_id}")
+async def delete_hosted(story_id: str, db: Session = Depends(get_db)):
+    """Delete a hosted story and its chapters from the library."""
+    story = db.query(Story).filter(Story.id == story_id).first()
+    if not story:
+        raise HTTPException(404, "Story not found")
+    # Only allow deleting hosted stories (imports/uploads), not the bulk-indexed archive
+    if not story.is_hosted:
+        raise HTTPException(403, "Can only delete hosted stories (imports and uploads)")
+
+    db.query(Chapter).filter(Chapter.story_id == story.id).delete()
+    db.delete(story)
+    db.commit()
+    return {"ok": True, "deleted": story_id}

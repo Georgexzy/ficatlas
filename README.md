@@ -13,6 +13,9 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **AO3 Atom feed discovery** — the reliable fresh-data path. AO3 publishes per-canonical-tag Atom feeds (`/tags/{tag}/feed.atom`) that aren't rate-limited like search pages. FicAtlas polls these on a schedule for tracked fandoms and auto-indexes new works, with the OTW mirror (`archive.transformativeworks.org`) as a fallback on origin errors. Trigger manually from Library → Import → "Discover fresh AO3 works", or let the scheduler poll every 6h.
 - **URL-paste import** — paste any AO3 or FanFiction.net URL into the search bar and a banner appears with a one-click "Import" button. Pulls the full text via FicHub, bypassing Cloudflare entirely. Works for both sites.
 - **EPUB upload (single or bulk)** — drag and drop one or many .epub files into the library. Up to 100 at a time, each becomes a hosted, searchable, readable story.
+- **Remove hosted stories** — delete any imported or uploaded story (and its stored text) from the library with one click. The bulk-indexed archive can't be deleted this way, only your own hosted additions.
+- **Settings page** — a dedicated `/settings` route to configure the tracked fandom, auto-pull-on-load, live AO3 fetch, default search sites/sort/page-size, explicit visibility, and reader font (serif/sans) and width (narrow/wide). Persisted server-side across restarts.
+- **Reader** — serif or sans typography, narrow or wide column, adjustable text size, a top reading-progress bar, ← → chapter navigation, and auto-saved reading position.
 - **Refresh from AO3** — button on results page triggers a 5-page deep fetch for the current query and adds new stories to the index
 - **In-app reader** for any hosted story (FicAlley stories, FicHub imports, EPUB uploads). Serif typography, ← → chapter nav, A+/A− font sizing, auto-saved reading progress.
 - **Bookmarks, recents, reading progress** — all client-side in localStorage, no account needed
@@ -135,6 +138,8 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 - `GET  /api/library/can-import?url=…` — check if a URL is importable
 - `POST /api/library/poll-feed` — poll an AO3 canonical-tag Atom feed and index new works
 - `GET  /api/library/hosted` — list stories hosted on FicAtlas (imports + uploads)
+- `DELETE /api/library/hosted/{id}` — remove a hosted story and its chapters
+- `GET/POST /api/settings` — read or update runtime settings (DB-backed key/value)
 - `GET  /api/stats/sites` — per-site indexed counts
 - `GET  /api/stats/totals` — index totals (stories, hosted, words)
 - `GET  /api/crawl/jobs` — recent crawl jobs
