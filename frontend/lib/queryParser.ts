@@ -1,7 +1,6 @@
 /**
- * FicAtlas client-side query parser
- * Mirrors backend query_parser.py — parses the search bar in real time
- * so the sidebar filters can reflect what's been typed.
+ * FicAtlas client-side query parser — mirrors backend query_parser.py
+ * Handles unquoted multi-word values: fandom: Harry Potter
  */
 
 export interface ParsedToken {
@@ -47,7 +46,7 @@ const FIELD_ALIASES: Record<string, string> = {
   updated: "updated_after", update: "updated_after", since: "updated_after",
   site: "sites",
   crossover: "crossovers", xover: "crossovers",
-  warn: "warnings", warning: "warnings",
+  warn: "warnings", warning: "warnings", warnings: "warnings",
   category: "categories", cat: "categories",
 }
 
@@ -61,7 +60,8 @@ const RATING_ALIASES: Record<string, string> = {
 
 const STATUS_WORDS: Record<string, string> = {
   complete: "complete", completed: "complete",
-  wip: "in_progress", incomplete: "in_progress", ongoing: "in_progress",
+  wip: "in_progress", incomplete: "in_progress",
+  ongoing: "in_progress", in_progress: "in_progress",
 }
 
 const RATING_WORDS: Record<string, string> = {
@@ -71,24 +71,19 @@ const RATING_WORDS: Record<string, string> = {
 
 function parseWordCount(val: string): [number | null, number | null] {
   val = val.toLowerCase().trim()
-  // range: 100k-200k
   const range = val.match(/^(\d+(?:\.\d+)?)(k|m)-(\d+(?:\.\d+)?)(k|m)$/)
   if (range) {
-    const toN = (v: string, u: string) => Math.round(parseFloat(v) * (u === "k" ? 1000 : 1_000_000))
-    return [toN(range[1], range[2]), toN(range[3], range[4])]
+    const n = (v: string, u: string) => Math.round(parseFloat(v) * (u === "k" ? 1000 : 1_000_000))
+    return [n(range[1], range[2]), n(range[3], range[4])]
   }
-  // operator: >100k
   const op = val.match(/^(>|<|>=|<=)(\d+(?:\.\d+)?)(k|m)\+?$/)
   if (op) {
     const n = Math.round(parseFloat(op[2]) * (op[3] === "k" ? 1000 : 1_000_000))
-    if (op[1] === ">" || op[1] === ">=") return [n, null]
-    return [null, n]
+    return op[1].startsWith(">") ? [n, null] : [null, n]
   }
-  // bare: 100k or 100k+
   const bare = val.match(/^(\d+(?:\.\d+)?)(k|m)\+?$/)
   if (bare) {
-    const n = Math.round(parseFloat(bare[1]) * (bare[2] === "k" ? 1000 : 1_000_000))
-    return [n, null]
+    return [Math.round(parseFloat(bare[1]) * (bare[2] === "k" ? 1000 : 1_000_000)), null]
   }
   return [null, null]
 }
@@ -107,7 +102,13 @@ function parseDate(val: string): string | null {
   return null
 }
 
-const OPERATOR_RE = /(-?)(\w+):(?:"([^"]+)"|(\S+))/gi
+function isWordCountShorthand(word: string): boolean {
+  const w = word.toLowerCase()
+  return /^[><]=?[\d.]+[km]\+?$/.test(w) || /^[\d.]+[km]\+$/.test(w)
+}
+
+// Find all "key:" positions
+const KEY_RE = /(-?)(\w+)\s*:\s*/gi
 
 export function parseQuery(raw: string): ParsedQuery {
   const pq: ParsedQuery = {
@@ -118,33 +119,56 @@ export function parseQuery(raw: string): ParsedQuery {
     updatedAfter: null, crossovers: null, tokens: [],
   }
 
-  let text = raw
-  const consumedSpans: [number, number][] = []
+  if (!raw?.trim()) return pq
 
-  // Reset regex
-  OPERATOR_RE.lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = OPERATOR_RE.exec(raw)) !== null) {
-    const excl = match[1] === "-"
-    const keyRaw = match[2].toLowerCase()
-    const value = match[3] ?? match[4]
+  KEY_RE.lastIndex = 0
+  const keyPositions: Array<{ kstart: number; kend: number; exclude: boolean; canonical: string }> = []
+
+  let m: RegExpExecArray | null
+  while ((m = KEY_RE.exec(raw)) !== null) {
+    const keyRaw = m[2].toLowerCase()
     const canonical = FIELD_ALIASES[keyRaw]
-    if (!canonical) continue
+    if (canonical) {
+      keyPositions.push({ kstart: m.index, kend: m.index + m[0].length, exclude: m[1] === "-", canonical })
+    }
+  }
 
-    consumedSpans.push([match.index, match.index + match[0].length])
-    const token: ParsedToken = { key: canonical, value, exclude: excl, raw: match[0] }
+  const consumed: [number, number][] = []
+  let text = raw
 
-    if (canonical === "fandoms")       { excl ? pq.excFandoms.push(value)       : pq.fandoms.push(value) }
-    else if (canonical === "relationships") { excl ? pq.excRelationships.push(value) : pq.relationships.push(value) }
-    else if (canonical === "characters")   { excl ? pq.excCharacters.push(value)    : pq.characters.push(value) }
-    else if (canonical === "tags")         { excl ? pq.excTags.push(value)           : pq.tags.push(value) }
+  for (let i = 0; i < keyPositions.length; i++) {
+    const { kstart, kend, exclude, canonical } = keyPositions[i]
+    const nextKeyStart = i + 1 < keyPositions.length ? keyPositions[i + 1].kstart : raw.length
+    const available = raw.slice(kend, nextKeyStart)
+
+    let value: string
+    let spanEnd: number
+
+    if (available.startsWith('"')) {
+      const endQ = available.indexOf('"', 1)
+      if (endQ === -1) { value = available.slice(1).trim(); spanEnd = kend + available.length }
+      else { value = available.slice(1, endQ).trim(); spanEnd = kend + endQ + 1 }
+    } else {
+      value = available.trim()
+      spanEnd = nextKeyStart
+    }
+
+    if (!value) continue
+    consumed.push([kstart, spanEnd])
+
+    const tok: ParsedToken = { key: canonical, value, exclude, raw: raw.slice(kstart, spanEnd).trim() }
+
+    if (canonical === "fandoms")       { exclude ? pq.excFandoms.push(value)       : pq.fandoms.push(value) }
+    else if (canonical === "relationships") { exclude ? pq.excRelationships.push(value) : pq.relationships.push(value) }
+    else if (canonical === "characters")   { exclude ? pq.excCharacters.push(value)    : pq.characters.push(value) }
+    else if (canonical === "tags")         { exclude ? pq.excTags.push(value)           : pq.tags.push(value) }
     else if (canonical === "warnings")     { pq.warnings.push(value) }
     else if (canonical === "categories")   { pq.categories.push(value) }
     else if (canonical === "ratings") {
       const mapped = RATING_ALIASES[value.toLowerCase()]
-      if (mapped) { pq.ratings.push(mapped); token.value = mapped }
+      if (mapped) { pq.ratings.push(mapped); tok.value = mapped }
     }
-    else if (canonical === "status")  { pq.status = STATUS_WORDS[value.toLowerCase()] ?? value.toLowerCase(); token.value = pq.status }
+    else if (canonical === "status")  { pq.status = STATUS_WORDS[value.toLowerCase()] ?? value.toLowerCase(); tok.value = pq.status! }
     else if (canonical === "word_count") {
       const [mn, mx] = parseWordCount(value)
       if (mn !== null) pq.wordCountMin = mn
@@ -158,11 +182,11 @@ export function parseQuery(raw: string): ParsedQuery {
       pq.crossovers = ["only","yes","true"].includes(v) ? "only" : ["no","false","exclude"].includes(v) ? "exclude" : "include"
     }
 
-    pq.tokens.push(token)
+    pq.tokens.push(tok)
   }
 
-  // Strip consumed spans
-  for (const [s, e] of [...consumedSpans].sort((a, b) => b[0] - a[0])) {
+  // Strip consumed
+  for (const [s, e] of [...consumed].sort((a, b) => b[0] - a[0])) {
     text = text.slice(0, s) + text.slice(e)
   }
 
@@ -171,8 +195,7 @@ export function parseQuery(raw: string): ParsedQuery {
   for (const word of text.split(/\s+/)) {
     const wl = word.toLowerCase().replace(/[.,]+$/, "")
     if (!wl) continue
-
-    if (/^[><]=?[\d.]+[km]\+?$/.test(wl) || /^[\d.]+[km]\+$/.test(wl)) {
+    if (isWordCountShorthand(wl)) {
       const [mn, mx] = parseWordCount(wl)
       if (mn !== null) pq.wordCountMin = mn
       if (mx !== null) pq.wordCountMax = mx
@@ -192,28 +215,27 @@ export function parseQuery(raw: string): ParsedQuery {
   return pq
 }
 
-/** Convert ParsedQuery back to SearchParams for the API call */
 export function parsedToSearchParams(pq: ParsedQuery): Record<string, any> {
   const csv = (arr: string[]) => arr.length ? arr.join(",") : undefined
   return {
-    q:                     pq.cleanText || undefined,
-    sites:                 csv(pq.sites),
-    fandoms:               csv(pq.fandoms),
-    relationships:         csv(pq.relationships),
-    characters:            csv(pq.characters),
-    tags:                  csv(pq.tags),
-    ratings:               csv(pq.ratings),
-    warnings:              csv(pq.warnings),
-    categories:            csv(pq.categories),
-    exclude_fandoms:       csv(pq.excFandoms),
+    q: pq.cleanText || undefined,
+    sites: csv(pq.sites),
+    fandoms: csv(pq.fandoms),
+    relationships: csv(pq.relationships),
+    characters: csv(pq.characters),
+    tags: csv(pq.tags),
+    ratings: csv(pq.ratings),
+    warnings: csv(pq.warnings),
+    categories: csv(pq.categories),
+    exclude_fandoms: csv(pq.excFandoms),
     exclude_relationships: csv(pq.excRelationships),
-    exclude_characters:    csv(pq.excCharacters),
-    exclude_tags:          csv(pq.excTags),
-    status:                pq.status ?? undefined,
-    language:              pq.language ?? undefined,
-    word_count_min:        pq.wordCountMin ?? undefined,
-    word_count_max:        pq.wordCountMax ?? undefined,
-    updated_after:         pq.updatedAfter ?? undefined,
-    crossovers:            pq.crossovers ?? undefined,
+    exclude_characters: csv(pq.excCharacters),
+    exclude_tags: csv(pq.excTags),
+    status: pq.status ?? undefined,
+    language: pq.language ?? undefined,
+    word_count_min: pq.wordCountMin ?? undefined,
+    word_count_max: pq.wordCountMax ?? undefined,
+    updated_after: pq.updatedAfter ?? undefined,
+    crossovers: pq.crossovers ?? undefined,
   }
 }

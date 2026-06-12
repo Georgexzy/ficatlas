@@ -147,19 +147,32 @@ def _parse_blurb(item) -> Optional[dict]:
         return None
 
 
-async def fetch_live_ao3(params: dict, limit: int = 20) -> list[dict]:
-    url = _build_ao3_url(params)
-    try:
-        async with httpx.AsyncClient(headers=HEADERS, timeout=15, follow_redirects=True) as client:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                return []
-            soup = BeautifulSoup(resp.text, "lxml")
-            results = []
-            for item in soup.select("li.work.blurb")[:limit]:
-                d = _parse_blurb(item)
-                if d:
-                    results.append(d)
-            return results
-    except Exception:
-        return []
+async def fetch_live_ao3(params: dict, limit: int = 20, pages: int = 1) -> list[dict]:
+    """Fetch live AO3 results. `pages` fetches N consecutive result pages and merges them."""
+    all_results: list[dict] = []
+    seen_ids: set[str] = set()
+
+    async with httpx.AsyncClient(headers=HEADERS, timeout=15, follow_redirects=True) as client:
+        for page_num in range(1, pages + 1):
+            page_params = dict(params)
+            page_params["page"] = page_num
+            url = _build_ao3_url(page_params)
+            try:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    break
+                soup = BeautifulSoup(resp.text, "lxml")
+                items = soup.select("li.work.blurb")
+                if not items:
+                    break
+                for item in items:
+                    d = _parse_blurb(item)
+                    if d and d["id"] not in seen_ids:
+                        seen_ids.add(d["id"])
+                        all_results.append(d)
+                        if len(all_results) >= limit:
+                            return all_results
+            except Exception:
+                break
+
+    return all_results

@@ -261,18 +261,28 @@ async def search(
             live_tasks = []
             if "ao3" in active_sites:
                 from live_fetch.ao3_live import fetch_live_ao3
-                live_tasks.append(fetch_live_ao3(live_params, limit=10))
+                # Fetch 3 pages = up to ~60 fresh results per search
+                live_tasks.append(fetch_live_ao3(live_params, limit=60, pages=3))
 
             if live_tasks:
                 raw_results = await asyncio.gather(*live_tasks, return_exceptions=True)
                 indexed_urls = {c.url for c in indexed_cards}
+                live_raw_for_persist: list[dict] = []
                 for batch in raw_results:
                     if isinstance(batch, Exception):
                         continue
                     for item in batch:
+                        live_raw_for_persist.append(item)
                         if item["url"] not in indexed_urls:
                             live_cards.append(_dict_to_card(item))
                             indexed_urls.add(item["url"])
+
+                # Persist live results into the DB so the index grows organically
+                try:
+                    from live_fetch.persist import persist_live_results
+                    persist_live_results(db, live_raw_for_persist)
+                except Exception:
+                    pass  # persistence failure shouldn't break search
         except Exception:
             pass  # live fetch failure is non-fatal
 
