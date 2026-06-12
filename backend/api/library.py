@@ -117,19 +117,9 @@ def parse_epub(data: bytes) -> dict:
 
 # ── Endpoints ───────────────────────────────────────────────────────────────
 
-@router.post("/upload-epub")
-async def upload_epub(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Upload an EPUB into the library as a hosted story."""
-    if not file.filename or not file.filename.lower().endswith(".epub"):
-        raise HTTPException(400, "Must be an .epub file")
-
-    data = await file.read()
-    if len(data) > 50 * 1024 * 1024:
-        raise HTTPException(400, "EPUB too large (50MB max)")
-
+def _ingest_epub_bytes(data: bytes, db: Session) -> dict:
+    """Parse EPUB bytes and insert as a hosted story. Returns dict with id/title/chapters."""
     parsed = parse_epub(data)
-
-    # Create story
     story_id = uuid.uuid4()
     story = Story(
         id=story_id,
@@ -162,8 +152,63 @@ async def upload_epub(file: UploadFile = File(...), db: Session = Depends(get_db
             content=ch["content"],
             word_count=ch["word_count"],
         ))
-    db.commit()
+
     return {"id": str(story.id), "title": parsed["title"], "chapters": len(parsed["chapters"])}
+
+
+@router.post("/upload-epub")
+async def upload_epub(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Upload a single EPUB into the library as a hosted story."""
+    if not file.filename or not file.filename.lower().endswith(".epub"):
+        raise HTTPException(400, "Must be an .epub file")
+
+    data = await file.read()
+    if len(data) > 50 * 1024 * 1024:
+        raise HTTPException(400, "EPUB too large (50MB max)")
+
+    result = _ingest_epub_bytes(data, db)
+    db.commit()
+    return result
+
+
+@router.post("/upload-epubs")
+async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
+    """
+    Bulk upload up to 100 EPUBs at once. Each file processed independently;
+    failures don't roll back the batch. Returns per-file results.
+    """
+    if len(files) > 100:
+        raise HTTPException(400, "Max 100 files per batch")
+
+    succeeded: list[dict] = []
+    failed: list[dict] = []
+
+    for f in files:
+        name = f.filename or "(no name)"
+        try:
+            if not name.lower().endswith(".epub"):
+                failed.append({"filename": name, "error": "Not an .epub file"})
+                continue
+
+            data = await f.read()
+            if len(data) > 50 * 1024 * 1024:
+                failed.append({"filename": name, "error": "Too large (50MB max)"})
+                continue
+
+            result = _ingest_epub_bytes(data, db)
+            db.commit()
+            succeeded.append({"filename": name, **result})
+        except Exception as e:
+            db.rollback()
+            failed.append({"filename": name, "error": str(e)[:200]})
+
+    return {
+        "total":    len(files),
+        "succeeded": len(succeeded),
+        "failed":    len(failed),
+        "results":   succeeded,
+        "errors":    failed,
+    }
 
 
 @router.post("/import-url")

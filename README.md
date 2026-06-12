@@ -11,7 +11,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Quoted or unquoted multi-word values** — `fandom: Harry Potter` reads as the full phrase
 - **Live AO3 fetch** — each search pulls fresh AO3 results (3 pages = ~60 stories per search). These are persisted into the DB so the index grows organically every time anyone searches.
 - **URL-paste import** — paste any AO3 or FanFiction.net URL into the search bar and a banner appears with a one-click "Import" button. Pulls the full text via FicHub, bypassing Cloudflare entirely. Works for both sites.
-- **EPUB upload** — drag and drop any .epub file into the library and it becomes a hosted, searchable, readable story
+- **EPUB upload (single or bulk)** — drag and drop one or many .epub files into the library. Up to 100 at a time, each becomes a hosted, searchable, readable story.
 - **Refresh from AO3** — button on results page triggers a 5-page deep fetch for the current query and adds new stories to the index
 - **In-app reader** for any hosted story (FicAlley stories, FicHub imports, EPUB uploads). Serif typography, ← → chapter nav, A+/A− font sizing, auto-saved reading progress.
 - **Bookmarks, recents, reading progress** — all client-side in localStorage, no account needed
@@ -77,7 +77,7 @@ For newer stories not in the dumps, two paths:
 
 - **Live AO3 fetch**: every search automatically pulls and indexes up to 60 fresh AO3 results. Use the "↻ Refresh from AO3" button on the results page to force a deeper fetch (5 pages) for the current query.
 - **URL paste**: paste any AO3 or FF.net URL into the search bar. A banner appears with a one-click import. The full text is pulled via FicHub.
-- **EPUB upload**: drag an .epub file onto the import zone in the Library page.
+- **EPUB upload**: drag one or many .epub files onto the import zone in the Library page. Bulk uploads process up to 100 files at a time with a progress bar.
 
 ## Search syntax
 
@@ -127,7 +127,8 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 - `GET  /api/search` — main search endpoint with all filters
 - `GET  /api/stories/{id}` — story detail + chapter list
 - `GET  /api/stories/{id}/chapters/{n}` — chapter content for reader
-- `POST /api/library/upload-epub` — multipart EPUB upload
+- `POST /api/library/upload-epub` — multipart EPUB upload (single file)
+- `POST /api/library/upload-epubs` — bulk EPUB upload (up to 100 files, batched)
 - `POST /api/library/import-url` — fetch a URL via FicHub and host it
 - `POST /api/library/refresh-ao3` — wider live fetch for a query
 - `GET  /api/library/can-import?url=…` — check if a URL is importable

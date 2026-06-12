@@ -66,24 +66,64 @@ export default function LibraryPage() {
     }
   }
 
-  const uploadEpub = async (file: File) => {
-    setImporting(true); setImportError(null); setImportMsg(null)
-    try {
-      const fd = new FormData()
-      fd.append("file", file)
-      const r = await fetch(`${API_BASE}/api/library/upload-epub`, { method: "POST", body: fd })
-      if (!r.ok) {
-        const err = await r.text()
-        throw new Error(err || `HTTP ${r.status}`)
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null)
+  const [uploadErrors, setUploadErrors] = useState<{ filename: string; error: string }[]>([])
+
+  const uploadEpubs = async (fileList: FileList | File[]) => {
+    const files = Array.from(fileList).filter(f => f.name.toLowerCase().endsWith(".epub"))
+    if (files.length === 0) {
+      setImportError("No .epub files found")
+      return
+    }
+    setImporting(true); setImportError(null); setImportMsg(null); setUploadErrors([])
+
+    // Single file uses the single endpoint for simpler error response
+    if (files.length === 1) {
+      try {
+        const fd = new FormData()
+        fd.append("file", files[0])
+        const r = await fetch(`${API_BASE}/api/library/upload-epub`, { method: "POST", body: fd })
+        if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`)
+        const data = await r.json()
+        setImportMsg(`Uploaded "${data.title}" (${data.chapters} chapters).`)
+      } catch (e: any) {
+        setImportError(e.message || "Upload failed")
+      } finally {
+        setImporting(false)
       }
-      const data = await r.json()
-      setImportMsg(`Uploaded "${data.title}" (${data.chapters} chapters).`)
+      return
+    }
+
+    // Bulk: chunk into batches of 25 so the progress bar moves and we don't timeout on giant uploads
+    const CHUNK = 25
+    let totalSucceeded = 0
+    const allErrors: { filename: string; error: string }[] = []
+    setUploadProgress({ done: 0, total: files.length })
+
+    try {
+      for (let i = 0; i < files.length; i += CHUNK) {
+        const batch = files.slice(i, i + CHUNK)
+        const fd = new FormData()
+        batch.forEach(f => fd.append("files", f))
+        const r = await fetch(`${API_BASE}/api/library/upload-epubs`, { method: "POST", body: fd })
+        if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`)
+        const data = await r.json()
+        totalSucceeded += data.succeeded
+        if (data.errors?.length) allErrors.push(...data.errors)
+        setUploadProgress({ done: Math.min(i + CHUNK, files.length), total: files.length })
+      }
+      setImportMsg(`Imported ${totalSucceeded} of ${files.length} EPUBs.`)
+      setUploadErrors(allErrors)
     } catch (e: any) {
-      setImportError(e.message || "Upload failed")
+      setImportError(e.message || "Bulk upload failed")
     } finally {
       setImporting(false)
+      setTimeout(() => setUploadProgress(null), 3000)
     }
   }
+
+  // Backwards-compatible single-file wrapper
+  const uploadEpub = (file: File) => uploadEpubs([file])
 
   return (
     <div className="library-shell">
@@ -188,15 +228,15 @@ export default function LibraryPage() {
               onDrop={e => {
                 e.preventDefault()
                 setDragOver(false)
-                const f = e.dataTransfer.files?.[0]
-                if (f && f.name.toLowerCase().endsWith(".epub")) uploadEpub(f)
-                else setImportError("Drop a .epub file")
+                if (e.dataTransfer.files?.length) uploadEpubs(e.dataTransfer.files)
+                else setImportError("Drop one or more .epub files")
               }}
             >
               <input
                 type="file"
                 accept=".epub"
-                onChange={e => e.target.files?.[0] && uploadEpub(e.target.files[0])}
+                multiple
+                onChange={e => e.target.files && uploadEpubs(e.target.files)}
                 disabled={importing}
                 style={{ display: "none" }}
               />
@@ -207,14 +247,34 @@ export default function LibraryPage() {
                     ? "Uploading…"
                     : dragOver
                       ? "Drop to upload"
-                      : <>Drag an EPUB here<br /><span className="import-drop__sub">or click to choose</span></>}
+                      : <>Drag one or more EPUBs here<br /><span className="import-drop__sub">or click to choose · up to 100 at once</span></>}
                 </span>
               </div>
             </label>
           </section>
 
+          {uploadProgress && (
+            <div className="upload-progress">
+              <div className="upload-progress__bar">
+                <div className="upload-progress__fill" style={{ width: `${(uploadProgress.done / uploadProgress.total) * 100}%` }} />
+              </div>
+              <p className="upload-progress__text">{uploadProgress.done} / {uploadProgress.total} files</p>
+            </div>
+          )}
+
           {importMsg   && <div className="alert alert--success">{importMsg}</div>}
           {importError && <div className="alert alert--error">{importError}</div>}
+
+          {uploadErrors.length > 0 && (
+            <details className="upload-errors">
+              <summary>{uploadErrors.length} file{uploadErrors.length === 1 ? "" : "s"} failed</summary>
+              <ul>
+                {uploadErrors.map((e, i) => (
+                  <li key={i}><code>{e.filename}</code> — {e.error}</li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
     </div>
