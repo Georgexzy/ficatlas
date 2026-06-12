@@ -66,46 +66,75 @@ def parse_epub(data: bytes) -> dict:
 
     # Find chapter HTML files in reading order from <spine>
     spine_ids = re.findall(r'<itemref[^>]*idref="([^"]+)"', opf)
+
+    # Parse <item> tags — attributes can be in ANY order, so extract id and href separately
     items = {}
-    for m in re.finditer(r'<item[^>]*id="([^"]+)"[^>]*href="([^"]+)"', opf):
-        items[m.group(1)] = m.group(2)
+    for item_tag in re.findall(r'<item\b[^>]*>', opf):
+        id_m   = re.search(r'\bid="([^"]+)"', item_tag)
+        href_m = re.search(r'\bhref="([^"]+)"', item_tag)
+        if id_m and href_m:
+            items[id_m.group(1)] = href_m.group(1)
 
     base_dir = os.path.dirname(opf_path)
     chapters = []
-    for idx, sid in enumerate(spine_ids):
-        href = items.get(sid)
-        if not href: continue
-        full_path = os.path.join(base_dir, href) if base_dir else href
-        full_path = full_path.replace("\\", "/").replace("./", "")
-        try:
-            html = z.read(full_path).decode("utf-8", errors="ignore")
-        except KeyError:
-            # Try variations
+
+    # Build the ordered list of hrefs to read
+    ordered_hrefs = []
+    if spine_ids and items:
+        for sid in spine_ids:
+            if sid in items:
+                ordered_hrefs.append(items[sid])
+
+    # Fallback: if spine parsing yielded nothing, read all xhtml/html files in zip order
+    if not ordered_hrefs:
+        ordered_hrefs = [n for n in names
+                         if n.lower().endswith((".xhtml", ".html", ".htm"))
+                         and "nav" not in n.lower() and "toc" not in n.lower()]
+
+    for idx, href in enumerate(ordered_hrefs):
+        # Resolve the file inside the zip
+        html = None
+        candidates = [
+            os.path.join(base_dir, href).replace("\\", "/").replace("./", "") if base_dir else href,
+            href,
+        ]
+        for cand in candidates:
+            try:
+                html = z.read(cand).decode("utf-8", errors="ignore")
+                break
+            except KeyError:
+                continue
+        if html is None:
+            # Last resort: suffix match
             for n in names:
-                if n.endswith(href):
+                if n.endswith(href.split("/")[-1]):
                     html = z.read(n).decode("utf-8", errors="ignore")
                     break
-            else:
-                continue
+        if html is None:
+            continue
 
         # Extract body content
         body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
         body = body_match.group(1) if body_match else html
 
         # Pull chapter title
-        title_match = re.search(r"<h\d[^>]*>([^<]+)</h\d>", body)
-        ch_title = title_match.group(1).strip() if title_match else None
+        title_match = re.search(r"<h\d[^>]*>(.*?)</h\d>", body, re.DOTALL)
+        ch_title = re.sub(r"<[^>]+>", "", title_match.group(1)).strip() if title_match else None
 
-        # Strip scripts/styles/css
-        body = re.sub(r"<script.*?</script>", "", body, flags=re.DOTALL)
-        body = re.sub(r"<style.*?</style>", "", body, flags=re.DOTALL)
+        # Strip scripts/styles
+        body = re.sub(r"<script.*?</script>", "", body, flags=re.DOTALL | re.IGNORECASE)
+        body = re.sub(r"<style.*?</style>", "", body, flags=re.DOTALL | re.IGNORECASE)
 
         # Word count
         text_only = re.sub(r"<[^>]+>", " ", body)
         words = len(text_only.split())
 
+        # Skip near-empty files (covers, nav pages)
+        if words < 10:
+            continue
+
         chapters.append({
-            "number": idx + 1, "title": ch_title, "content": body, "word_count": words,
+            "number": len(chapters) + 1, "title": ch_title, "content": body, "word_count": words,
         })
 
     total_words = sum(c["word_count"] for c in chapters)
@@ -309,3 +338,64 @@ async def can_import(url: str):
     if "fanfiction.net/s/" in u or "fanfiction.net/r/" in u:
         return {"importable": True, "site": "ffnet", "url": u}
     return {"importable": False}
+
+
+@router.get("/hosted")
+async def list_hosted(limit: int = 100, offset: int = 0, db: Session = Depends(get_db)):
+    """List all stories hosted on FicAtlas (EPUB uploads + URL imports), newest first."""
+    q = (db.query(Story)
+         .filter(Story.is_hosted == True)
+         .order_by(Story.indexed_at.desc())
+         .offset(offset).limit(min(limit, 200)))
+    rows = q.all()
+    return [
+        {
+            "id": str(s.id),
+            "title": s.title,
+            "author": s.author or "Unknown",
+            "site": s.site.value if s.site else "ao3",
+            "word_count": s.word_count or 0,
+            "chapter_count": s.chapter_count or 0,
+            "summary": s.summary,
+            "tags": s.tags or [],
+            "indexed_at": s.indexed_at.isoformat() if s.indexed_at else None,
+        }
+        for s in rows
+    ]
+
+
+# ── AO3 Atom feed discovery (the reliable fresh-data path) ───────────────────
+
+@router.post("/poll-feed")
+async def poll_feed(
+    fandom: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Resolve a fandom name to its AO3 canonical tag feed, poll it, and index new works.
+    This is the RELIABLE fresh-AO3 path — feeds aren't rate-limited like search pages.
+    """
+    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed
+    from live_fetch.persist import persist_live_results
+    import httpx
+
+    async with httpx.AsyncClient(
+        headers={"User-Agent": "FicAtlasBot/1.0 (+fanfic discovery)"},
+        timeout=20, follow_redirects=True
+    ) as client:
+        tag_id = await resolve_tag_id(client, fandom)
+
+    if not tag_id:
+        return {"ok": False, "error": f"Couldn't resolve a canonical AO3 tag feed for '{fandom}'. "
+                                       "Only canonical fandom/character/relationship tags have feeds."}
+
+    entries = await fetch_feed(tag_id, limit=25)
+    inserted = persist_live_results(db, entries)
+
+    return {
+        "ok": True,
+        "fandom": fandom,
+        "tag_id": tag_id,
+        "found": len(entries),
+        "newly_indexed": inserted,
+    }

@@ -10,6 +10,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Operator syntax** in any order: `fandom: Harry Potter ship:Draco/Hermione >100k complete updated:2y -tag:fluff`
 - **Quoted or unquoted multi-word values** — `fandom: Harry Potter` reads as the full phrase
 - **Live AO3 fetch** — each search pulls fresh AO3 results (3 pages = ~60 stories per search). These are persisted into the DB so the index grows organically every time anyone searches.
+- **AO3 Atom feed discovery** — the reliable fresh-data path. AO3 publishes per-canonical-tag Atom feeds (`/tags/{tag}/feed.atom`) that aren't rate-limited like search pages. FicAtlas polls these on a schedule for tracked fandoms and auto-indexes new works, with the OTW mirror (`archive.transformativeworks.org`) as a fallback on origin errors. Trigger manually from Library → Import → "Discover fresh AO3 works", or let the scheduler poll every 6h.
 - **URL-paste import** — paste any AO3 or FanFiction.net URL into the search bar and a banner appears with a one-click "Import" button. Pulls the full text via FicHub, bypassing Cloudflare entirely. Works for both sites.
 - **EPUB upload (single or bulk)** — drag and drop one or many .epub files into the library. Up to 100 at a time, each becomes a hosted, searchable, readable story.
 - **Refresh from AO3** — button on results page triggers a 5-page deep fetch for the current query and adds new stories to the index
@@ -132,6 +133,8 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 - `POST /api/library/import-url` — fetch a URL via FicHub and host it
 - `POST /api/library/refresh-ao3` — wider live fetch for a query
 - `GET  /api/library/can-import?url=…` — check if a URL is importable
+- `POST /api/library/poll-feed` — poll an AO3 canonical-tag Atom feed and index new works
+- `GET  /api/library/hosted` — list stories hosted on FicAtlas (imports + uploads)
 - `GET  /api/stats/sites` — per-site indexed counts
 - `GET  /api/stats/totals` — index totals (stories, hosted, words)
 - `GET  /api/crawl/jobs` — recent crawl jobs
@@ -139,9 +142,9 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 
 ## Known limitations
 
-- **FF.net live search and bulk crawling from cloud IPs** — Cloudflare blocks everything. URL-based import works through FicHub.
-- **AO3 scheduled crawler** — also Cloudflare-blocked. Single-page live search and direct URL fetches work.
-- **No accounts** — bookmarks, recents, and reading progress are localStorage only. To make them sync across devices, an auth system would be needed.
+- **FF.net live search and bulk crawling from cloud IPs** — FanFiction.net runs an aggressive interactive Cloudflare challenge that blocks server-side scraping from datacenter IPs entirely. There is no clean server-side path. URL-based import works through FicHub (which solves the challenge on its end). For bulk freshness you'd need a residential-proxy browser API.
+- **AO3 direct scraping** — AO3 doesn't use an interactive challenge; it rate-limits by IP and request rate, returning 418/429 when throttled and 525/503 when its own origin is overloaded (common through 2025 due to infrastructure strain). The fix isn't a Cloudflare "bypass" — it's politeness: a `bot` user-agent, request delays, weekday off-peak scheduling, and the mirror-domain fallback. FicAtlas uses AO3's **Atom feeds** rather than scraping search pages, since feeds aren't throttled the same way. Direct crawlers are disabled by default (`ENABLE_DIRECT_CRAWL=false`).
+- **No accounts** — bookmarks, recents, and reading progress are localStorage only.
 
 ## Acknowledgements
 

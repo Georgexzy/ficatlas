@@ -82,25 +82,29 @@ async def _run_crawl(site: str):
 def start_scheduler():
     """Register jobs and start the scheduler. Call once at app startup."""
 
+    # Feed polling is the reliable fresh-AO3 path. Runs on a schedule.
+    FEED_INTERVAL_HOURS = float(os.getenv("FEED_INTERVAL_HOURS", "6"))
     scheduler.add_job(
-        _run_crawl,
-        trigger=IntervalTrigger(hours=AO3_INTERVAL_HOURS),
-        args=["ao3"],
-        id="crawl_ao3",
-        replace_existing=True,
-        max_instances=1,        # never overlap
-        misfire_grace_time=300, # ok to be 5 min late
-    )
-
-    scheduler.add_job(
-        _run_crawl,
-        trigger=IntervalTrigger(hours=FFNET_INTERVAL_HOURS),
-        args=["ffnet"],
-        id="crawl_ffnet",
+        _run_feed_poll,
+        trigger=IntervalTrigger(hours=FEED_INTERVAL_HOURS),
+        id="poll_feeds",
         replace_existing=True,
         max_instances=1,
-        misfire_grace_time=300,
+        misfire_grace_time=600,
     )
+
+    # Legacy direct crawlers (Cloudflare-blocked from VPS IPs) — off unless explicitly enabled
+    if os.getenv("ENABLE_DIRECT_CRAWL", "false").lower() == "true":
+        scheduler.add_job(
+            _run_crawl, trigger=IntervalTrigger(hours=AO3_INTERVAL_HOURS),
+            args=["ao3"], id="crawl_ao3", replace_existing=True,
+            max_instances=1, misfire_grace_time=300,
+        )
+        scheduler.add_job(
+            _run_crawl, trigger=IntervalTrigger(hours=FFNET_INTERVAL_HOURS),
+            args=["ffnet"], id="crawl_ffnet", replace_existing=True,
+            max_instances=1, misfire_grace_time=300,
+        )
 
     scheduler.start()
 
@@ -111,15 +115,55 @@ def start_scheduler():
             _next_run[site] = job.next_run_time
 
     if RUN_ON_STARTUP:
-        logger.info("[scheduler] Running startup crawls...")
-        asyncio.create_task(_run_crawl("ao3"))
-        asyncio.create_task(_run_crawl("ffnet"))
+        logger.info("[scheduler] Running startup feed poll...")
+        asyncio.create_task(_run_feed_poll())
 
     logger.info(
-        f"[scheduler] Started — AO3 every {AO3_INTERVAL_HOURS}h, "
-        f"FF.net every {FFNET_INTERVAL_HOURS}h, "
-        f"run on startup: {RUN_ON_STARTUP}"
+        f"[scheduler] Started — feed polling every {FEED_INTERVAL_HOURS}h, "
+        f"direct crawl enabled: {os.getenv('ENABLE_DIRECT_CRAWL', 'false')}"
     )
+
+
+# Fandoms to auto-poll feeds for. Override via TRACKED_FANDOMS env (comma-separated).
+TRACKED_FANDOMS = [
+    f.strip() for f in os.getenv(
+        "TRACKED_FANDOMS",
+        "Harry Potter - J. K. Rowling"
+    ).split(",") if f.strip()
+]
+
+
+async def _run_feed_poll():
+    """Poll AO3 Atom feeds for tracked fandoms and index new works."""
+    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed
+    from live_fetch.persist import persist_live_results
+    from db.session import db_session
+    import httpx
+
+    logger.info(f"[scheduler] Polling AO3 feeds for {len(TRACKED_FANDOMS)} fandoms...")
+    total_new = 0
+
+    async with httpx.AsyncClient(
+        headers={"User-Agent": "FicAtlasBot/1.0 (+fanfic discovery)"},
+        timeout=20, follow_redirects=True
+    ) as client:
+        for fandom in TRACKED_FANDOMS:
+            try:
+                tag_id = await resolve_tag_id(client, fandom)
+                if not tag_id:
+                    logger.warning(f"[scheduler] No feed for '{fandom}'")
+                    continue
+                await asyncio.sleep(4)  # polite delay
+                entries = await fetch_feed(tag_id, limit=25)
+                with db_session() as db:
+                    new = persist_live_results(db, entries)
+                total_new += new
+                logger.info(f"[scheduler] {fandom}: {len(entries)} found, {new} new")
+                await asyncio.sleep(4)
+            except Exception as e:
+                logger.warning(f"[scheduler] Feed poll failed for '{fandom}': {e}")
+
+    logger.info(f"[scheduler] Feed poll done — {total_new} new works indexed")
 
 
 def stop_scheduler():
