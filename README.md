@@ -1,142 +1,154 @@
 # FicAtlas
 
-Fanfiction discovery platform — search AO3, FF.net, and more in one place.
+A unified search engine for fanfiction across multiple archives — AO3, FanFiction.net, FicAlley, and any user-supplied EPUB.
+
+One search bar over a single index spanning multiple sites, with AO3-parity filters, a clean reader for stories hosted directly, and one-click import for fresh stories from any URL.
+
+## What works today
+
+- **Unified search** across AO3, FanFiction.net, and FicAlley with one query bar
+- **Operator syntax** in any order: `fandom: Harry Potter ship:Draco/Hermione >100k complete updated:2y -tag:fluff`
+- **Quoted or unquoted multi-word values** — `fandom: Harry Potter` reads as the full phrase
+- **Live AO3 fetch** — each search pulls fresh AO3 results (3 pages = ~60 stories per search). These are persisted into the DB so the index grows organically every time anyone searches.
+- **URL-paste import** — paste any AO3 or FanFiction.net URL into the search bar and a banner appears with a one-click "Import" button. Pulls the full text via FicHub, bypassing Cloudflare entirely. Works for both sites.
+- **EPUB upload** — drag and drop any .epub file into the library and it becomes a hosted, searchable, readable story
+- **Refresh from AO3** — button on results page triggers a 5-page deep fetch for the current query and adds new stories to the index
+- **In-app reader** for any hosted story (FicAlley stories, FicHub imports, EPUB uploads). Serif typography, ← → chapter nav, A+/A− font sizing, auto-saved reading progress.
+- **Bookmarks, recents, reading progress** — all client-side in localStorage, no account needed
+- **Keyboard shortcuts** — `/` to focus search, `Esc` to close help, `← →` to navigate chapters, `+ −` to resize reader text
+- **Index status widget** — header button shows per-site counts and growth over time
+- **Wayback fallback** — every FicAlley story card includes a Wayback Machine link as backup since the original site is offline
 
 ## Stack
 
-| Layer     | Tech |
-|-----------|------|
-| Frontend  | Next.js 15, TypeScript, Tailwind CSS |
-| Backend   | Python, FastAPI |
-| Database  | PostgreSQL 16 |
-| Crawlers  | httpx + BeautifulSoup4 |
+- **Backend** — FastAPI · SQLAlchemy · PostgreSQL 16 · APScheduler · httpx · BeautifulSoup4
+- **Frontend** — Next.js 15 · TypeScript · Tailwind base + custom editorial CSS
+- **External services** — FicHub (cross-archive download API)
+- **Data sources** — AO3 2021 official CSV dump · FanFiction.net 2015 Archive.org SQLite · Unofficial FicAlley pg_dump · Live fetching for freshness
 
-## Project Structure
-
-```
-ficatlas/
-├── backend/
-│   ├── main.py              # FastAPI app entry point
-│   ├── api/
-│   │   ├── search.py        # Unified search endpoint (full AO3-parity filters)
-│   │   ├── stories.py       # Story detail endpoint
-│   │   └── crawl.py         # Crawl trigger + job management
-│   ├── models/
-│   │   └── story.py         # SQLAlchemy models (Story, CrawlJob)
-│   ├── db/
-│   │   └── session.py       # Database session management
-│   ├── crawlers/
-│   │   ├── base.py          # BaseCrawler (rate limiting, upsert, retries)
-│   │   ├── ao3.py           # AO3 adapter
-│   │   └── ffnet.py         # FF.net adapter
-│   ├── init_db.py           # One-time DB setup + index creation
-│   └── requirements.txt
-├── frontend/
-│   ├── app/
-│   │   ├── page.tsx         # Main search UI (sidebar filters + results)
-│   │   ├── layout.tsx
-│   │   └── globals.css      # Dark editorial theme
-│   └── lib/
-│       ├── types.ts         # TypeScript types
-│       └── api.ts           # API client + formatters + constants
-└── docker-compose.yml
-```
-
-## Quick Start
-
-### With Docker (recommended)
+## Quick start
 
 ```bash
-docker-compose up
+git clone https://github.com/Georgexzy/ficatlas.git
+cd ficatlas
+docker compose up --build
+docker compose exec backend python init_db.py
 ```
 
-Then open http://localhost:3000
+Open <http://localhost:3000>. API docs at <http://localhost:8000/docs>.
 
-### Manual
+## Importing data
 
-**Database**
+### FicAlley (≈30k Harry Potter stories with full text)
+
 ```bash
-createdb ficatlas
-DATABASE_URL=postgresql://localhost/ficatlas python backend/init_db.py
+# Copy the FicAlley pg_dump folder into the db container:
+docker cp /path/to/faarchive ficatlas-db-1:/tmp/dump
+
+# Restore into a temp database:
+docker compose exec -e PGPASSWORD=ficatlas db bash -c '
+  psql -U ficatlas -d postgres -c "DROP DATABASE IF EXISTS ficalley_tmp;"
+  psql -U ficatlas -d postgres -c "CREATE DATABASE ficalley_tmp;"
+  psql -U ficatlas -d postgres -c "DO \$\$ BEGIN CREATE ROLE frank; EXCEPTION WHEN OTHERS THEN NULL; END \$\$;"
+  pg_restore -U ficatlas -d ficalley_tmp --no-owner --no-acl /tmp/dump
+'
+
+# Run the importer:
+docker compose exec backend python fictionalley_importer.py
 ```
 
-**Backend**
+### AO3 (2021 official dump, metadata for ~5M works)
+
 ```bash
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload
-# API at http://localhost:8000
-# Docs at http://localhost:8000/docs
+docker compose exec backend python ao3_dump_importer.py --fandom "Harry Potter" --limit 50000
+# or full import:
+docker compose exec backend python ao3_dump_importer.py
 ```
 
-**Frontend**
+### FanFiction.net (2015 Archive.org SQLite dump)
+
 ```bash
-cd frontend
-npm install
-npm run dev
-# App at http://localhost:3000
+docker compose exec backend python ffnet_sqlite_importer.py --download
 ```
 
-## API
+### Live & user-driven imports
 
-### Search
+For newer stories not in the dumps, two paths:
+
+- **Live AO3 fetch**: every search automatically pulls and indexes up to 60 fresh AO3 results. Use the "↻ Refresh from AO3" button on the results page to force a deeper fetch (5 pages) for the current query.
+- **URL paste**: paste any AO3 or FF.net URL into the search bar. A banner appears with a one-click import. The full text is pulled via FicHub.
+- **EPUB upload**: drag an .epub file onto the import zone in the Library page.
+
+## Search syntax
+
+| Example | Meaning |
+|---------|---------|
+| `harry potter slow burn` | Free text across title/summary/fandoms/tags/author |
+| `fandom: Harry Potter` | Filter — unquoted multi-word |
+| `fandom:"Harry Potter"` | Quoted equivalent |
+| `ship:Draco/Hermione` | Relationship (also `pairing:`, `rel:`) |
+| `char: Hermione Granger` | Character |
+| `tag: slow burn` | Additional tag |
+| `rating:M` | G / T / M / E / NR |
+| `status:complete` | complete / wip / ongoing |
+| `>100k` `<50k` `100k-200k` | Word count shorthand |
+| `wc:>100k` `words:200k+` | Word count operator |
+| `updated:1y` `since:2024` | Date filters |
+| `lang:French` | Language |
+| `site:ao3` | Restrict to one site |
+| `-tag:fluff` | Exclude (prefix any operator with `-`) |
+| `complete` `wip` `mature` | Standalone status/rating words |
+| `https://archiveofourown.org/works/12345` | Paste a URL to import the story |
+
+## Architecture
+
 ```
-GET /api/search
+┌─────────────────────────────────────┐
+│  Next.js frontend (port 3000)       │
+│  Search · Reader · Library          │
+└──────────────┬──────────────────────┘
+               │ /api
+┌──────────────▼──────────────────────┐
+│  FastAPI backend (port 8000)        │
+│  search · stories · library · stats │
+│  + crawl scheduler (APScheduler)    │
+└──────────────┬──────────────────────┘
+               │
+┌──────────────▼──────────────────────┐
+│  PostgreSQL 16                      │
+│  stories · chapters · crawl_jobs    │
+└─────────────────────────────────────┘
 ```
 
-**Include filters**
-| Param | Type | Description |
-|-------|------|-------------|
-| `q` | string | Free-text search |
-| `sites` | csv | `ao3,ffnet,wattpad` |
-| `fandoms` | csv | Include fandoms |
-| `characters` | csv | Include characters |
-| `relationships` | csv | Include pairings |
-| `tags` | csv | Include additional tags |
-| `ratings` | csv | `G,T,M,E,NR` |
-| `warnings` | csv | Include archive warnings |
-| `categories` | csv | `F/F,F/M,M/M,Gen,Multi,Other` |
-| `crossovers` | string | `include` (default) / `exclude` / `only` |
+Bulk indexing is one-time per source via the importers. Day-to-day, the live-fetch module hits AO3's search pages on demand for freshness and persists results into the DB. FicHub bridges Cloudflare for AO3/FFnet imports.
 
-**Exclude filters** — same fields prefixed `exclude_`
+## API endpoints
 
-**More options**
-| Param | Type | Description |
-|-------|------|-------------|
-| `status` | csv | `complete,in_progress,abandoned` |
-| `language` | string | e.g. `English` |
-| `word_count_min` | int | Minimum word count |
-| `word_count_max` | int | Maximum word count |
-| `updated_after` | date | ISO date e.g. `2024-01-01` |
-| `updated_before` | date | ISO date |
-| `published_after` | date | ISO date |
-| `explicit` | bool | Show explicit content (default false) |
-| `search_within` | string | Narrow within current results |
+- `GET  /api/search` — main search endpoint with all filters
+- `GET  /api/stories/{id}` — story detail + chapter list
+- `GET  /api/stories/{id}/chapters/{n}` — chapter content for reader
+- `POST /api/library/upload-epub` — multipart EPUB upload
+- `POST /api/library/import-url` — fetch a URL via FicHub and host it
+- `POST /api/library/refresh-ao3` — wider live fetch for a query
+- `GET  /api/library/can-import?url=…` — check if a URL is importable
+- `GET  /api/stats/sites` — per-site indexed counts
+- `GET  /api/stats/totals` — index totals (stories, hosted, words)
+- `GET  /api/crawl/jobs` — recent crawl jobs
+- `GET  /api/crawl/schedule` — crawl scheduler state
 
-**Pagination & sort**
-| Param | Values |
-|-------|--------|
-| `sort` | `relevance`, `updated_desc`, `published_desc`, `kudos_desc`, `hits_desc`, `bookmarks_desc`, `comments_desc`, `word_count_desc`, `word_count_asc` |
-| `page` | int (default 1) |
-| `per_page` | int 1–100 (default 20) |
+## Known limitations
 
-### Trigger a crawl
-```
-POST /api/crawl/trigger/ao3?job_type=incremental
-POST /api/crawl/trigger/ffnet?job_type=full
-```
+- **FF.net live search and bulk crawling from cloud IPs** — Cloudflare blocks everything. URL-based import works through FicHub.
+- **AO3 scheduled crawler** — also Cloudflare-blocked. Single-page live search and direct URL fetches work.
+- **No accounts** — bookmarks, recents, and reading progress are localStorage only. To make them sync across devices, an auth system would be needed.
 
-## Crawler notes
+## Acknowledgements
 
-- **AO3**: 5s delay between requests. Crawls works pages. AO3 has no API so this is HTML scraping — be respectful of their infrastructure.
-- **FF.net**: 3s delay. Scrapes category listing pages which contain full story metadata.
-- Both crawlers upsert — re-running is safe.
-- Add crawlers for Wattpad/RoyalRoad by extending `BaseCrawler`.
+- **AO3** — for publishing the official data dump
+- **FicHub** — for the cross-archive download API that bypasses Cloudflare cleanly
+- **Internet Archive** — for preserving FanFiction.net
+- The unofficial **FicAlley archive maintainers** — for keeping the dead site alive in pg_dump form
 
-## Database
+## Status
 
-Key indexes:
-- GIN indexes on `fandoms`, `tags`, `relationships`, `characters` (array overlap queries)
-- Full-text search vector on `title + summary + author`
-- Partial index on `updated_at` excluding explicit content
-- Composite unique index on `(site, site_id)`
+Personal project, not a finished product. Things listed under "What works today" do work; everything else is aspirational.

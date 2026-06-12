@@ -644,9 +644,13 @@ export default function SearchPage() {
           <div className="search-wrap">
             {detectedUrl && (
               <div className="url-detected">
-                <span>Detected a {detectedUrl.site === "ao3" ? "AO3" : "FF.net"} URL.</span>
+                <span className="url-detected__icon">↓</span>
+                <div className="url-detected__text">
+                  <strong>{detectedUrl.site === "ao3" ? "AO3" : "FF.net"} story detected</strong>
+                  <span className="url-detected__sub">We'll fetch the full text via FicHub and add it to your library — readable in-app, fully searchable.</span>
+                </div>
                 <button onClick={importDetectedUrl} disabled={importing} className="btn btn--primary">
-                  {importing ? "Importing…" : "Import to library"}
+                  {importing ? "Importing…" : "Import"}
                 </button>
               </div>
             )}
@@ -680,9 +684,11 @@ export default function SearchPage() {
                   {liveCount > 0 && <span className="results-bar__live"> +{liveCount} live</span>}
                 </span>
                 <span className="results-bar__actions">
-                  <button className="page-btn" onClick={refreshFromAO3} disabled={refreshing}>
-                    {refreshing ? "Refreshing…" : "↻ Refresh from AO3"}
-                  </button>
+                  {sites.includes("ao3") && (
+                    <button className="page-btn page-btn--refresh" onClick={refreshFromAO3} disabled={refreshing} title="Pull fresh AO3 results and add them to the index">
+                      {refreshing ? "Refreshing…" : "↻ Refresh from AO3"}
+                    </button>
+                  )}
                   <span className="results-bar__page">Page {results.page} of {totalPages}</span>
                 </span>
               </div>
