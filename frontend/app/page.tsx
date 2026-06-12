@@ -371,6 +371,12 @@ export default function SearchPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query])
 
+  // Fire an AO3 feed poll on page load (server debounces to once / 10 min)
+  useEffect(() => {
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+    fetch(`${API_BASE}/api/library/autopoll`, { method: "POST" }).catch(() => {})
+  }, [])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

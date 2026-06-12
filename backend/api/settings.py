@@ -1,0 +1,47 @@
+"""Runtime settings — small key/value store for user-configurable options."""
+from fastapi import APIRouter, Depends, Form
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from db.session import get_db
+
+router = APIRouter()
+
+DEFAULTS = {
+    "tracked_fandom": "Harry Potter - J. K. Rowling",
+    "poll_on_load": "true",
+}
+
+
+def _ensure_table(db: Session):
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """))
+    db.commit()
+
+
+def get_setting(db: Session, key: str) -> str:
+    _ensure_table(db)
+    row = db.execute(text("SELECT value FROM app_settings WHERE key=:k"), {"k": key}).first()
+    return row[0] if row else DEFAULTS.get(key, "")
+
+
+@router.get("")
+async def all_settings(db: Session = Depends(get_db)):
+    _ensure_table(db)
+    rows = db.execute(text("SELECT key, value FROM app_settings")).fetchall()
+    stored = {r[0]: r[1] for r in rows}
+    return {**DEFAULTS, **stored}
+
+
+@router.post("")
+async def set_setting(key: str = Form(...), value: str = Form(...), db: Session = Depends(get_db)):
+    _ensure_table(db)
+    db.execute(text("""
+        INSERT INTO app_settings (key, value) VALUES (:k, :v)
+        ON CONFLICT (key) DO UPDATE SET value = :v
+    """), {"k": key, "v": value})
+    db.commit()
+    return {"ok": True, "key": key, "value": value}

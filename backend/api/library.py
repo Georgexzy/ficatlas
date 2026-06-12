@@ -399,3 +399,47 @@ async def poll_feed(
         "found": len(entries),
         "newly_indexed": inserted,
     }
+
+
+# ── On-load auto poll (debounced) ────────────────────────────────────────────
+
+_last_autopoll = {"at": None}
+
+@router.post("/autopoll")
+async def autopoll(db: Session = Depends(get_db)):
+    """
+    Called by the frontend on page load. Polls the tracked fandom's AO3 feed,
+    but debounced server-side to at most once every 10 minutes so refreshing
+    the page repeatedly doesn't hammer AO3.
+    """
+    from datetime import datetime, timezone, timedelta
+    from api.settings import get_setting
+    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed
+    from live_fetch.persist import persist_live_results
+    import httpx
+
+    now = datetime.now(timezone.utc)
+    last = _last_autopoll["at"]
+    if last and (now - last) < timedelta(minutes=10):
+        return {"ok": True, "skipped": "debounced", "next_in_seconds": int(600 - (now - last).total_seconds())}
+
+    fandom = get_setting(db, "tracked_fandom")
+    if not fandom:
+        return {"ok": False, "error": "No tracked fandom set"}
+
+    _last_autopoll["at"] = now
+
+    try:
+        async with httpx.AsyncClient(
+            headers={"User-Agent": "FicAtlasBot/1.0 (+fanfic discovery)"},
+            timeout=20, follow_redirects=True
+        ) as client:
+            tag_id = await resolve_tag_id(client, fandom.split(",")[0].strip())
+        if not tag_id:
+            return {"ok": False, "error": f"No canonical feed for '{fandom}'"}
+
+        entries = await fetch_feed(tag_id, limit=25)
+        inserted = persist_live_results(db, entries)
+        return {"ok": True, "fandom": fandom, "found": len(entries), "newly_indexed": inserted}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}

@@ -30,6 +30,34 @@ export default function LibraryPage() {
   const [feedBusy, setFeedBusy] = useState(false)
   const [feedMsg, setFeedMsg] = useState<string | null>(null)
 
+  // Tracked fandom (auto-polled on every site load)
+  const [trackedFandom, setTrackedFandom] = useState("")
+  const [savingTracked, setSavingTracked] = useState(false)
+  const [trackedSaved, setTrackedSaved] = useState(false)
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/settings`).then(r => r.json())
+      .then(s => setTrackedFandom(s.tracked_fandom ?? ""))
+      .catch(() => {})
+  }, [])
+
+  const saveTracked = async () => {
+    setSavingTracked(true); setTrackedSaved(false)
+    try {
+      const fd = new FormData()
+      fd.append("key", "tracked_fandom")
+      fd.append("value", trackedFandom.trim())
+      await fetch(`${API_BASE}/api/settings`, { method: "POST", body: fd })
+      setTrackedSaved(true)
+      // Immediately pull for the newly-set fandom
+      const pf = new FormData(); pf.append("fandom", trackedFandom.trim())
+      fetch(`${API_BASE}/api/library/poll-feed`, { method: "POST", body: pf }).catch(() => {})
+      setTimeout(() => setTrackedSaved(false), 2500)
+    } finally {
+      setSavingTracked(false)
+    }
+  }
+
   const loadHosted = () => {
     fetch(`${API_BASE}/api/library/hosted`).then(r => r.json()).then(setHosted).catch(() => {})
   }
@@ -264,6 +292,23 @@ export default function LibraryPage() {
                 </span>
               </div>
             </label>
+          </section>
+
+          <section className="import-section">
+            <h3>Auto-pull on load</h3>
+            <p className="import-help">
+              Set a fandom or ship to pull automatically every time FicAtlas loads.
+              The latest works from its AO3 feed get indexed in the background (debounced to once every 10 min).
+            </p>
+            <div className="import-row">
+              <input type="text" className="import-input"
+                placeholder="Harry Potter - J. K. Rowling"
+                value={trackedFandom} onChange={e => setTrackedFandom(e.target.value)}
+                disabled={savingTracked} onKeyDown={e => e.key === "Enter" && saveTracked()} />
+              <button className="btn btn--primary" onClick={saveTracked} disabled={savingTracked || !trackedFandom}>
+                {savingTracked ? "Saving…" : trackedSaved ? "✓ Saved" : "Save"}
+              </button>
+            </div>
           </section>
 
           <section className="import-section">

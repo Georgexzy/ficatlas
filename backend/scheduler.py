@@ -140,14 +140,26 @@ async def _run_feed_poll():
     from db.session import db_session
     import httpx
 
-    logger.info(f"[scheduler] Polling AO3 feeds for {len(TRACKED_FANDOMS)} fandoms...")
+    # Pull the tracked fandom from runtime settings (falls back to env list)
+    fandoms = list(TRACKED_FANDOMS)
+    try:
+        from api.settings import get_setting
+        with db_session() as db:
+            stored = get_setting(db, "tracked_fandom")
+        if stored:
+            # Allow comma-separated list in the setting too
+            fandoms = [f.strip() for f in stored.split(",") if f.strip()]
+    except Exception as e:
+        logger.warning(f"[scheduler] Couldn't read tracked_fandom setting: {e}")
+
+    logger.info(f"[scheduler] Polling AO3 feeds for {len(fandoms)} fandom(s): {fandoms}")
     total_new = 0
 
     async with httpx.AsyncClient(
         headers={"User-Agent": "FicAtlasBot/1.0 (+fanfic discovery)"},
         timeout=20, follow_redirects=True
     ) as client:
-        for fandom in TRACKED_FANDOMS:
+        for fandom in fandoms:
             try:
                 tag_id = await resolve_tag_id(client, fandom)
                 if not tag_id:
