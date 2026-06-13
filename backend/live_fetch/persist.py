@@ -2,6 +2,7 @@
 import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 
 log = logging.getLogger(__name__)
@@ -23,22 +24,34 @@ _STATUS_MAP = {
 def persist_live_results(db: Session, live_results: list[dict]) -> int:
     """
     Save live-fetched stories to the DB if they aren't already there.
-    Returns the count of newly-inserted stories.
+    Commits each row individually so a single bad row doesn't roll back the batch.
+    Returns the count of rows that actually committed.
     """
     if not live_results:
         return 0
 
-    inserted = 0
+    # Pre-fetch existing URLs in one query — cheap and avoids per-row SELECT roundtrips
+    urls = [d.get("url") for d in live_results if d.get("url")]
+    existing_urls: set[str] = set()
+    if urls:
+        rows = db.query(Story.url).filter(Story.url.in_(urls)).all()
+        existing_urls = {r[0] for r in rows}
+
+    saved = 0
+    skipped_existing = 0
+    failed = 0
+
     for d in live_results:
+        url = d.get("url")
+        if not url:
+            failed += 1
+            continue
+        if url in existing_urls:
+            skipped_existing += 1
+            continue
+
         try:
             site_id = d["id"].replace("live_ao3_", "")
-            url     = d["url"]
-
-            # Skip if URL already exists
-            existing = db.query(Story.id).filter(Story.url == url).first()
-            if existing:
-                continue
-
             updated_at = None
             if d.get("updated_at"):
                 try:
@@ -50,8 +63,8 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
                 site=SiteEnum.ao3,
                 site_id=site_id,
                 url=url,
-                title=d.get("title") or "Untitled",
-                author=d.get("author") or "Anonymous",
+                title=(d.get("title") or "Untitled")[:500],
+                author=(d.get("author") or "Anonymous")[:200],
                 author_url=d.get("author_url"),
                 summary=d.get("summary"),
                 language=d.get("language") or "English",
@@ -77,19 +90,24 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
                 updated_at=updated_at,
             )
             db.add(story)
-            inserted += 1
-        except Exception as e:
-            log.warning(f"Skip live persist for {d.get('url')}: {e}")
+            db.commit()      # commit each row individually
+            saved += 1
+            # add to existing_urls so duplicates within the same batch are skipped
+            existing_urls.add(url)
+        except IntegrityError:
             db.rollback()
-            continue
-
-    if inserted:
-        try:
-            db.commit()
-            log.info(f"Persisted {inserted} new live AO3 results into the index.")
+            skipped_existing += 1  # most likely a duplicate site_id from elsewhere
+            existing_urls.add(url)
         except Exception as e:
-            log.warning(f"Commit failed for live persistence: {e}")
             db.rollback()
-            return 0
+            failed += 1
+            log.warning(f"Skip live persist for {url}: {e}")
 
-    return inserted
+    if saved or failed or skipped_existing:
+        log.info(
+            f"persist_live_results: saved={saved} "
+            f"already_indexed={skipped_existing} failed={failed} "
+            f"(of {len(live_results)} candidates)"
+        )
+
+    return saved

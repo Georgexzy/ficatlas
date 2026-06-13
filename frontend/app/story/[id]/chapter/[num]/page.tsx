@@ -24,15 +24,51 @@ export default function ChapterPage() {
   const [chapter, setChapter] = useState<ChapterFull | null>(null)
   const [story, setStory] = useState<StoryMin | null>(null)
   const [fontSize, setFontSize] = useState(17)
+  const [fontFamily, setFontFamily] = useState<"serif" | "sans">("serif")
+  const [width, setWidth] = useState<"narrow" | "wide">("narrow")
+  const [scrollPct, setScrollPct] = useState(0)
 
   useEffect(() => {
     const savedSize = localStorage.getItem("ficatlas:reader-fontsize")
     if (savedSize) setFontSize(Number(savedSize))
+    const savedFont = localStorage.getItem("ficatlas:reader_font")
+    if (savedFont === "sans" || savedFont === "serif") setFontFamily(savedFont)
+    const savedWidth = localStorage.getItem("ficatlas:reader_width")
+    if (savedWidth === "narrow" || savedWidth === "wide") setWidth(savedWidth)
+
+    // Fall back to server settings if localStorage is empty (different browser etc.)
+    if (!savedFont || !savedWidth) {
+      fetch(`${API_BASE}/api/settings`).then(r => r.json()).then(s => {
+        if (!savedFont && (s.reader_font === "sans" || s.reader_font === "serif")) {
+          setFontFamily(s.reader_font)
+        }
+        if (!savedWidth && (s.reader_width === "narrow" || s.reader_width === "wide")) {
+          setWidth(s.reader_width)
+        }
+      }).catch(() => {})
+    }
   }, [])
 
   useEffect(() => {
     localStorage.setItem("ficatlas:reader-fontsize", String(fontSize))
   }, [fontSize])
+  useEffect(() => {
+    localStorage.setItem("ficatlas:reader_font", fontFamily)
+  }, [fontFamily])
+  useEffect(() => {
+    localStorage.setItem("ficatlas:reader_width", width)
+  }, [width])
+
+  // Reading progress bar
+  useEffect(() => {
+    const onScroll = () => {
+      const h = document.documentElement
+      const scrolled = h.scrollTop / (h.scrollHeight - h.clientHeight)
+      setScrollPct(Math.min(100, Math.max(0, scrolled * 100)))
+    }
+    window.addEventListener("scroll", onScroll, { passive: true })
+    return () => window.removeEventListener("scroll", onScroll)
+  }, [])
 
   useEffect(() => {
     if (!storyId || !num) return
@@ -69,16 +105,21 @@ export default function ChapterPage() {
   const hasNext = num < story.chapter_count
 
   return (
-    <div className="reader-shell">
+    <div className="reader-shell" data-width={width} data-font={fontFamily}>
+      <div className="reader-progress" style={{ width: `${scrollPct}%` }} />
       <div className="reader-topbar">
         <Link href={`/story/${storyId}`} className="back-link">← {story.title}</Link>
         <div className="reader-controls">
+          <button className="reader-ctrl" onClick={() => setFontFamily(f => f === "serif" ? "sans" : "serif")}
+            title="Toggle serif / sans">{fontFamily === "serif" ? "Serif" : "Sans"}</button>
+          <button className="reader-ctrl" onClick={() => setWidth(w => w === "narrow" ? "wide" : "narrow")}
+            title="Toggle column width">{width === "narrow" ? "↔ Wide" : "↔ Narrow"}</button>
           <button className="reader-ctrl" onClick={() => setFontSize(s => Math.max(s - 1, 13))} aria-label="Smaller">A-</button>
           <button className="reader-ctrl" onClick={() => setFontSize(s => Math.min(s + 1, 24))} aria-label="Larger">A+</button>
         </div>
       </div>
 
-      <article className="reader" style={{ fontSize: `${fontSize}px` }}>
+      <article className="reader" data-width={width} data-font={fontFamily} style={{ fontSize: `${fontSize}px` }}>
         <header className="reader__header">
           <p className="reader__breadcrumb">Chapter {num} of {story.chapter_count}</p>
           <h1 className="reader__title">{chapter.title || `Chapter ${num}`}</h1>
@@ -92,7 +133,7 @@ export default function ChapterPage() {
           </aside>
         )}
 
-        <div className="reader__content" dangerouslySetInnerHTML={{ __html: chapter.content }} />
+        <div className="reader__body reader__content" dangerouslySetInnerHTML={{ __html: chapter.content }} />
 
         {chapter.end_note && (
           <aside className="reader__note">
@@ -110,7 +151,7 @@ export default function ChapterPage() {
           onClick={() => router.push(`/story/${storyId}/chapter/${num + 1}`)}>Next →</button>
       </nav>
 
-      <p className="reader-hint">← → to navigate · + − to resize</p>
+      <p className="reader-hint">← → to navigate · + − to resize · serif/sans &amp; width toggles above</p>
     </div>
   )
 }

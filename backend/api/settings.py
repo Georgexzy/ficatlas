@@ -7,15 +7,19 @@ from db.session import get_db
 router = APIRouter()
 
 DEFAULTS = {
-    "tracked_fandom":   "Harry Potter - J. K. Rowling",
-    "poll_on_load":     "true",
-    "default_sites":    "ao3,ffnet,fictionalley",
-    "default_sort":     "relevance",
-    "results_per_page": "20",
-    "reader_font":      "serif",       # serif | sans
-    "reader_width":     "narrow",      # narrow | wide
-    "show_explicit":    "false",
-    "live_fetch":       "true",        # pull live AO3 results on search
+    "tracked_fandom":      "Harry Potter - J. K. Rowling",
+    "poll_on_load":        "true",
+    "default_sites":       "ao3,ffnet,fictionalley",
+    "default_sort":        "relevance",
+    "results_per_page":    "20",
+    "reader_font":         "serif",
+    "reader_width":        "narrow",
+    "show_explicit":       "false",
+    "live_fetch":          "true",
+    # Feed-poll filters — post-filter the 25 newest works per tag
+    "feed_min_words":      "",        # blank = no min
+    "feed_max_words":      "",        # blank = no max
+    "feed_complete_only":  "false",
 }
 
 

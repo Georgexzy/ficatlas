@@ -15,7 +15,9 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **EPUB upload (single or bulk)** — drag and drop one or many .epub files into the library. Up to 100 at a time, each becomes a hosted, searchable, readable story.
 - **Remove hosted stories** — delete any imported or uploaded story (and its stored text) from the library with one click. The bulk-indexed archive can't be deleted this way, only your own hosted additions.
 - **Settings page** — a dedicated `/settings` route to configure the tracked fandom, auto-pull-on-load, live AO3 fetch, default search sites/sort/page-size, explicit visibility, and reader font (serif/sans) and width (narrow/wide). Persisted server-side across restarts.
-- **Reader** — serif or sans typography, narrow or wide column, adjustable text size, a top reading-progress bar, ← → chapter navigation, and auto-saved reading position.
+- **FF.net discovery via Wayback Machine** — FF.net itself is blocked from VPS IPs by Cloudflare, but the Internet Archive's CDX index isn't. FicAtlas queries Wayback for archived FF.net story URLs, then each can be imported on click via FicHub. Filter by URL keyword to narrow to a fandom.
+- **Reader typography** — body uses a conventional readable serif (Charter/Georgia) with normal italics; Playfair Display is reserved for headings only, so emphasized text doesn't jar against the running prose.
+- **iOS Books-style library** — the Hosted tab renders stories as a grid of book covers with auto-generated gradients, soft drop shadows, and a hover lift; click any cover to open the reader.
 - **Refresh from AO3** — button on results page triggers a 5-page deep fetch for the current query and adds new stories to the index
 - **In-app reader** for any hosted story (FicAlley stories, FicHub imports, EPUB uploads). Serif typography, ← → chapter nav, A+/A− font sizing, auto-saved reading progress.
 - **Bookmarks, recents, reading progress** — all client-side in localStorage, no account needed
@@ -137,6 +139,7 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 - `POST /api/library/refresh-ao3` — wider live fetch for a query
 - `GET  /api/library/can-import?url=…` — check if a URL is importable
 - `POST /api/library/poll-feed` — poll an AO3 canonical-tag Atom feed and index new works
+- `POST /api/library/discover-ffnet` — enumerate FF.net URLs via the Wayback CDX index
 - `GET  /api/library/hosted` — list stories hosted on FicAtlas (imports + uploads)
 - `DELETE /api/library/hosted/{id}` — remove a hosted story and its chapters
 - `GET/POST /api/settings` — read or update runtime settings (DB-backed key/value)

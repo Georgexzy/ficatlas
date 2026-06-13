@@ -25,10 +25,18 @@ export default function LibraryPage() {
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null)
   const [uploadErrors, setUploadErrors] = useState<{ filename: string; error: string }[]>([])
 
-  // Feed discovery
+  // Feed discovery (AO3)
   const [feedFandom, setFeedFandom] = useState("")
+  const [feedMinWords, setFeedMinWords] = useState("")
+  const [feedCompleteOnly, setFeedCompleteOnly] = useState(false)
   const [feedBusy, setFeedBusy] = useState(false)
   const [feedMsg, setFeedMsg] = useState<string | null>(null)
+
+  // FFN discovery via Wayback
+  const [ffnQuery, setFfnQuery] = useState("")
+  const [ffnBusy, setFfnBusy] = useState(false)
+  const [ffnUrls, setFfnUrls] = useState<{ url: string; story_id: string }[]>([])
+  const [ffnMsg, setFfnMsg] = useState<string | null>(null)
 
   // Tracked fandom (auto-polled on every site load)
   const [trackedFandom, setTrackedFandom] = useState("")
@@ -68,17 +76,26 @@ export default function LibraryPage() {
       const r = await fetch(`${API_BASE}/api/library/hosted/${id}`, { method: "DELETE" })
       if (r.ok) {
         setHosted(h => h.filter(s => s.id !== id))
-        // Also drop any bookmark/progress referencing it
-        const bm = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
-        localStorage.setItem("ficatlas:bookmarks", JSON.stringify(bm.filter((b: any) => b.id !== id)))
+        try {
+          const bm = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
+          localStorage.setItem("ficatlas:bookmarks", JSON.stringify(bm.filter((b: any) => b.id !== id)))
+        } catch { /* corrupt localStorage — ignore */ }
+        try {
+          const pg = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
+          delete pg[id]
+          localStorage.setItem("ficatlas:progress", JSON.stringify(pg))
+        } catch { /* same */ }
       }
     } catch {}
   }
 
   useEffect(() => {
-    setBookmarks(JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]"))
-    setProgress(JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}"))
-    setRecents(JSON.parse(localStorage.getItem("ficatlas:recent-searches") ?? "[]"))
+    const safe = <T,>(key: string, fallback: T): T => {
+      try { return JSON.parse(localStorage.getItem(key) ?? JSON.stringify(fallback)) } catch { return fallback }
+    }
+    setBookmarks(safe("ficatlas:bookmarks", []))
+    setProgress(safe("ficatlas:progress", {}))
+    setRecents(safe("ficatlas:recent-searches", []))
     loadHosted()
   }, [])
 
@@ -161,11 +178,19 @@ export default function LibraryPage() {
     if (!feedFandom.trim()) return
     setFeedBusy(true); setFeedMsg(null)
     try {
-      const fd = new FormData(); fd.append("fandom", feedFandom.trim())
+      const fd = new FormData()
+      fd.append("fandom", feedFandom.trim())
+      if (feedMinWords.trim()) fd.append("min_words", feedMinWords.trim())
+      if (feedCompleteOnly) fd.append("complete_only", "true")
       const r = await fetch(`${API_BASE}/api/library/poll-feed`, { method: "POST", body: fd })
       const data = await r.json()
       if (data.ok) {
-        setFeedMsg(`Found ${data.found} recent works for "${data.fandom}", added ${data.newly_indexed} new to the index. Search to see them.`)
+        const filtered = data.after_filter ?? data.found
+        setFeedMsg(
+          `Found ${data.found} recent works for "${data.fandom}"`
+          + (filtered !== data.found ? `, ${filtered} matched filters` : "")
+          + `, added ${data.newly_indexed} new to the index.`
+        )
       } else {
         setFeedMsg(data.error || "Feed poll failed")
       }
@@ -173,6 +198,40 @@ export default function LibraryPage() {
       setFeedMsg(`Failed: ${e.message}`)
     } finally {
       setFeedBusy(false)
+    }
+  }
+
+  const discoverFfn = async () => {
+    setFfnBusy(true); setFfnMsg(null); setFfnUrls([])
+    try {
+      const fd = new FormData()
+      if (ffnQuery.trim()) fd.append("query", ffnQuery.trim())
+      fd.append("limit", "30")
+      const r = await fetch(`${API_BASE}/api/library/discover-ffnet`, { method: "POST", body: fd })
+      const data = await r.json()
+      if (data.ok) {
+        setFfnUrls(data.urls || [])
+        setFfnMsg(`Found ${data.found} FF.net URLs in the Wayback index. Click any to import via FicHub.`)
+      } else {
+        setFfnMsg(data.error || "Discovery failed")
+      }
+    } catch (e: any) {
+      setFfnMsg(`Failed: ${e.message}`)
+    } finally {
+      setFfnBusy(false)
+    }
+  }
+
+  const importDiscoveredUrl = async (url: string) => {
+    const fd = new FormData(); fd.append("url", url)
+    try {
+      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const data = await r.json()
+      setImportMsg(`Imported "${data.title}" (${data.chapters} chapters).`)
+      setFfnUrls(urls => urls.filter(u => u.url !== url))
+      loadHosted()
+    } catch (e: any) {
+      setImportError(e.message || "Import failed")
     }
   }
 
@@ -200,23 +259,14 @@ export default function LibraryPage() {
       </div>
 
       {tab === "hosted" && (
-        <div className="library-list">
+        <div className="books-shelf">
           {hosted.length === 0
             ? <p className="library-empty">No hosted stories yet. Import a URL or upload an EPUB in the Import tab — those become readable here.</p>
-            : hosted.map(s => (
-                <div key={s.id} className="library-item">
-                  <Link href={`/story/${s.id}`} className="library-item__main">
-                    <p className="library-item__title">{s.title}</p>
-                    <p className="library-item__meta">
-                      by {s.author} · {s.chapter_count} ch · {(s.word_count/1000).toFixed(0)}k words
-                      {s.tags.includes("imported") && " · imported"}
-                      {s.tags.includes("user upload") && " · uploaded"}
-                    </p>
-                  </Link>
-                  <button className="library-item__remove" title="Remove from library"
-                    onClick={() => deleteHosted(s.id, s.title)}>✕</button>
-                </div>
-              ))}
+            : (
+              <div className="books-grid">
+                {hosted.map(s => <BookCover key={s.id} story={s} onDelete={deleteHosted} />)}
+              </div>
+            )}
         </div>
       )}
 
@@ -327,8 +377,7 @@ export default function LibraryPage() {
           </section>
 
           <section className="import-section">
-            <h3>Discover fresh AO3 works</h3>
-            <p className="import-help">
+            <h3>Discover fresh AO3 works</h3><p className="import-help">
               Pull the latest works for a fandom or ship straight from AO3&apos;s feed
               (e.g. &quot;Harry Potter - J. K. Rowling&quot; or &quot;Draco Malfoy/Hermione Granger&quot;).
               Only canonical AO3 tags have feeds. Newly found works get added to the search index.
@@ -342,7 +391,47 @@ export default function LibraryPage() {
                 {feedBusy ? "Polling…" : "Pull latest"}
               </button>
             </div>
+            <div className="feed-filters">
+              <input type="number" className="setting-input" placeholder="Min words (e.g. 100000)"
+                value={feedMinWords} onChange={e => setFeedMinWords(e.target.value)}
+                style={{ flex: 1 }} min={0} step={1000} />
+              <label className="feed-filters__check">
+                <input type="checkbox" checked={feedCompleteOnly}
+                  onChange={e => setFeedCompleteOnly(e.target.checked)} />
+                <span>Complete only</span>
+              </label>
+            </div>
             {feedMsg && <div className="alert alert--success" style={{marginTop:10}}>{feedMsg}</div>}
+          </section>
+
+          <section className="import-section">
+            <h3>Discover FF.net works (via Wayback)</h3>
+            <p className="import-help">
+              FF.net itself is blocked from our server by Cloudflare, but the Wayback
+              Machine's index isn't. We pull FF.net story URLs Wayback has archived,
+              then import each via FicHub. Filter by URL keyword (e.g. &quot;Harry-Potter&quot;)
+              to narrow results.
+            </p>
+            <div className="import-row">
+              <input type="text" className="import-input"
+                placeholder="Harry-Potter (optional URL filter)"
+                value={ffnQuery} onChange={e => setFfnQuery(e.target.value)}
+                disabled={ffnBusy} onKeyDown={e => e.key === "Enter" && discoverFfn()} />
+              <button className="btn btn--primary" onClick={discoverFfn} disabled={ffnBusy}>
+                {ffnBusy ? "Searching…" : "Discover"}
+              </button>
+            </div>
+            {ffnMsg && <div className="alert alert--success" style={{marginTop:10}}>{ffnMsg}</div>}
+            {ffnUrls.length > 0 && (
+              <ul className="ffn-discover-list">
+                {ffnUrls.map(u => (
+                  <li key={u.url}>
+                    <code>{u.url}</code>
+                    <button className="ffn-discover__import" onClick={() => importDiscoveredUrl(u.url)}>Import</button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
           {uploadProgress && (
@@ -365,6 +454,55 @@ export default function LibraryPage() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── BookCover component (iOS Books-style cover with auto gradient by title hash) ──
+function hashCode(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) { h = ((h << 5) - h) + s.charCodeAt(i); h |= 0 }
+  return Math.abs(h)
+}
+
+// Curated palette: 12 muted, book-cover-appropriate gradient pairs
+const COVER_GRADIENTS = [
+  ["#3a2e2a", "#7a4f3a"],   // burnt sienna
+  ["#1f2937", "#374151"],   // graphite
+  ["#2d3748", "#4a5568"],   // slate
+  ["#3c2a4d", "#6b4d8a"],   // plum
+  ["#1e3a3a", "#3a6b6b"],   // teal forest
+  ["#3a2a1e", "#7a5a3a"],   // tobacco
+  ["#2a3a2d", "#4a7a55"],   // forest
+  ["#4a2d2a", "#8a4a3a"],   // brick
+  ["#2a2a3a", "#4a4a7a"],   // indigo dusk
+  ["#3d2a3a", "#7a4a6a"],   // mauve
+  ["#3a3d2a", "#7a7a3a"],   // olive gold
+  ["#1f2d3a", "#3a5a7a"],   // navy mist
+]
+
+function BookCover({ story, onDelete }: { story: HostedStory; onDelete: (id: string, title: string) => void }) {
+  const [g1, g2] = COVER_GRADIENTS[hashCode(story.title) % COVER_GRADIENTS.length]
+  const fontSize = story.title.length > 30 ? 13 : story.title.length > 18 ? 15 : 17
+  return (
+    <div className="book">
+      <Link href={`/story/${story.id}`} className="book__cover-link">
+        <div className="book__cover" style={{ background: `linear-gradient(160deg, ${g1}, ${g2})` }}>
+          <div className="book__cover-spine" />
+          <div className="book__cover-content">
+            <p className="book__cover-title" style={{ fontSize }}>{story.title}</p>
+            <p className="book__cover-author">{story.author}</p>
+          </div>
+          <div className="book__cover-shine" />
+        </div>
+      </Link>
+      <div className="book__meta">
+        <p className="book__title" title={story.title}>{story.title}</p>
+        <p className="book__author">{story.author}</p>
+        <p className="book__stats">{story.chapter_count} ch · {(story.word_count/1000).toFixed(0)}k words</p>
+      </div>
+      <button className="book__remove" title="Remove from library"
+        onClick={(e) => { e.preventDefault(); onDelete(story.id, story.title) }}>✕</button>
     </div>
   )
 }

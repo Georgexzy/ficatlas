@@ -2,7 +2,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api import search, stories, crawl, stats, library, settings
+from api import search, stories, stats, library, settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -23,7 +23,6 @@ app.add_middleware(
 
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(stories.router, prefix="/api/stories", tags=["stories"])
-app.include_router(crawl.router, prefix="/api/crawl", tags=["crawl"])
 app.include_router(stats.router,  prefix="/api/stats", tags=["stats"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])

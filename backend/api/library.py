@@ -246,7 +246,9 @@ async def import_url(url: str = Form(...), db: Session = Depends(get_db)):
     # First check if we already have it
     existing = db.query(Story).filter(Story.url == url).first()
     if existing and existing.is_hosted:
-        return {"id": str(existing.id), "title": existing.title, "already_hosted": True}
+        ch_count = db.query(Chapter).filter(Chapter.story_id == existing.id).count()
+        return {"id": str(existing.id), "title": existing.title,
+                "chapters": ch_count, "already_hosted": True}
 
     log.info(f"Fetching {url} via FicHub...")
     meta = await fetch_from_fichub(url)
@@ -369,13 +371,16 @@ async def list_hosted(limit: int = 100, offset: int = 0, db: Session = Depends(g
 @router.post("/poll-feed")
 async def poll_feed(
     fandom: str = Form(...),
+    min_words: Optional[int] = Form(None),
+    max_words: Optional[int] = Form(None),
+    complete_only: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     """
     Resolve a fandom name to its AO3 canonical tag feed, poll it, and index new works.
-    This is the RELIABLE fresh-AO3 path — feeds aren't rate-limited like search pages.
+    Optional post-filters (min_words/max_words/complete_only) narrow the 25-entry feed.
     """
-    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed
+    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed, filter_entries
     from live_fetch.persist import persist_live_results
     import httpx
 
@@ -390,13 +395,19 @@ async def poll_feed(
                                        "Only canonical fandom/character/relationship tags have feeds."}
 
     entries = await fetch_feed(tag_id, limit=25)
+    raw_count = len(entries)
+    entries = filter_entries(
+        entries,
+        min_words=min_words, max_words=max_words, complete_only=complete_only,
+    )
     inserted = persist_live_results(db, entries)
 
     return {
         "ok": True,
         "fandom": fandom,
         "tag_id": tag_id,
-        "found": len(entries),
+        "found": raw_count,
+        "after_filter": len(entries),
         "newly_indexed": inserted,
     }
 
@@ -414,7 +425,7 @@ async def autopoll(db: Session = Depends(get_db)):
     """
     from datetime import datetime, timezone, timedelta
     from api.settings import get_setting
-    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed
+    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed, filter_entries
     from live_fetch.persist import persist_live_results
     import httpx
 
@@ -426,6 +437,15 @@ async def autopoll(db: Session = Depends(get_db)):
     fandom = get_setting(db, "tracked_fandom")
     if not fandom:
         return {"ok": False, "error": "No tracked fandom set"}
+
+    # Read filter settings (all optional)
+    def _int_setting(key: str) -> int | None:
+        v = (get_setting(db, key) or "").strip()
+        try: return int(v) if v else None
+        except Exception: return None
+    min_words     = _int_setting("feed_min_words")
+    max_words     = _int_setting("feed_max_words")
+    complete_only = (get_setting(db, "feed_complete_only") or "false").lower() == "true"
 
     _last_autopoll["at"] = now
 
@@ -439,8 +459,11 @@ async def autopoll(db: Session = Depends(get_db)):
             return {"ok": False, "error": f"No canonical feed for '{fandom}'"}
 
         entries = await fetch_feed(tag_id, limit=25)
+        raw_count = len(entries)
+        entries = filter_entries(entries, min_words=min_words, max_words=max_words, complete_only=complete_only)
         inserted = persist_live_results(db, entries)
-        return {"ok": True, "fandom": fandom, "found": len(entries), "newly_indexed": inserted}
+        return {"ok": True, "fandom": fandom, "found": raw_count,
+                "after_filter": len(entries), "newly_indexed": inserted}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
 
@@ -461,3 +484,77 @@ async def delete_hosted(story_id: str, db: Session = Depends(get_db)):
     db.delete(story)
     db.commit()
     return {"ok": True, "deleted": story_id}
+
+
+# ── FF.net discovery via Wayback Machine ─────────────────────────────────────
+
+@router.post("/discover-ffnet")
+async def discover_ffnet(
+    query: Optional[str] = Form(None),
+    since: str = Form("20230101"),
+    limit: int = Form(50),
+    auto_import: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    """
+    Discover FFN story URLs via the Wayback Machine CDX index (no Cloudflare).
+    Returns the URL list. If auto_import=true, also pulls each via FicHub (slow).
+    """
+    from live_fetch.ffnet_wayback import discover_ffn_urls
+    urls = await discover_ffn_urls(query=query, since=since, limit=limit)
+
+    if not auto_import:
+        return {"ok": True, "found": len(urls), "urls": urls, "imported": 0}
+
+    # Auto-import each — slow because FicHub is serial-only
+    imported, failed = 0, 0
+    for u in urls:
+        try:
+            meta = await fetch_from_fichub(u["url"])
+            epub_url = meta.get("epub_url") or meta.get("urls", {}).get("epub")
+            if not epub_url:
+                failed += 1
+                continue
+            epub_bytes = await fetch_epub_bytes(epub_url)
+            _ingest_epub_from_url(db, u["url"], epub_bytes, SiteEnum.ffnet)
+            db.commit()
+            imported += 1
+        except Exception as e:
+            db.rollback()
+            log.warning(f"Auto-import {u['url']} failed: {e}")
+            failed += 1
+
+    return {"ok": True, "found": len(urls), "urls": urls, "imported": imported, "failed": failed}
+
+
+def _ingest_epub_from_url(db: Session, url: str, epub_bytes: bytes, site: SiteEnum) -> dict:
+    """Helper: parse epub bytes and persist as a hosted story for a given URL."""
+    parsed = parse_epub(epub_bytes)
+    existing = db.query(Story).filter(Story.url == url).first()
+    if existing:
+        existing.is_hosted = True
+        db.query(Chapter).filter(Chapter.story_id == existing.id).delete()
+        story = existing
+    else:
+        site_id = url.rstrip("/").split("/")[-1]
+        story = Story(
+            id=uuid.uuid4(), site=site, site_id=f"import_{site_id}", url=url,
+            title=parsed["title"] or "Imported", author=parsed["author"] or "Unknown",
+            summary=parsed["summary"], language=parsed["language"],
+            rating=RatingEnum.not_rated, status=StatusEnum.complete,
+            word_count=parsed["word_count"], chapter_count=len(parsed["chapters"]),
+            chapter_count_total=len(parsed["chapters"]),
+            fandoms=[], characters=[], relationships=[],
+            tags=["imported", "via_wayback"],
+            warnings=[], categories=[], genres=[],
+            is_hosted=True,
+            published_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+        )
+        db.add(story)
+    db.flush()
+    for ch in parsed["chapters"]:
+        db.add(Chapter(
+            story_id=story.id, number=ch["number"], title=ch["title"],
+            content=ch["content"], word_count=ch["word_count"],
+        ))
+    return {"id": str(story.id), "title": story.title, "chapters": len(parsed["chapters"])}

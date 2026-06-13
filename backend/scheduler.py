@@ -23,6 +23,7 @@ RUN_ON_STARTUP       = os.getenv("CRAWL_RUN_ON_STARTUP", "true").lower() == "tru
 scheduler = AsyncIOScheduler(timezone="UTC")
 _last_run: dict[str, datetime | None] = {"ao3": None, "ffnet": None}
 _next_run: dict[str, datetime | None] = {"ao3": None, "ffnet": None}
+_startup_task = None  # holds reference to startup poll so it isn't GC'd
 
 
 async def _run_crawl(site: str):
@@ -116,7 +117,9 @@ def start_scheduler():
 
     if RUN_ON_STARTUP:
         logger.info("[scheduler] Running startup feed poll...")
-        asyncio.create_task(_run_feed_poll())
+        # Hold reference; bare create_task can be garbage-collected
+        global _startup_task
+        _startup_task = asyncio.create_task(_run_feed_poll())
 
     logger.info(
         f"[scheduler] Started — feed polling every {FEED_INTERVAL_HOURS}h, "
@@ -135,24 +138,33 @@ TRACKED_FANDOMS = [
 
 async def _run_feed_poll():
     """Poll AO3 Atom feeds for tracked fandoms and index new works."""
-    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed
+    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed, filter_entries
     from live_fetch.persist import persist_live_results
     from db.session import db_session
+    from api.settings import get_setting
     import httpx
 
-    # Pull the tracked fandom from runtime settings (falls back to env list)
+    # Pull the tracked fandom + filters from runtime settings
     fandoms = list(TRACKED_FANDOMS)
+    min_words = max_words = None
+    complete_only = False
     try:
-        from api.settings import get_setting
         with db_session() as db:
             stored = get_setting(db, "tracked_fandom")
-        if stored:
-            # Allow comma-separated list in the setting too
-            fandoms = [f.strip() for f in stored.split(",") if f.strip()]
+            if stored:
+                fandoms = [f.strip() for f in stored.split(",") if f.strip()]
+            try: min_words = int((get_setting(db, "feed_min_words") or "").strip() or 0) or None
+            except Exception: pass
+            try: max_words = int((get_setting(db, "feed_max_words") or "").strip() or 0) or None
+            except Exception: pass
+            complete_only = (get_setting(db, "feed_complete_only") or "false").lower() == "true"
     except Exception as e:
-        logger.warning(f"[scheduler] Couldn't read tracked_fandom setting: {e}")
+        logger.warning(f"[scheduler] Couldn't read settings: {e}")
 
-    logger.info(f"[scheduler] Polling AO3 feeds for {len(fandoms)} fandom(s): {fandoms}")
+    logger.info(
+        f"[scheduler] Polling AO3 feeds for {len(fandoms)} fandom(s): {fandoms} "
+        f"(filters: min_words={min_words}, max_words={max_words}, complete_only={complete_only})"
+    )
     total_new = 0
 
     async with httpx.AsyncClient(
@@ -165,12 +177,15 @@ async def _run_feed_poll():
                 if not tag_id:
                     logger.warning(f"[scheduler] No feed for '{fandom}'")
                     continue
-                await asyncio.sleep(4)  # polite delay
+                await asyncio.sleep(4)
                 entries = await fetch_feed(tag_id, limit=25)
+                entries = filter_entries(
+                    entries, min_words=min_words, max_words=max_words, complete_only=complete_only,
+                )
                 with db_session() as db:
                     new = persist_live_results(db, entries)
                 total_new += new
-                logger.info(f"[scheduler] {fandom}: {len(entries)} found, {new} new")
+                logger.info(f"[scheduler] {fandom}: {len(entries)} matched, {new} new")
                 await asyncio.sleep(4)
             except Exception as e:
                 logger.warning(f"[scheduler] Feed poll failed for '{fandom}': {e}")
