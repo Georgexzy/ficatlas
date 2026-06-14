@@ -78,6 +78,9 @@ class Story(Base):
     # New: hosted content
     is_hosted = Column(Boolean, default=False, index=True)   # we have the full text
     wayback_url = Column(Text)                                # archive.org fallback
+    # URLs where this same story is cross-posted on other sites (FFN/AO3/etc).
+    # Populated when a curator (DLP, manual) tells us "these point to the same work".
+    cross_post_urls = Column(ARRAY(Text), default=list)
 
     published_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True), index=True)

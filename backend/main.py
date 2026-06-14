@@ -6,6 +6,14 @@ from api import search, stories, stats, library, settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Idempotently ensure schema is up-to-date (adds new columns safely)
+    try:
+        from init_db import init as init_db
+        init_db()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"DB init at startup failed: {e}")
+
     from scheduler import start_scheduler, stop_scheduler
     start_scheduler()
     yield

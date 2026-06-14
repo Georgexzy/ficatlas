@@ -243,12 +243,18 @@ async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depend
 @router.post("/import-url")
 async def import_url(url: str = Form(...), db: Session = Depends(get_db)):
     """Fetch a story from AO3/FFnet via FicHub and import it as a hosted story."""
-    # First check if we already have it
+    # Check exact URL match first
     existing = db.query(Story).filter(Story.url == url).first()
+    # ...then check if any existing story knows this URL as a cross-post
+    if not existing:
+        existing = db.query(Story).filter(
+            Story.cross_post_urls.any(url)  # type: ignore[arg-type]
+        ).first()
     if existing and existing.is_hosted:
         ch_count = db.query(Chapter).filter(Chapter.story_id == existing.id).count()
         return {"id": str(existing.id), "title": existing.title,
-                "chapters": ch_count, "already_hosted": True}
+                "chapters": ch_count, "already_hosted": True,
+                "matched_via": "cross_post" if existing.url != url else "url"}
 
     log.info(f"Fetching {url} via FicHub...")
     meta = await fetch_from_fichub(url)
@@ -602,10 +608,25 @@ async def discover_dlp(
             skipped += 1; continue
 
         try:
-            existing = db.query(Story).filter(Story.url == chosen_url).first()
+            # Build the set of "this is the same story" URLs DLP gave us
+            sibling_urls = [v for k, v in e["urls"].items() if k in ("ffn", "ao3") and v != chosen_url]
+
+            # Is this story (or any of its siblings) already in our index?
+            candidates = [chosen_url] + sibling_urls
+            existing = db.query(Story).filter(Story.url.in_(candidates)).first()
+            if not existing:
+                # Also check cross_post_urls of existing stories
+                for u in candidates:
+                    existing = db.query(Story).filter(
+                        Story.cross_post_urls.any(u)  # type: ignore[arg-type]
+                    ).first()
+                    if existing: break
+
             if existing and existing.is_hosted:
-                # Already imported — just merge DLP tags
+                # Already imported under some URL — merge DLP tags and record any
+                # cross-posts we hadn't seen before, but don't re-fetch the EPUB.
                 _merge_dlp_tags(existing, e["dlp_tags"])
+                _record_cross_posts(existing, candidates)
                 db.commit()
                 skipped += 1
                 continue
@@ -619,12 +640,11 @@ async def discover_dlp(
             site = SiteEnum.ao3 if "archiveofourown.org" in chosen_url else SiteEnum.ffnet
             result = _ingest_epub_from_url(db, chosen_url, epub_bytes, site)
 
-            # Merge DLP tags onto the newly imported story
+            # Merge DLP tags AND record cross-posts onto the newly imported story
             story = db.query(Story).get(uuid.UUID(result["id"]))
             if story:
                 _merge_dlp_tags(story, e["dlp_tags"])
-                if e.get("rating") and not story.summary:
-                    pass  # rating already mapped by FicHub
+                _record_cross_posts(story, sibling_urls)
             db.commit()
             imported += 1
         except Exception as ex:
@@ -647,3 +667,13 @@ def _merge_dlp_tags(story: "Story", dlp_tags: list[str]) -> None:
     existing = set((story.tags or []))
     merged = list(existing | set(clean))
     story.tags = merged + ["dlp_library"] if "dlp_library" not in merged else merged
+
+
+def _record_cross_posts(story: "Story", sibling_urls: list[str]) -> None:
+    """Append known same-story URLs from other sites onto the Story row."""
+    if not sibling_urls: return
+    current = set(story.cross_post_urls or [])
+    # Don't include the story's own canonical URL
+    new_urls = [u for u in sibling_urls if u and u != story.url and u not in current]
+    if new_urls:
+        story.cross_post_urls = list(current | set(new_urls))

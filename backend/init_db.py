@@ -93,6 +93,10 @@ CREATE INDEX IF NOT EXISTS ix_stories_search_vector ON stories USING gin (
     to_tsvector('english', coalesce(title,'') || ' ' || coalesce(summary,'') || ' ' || coalesce(author,''))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ix_chapters_story_number ON chapters (story_id, number);
+
+-- Idempotent schema additions for existing deployments
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS cross_post_urls TEXT[] DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS ix_stories_cross_post_urls ON stories USING gin (cross_post_urls);
 """
 
 def init():
