@@ -78,3 +78,4 @@ export interface SearchParams {
   page?: number
   per_page?: number
 }
+  live?: boolean

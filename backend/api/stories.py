@@ -58,6 +58,7 @@ class StoryDetail(BaseModel):
     updated_at: Optional[str]
     is_hosted: bool
     wayback_url: Optional[str]
+    cross_post_urls: List[str] = []
     chapters: List[ChapterMeta]
 
 
@@ -107,6 +108,7 @@ async def get_story(story_id: str, db: Session = Depends(get_db)):
         updated_at=story.updated_at.isoformat() if story.updated_at else None,
         is_hosted=story.is_hosted or False,
         wayback_url=story.wayback_url,
+        cross_post_urls=story.cross_post_urls or [],
         chapters=chapter_meta,
     )
 

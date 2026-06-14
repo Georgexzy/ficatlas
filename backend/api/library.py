@@ -522,7 +522,8 @@ async def discover_ffnet(
                 failed += 1
                 continue
             epub_bytes = await fetch_epub_bytes(epub_url)
-            _ingest_epub_from_url(db, u["url"], epub_bytes, SiteEnum.ffnet)
+            _ingest_epub_from_url(db, u["url"], epub_bytes, SiteEnum.ffnet,
+                                  provenance=["imported", "via_wayback"])
             db.commit()
             imported += 1
         except Exception as e:
@@ -533,8 +534,14 @@ async def discover_ffnet(
     return {"ok": True, "found": len(urls), "urls": urls, "imported": imported, "failed": failed}
 
 
-def _ingest_epub_from_url(db: Session, url: str, epub_bytes: bytes, site: SiteEnum) -> dict:
-    """Helper: parse epub bytes and persist as a hosted story for a given URL."""
+def _ingest_epub_from_url(db: Session, url: str, epub_bytes: bytes, site: SiteEnum,
+                          provenance: list[str] | None = None) -> dict:
+    """Helper: parse epub bytes and persist as a hosted story for a given URL.
+    `provenance` controls the marker tags on a newly created Story row
+    (e.g. ["imported", "via_dlp"] vs ["imported", "via_wayback"]).
+    """
+    if provenance is None:
+        provenance = ["imported"]
     parsed = parse_epub(epub_bytes)
     existing = db.query(Story).filter(Story.url == url).first()
     if existing:
@@ -551,7 +558,7 @@ def _ingest_epub_from_url(db: Session, url: str, epub_bytes: bytes, site: SiteEn
             word_count=parsed["word_count"], chapter_count=len(parsed["chapters"]),
             chapter_count_total=len(parsed["chapters"]),
             fandoms=[], characters=[], relationships=[],
-            tags=["imported", "via_wayback"],
+            tags=list(provenance),
             warnings=[], categories=[], genres=[],
             is_hosted=True,
             published_at=datetime.utcnow(), updated_at=datetime.utcnow(),
@@ -638,7 +645,8 @@ async def discover_dlp(
             epub_bytes = await fetch_epub_bytes(epub_url)
 
             site = SiteEnum.ao3 if "archiveofourown.org" in chosen_url else SiteEnum.ffnet
-            result = _ingest_epub_from_url(db, chosen_url, epub_bytes, site)
+            result = _ingest_epub_from_url(db, chosen_url, epub_bytes, site,
+                                           provenance=["imported", "via_dlp"])
 
             # Merge DLP tags AND record cross-posts onto the newly imported story
             story = db.query(Story).get(uuid.UUID(result["id"]))

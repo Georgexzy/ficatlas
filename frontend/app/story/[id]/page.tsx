@@ -14,7 +14,7 @@ interface StoryDetail {
   comments: number; fandoms: string[]; relationships: string[]; characters: string[];
   tags: string[]; warnings: string[]; categories: string[];
   published_at?: string; updated_at?: string;
-  is_hosted: boolean; wayback_url?: string; chapters: ChapterMeta[]
+  is_hosted: boolean; wayback_url?: string; cross_post_urls?: string[]; chapters: ChapterMeta[]
 }
 
 const SITE_LABELS: Record<string, string> = {
@@ -100,7 +100,24 @@ export default function StoryPage() {
               Wayback ↗
             </a>
           )}
+          {story.cross_post_urls?.map(url => {
+            const kind = url.includes("archiveofourown.org") ? "AO3"
+                       : url.includes("fanfiction.net") ? "FF.net"
+                       : "Mirror"
+            return (
+              <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
+                Also on {kind} ↗
+              </a>
+            )
+          })}
         </div>
+
+        {story.tags?.includes("dlp_library") && (
+          <div className="dlp-banner">
+            <span className="dlp-banner__icon">⚜</span>
+            <span><strong>Curated by DarkLordPotter.</strong> This story is on DLP&apos;s recommended library list, with their curated tags applied.</span>
+          </div>
+        )}
 
         {story.summary && (
           <section className="story-detail__summary">

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
 
 interface SiteStat { site: string; count: number; last_indexed: string | null }
-interface Totals   { stories: number; hosted: number; total_words: number }
+interface Totals   { stories: number; hosted: number; total_words: number; dlp?: number }
 
 const SITE_LABELS: Record<string, string> = {
   ao3: "AO3", ffnet: "FF.net", fictionalley: "FicAlley",
@@ -54,6 +54,9 @@ export default function IndexStatus() {
                 <div><dt>Stories</dt><dd>{totals.stories.toLocaleString()}</dd></div>
                 <div><dt>Readable here</dt><dd>{totals.hosted.toLocaleString()}</dd></div>
                 <div><dt>Words</dt><dd>{fmt(totals.total_words)}</dd></div>
+                {totals.dlp != null && totals.dlp > 0 && (
+                  <div><dt>DLP curated</dt><dd>{totals.dlp.toLocaleString()}</dd></div>
+                )}
               </dl>
             )}
 

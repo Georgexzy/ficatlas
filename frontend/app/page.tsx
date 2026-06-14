@@ -178,6 +178,7 @@ function StoryCard({ story }: { story: StoryCard }) {
             <span className={`badge badge--site-${story.site}`}>{SITE_LABELS[story.site] ?? story.site}</span>
             {story.rating && <span className={`badge badge--rating badge--${story.rating.toLowerCase()}`}>{RATING_LABELS[story.rating] ?? story.rating}</span>}
             {story.status === "complete" && <span className="badge badge--complete">Complete</span>}
+            {story.tags?.includes("dlp_library") && <span className="badge badge--dlp" title="Curated by DarkLordPotter">DLP</span>}
             {story.is_live && <span className="badge badge--live">Live</span>}
           </div>
         </div>
@@ -540,6 +541,17 @@ export default function SearchPage() {
           <FilterSection label="Additional Tags" highlighted={parsedLive.tags.length > 0} count={incTags.length}>
             <TagInput value={incTags} onChange={setIncTags}
               placeholder="e.g. slow burn" highlighted={parsedLive.tags} />
+          </FilterSection>
+
+          <FilterSection label="Curation" count={incTags.includes("dlp_library") ? 1 : 0}>
+            <label className="curated-check">
+              <input type="checkbox"
+                checked={incTags.includes("dlp_library")}
+                onChange={e => setIncTags(t => e.target.checked
+                  ? [...t, "dlp_library"]
+                  : t.filter(x => x !== "dlp_library"))} />
+              <span>DLP curated only</span>
+            </label>
           </FilterSection>
 
           <hr className="sidebar__rule" />

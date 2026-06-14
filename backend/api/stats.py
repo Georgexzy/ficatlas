@@ -25,4 +25,8 @@ async def total_stats(db: Session = Depends(get_db)):
     stories = db.query(func.count(Story.id)).scalar() or 0
     hosted  = db.query(func.count(Story.id)).filter(Story.is_hosted == True).scalar() or 0
     total_words = db.query(func.sum(Story.word_count)).scalar() or 0
-    return {"stories": stories, "hosted": hosted, "total_words": int(total_words)}
+    # DLP-curated story count (any row with the dlp_library tag in its tags array)
+    dlp = db.query(func.count(Story.id)).filter(
+        Story.tags.any("dlp_library")  # type: ignore[arg-type]
+    ).scalar() or 0
+    return {"stories": stories, "hosted": hosted, "total_words": int(total_words), "dlp": dlp}
