@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
 
 interface Bookmark { id: string; title: string; author: string; site: string; url: string; savedAt: string }
 interface ProgressEntry { chapter: number; at: string; title: string }
@@ -44,6 +44,16 @@ export default function LibraryPage() {
   const [dlpEntries, setDlpEntries] = useState<any[]>([])
   const [dlpMsg, setDlpMsg] = useState<string | null>(null)
   const [dlpAutoImport, setDlpAutoImport] = useState(false)
+
+  // AO3 deep-filtered discovery (paginated tag-works)
+  const [a3Fandom, setA3Fandom] = useState("")
+  const [a3MinWords, setA3MinWords] = useState("")
+  const [a3MaxWords, setA3MaxWords] = useState("")
+  const [a3CompleteOnly, setA3CompleteOnly] = useState(false)
+  const [a3Sort, setA3Sort] = useState("revised_at")
+  const [a3Pages, setA3Pages] = useState("3")
+  const [a3Busy, setA3Busy] = useState(false)
+  const [a3Msg, setA3Msg] = useState<string | null>(null)
 
   // Tracked fandom (auto-polled on every site load)
   const [trackedFandom, setTrackedFandom] = useState("")
@@ -239,6 +249,31 @@ export default function LibraryPage() {
       loadHosted()
     } catch (e: any) {
       setImportError(e.message || "Import failed")
+    }
+  }
+
+  const discoverAo3Deep = async () => {
+    if (!a3Fandom.trim()) return
+    setA3Busy(true); setA3Msg(null)
+    try {
+      const fd = new FormData()
+      fd.append("fandom", a3Fandom.trim())
+      if (a3MinWords.trim()) fd.append("min_words", a3MinWords.trim())
+      if (a3MaxWords.trim()) fd.append("max_words", a3MaxWords.trim())
+      if (a3CompleteOnly) fd.append("complete_only", "true")
+      fd.append("sort", a3Sort)
+      fd.append("max_pages", a3Pages || "3")
+      const r = await fetch(`${API_BASE}/api/library/discover-ao3`, { method: "POST", body: fd })
+      const data = await r.json()
+      if (data.ok) {
+        setA3Msg(`Scraped ${data.found} works matching filters, added ${data.newly_indexed} new to the index.`)
+      } else {
+        setA3Msg(data.error || "AO3 deep discovery failed")
+      }
+    } catch (e: any) {
+      setA3Msg(`Failed: ${e.message}`)
+    } finally {
+      setA3Busy(false)
     }
   }
 
@@ -450,6 +485,52 @@ export default function LibraryPage() {
               </label>
             </div>
             {feedMsg && <div className="alert alert--success" style={{marginTop:10}}>{feedMsg}</div>}
+          </section>
+
+          <section className="import-section">
+            <h3>Deep AO3 scrape (filtered, paginated)</h3>
+            <p className="import-help">
+              Where feeds give only the 25 newest works for a tag, this hits AO3&apos;s
+              filtered works page directly. Scrapes up to 20 works per page across
+              multiple pages — for example 5 pages = ~100 works matching your filters.
+              Polite 3s delays between requests; a 5-page scrape takes ~15s.
+            </p>
+            <div className="import-row">
+              <input type="text" className="import-input"
+                placeholder="Harry Potter - J. K. Rowling"
+                value={a3Fandom} onChange={e => setA3Fandom(e.target.value)}
+                disabled={a3Busy} onKeyDown={e => e.key === "Enter" && discoverAo3Deep()} />
+              <button className="btn btn--primary" onClick={discoverAo3Deep} disabled={a3Busy || !a3Fandom}>
+                {a3Busy ? "Scraping…" : "Scrape filtered"}
+              </button>
+            </div>
+            <div className="feed-filters">
+              <input type="number" className="setting-input" placeholder="Min words"
+                value={a3MinWords} onChange={e => setA3MinWords(e.target.value)}
+                style={{ flex: 1 }} min={0} step={1000} />
+              <input type="number" className="setting-input" placeholder="Max words"
+                value={a3MaxWords} onChange={e => setA3MaxWords(e.target.value)}
+                style={{ flex: 1 }} min={0} step={1000} />
+              <label className="feed-filters__check">
+                <input type="checkbox" checked={a3CompleteOnly}
+                  onChange={e => setA3CompleteOnly(e.target.checked)} />
+                <span>Complete</span>
+              </label>
+            </div>
+            <div className="feed-filters" style={{marginTop:6}}>
+              <select className="setting-select" value={a3Sort}
+                onChange={e => setA3Sort(e.target.value)} style={{flex:1}}>
+                <option value="revised_at">Recently updated</option>
+                <option value="created_at">Recently posted</option>
+                <option value="kudos_count">Most kudos</option>
+                <option value="word_count">Word count</option>
+                <option value="hits">Most hits</option>
+              </select>
+              <input type="number" className="setting-input" placeholder="Pages"
+                value={a3Pages} onChange={e => setA3Pages(e.target.value)}
+                style={{ width: 80 }} min={1} max={20} />
+            </div>
+            {a3Msg && <div className="alert alert--success" style={{marginTop:10}}>{a3Msg}</div>}
           </section>
 
           <section className="import-section">

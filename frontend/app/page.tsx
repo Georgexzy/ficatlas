@@ -307,7 +307,7 @@ export default function SearchPage() {
     if (!detectedUrl) return
     setImporting(true); setImportMsg(null)
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
       const fd = new FormData(); fd.append("url", detectedUrl.url)
       const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
       if (!r.ok) throw new Error(await r.text())
@@ -325,7 +325,7 @@ export default function SearchPage() {
   const refreshFromAO3 = useCallback(async () => {
     setRefreshing(true); setRefreshMsg(null)
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
       const fd = new FormData()
       const pq = parseQuery(query)
       if (pq.cleanText) fd.append("q", pq.cleanText)
@@ -343,40 +343,21 @@ export default function SearchPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query])
 
-  // Live parse for sidebar highlighting
+  // Live parse for sidebar highlighting (does NOT mutate chip state — chips
+  // only commit on doSearch submit via the merge in fandoms/etc. params).
   const parsedLive = parseQuery(query)
   const fromSearch = (key: string) => parsedLive.tokens.filter(t => t.key === key && !t.exclude).map(t => t.value)
 
-  // Auto-populate sidebar from search bar as user types
-  useEffect(() => {
-    const pq = parseQuery(query)
-    if (pq.fandoms.length)       setIncFandoms(v => [...new Set([...v, ...pq.fandoms])])
-    if (pq.relationships.length) setIncShips(v => [...new Set([...v, ...pq.relationships])])
-    if (pq.characters.length)    setIncChars(v => [...new Set([...v, ...pq.characters])])
-    if (pq.tags.length)          setIncTags(v => [...new Set([...v, ...pq.tags])])
-    if (pq.ratings.length)       setIncRatings(v => [...new Set([...v, ...pq.ratings])])
-    if (pq.status)               setStatus([pq.status])
-    if (pq.wordCountMin != null) setWordMin(pq.wordCountMin)
-    if (pq.wordCountMax != null) setWordMax(pq.wordCountMax)
-    if (pq.updatedAfter)         setUpdatedAfter(pq.updatedAfter)
-    if (pq.language)             setLanguage(pq.language)
-    if (pq.excFandoms.length)    setExcFandoms(v => [...new Set([...v, ...pq.excFandoms])])
-    if (pq.excRelationships.length) setExcShips(v => [...new Set([...v, ...pq.excRelationships])])
-    if (pq.excCharacters.length) setExcChars(v => [...new Set([...v, ...pq.excCharacters])])
-    if (pq.excTags.length)       setExcTags(v => [...new Set([...v, ...pq.excTags])])
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query])
-
   // Fire an AO3 feed poll on page load (server debounces to once / 10 min)
   useEffect(() => {
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
     fetch(`${API_BASE}/api/library/autopoll`, { method: "POST" }).catch(() => {})
   }, [])
 
   // Apply saved default sites / sort from settings on a fresh landing (no URL params)
   useEffect(() => {
     if (rawParams.toString()) return  // user arrived with explicit params; respect them
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
     fetch(`${API_BASE}/api/settings`).then(r => r.json()).then(s => {
       if (s.default_sites) setSites(s.default_sites.split(",").filter(Boolean))
       if (s.default_sort) setSort(s.default_sort)

@@ -677,3 +677,69 @@ def _record_cross_posts(story: "Story", sibling_urls: list[str]) -> None:
     new_urls = [u for u in sibling_urls if u and u != story.url and u not in current]
     if new_urls:
         story.cross_post_urls = list(current | set(new_urls))
+
+
+# ── AO3 deep-filter discovery (paginated tag-works scrape) ───────────────────
+
+@router.post("/discover-ao3")
+async def discover_ao3(
+    fandom: str = Form(...),
+    min_words: Optional[int] = Form(None),
+    max_words: Optional[int] = Form(None),
+    complete_only: bool = Form(False),
+    sort: str = Form("revised_at"),
+    direction: str = Form("desc"),
+    ratings: Optional[str] = Form(None),       # comma-separated, e.g. "T,M,E"
+    excluded_tags: Optional[str] = Form(None), # comma-separated
+    max_pages: int = Form(5),                  # 5 pages = ~100 works
+    db: Session = Depends(get_db),
+):
+    """
+    Deep AO3 discovery via the tag-works listing page. Supports filtering by
+    word count, completion, rating, excluded tags, with sorting and pagination.
+    This goes beyond the 25-work feed limit — set max_pages higher for deeper scrapes.
+    """
+    from live_fetch.ao3_works_scraper import scrape_tag_works
+    from live_fetch.persist import persist_live_results
+
+    ratings_list = [r.strip().upper() for r in (ratings or "").split(",") if r.strip()] or None
+    excluded_tags_list = [t.strip() for t in (excluded_tags or "").split(",") if t.strip()] or None
+
+    entries = await scrape_tag_works(
+        fandom,
+        min_words=min_words, max_words=max_words,
+        complete_only=complete_only, sort=sort, direction=direction,
+        ratings=ratings_list, excluded_tags=excluded_tags_list,
+        max_pages=max(1, min(max_pages, 20)),  # cap at 20 pages = ~400 works
+    )
+
+    inserted = persist_live_results(db, entries)
+    return {
+        "ok": True, "fandom": fandom,
+        "found": len(entries), "newly_indexed": inserted,
+    }
+
+
+# ── Admin: remove orphaned example/seed stories ──────────────────────────────
+
+@router.delete("/admin/cleanup-seeds")
+async def cleanup_seeds(db: Session = Depends(get_db)):
+    """Best-effort removal of seed/example/test stories left over from earlier runs.
+    Matches by site_id pattern and obvious placeholder authors.
+    """
+    from sqlalchemy import or_
+    candidates = db.query(Story).filter(or_(
+        Story.site_id.like("seed%"),
+        Story.site_id.like("example%"),
+        Story.site_id.like("test%"),
+        Story.site_id.like("demo%"),
+        Story.author.in_(["Example Author", "Test Author", "Demo Author", "Seed Author"]),
+        Story.tags.any("example"),
+        Story.tags.any("seed"),
+    )).all()
+    removed = []
+    for s in candidates:
+        removed.append({"id": str(s.id), "title": s.title, "site_id": s.site_id})
+        db.delete(s)
+    db.commit()
+    return {"ok": True, "removed_count": len(removed), "removed": removed}
