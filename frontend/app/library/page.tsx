@@ -38,6 +38,13 @@ export default function LibraryPage() {
   const [ffnUrls, setFfnUrls] = useState<{ url: string; story_id: string }[]>([])
   const [ffnMsg, setFfnMsg] = useState<string | null>(null)
 
+  // DLP library discovery
+  const [dlpCorpus, setDlpCorpus] = useState<"hp" | "other">("hp")
+  const [dlpBusy, setDlpBusy] = useState(false)
+  const [dlpEntries, setDlpEntries] = useState<any[]>([])
+  const [dlpMsg, setDlpMsg] = useState<string | null>(null)
+  const [dlpAutoImport, setDlpAutoImport] = useState(false)
+
   // Tracked fandom (auto-polled on every site load)
   const [trackedFandom, setTrackedFandom] = useState("")
   const [savingTracked, setSavingTracked] = useState(false)
@@ -229,6 +236,47 @@ export default function LibraryPage() {
       const data = await r.json()
       setImportMsg(`Imported "${data.title}" (${data.chapters} chapters).`)
       setFfnUrls(urls => urls.filter(u => u.url !== url))
+      loadHosted()
+    } catch (e: any) {
+      setImportError(e.message || "Import failed")
+    }
+  }
+
+  const discoverDlp = async () => {
+    setDlpBusy(true); setDlpMsg(null); setDlpEntries([])
+    try {
+      const fd = new FormData()
+      fd.append("corpus", dlpCorpus)
+      fd.append("limit", "200")
+      fd.append("auto_import", String(dlpAutoImport))
+      const r = await fetch(`${API_BASE}/api/library/discover-dlp`, { method: "POST", body: fd })
+      const data = await r.json()
+      if (data.ok) {
+        setDlpEntries(data.entries || [])
+        const msg = dlpAutoImport
+          ? `Found ${data.found} entries · imported ${data.imported}, skipped ${data.skipped}, failed ${data.failed}.`
+          : `Found ${data.found} curated stories. Click Import on any to pull it.`
+        setDlpMsg(msg)
+        if (dlpAutoImport) loadHosted()
+      } else {
+        setDlpMsg(data.error || "DLP discovery failed")
+      }
+    } catch (e: any) {
+      setDlpMsg(`Failed: ${e.message}`)
+    } finally {
+      setDlpBusy(false)
+    }
+  }
+
+  const importDlpEntry = async (entry: any) => {
+    const url = entry.urls?.ao3 || entry.urls?.ffn
+    if (!url) { setImportError("This entry has no FFN/AO3 URL to import"); return }
+    const fd = new FormData(); fd.append("url", url)
+    try {
+      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const data = await r.json()
+      setImportMsg(`Imported "${data.title}" (${data.chapters} chapters).`)
+      setDlpEntries(entries => entries.filter(e => e !== entry))
       loadHosted()
     } catch (e: any) {
       setImportError(e.message || "Import failed")
@@ -430,6 +478,62 @@ export default function LibraryPage() {
                     <button className="ffn-discover__import" onClick={() => importDiscoveredUrl(u.url)}>Import</button>
                   </li>
                 ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="import-section">
+            <h3>Discover via DarkLordPotter library</h3>
+            <p className="import-help">
+              DLP curates ~1000+ vetted Harry Potter fanfics with links to their FFN/AO3
+              sources. We scrape the catalog and you can import any entry, or auto-import
+              the whole list. DLP&apos;s curated tags get merged into each story&apos;s tags.
+            </p>
+            <div className="import-row">
+              <select className="setting-select" value={dlpCorpus}
+                onChange={e => setDlpCorpus(e.target.value as "hp" | "other")}
+                disabled={dlpBusy}>
+                <option value="hp">HP-only library</option>
+                <option value="other">Other fandoms library</option>
+              </select>
+              <label className="feed-filters__check">
+                <input type="checkbox" checked={dlpAutoImport}
+                  onChange={e => setDlpAutoImport(e.target.checked)} disabled={dlpBusy} />
+                <span>Auto-import all (slow, ~5min per 50 stories)</span>
+              </label>
+              <button className="btn btn--primary" onClick={discoverDlp} disabled={dlpBusy}>
+                {dlpBusy ? (dlpAutoImport ? "Importing…" : "Fetching…") : "Fetch DLP library"}
+              </button>
+            </div>
+            {dlpMsg && <div className="alert alert--success" style={{marginTop:10}}>{dlpMsg}</div>}
+            {dlpEntries.length > 0 && !dlpAutoImport && (
+              <ul className="dlp-entries">
+                {dlpEntries.slice(0, 100).map((e, i) => (
+                  <li key={i}>
+                    <div className="dlp-entry__main">
+                      <p className="dlp-entry__title">{e.title}</p>
+                      <p className="dlp-entry__meta">
+                        by {e.author}{e.rating ? ` · ${e.rating}` : ""}
+                        {e.dlp_tags?.length ? ` · ${e.dlp_tags.filter((t: string) => !t.toLowerCase().startsWith("author")).slice(0, 4).join(", ")}` : ""}
+                      </p>
+                      <p className="dlp-entry__urls">
+                        {Object.entries(e.urls || {}).map(([k, v]) => (
+                          <a key={k} href={v as string} target="_blank" rel="noreferrer">{k}</a>
+                        ))}
+                      </p>
+                    </div>
+                    <button className="ffn-discover__import"
+                      onClick={() => importDlpEntry(e)}
+                      disabled={!e.urls?.ao3 && !e.urls?.ffn}>
+                      {(e.urls?.ao3 || e.urls?.ffn) ? "Import" : "No URL"}
+                    </button>
+                  </li>
+                ))}
+                {dlpEntries.length > 100 && (
+                  <li style={{textAlign:"center", color:"var(--text-faint)", fontSize:12, padding:8}}>
+                    …and {dlpEntries.length - 100} more. Use Auto-import to grab them all.
+                  </li>
+                )}
               </ul>
             )}
           </section>

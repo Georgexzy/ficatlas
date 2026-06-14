@@ -558,3 +558,92 @@ def _ingest_epub_from_url(db: Session, url: str, epub_bytes: bytes, site: SiteEn
             content=ch["content"], word_count=ch["word_count"],
         ))
     return {"id": str(story.id), "title": story.title, "chapters": len(parsed["chapters"])}
+
+
+# ── DLP (DarkLordPotter) library discovery ───────────────────────────────────
+
+@router.post("/discover-dlp")
+async def discover_dlp(
+    corpus: str = Form("hp"),            # "hp" or "other"
+    limit: int = Form(200),
+    auto_import: bool = Form(False),
+    prefer: str = Form("ao3"),           # which URL to import: "ao3" or "ffn"
+    db: Session = Depends(get_db),
+):
+    """
+    Scrape the DLP library list. Returns parsed entries with FFN/AO3/etc URLs.
+    If auto_import=true, also imports each entry's preferred external URL via FicHub
+    and merges the DLP-curated tags onto the resulting Story row.
+    """
+    from live_fetch.dlp_scraper import fetch_dlp_library
+
+    entries = await fetch_dlp_library(corpus=corpus, limit=limit)
+
+    if not entries:
+        return {"ok": False, "error": "Couldn't fetch the DLP library list. Try again later."}
+
+    if not auto_import:
+        return {"ok": True, "found": len(entries), "entries": entries, "imported": 0}
+
+    # Auto-import flow: per entry, pick a URL and import it via FicHub
+    fallbacks = [prefer, "ao3", "ffn", "patronuscharm", "ficwad", "hpfanficarchive"]
+    imported, failed, skipped = 0, 0, 0
+
+    for e in entries:
+        chosen_url = None
+        for kind in fallbacks:
+            if kind in e["urls"]:
+                chosen_url = e["urls"][kind]; break
+        if not chosen_url:
+            skipped += 1; continue
+
+        # FicHub only handles FFN and AO3 reliably. Skip others.
+        if not ("fanfiction.net/" in chosen_url or "archiveofourown.org/" in chosen_url):
+            skipped += 1; continue
+
+        try:
+            existing = db.query(Story).filter(Story.url == chosen_url).first()
+            if existing and existing.is_hosted:
+                # Already imported — just merge DLP tags
+                _merge_dlp_tags(existing, e["dlp_tags"])
+                db.commit()
+                skipped += 1
+                continue
+
+            meta = await fetch_from_fichub(chosen_url)
+            epub_url = meta.get("epub_url") or meta.get("urls", {}).get("epub")
+            if not epub_url:
+                failed += 1; continue
+            epub_bytes = await fetch_epub_bytes(epub_url)
+
+            site = SiteEnum.ao3 if "archiveofourown.org" in chosen_url else SiteEnum.ffnet
+            result = _ingest_epub_from_url(db, chosen_url, epub_bytes, site)
+
+            # Merge DLP tags onto the newly imported story
+            story = db.query(Story).get(uuid.UUID(result["id"]))
+            if story:
+                _merge_dlp_tags(story, e["dlp_tags"])
+                if e.get("rating") and not story.summary:
+                    pass  # rating already mapped by FicHub
+            db.commit()
+            imported += 1
+        except Exception as ex:
+            db.rollback()
+            log.warning(f"DLP auto-import failed for {chosen_url}: {ex}")
+            failed += 1
+
+    return {
+        "ok": True, "found": len(entries),
+        "imported": imported, "failed": failed, "skipped": skipped,
+        "entries": entries,
+    }
+
+
+def _merge_dlp_tags(story: "Story", dlp_tags: list[str]) -> None:
+    """Add DLP-curated tags to a story's existing tags array (deduped)."""
+    # Filter noise: skip pure author-attribution tags ('author:xxx') from DLP
+    clean = [t for t in dlp_tags if not t.lower().startswith("author")]
+    if not clean: return
+    existing = set((story.tags or []))
+    merged = list(existing | set(clean))
+    story.tags = merged + ["dlp_library"] if "dlp_library" not in merged else merged
