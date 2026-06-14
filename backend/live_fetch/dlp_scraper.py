@@ -51,18 +51,26 @@ HEADERS = {
 WAYBACK_AVAILABLE = "https://archive.org/wayback/available"
 
 
-# Regex for one numbered library entry.
-# We capture the title-line + the following block until the next numbered heading.
-# DLP renders each entry as: <li><h3><a href="THREAD_URL">TITLE - RATING</a></h3>
-#   ...tag links... ...external links...</li>
-_ENTRY_RE = re.compile(
-    r'<li[^>]*>\s*<h3[^>]*>\s*<a\s+href="([^"]+)"[^>]*>(.*?)</a>\s*</h3>(.*?)</li>',
+# Each story is wrapped in <li id="story-NNN" class="discussionListItem">…</li>
+# Inside: <h3 class="title"><a href="threads/...">TITLE - RATING</a></h3>
+#         tagBlock with <a class="tag">…</a> entries
+#         lastPost block with external <a href="http(s)://…">FFN/AO3/etc</a> links
+_ITEM_RE = re.compile(
+    r'<li[^>]+id="story-\d+"[^>]+class="[^"]*discussionListItem[^"]*"[^>]*>',
+    re.IGNORECASE,
+)
+_HEADING_RE = re.compile(
+    r'<h3[^>]+class="[^"]*title[^"]*"[^>]*>\s*<a\s+href="([^"]+)"[^>]*>(.*?)</a>',
     re.DOTALL | re.IGNORECASE,
 )
-# Tag link inside an entry: /tags/{slug}/
-_TAG_RE = re.compile(r'<a\s+href="(/tags/[^"]+)"[^>]*>([^<]+)</a>', re.IGNORECASE)
-# External link inside an entry: any <a href> NOT pointing to /tags/ or /threads/
-_EXT_RE = re.compile(r'<a\s+href="(https?://[^"]+)"[^>]*>([^<]+)</a>', re.IGNORECASE)
+# Tag link: <a class="tag" href="tags/xxx/"> ...label... </a>  (label has nested span)
+_TAG_RE = re.compile(
+    r'<a[^>]+href="(tags/[^"]+|/tags/[^"]+)"[^>]+class="[^"]*tag[^"]*"[^>]*>(.*?)</a>',
+    re.DOTALL | re.IGNORECASE,
+)
+# External link: any <a href="http(s)://..."> inside the item
+_EXT_RE = re.compile(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', re.IGNORECASE)
+
 
 # Identify the host of an external link to label it
 def _classify(url: str) -> str | None:
@@ -80,78 +88,69 @@ def _classify(url: str) -> str | None:
 
 def _parse_title_line(raw: str) -> tuple[str, str, str | None]:
     """
-    DLP titles are of the form: "Title by Author - Rating" or "Title by Author [M]".
-    Returns (title, author, rating).
+    DLP titles: "Title by Author - Rating" or "Title by Author [M]".
     """
-    raw = _html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
+    raw = _html.unescape(re.sub(r"<[^>]+>", "", raw))
+    raw = re.sub(r"\s+", " ", raw).strip()
 
-    # Rating patterns we strip off the end: " - K+", " - T", " - M/NC-17", " [M]", " - NC-17", " (Oneshot)"
     rating = None
     m = re.search(r"\s*[\-\u2013]\s*([KTMR](?:\+|/[A-Z0-9\-]+)?|NC-?17|PG(?:-?\d+)?)\s*$", raw, re.IGNORECASE)
     if m:
-        rating = m.group(1).upper()
-        raw = raw[:m.start()].strip()
+        rating = m.group(1).upper(); raw = raw[:m.start()].strip()
     else:
         m2 = re.search(r"\s*\[([A-Z0-9\-/+]+)\]\s*$", raw)
         if m2:
-            rating = m2.group(1).upper()
-            raw = raw[:m2.start()].strip()
+            rating = m2.group(1).upper(); raw = raw[:m2.start()].strip()
 
-    # Split "Title by Author"
     m = re.search(r"\s+by\s+(.+)$", raw, re.IGNORECASE)
     if m:
-        title  = raw[:m.start()].strip()
-        author = m.group(1).strip()
-    else:
-        title  = raw
-        author = "Unknown"
-
-    return title, author, rating
+        return raw[:m.start()].strip(), m.group(1).strip(), rating
+    return raw, "Unknown", rating
 
 
 def parse_dlp_library(html_text: str) -> list[dict]:
-    """Parse a DLP library-list HTML page into structured entries.
+    """Parse DLP's XenForo library list into structured entries."""
+    # Find each story item's start position; slice from item N to item N+1
+    starts = [m.start() for m in _ITEM_RE.finditer(html_text)]
+    if not starts:
+        log.warning("DLP parser: no <li class='discussionListItem'> items found")
+        return []
 
-    Strategy: locate each story's <h3>...</h3> heading and treat the slice from
-    that heading to the next heading (or end of document) as the entry body.
-    This sidesteps the non-greedy </li> matching problem caused by nested lists.
-    """
-    # Find all (title-anchor href, title text, position-of-heading) tuples in order
-    heading_re = re.compile(
-        r'<h3[^>]*>\s*<a\s+href="([^"]+)"[^>]*>(.*?)</a>\s*</h3>',
-        re.DOTALL | re.IGNORECASE,
-    )
-    matches = list(heading_re.finditer(html_text))
+    # Append EOF so the last slice is bounded
+    starts.append(len(html_text))
     entries: list[dict] = []
 
-    for i, m in enumerate(matches):
-        thread_url = m.group(1).strip()
-        title_html = m.group(2)
-        # Skip headings that aren't story threads (e.g. site nav)
-        if "/threads/" not in thread_url:
+    for i in range(len(starts) - 1):
+        item = html_text[starts[i]:starts[i+1]]
+
+        h = _HEADING_RE.search(item)
+        if not h: continue
+        thread_path = h.group(1).strip()
+        if not (thread_path.startswith("threads/") or "/threads/" in thread_path):
             continue
+        # Normalise to a full URL
+        thread_url = thread_path if thread_path.startswith("http") else (
+            f"https://forums.darklordpotter.net/{thread_path.lstrip('/')}"
+        )
 
-        # Body runs from end of this heading to start of next heading (or EOF)
-        body_start = m.end()
-        body_end   = matches[i+1].start() if i+1 < len(matches) else len(html_text)
-        body = html_text[body_start:body_end]
+        title, author, rating = _parse_title_line(h.group(2))
 
-        title, author, rating = _parse_title_line(title_html)
-
-        # DLP tags from /tags/xxx links in the body
+        # Tags
         dlp_tags = []
         seen_labels = set()
-        for tm in _TAG_RE.finditer(body):
-            label = _html.unescape(tm.group(2)).strip()
-            if not label or label.lower() in seen_labels: continue
-            seen_labels.add(label.lower())
+        for tm in _TAG_RE.finditer(item):
+            label = _html.unescape(re.sub(r"<[^>]+>", "", tm.group(2))).strip()
+            if not label: continue
+            key = label.lower()
+            if key in seen_labels: continue
+            seen_labels.add(key)
             dlp_tags.append(label)
 
-        # External links: classify FFN / AO3 / etc.
+        # External links (FFN/AO3/etc)
         urls: dict[str, str] = {}
-        for em in _EXT_RE.finditer(body):
+        for em in _EXT_RE.finditer(item):
             href = em.group(1).strip()
-            if "darklordpotter.net" in href: continue   # skip self-links
+            if "darklordpotter.net" in href: continue
             kind = _classify(href)
             if kind and kind not in urls:
                 urls[kind] = href
