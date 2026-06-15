@@ -43,6 +43,7 @@ class StoryCard(BaseModel):
     published_at: Optional[str] = None
     updated_at: Optional[str] = None
     is_live: bool = False          # true = came from live fetch, not index
+    is_hosted: bool = False        # true = full text stored locally, one-click reader
 
     class Config:
         from_attributes = True
@@ -322,6 +323,7 @@ def _to_card(s: Story) -> StoryCard:
         published_at=s.published_at.isoformat() if s.published_at else None,
         updated_at=s.updated_at.isoformat() if s.updated_at else None,
         is_live=False,
+        is_hosted=bool(s.is_hosted),
     )
 
 

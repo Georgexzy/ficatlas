@@ -28,6 +28,7 @@ export default function StoryPage() {
   const [story, setStory] = useState<StoryDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [bookmarked, setBookmarked] = useState(false)
+  const [importing, setImporting] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -40,23 +41,46 @@ export default function StoryPage() {
   // Bookmark state from localStorage
   useEffect(() => {
     if (!story) return
-    const list = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
-    setBookmarked(list.some((b: any) => b.id === story.id))
+    try {
+      const list = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
+      setBookmarked(list.some((b: any) => b.id === story.id))
+    } catch {}
   }, [story])
 
   const toggleBookmark = () => {
     if (!story) return
-    const list = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
-    if (bookmarked) {
-      localStorage.setItem("ficatlas:bookmarks", JSON.stringify(list.filter((b: any) => b.id !== story.id)))
-      setBookmarked(false)
-    } else {
-      list.unshift({
-        id: story.id, title: story.title, author: story.author,
-        site: story.site, url: story.url, savedAt: new Date().toISOString(),
-      })
-      localStorage.setItem("ficatlas:bookmarks", JSON.stringify(list.slice(0, 200)))
-      setBookmarked(true)
+    try {
+      const list = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
+      if (bookmarked) {
+        localStorage.setItem("ficatlas:bookmarks", JSON.stringify(list.filter((b: any) => b.id !== story.id)))
+        setBookmarked(false)
+      } else {
+        list.unshift({
+          id: story.id, title: story.title, author: story.author,
+          site: story.site, url: story.url, savedAt: new Date().toISOString(),
+        })
+        localStorage.setItem("ficatlas:bookmarks", JSON.stringify(list.slice(0, 200)))
+        setBookmarked(true)
+      }
+    } catch {}
+  }
+
+  const importAndRead = async () => {
+    if (!story || importing) return
+    setImporting(true)
+    try {
+      const fd = new FormData(); fd.append("url", story.url)
+      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const data = await r.json()
+      if (data.id) {
+        window.location.href = `/story/${data.id}/chapter/1`
+      } else {
+        alert(`Import failed: ${data.error || data.detail || "unknown"}`)
+        setImporting(false)
+      }
+    } catch (e: any) {
+      alert(`Import failed: ${e.message || e}`)
+      setImporting(false)
     }
   }
 
@@ -87,14 +111,29 @@ export default function StoryPage() {
               Read Chapter 1
             </Link>
           )}
-          {!story.is_hosted && (
-            <a href={story.url} target="_blank" rel="noopener noreferrer" className="btn btn--primary">
-              Read on {SITE_LABELS[story.site]} ↗
+          {!story.is_hosted && (story.site === "ao3" || story.site === "ffnet") && (
+            <button className="btn btn--primary" onClick={importAndRead} disabled={importing}>
+              {importing ? "Importing…" : "Import & Read here"}
+            </button>
+          )}
+          {!story.is_hosted && story.site !== "ao3" && story.site !== "ffnet" && (
+            <a href={story.site === "fictionalley"
+                  ? `https://web.archive.org/web/2020/${story.url}`
+                  : story.url}
+              target="_blank" rel="noopener noreferrer" className="btn btn--primary">
+              Read on {story.site === "fictionalley" ? "Wayback" : (SITE_LABELS[story.site] ?? story.site)} ↗
             </a>
           )}
           <button className={`btn ${bookmarked ? "btn--on" : ""}`} onClick={toggleBookmark}>
             {bookmarked ? "★ Bookmarked" : "☆ Bookmark"}
           </button>
+          {/* For hosted FicAlley stories, expose Wayback alongside the in-app reader since FicAlley is defunct */}
+          {story.is_hosted && story.site === "fictionalley" && (
+            <a href={`https://web.archive.org/web/2020/${story.url}`}
+              target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
+              View on Wayback ↗
+            </a>
+          )}
           {story.wayback_url && (
             <a href={story.wayback_url} target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
               Wayback ↗

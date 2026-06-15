@@ -148,26 +148,65 @@ function TokenStrip({ tokens, onRemove }: { tokens: ParsedToken[]; onRemove: (ra
 // ── Result card ───────────────────────────────────────────────────────────────
 function StoryCard({ story }: { story: StoryCard }) {
   const [bookmarked, setBookmarked] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importedId, setImportedId] = useState<string | null>(null)
 
   useEffect(() => {
-    const list = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
-    setBookmarked(list.some((b: any) => b.id === story.id))
+    try {
+      const list = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
+      setBookmarked(list.some((b: any) => b.id === story.id))
+    } catch {}
   }, [story.id])
 
   const toggleBookmark = (e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation()
-    const list = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
-    if (bookmarked) {
-      localStorage.setItem("ficatlas:bookmarks",
-        JSON.stringify(list.filter((b: any) => b.id !== story.id)))
-      setBookmarked(false)
-    } else {
-      list.unshift({ id: story.id, title: story.title, author: story.author,
-                     site: story.site, url: story.url, savedAt: new Date().toISOString() })
-      localStorage.setItem("ficatlas:bookmarks", JSON.stringify(list.slice(0, 200)))
-      setBookmarked(true)
+    try {
+      const list = JSON.parse(localStorage.getItem("ficatlas:bookmarks") ?? "[]")
+      if (bookmarked) {
+        localStorage.setItem("ficatlas:bookmarks",
+          JSON.stringify(list.filter((b: any) => b.id !== story.id)))
+        setBookmarked(false)
+      } else {
+        list.unshift({ id: story.id, title: story.title, author: story.author,
+                       site: story.site, url: story.url, savedAt: new Date().toISOString() })
+        localStorage.setItem("ficatlas:bookmarks", JSON.stringify(list.slice(0, 200)))
+        setBookmarked(true)
+      }
+    } catch {}
+  }
+
+  const importToRead = async (e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation()
+    if (importing) return
+    setImporting(true)
+    try {
+      const fd = new FormData(); fd.append("url", story.url)
+      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const data = await r.json()
+      if (data.id) {
+        setImportedId(data.id)
+        // Auto-redirect to the reader after a brief success state
+        setTimeout(() => { window.location.href = `/story/${data.id}/chapter/1` }, 350)
+      } else {
+        alert(`Import failed: ${data.error || data.detail || "unknown"}`)
+      }
+    } catch (err: any) {
+      alert(`Import failed: ${err.message || err}`)
+    } finally {
+      setImporting(false)
     }
   }
+
+  // External link: for FicAlley use Wayback (site is defunct), otherwise the original URL
+  const externalUrl = story.site === "fictionalley"
+    ? `https://web.archive.org/web/2020/${story.url}`
+    : story.url
+  const externalLabel = story.site === "fictionalley"
+    ? "Open on Wayback ↗"
+    : `Open on ${SITE_LABELS[story.site] ?? story.site} ↗`
+
+  // Can we one-click import? Only sites FicHub handles, and not already hosted.
+  const canImport = !story.is_hosted && (story.site === "ao3" || story.site === "ffnet")
 
   return (
     <article className={`card ${story.is_live ? "card--live" : ""}`}>
@@ -217,9 +256,22 @@ function StoryCard({ story }: { story: StoryCard }) {
       )}
 
       <div className="card__actions">
-        <Link href={`/story/${story.id}`} className="card-btn card-btn--primary">Details</Link>
-        <a href={story.url} target="_blank" rel="noopener noreferrer" className="card-btn">
-          Open on {SITE_LABELS[story.site] ?? story.site} ↗
+        {story.is_hosted ? (
+          <Link href={`/story/${story.id}/chapter/1`} className="card-btn card-btn--primary">
+            Read here
+          </Link>
+        ) : canImport ? (
+          <button className="card-btn card-btn--primary" onClick={importToRead} disabled={importing}>
+            {importing ? "Importing…" : importedId ? "✓ Opening…" : "Import & Read"}
+          </button>
+        ) : (
+          <Link href={`/story/${story.id}`} className="card-btn card-btn--primary">Details</Link>
+        )}
+        {story.is_hosted && (
+          <Link href={`/story/${story.id}`} className="card-btn">Details</Link>
+        )}
+        <a href={externalUrl} target="_blank" rel="noopener noreferrer" className="card-btn">
+          {externalLabel}
         </a>
         <button className={`card-btn ${bookmarked ? "card-btn--on" : ""}`} onClick={toggleBookmark}
                 aria-label={bookmarked ? "Remove bookmark" : "Bookmark"}>

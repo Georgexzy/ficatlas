@@ -33,6 +33,8 @@ export interface StoryCard {
   genres: string[]
   published_at?: string
   updated_at?: string
+  is_live?: boolean
+  is_hosted?: boolean
 }
 
 export interface SearchResponse {

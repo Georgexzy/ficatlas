@@ -1204,3 +1204,31 @@ kbd {
   padding: 4px 0;
 }
 .curated-check input { accent-color: var(--accent); }
+
+/* ── One-click import button states ──────────────────────────────────────── */
+.card-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.card-btn.card-btn--primary:not(:disabled):hover { filter: brightness(1.1); }
+
+/* Mobile responsiveness for card actions row */
+@media (max-width: 640px) {
+  .card__actions {
+    flex-wrap: wrap; gap: 6px;
+  }
+  .card__actions .card-btn {
+    flex: 1; min-width: 0;
+    font-size: 12px; padding: 8px 10px;
+    text-align: center;
+  }
+  .card__actions .card-btn[aria-label*="bookmark" i] {
+    flex: 0 0 auto; min-width: 38px;
+  }
+
+  /* Story detail action row stacks nicely */
+  .story-detail__actions {
+    flex-wrap: wrap; gap: 8px;
+  }
+  .story-detail__actions .btn { flex: 1 1 calc(50% - 4px); }
+
+  /* Upload drop target bigger tap area on mobile */
+  .import-drop { min-height: 140px; }
+}

@@ -429,14 +429,17 @@ export default function LibraryPage() {
               onDrop={e => { e.preventDefault(); setDragOver(false)
                 if (e.dataTransfer.files?.length) uploadEpubs(e.dataTransfer.files)
                 else setImportError("Drop one or more .epub files") }}>
-              <input type="file" accept=".epub" multiple
+              <input type="file"
+                accept=".epub,application/epub+zip,application/zip"
+                multiple
                 onChange={e => e.target.files && uploadEpubs(e.target.files)}
                 disabled={importing} style={{ display: "none" }} />
               <div className="import-drop__inner">
                 <span className="import-drop__icon">{importing ? "⋯" : "↓"}</span>
                 <span className="import-drop__text">
                   {importing ? "Uploading…" : dragOver ? "Drop to upload"
-                    : <>Drag one or more EPUBs here<br /><span className="import-drop__sub">or click to choose · up to 100 at once</span></>}
+                    : <>Drag one or more EPUBs here<br />
+                      <span className="import-drop__sub">or tap to choose · up to 100 at once · works on phone</span></>}
                 </span>
               </div>
             </label>
@@ -630,6 +633,81 @@ export default function LibraryPage() {
 
           {importMsg   && <div className="alert alert--success">{importMsg}</div>}
           {importError && <div className="alert alert--error">{importError}</div>}
+
+          <section className="import-section import-section--docs">
+            <h3>Bulk imports (server-side)</h3>
+            <p className="import-help">
+              For multi-gigabyte datasets — too big to upload through the browser — copy the
+              file to the server then run the importer via <code>docker compose exec</code>. Each
+              runs once and inserts everything matching your filter into the index.
+            </p>
+
+            <details className="bulk-importer">
+              <summary><strong>FicAlley HTML dump</strong> — full text, ~30k Harry Potter stories</summary>
+              <p>Imports stories from a local extract of the FicAlley archive (chapters and metadata).</p>
+              <pre className="bulk-importer__cmd">{`sudo docker compose exec backend python fictionalley_importer.py --path /path/to/fictionalley`}</pre>
+              <p className="bulk-importer__note">
+                Source: archived FicAlley HTML directories. If you have a local copy, mount it into
+                the backend container and pass <code>--path</code>.
+              </p>
+            </details>
+
+            <details className="bulk-importer">
+              <summary><strong>AO3 2021 metadata dump</strong> — ~5M works, titles/authors/tags only</summary>
+              <p>Metadata-only import of the 2021 AO3 CSV release. Read these to find URLs; use URL import or DLP for full text.</p>
+              <pre className="bulk-importer__cmd">{`sudo docker cp ao3_works.csv ficatlas-backend-1:/app/data/ao3_works.csv
+sudo docker compose exec backend python ao3_dump_importer.py \\
+  --file /app/data/ao3_works.csv --fandom "Harry Potter" --limit 50000`}</pre>
+              <p className="bulk-importer__note">
+                The 2021 dump was hosted at the AO3 admin posts page. If the original link 404s, the
+                dump may have been deprecated — try Internet Archive or skip in favour of the deep
+                AO3 scrape above, which gives live data.
+              </p>
+            </details>
+
+            <details className="bulk-importer" open>
+              <summary><strong>HuggingFace mrzjy/fanfiction_meta</strong> — 6.6M FFnet rows, metadata only ⭐ recommended</summary>
+              <p>
+                The best free seed source for FFnet given that direct scraping is Cloudflare-blocked
+                from datacenter IPs. Covers FFnet story IDs 1 to ~10.9M (roughly 2014-era). After
+                import, click any story&apos;s &quot;Import &amp; Read&quot; button in search and FicHub will
+                fetch the full text on-demand.
+              </p>
+              <pre className="bulk-importer__cmd">{`# One command — downloads ~2GB via huggingface_hub and imports HP subset.
+# Skip --fandom and --limit to ingest all 6.6M rows (~30 min, all fandoms).
+sudo docker compose exec backend python huggingface_meta_importer.py \\
+  --download --fandom "Harry Potter" --limit 100000
+
+# Or peek first with dry-run:
+sudo docker compose exec backend python huggingface_meta_importer.py \\
+  --download --dry-run --limit 50`}</pre>
+              <p className="bulk-importer__note">
+                Dataset: <code>huggingface.co/datasets/mrzjy/fanfiction_meta</code> (CC license).
+                The script downloads parquet shards from the dataset&apos;s
+                <code>refs/convert/parquet</code> branch and caches them in <code>/app/data/hf_cache</code>;
+                re-running with the same flags re-uses the cache. <code>--fandom</code> is a
+                substring match on the category column (e.g. matches both &quot;Harry Potter&quot; and
+                &quot;Harry Potter, Twilight&quot; crossovers).
+              </p>
+            </details>
+
+            <details className="bulk-importer">
+              <summary><strong>FF.net 2015 SQLite</strong> — ~7M works, metadata only</summary>
+              <p>Older academic dataset of FF.net works circa 2015. Superseded by the HuggingFace dump above (which is cleaner and current); use this only if you have the file already.</p>
+              <pre className="bulk-importer__cmd">{`sudo docker cp fanfiction.db ficatlas-backend-1:/app/data/fanfiction.db
+sudo docker compose exec backend python ffnet_sqlite_importer.py \\
+  --path /app/data/fanfiction.db --fandom "Harry Potter" --limit 50000`}</pre>
+              <p className="bulk-importer__note">
+                Source: <code>archive.org/details/fanfic_dataset_2014_2015</code> (may be unavailable).
+              </p>
+            </details>
+
+            <p className="bulk-importer__hint">
+              Why CLI-only? These files are 600MB–3GB. HTTP upload would time out and chunked
+              upload adds complexity for a one-time operation. <code>docker cp</code> + a server-side
+              command is faster, more reliable, and matches how you&apos;d handle any large data load.
+            </p>
+          </section>
 
           {uploadErrors.length > 0 && (
             <details className="upload-errors">
