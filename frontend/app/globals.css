@@ -1232,3 +1232,32 @@ kbd {
   /* Upload drop target bigger tap area on mobile */
   .import-drop { min-height: 140px; }
 }
+
+/* ── Clickable tags ──────────────────────────────────────────────────────── */
+a.tag, a.tag--clickable, .tag--clickable {
+  text-decoration: none; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.12s;
+}
+a.tag:hover, .tag--clickable:hover {
+  border-color: var(--accent); color: var(--accent);
+  background: var(--accent-bg);
+}
+a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
+.card__fandom-link {
+  color: inherit; text-decoration: none; border-bottom: 1px dotted transparent;
+  transition: color 0.12s, border-color 0.12s;
+}
+.card__fandom-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── Reading progress bar on book covers ─────────────────────────────────── */
+.book__progress {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 0 0 8px 4px;     /* matches book__cover's bottom corners */
+  overflow: hidden;
+}
+.book__progress-fill {
+  height: 100%; background: linear-gradient(90deg, #d4a86a, #f0c987);
+  transition: width 0.25s ease;
+  box-shadow: 0 0 6px rgba(240, 201, 135, 0.4);
+}

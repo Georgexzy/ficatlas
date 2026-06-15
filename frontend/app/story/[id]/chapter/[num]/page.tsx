@@ -78,13 +78,67 @@ export default function ChapterPage() {
     ]).then(([s, c]) => { setStory(s); setChapter(c) })
   }, [storyId, num])
 
-  // Save last-read progress
+  // Save last-read progress (chapter number + scroll position + total chapters)
   useEffect(() => {
     if (!story || !chapter) return
-    const progress = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
-    progress[story.id] = { chapter: chapter.number, at: new Date().toISOString(), title: story.title }
-    localStorage.setItem("ficatlas:progress", JSON.stringify(progress))
+    try {
+      const progress = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
+      progress[story.id] = {
+        ...(progress[story.id] || {}),
+        chapter: chapter.number,
+        totalChapters: story.chapter_count,
+        title: story.title,
+        author: story.author,
+        at: new Date().toISOString(),
+      }
+      localStorage.setItem("ficatlas:progress", JSON.stringify(progress))
+    } catch {}
   }, [story, chapter])
+
+  // Persist scroll position within chapter (debounced)
+  useEffect(() => {
+    if (!story || !chapter) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const save = () => {
+      try {
+        const h = document.documentElement
+        const denom = h.scrollHeight - h.clientHeight
+        const pct = denom > 0 ? h.scrollTop / denom : 0
+        const progress = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
+        progress[story.id] = {
+          ...(progress[story.id] || {}),
+          chapter: chapter.number,
+          totalChapters: story.chapter_count,
+          title: story.title,
+          author: story.author,
+          scrollPct: Math.min(1, Math.max(0, pct)),
+          at: new Date().toISOString(),
+        }
+        localStorage.setItem("ficatlas:progress", JSON.stringify(progress))
+      } catch {}
+    }
+    const onScroll = () => { if (timer) clearTimeout(timer); timer = setTimeout(save, 600) }
+    window.addEventListener("scroll", onScroll, { passive: true })
+    return () => { window.removeEventListener("scroll", onScroll); if (timer) clearTimeout(timer) }
+  }, [story, chapter])
+
+  // Restore scroll position once chapter content has rendered
+  useEffect(() => {
+    if (!story || !chapter) return
+    try {
+      const progress = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
+      const saved = progress[story.id]
+      if (saved && saved.chapter === chapter.number && saved.scrollPct) {
+        // Wait one paint so the content has laid out
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const h = document.documentElement
+          const target = (h.scrollHeight - h.clientHeight) * saved.scrollPct
+          window.scrollTo({ top: target, behavior: "auto" })
+        }))
+      }
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chapter?.number, story?.id])
 
   // Keyboard navigation
   useEffect(() => {

@@ -38,13 +38,17 @@ const RATING_OPTIONS = [
 ]
 
 // ── Tag list with expand/collapse ─────────────────────────────────────────────
-function TagList({ tags, className }: { tags: string[]; className?: string }) {
+function TagList({ tags, className, kind = "tags" }: {
+  tags: string[]; className?: string; kind?: "tags" | "fandoms" | "relationships" | "characters"
+}) {
   const [expanded, setExpanded] = useState(false)
   const shown = expanded ? tags : tags.slice(0, 5)
   const extra = tags.length - 5
   return (
     <div className={`tag-list ${className ?? ""}`}>
-      {shown.map(t => <span key={t} className="tag">{t}</span>)}
+      {shown.map(t => (
+        <Link key={t} href={`/?${kind}=${encodeURIComponent(t)}`} className="tag tag--clickable">{t}</Link>
+      ))}
       {!expanded && extra > 0 && <button onClick={() => setExpanded(true)} className="tag tag--more">+{extra}</button>}
       {expanded  && extra > 0 && <button onClick={() => setExpanded(false)} className="tag tag--more">less</button>}
     </div>
@@ -225,7 +229,17 @@ function StoryCard({ story }: { story: StoryCard }) {
           {story.author_url
             ? <a href={story.author_url} target="_blank" rel="noopener noreferrer">{story.author}</a>
             : story.author}
-          {story.fandoms.length > 0 && <> · <span className="card__fandom">{story.fandoms.slice(0, 2).join(", ")}{story.fandoms.length > 2 ? ` +${story.fandoms.length - 2}` : ""}</span></>}
+          {story.fandoms.length > 0 && (
+            <> · <span className="card__fandom">
+              {story.fandoms.slice(0, 2).map((f, i) => (
+                <span key={f}>
+                  {i > 0 && ", "}
+                  <Link href={`/?fandoms=${encodeURIComponent(f)}`} className="card__fandom-link">{f}</Link>
+                </span>
+              ))}
+              {story.fandoms.length > 2 ? ` +${story.fandoms.length - 2}` : ""}
+            </span></>
+          )}
         </p>
       </div>
 
@@ -244,7 +258,9 @@ function StoryCard({ story }: { story: StoryCard }) {
 
       {story.relationships.length > 0 && (
         <div className="card__ships">
-          {story.relationships.map(r => <span key={r} className="tag tag--ship">{r}</span>)}
+          {story.relationships.map(r => (
+            <Link key={r} href={`/?relationships=${encodeURIComponent(r)}`} className="tag tag--ship tag--clickable">{r}</Link>
+          ))}
         </div>
       )}
       {story.tags.length > 0 && <TagList tags={story.tags} className="card__tags" />}

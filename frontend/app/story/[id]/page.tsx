@@ -106,11 +106,30 @@ export default function StoryPage() {
         </header>
 
         <div className="story-detail__actions">
-          {story.is_hosted && story.chapters.length > 0 && (
-            <Link href={`/story/${story.id}/chapter/1`} className="btn btn--primary">
-              Read Chapter 1
-            </Link>
-          )}
+          {story.is_hosted && story.chapters.length > 0 && (() => {
+            let savedChapter = 0
+            try {
+              const p = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
+              savedChapter = p[story.id]?.chapter ?? 0
+            } catch {}
+            if (savedChapter > 1 && savedChapter <= story.chapters.length) {
+              return (
+                <>
+                  <Link href={`/story/${story.id}/chapter/${savedChapter}`} className="btn btn--primary">
+                    Continue Chapter {savedChapter}
+                  </Link>
+                  <Link href={`/story/${story.id}/chapter/1`} className="btn btn--ghost">
+                    Start over
+                  </Link>
+                </>
+              )
+            }
+            return (
+              <Link href={`/story/${story.id}/chapter/1`} className="btn btn--primary">
+                Read Chapter 1
+              </Link>
+            )
+          })()}
           {!story.is_hosted && (story.site === "ao3" || story.site === "ffnet") && (
             <button className="btn btn--primary" onClick={importAndRead} disabled={importing}>
               {importing ? "Importing…" : "Import & Read here"}
@@ -175,22 +194,44 @@ export default function StoryPage() {
           {story.updated_at && <div><dt>Updated</dt><dd>{story.updated_at.split("T")[0]}</dd></div>}
         </dl>
 
+        {story.fandoms?.length > 0 && (
+          <section className="story-detail__taggroup">
+            <h4>Fandoms</h4>
+            <div className="tag-list">{story.fandoms.map(f =>
+              <Link key={f} href={`/?fandoms=${encodeURIComponent(f)}`} className="tag tag--fandom tag--clickable">{f}</Link>
+            )}</div>
+          </section>
+        )}
         {story.relationships.length > 0 && (
           <section className="story-detail__taggroup">
             <h4>Relationships</h4>
-            <div className="tag-list">{story.relationships.map(r => <span key={r} className="tag tag--ship">{r}</span>)}</div>
+            <div className="tag-list">{story.relationships.map(r =>
+              <Link key={r} href={`/?relationships=${encodeURIComponent(r)}`} className="tag tag--ship tag--clickable">{r}</Link>
+            )}</div>
           </section>
         )}
         {story.characters.length > 0 && (
           <section className="story-detail__taggroup">
             <h4>Characters</h4>
-            <div className="tag-list">{story.characters.map(c => <span key={c} className="tag">{c}</span>)}</div>
+            <div className="tag-list">{story.characters.map(c =>
+              <Link key={c} href={`/?characters=${encodeURIComponent(c)}`} className="tag tag--clickable">{c}</Link>
+            )}</div>
           </section>
         )}
         {story.tags.length > 0 && (
           <section className="story-detail__taggroup">
             <h4>Tags</h4>
-            <div className="tag-list">{story.tags.map(t => <span key={t} className="tag">{t}</span>)}</div>
+            <div className="tag-list">{story.tags.map(t =>
+              <Link key={t} href={`/?tags=${encodeURIComponent(t)}`} className="tag tag--clickable">{t}</Link>
+            )}</div>
+          </section>
+        )}
+        {story.warnings?.filter(w => w !== "No Archive Warnings Apply").length > 0 && (
+          <section className="story-detail__taggroup">
+            <h4>Warnings</h4>
+            <div className="tag-list">{story.warnings.filter(w => w !== "No Archive Warnings Apply").map(w =>
+              <Link key={w} href={`/?tags=${encodeURIComponent(w)}`} className="tag tag--warn tag--clickable">{w}</Link>
+            )}</div>
           </section>
         )}
 

@@ -347,7 +347,8 @@ export default function LibraryPage() {
             ? <p className="library-empty">No hosted stories yet. Import a URL or upload an EPUB in the Import tab — those become readable here.</p>
             : (
               <div className="books-grid">
-                {hosted.map(s => <BookCover key={s.id} story={s} onDelete={deleteHosted} />)}
+                {hosted.map(s => <BookCover key={s.id} story={s} onDelete={deleteHosted}
+                  progress={progress[s.id]} />)}
               </div>
             )}
         </div>
@@ -744,12 +745,32 @@ const COVER_GRADIENTS = [
   ["#1f2d3a", "#3a5a7a"],   // navy mist
 ]
 
-function BookCover({ story, onDelete }: { story: HostedStory; onDelete: (id: string, title: string) => void }) {
+function BookCover({ story, onDelete, progress }: {
+  story: HostedStory; onDelete: (id: string, title: string) => void;
+  progress?: { chapter: number; totalChapters?: number; scrollPct?: number }
+}) {
   const [g1, g2] = COVER_GRADIENTS[hashCode(story.title) % COVER_GRADIENTS.length]
   const fontSize = story.title.length > 30 ? 13 : story.title.length > 18 ? 15 : 17
+
+  // Compute % through story: (completed chapters + partial scroll) / total
+  let pct: number | null = null
+  let label = ""
+  if (progress?.chapter && progress.chapter > 0) {
+    const total = progress.totalChapters ?? story.chapter_count ?? 1
+    const completed = Math.max(0, progress.chapter - 1)
+    const partial = progress.scrollPct ?? 0
+    pct = Math.min(1, (completed + partial) / Math.max(total, 1))
+    label = `Ch ${progress.chapter}/${total} · ${Math.round(pct * 100)}%`
+  }
+
+  // Continue Reading: deep-link straight to the saved chapter
+  const readHref = progress?.chapter
+    ? `/story/${story.id}/chapter/${progress.chapter}`
+    : `/story/${story.id}`
+
   return (
     <div className="book">
-      <Link href={`/story/${story.id}`} className="book__cover-link">
+      <Link href={readHref} className="book__cover-link">
         <div className="book__cover" style={{ background: `linear-gradient(160deg, ${g1}, ${g2})` }}>
           <div className="book__cover-spine" />
           <div className="book__cover-content">
@@ -757,12 +778,19 @@ function BookCover({ story, onDelete }: { story: HostedStory; onDelete: (id: str
             <p className="book__cover-author">{story.author}</p>
           </div>
           <div className="book__cover-shine" />
+          {pct !== null && (
+            <div className="book__progress" title={label}>
+              <div className="book__progress-fill" style={{ width: `${pct * 100}%` }} />
+            </div>
+          )}
         </div>
       </Link>
       <div className="book__meta">
         <p className="book__title" title={story.title}>{story.title}</p>
         <p className="book__author">{story.author}</p>
-        <p className="book__stats">{story.chapter_count} ch · {(story.word_count/1000).toFixed(0)}k words</p>
+        <p className="book__stats">
+          {pct !== null ? label : `${story.chapter_count} ch · ${(story.word_count/1000).toFixed(0)}k words`}
+        </p>
       </div>
       <button className="book__remove" title="Remove from library"
         onClick={(e) => { e.preventDefault(); onDelete(story.id, story.title) }}>✕</button>
