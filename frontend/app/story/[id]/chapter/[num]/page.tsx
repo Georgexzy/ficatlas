@@ -3,7 +3,7 @@ import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
+const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
 interface ChapterFull {
   id: string; number: number; title?: string; summary?: string;

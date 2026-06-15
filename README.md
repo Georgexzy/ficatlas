@@ -6,32 +6,66 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 
 ## What works today
 
-- **Unified search** across AO3, FanFiction.net, and FicAlley with one query bar
+### Search & discovery
+- **Unified search** across AO3, FanFiction.net, FicAlley, and DLP-curated picks in one query
 - **Operator syntax** in any order: `fandom: Harry Potter ship:Draco/Hermione >100k complete updated:2y -tag:fluff`
-- **Quoted or unquoted multi-word values** — `fandom: Harry Potter` reads as the full phrase
-- **Live AO3 fetch** — each search pulls fresh AO3 results (3 pages = ~60 stories per search). These are persisted into the DB so the index grows organically every time anyone searches.
-- **AO3 Atom feed discovery** — the reliable fresh-data path. AO3 publishes per-canonical-tag Atom feeds (`/tags/{tag}/feed.atom`) that aren't rate-limited like search pages. FicAtlas polls these on a schedule for tracked fandoms and auto-indexes new works, with the OTW mirror (`archive.transformativeworks.org`) as a fallback on origin errors. Trigger manually from Library → Import → "Discover fresh AO3 works", or let the scheduler poll every 6h.
-- **URL-paste import** — paste any AO3 or FanFiction.net URL into the search bar and a banner appears with a one-click "Import" button. Pulls the full text via FicHub, bypassing Cloudflare entirely. Works for both sites.
-- **EPUB upload (single or bulk)** — drag and drop one or many .epub files into the library. Up to 100 at a time, each becomes a hosted, searchable, readable story.
-- **Remove hosted stories** — delete any imported or uploaded story (and its stored text) from the library with one click. The bulk-indexed archive can't be deleted this way, only your own hosted additions.
-- **Settings page** — a dedicated `/settings` route to configure the tracked fandom, auto-pull-on-load, live AO3 fetch, default search sites/sort/page-size, explicit visibility, and reader font (serif/sans) and width (narrow/wide). Persisted server-side across restarts.
-- **DLP library import** — scrapes DarkLordPotter's curated catalog of ~1000+ vetted HP fanfics with their FFN/AO3 URLs and DLP-specific tags. Browse the list and import any entry, or auto-import the whole library. DLP's curated tags merge into each imported story's tags array, so you can filter by "complete", "time travel", "harry/daphne", etc. Falls back to the Wayback Machine if DLP rate-limits a direct fetch.
-- **FF.net discovery via Wayback Machine** — FF.net itself is blocked from VPS IPs by Cloudflare, but the Internet Archive's CDX index isn't. FicAtlas queries Wayback for archived FF.net story URLs, then each can be imported on click via FicHub. Filter by URL keyword to narrow to a fandom.
-- **Reader typography** — body uses a conventional readable serif (Charter/Georgia) with normal italics; Playfair Display is reserved for headings only, so emphasized text doesn't jar against the running prose.
-- **iOS Books-style library** — the Hosted tab renders stories as a grid of book covers with auto-generated gradients, soft drop shadows, and a hover lift; click any cover to open the reader.
-- **Refresh from AO3** — button on results page triggers a 5-page deep fetch for the current query and adds new stories to the index
-- **In-app reader** for any hosted story (FicAlley stories, FicHub imports, EPUB uploads). Serif typography, ← → chapter nav, A+/A− font sizing, auto-saved reading progress.
-- **Bookmarks, recents, reading progress** — all client-side in localStorage, no account needed
-- **Keyboard shortcuts** — `/` to focus search, `Esc` to close help, `← →` to navigate chapters, `+ −` to resize reader text
-- **Index status widget** — header button shows per-site counts and growth over time
-- **Wayback fallback** — every FicAlley story card includes a Wayback Machine link as backup since the original site is offline
+- **Click-to-search tags** — every fandom, ship, character, freeform tag and warning is a link that pre-fills the corresponding filter
+- **AO3 deep filtered scrape** — `/api/library/discover-ao3` paginates AO3's tag-works listing with full filter support (min/max words, complete-only, sort by recent/kudos/words/hits/popularity, exclude tags). Up to 20 pages × 20 works = ~400 matching stories per call, with polite 3s delays
+- **AO3 Atom feeds** — per-canonical-tag feeds (`/tags/{N}/feed.atom`), polled on a 6h schedule plus on-load with auto-mirror fallback. Filterable in Settings (min words, max words, complete-only)
+- **Live AO3 fetch** on every search (3 pages = ~60 stories), results persisted so the index grows passively
+- **FF.net discovery via Wayback Machine CDX** — FFN is Cloudflare-walled from VPS IPs, but archive.org's index isn't; we enumerate FFN URLs from Wayback and import on-demand
+- **DLP library import** — scrapes DarkLordPotter's curated catalog of ~1000+ vetted HP fanfics, merges DLP's curated tags onto each imported story
+
+### Reading & library
+- **One-click "Import & Read"** — every search result for AO3/FFN with `is_hosted=false` shows an "Import & Read" button that fetches the full EPUB via FicHub and drops you into the reader
+- **In-app reader** — Charter/Georgia serif (conventional italics), serif↔sans toggle, narrow↔wide column, A+/A−, scroll progress bar, ← → chapter navigation
+- **Scroll-position reading progress** — debounced save of chapter + scroll position; opening a chapter you've partly read jumps back to where you left off
+- **iOS Books-style hosted library** — book covers with hashed gradients, hover lift, drop shadow. Each shows an amber progress bar across the bottom and `Ch N/M · X%` when you've started reading. Clicking deep-links to your saved chapter, not chapter 1
+- **Continue Reading** — story detail page replaces "Read Chapter 1" with "Continue Chapter N · Start over" when progress exists
+- **EPUB upload (single or bulk)** — drag/drop up to 100 .epub files; mobile-friendly file picker (iOS Files surfaces EPUBs via the broadened accept attribute)
+- **DLP badge & cross-post links** — DLP-curated stories show a purple "DLP" badge; if a story has FFN/AO3 cross-posts recorded, both buttons appear on the detail page
+- **Bookmarks, recents, reading progress** — client-side in localStorage, no account needed
+
+### Data seeds
+- **HuggingFace FFN metadata dump** — 6.6M FFnet rows (IDs 1–10.9M, 2014-era). The single biggest free seed. Auto-downloads via `huggingface_hub` from inside the backend container. Uses Postgres `ON CONFLICT DO NOTHING` for idempotent batched inserts
+- **Live AO3** filling the gap from 2021 onward
+- **FicAlley** for offline HP archive with full text
+- **FicHub** for any fresh per-URL fetch
+
+### Settings & UX
+- **Settings page** at `/settings` — tracked fandom, poll-on-load, live AO3 fetch, default sites/sort/per-page, feed filters (min/max words, complete-only), reader font and width, explicit visibility. Persisted server-side
+- **Index status widget** — per-site counts, total stories, total words, DLP-curated count
+- **Mobile-responsive** — card actions wrap on small screens, story detail actions stack, drop target taller; works from any host (see Deployment below)
+- **Keyboard shortcuts** — `/` focus search, `Esc` close help, `← →` navigate chapters, `+ −` resize reader
 
 ## Stack
 
-- **Backend** — FastAPI · SQLAlchemy · PostgreSQL 16 · APScheduler · httpx · BeautifulSoup4
-- **Frontend** — Next.js 15 · TypeScript · Tailwind base + custom editorial CSS
-- **External services** — FicHub (cross-archive download API)
-- **Data sources** — AO3 2021 official CSV dump · FanFiction.net 2015 Archive.org SQLite · Unofficial FicAlley pg_dump · Live fetching for freshness
+- **Backend** — FastAPI · SQLAlchemy · PostgreSQL 16 · APScheduler · httpx · BeautifulSoup4 · pyarrow · huggingface-hub
+- **Frontend** — Next.js 15 (App Router, `/api/*` rewrite proxy to backend) · TypeScript · Tailwind base + custom editorial CSS
+- **External services** — FicHub (cross-archive download API), Wayback Machine CDX, HuggingFace Hub
+- **Data sources** — HuggingFace `mrzjy/fanfiction_meta` (6.6M FFN rows) · AO3 Atom feeds · AO3 tag-works deep-scrape · DLP library list · Wayback Machine FFN URL discovery · FicHub per-URL · FicAlley dump · uploaded EPUBs
+
+## Deployment & accessing from another device
+
+FicAtlas runs everything in Docker on one host (single VPS or homelab box). The frontend container also acts as a reverse-proxy for `/api/*` to the backend container — this is the architecture that makes phone access via Tailscale or LAN work.
+
+```
+┌─────────────────┐
+│ phone / laptop  │  ← only sees port 3000
+└────────┬────────┘
+         │  http(s)://<host>:3000/...
+         ↓
+   ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+   │ frontend :3000  │───▶│ backend :8000   │───▶│ postgres :5432  │
+   │ (Next.js + RW)  │    │ (FastAPI)       │    │                 │
+   └─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+Only **port 3000** needs to be reachable from clients. The frontend's `next.config.ts` declares a rewrite that forwards `/api/:path*` → `http://backend:8000/api/:path*`, so the browser only ever talks to one origin (no CORS, no port-8000 exposure, no env-var pinning). Tailscale, LAN, or a Cloudflare Tunnel pointed at port 3000 all work the same way.
+
+To access from your phone over Tailscale:
+1. Install Tailscale on both the host and the phone, both signed into the same tailnet
+2. On the phone, open `http://<server-tailscale-hostname>:3000`
 
 ## Quick start
 

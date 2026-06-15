@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useState } from "react"
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
+const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
 interface SiteStat { site: string; count: number; last_indexed: string | null }
 interface Totals   { stories: number; hosted: number; total_words: number; dlp?: number }

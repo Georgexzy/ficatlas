@@ -376,7 +376,7 @@ export default function SearchPage() {
     if (!detectedUrl) return
     setImporting(true); setImportMsg(null)
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
+      const API_BASE = ""  // relative — handled by Next.js rewrite to backend
       const fd = new FormData(); fd.append("url", detectedUrl.url)
       const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
       if (!r.ok) throw new Error(await r.text())
@@ -394,7 +394,7 @@ export default function SearchPage() {
   const refreshFromAO3 = useCallback(async () => {
     setRefreshing(true); setRefreshMsg(null)
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
+      const API_BASE = ""  // relative — handled by Next.js rewrite to backend
       const fd = new FormData()
       const pq = parseQuery(query)
       if (pq.cleanText) fd.append("q", pq.cleanText)
@@ -419,14 +419,14 @@ export default function SearchPage() {
 
   // Fire an AO3 feed poll on page load (server debounces to once / 10 min)
   useEffect(() => {
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
+    const API_BASE = ""  // relative — handled by Next.js rewrite to backend
     fetch(`${API_BASE}/api/library/autopoll`, { method: "POST" }).catch(() => {})
   }, [])
 
   // Apply saved default sites / sort from settings on a fresh landing (no URL params)
   useEffect(() => {
     if (rawParams.toString()) return  // user arrived with explicit params; respect them
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:8000` : "http://localhost:8000")
+    const API_BASE = ""  // relative — handled by Next.js rewrite to backend
     fetch(`${API_BASE}/api/settings`).then(r => r.json()).then(s => {
       if (s.default_sites) setSites(s.default_sites.split(",").filter(Boolean))
       if (s.default_sort) setSort(s.default_sort)
