@@ -713,18 +713,25 @@ async def discover_ao3(
     ratings_list = [r.strip().upper() for r in (ratings or "").split(",") if r.strip()] or None
     excluded_tags_list = [t.strip() for t in (excluded_tags or "").split(",") if t.strip()] or None
 
-    entries = await scrape_tag_works(
+    result = await scrape_tag_works(
         fandom,
         min_words=min_words, max_words=max_words,
         complete_only=complete_only, sort=sort, direction=direction,
         ratings=ratings_list, excluded_tags=excluded_tags_list,
-        max_pages=max(1, min(max_pages, 20)),  # cap at 20 pages = ~400 works
+        max_pages=max(1, min(max_pages, 20)),
     )
+    entries = result["entries"]
+
+    # Surface a real error if NO pages came back (network/rate-limit/bad tag)
+    if result["pages_failed"] > 0 and result["pages_ok"] == 0:
+        raise HTTPException(502, f"AO3 unreachable or no snapshot for tag — tried {result['tried_url']}")
 
     inserted = persist_live_results(db, entries)
     return {
         "ok": True, "fandom": fandom,
         "found": len(entries), "newly_indexed": inserted,
+        "pages_ok": result["pages_ok"], "pages_failed": result["pages_failed"],
+        "tried_url": result["tried_url"],
     }
 
 
@@ -751,13 +758,17 @@ async def discover_hpffa(
     from live_fetch.ao3_works_scraper import scrape_tag_works
     from live_fetch.persist import persist_live_results
 
-    entries = await scrape_tag_works(
+    result = await scrape_tag_works(
         tag="",                                       # no fandom filter; whole collection
         min_words=min_words, max_words=max_words,
         complete_only=complete_only, sort=sort,
         max_pages=max(1, min(max_pages, 20)),
         collection="hpfanfiction_hpff",
     )
+    entries = result["entries"]
+
+    if result["pages_failed"] > 0 and result["pages_ok"] == 0:
+        raise HTTPException(502, f"AO3 unreachable — tried {result['tried_url']}")
 
     # Mark provenance so we can filter "HPFFA archive only" in the UI
     for e in entries:
@@ -767,6 +778,7 @@ async def discover_hpffa(
     return {
         "ok": True, "source": "hpffa_via_ao3",
         "found": len(entries), "newly_indexed": inserted,
+        "pages_ok": result["pages_ok"], "pages_failed": result["pages_failed"],
     }
 
 

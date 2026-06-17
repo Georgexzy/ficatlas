@@ -261,26 +261,66 @@ export default function LibraryPage() {
     }
   }
 
+  // Elapsed-seconds counter ticks every second while a scrape is in flight,
+  // so the button + status visibly change even though the underlying fetch
+  // is one long-running request.
+  const [a3Elapsed, setA3Elapsed] = useState(0)
+  useEffect(() => {
+    if (!a3Busy) { setA3Elapsed(0); return }
+    const t = setInterval(() => setA3Elapsed(s => s + 1), 1000)
+    return () => clearInterval(t)
+  }, [a3Busy])
+
   const discoverAo3Deep = async () => {
-    if (!a3Fandom.trim()) return
-    setA3Busy(true); setA3Msg(null)
+    // Collapse internal whitespace runs to a single space — pasted tag names
+    // routinely contain double spaces ("Harry Potter  - J. K. Rowling") that
+    // AO3 doesn't recognise. Trim trailing/leading too.
+    const fandom = a3Fandom.replace(/\s+/g, " ").trim()
+    if (!fandom) {
+      setA3Msg("⚠ Enter a fandom name first (e.g. 'Harry Potter - J. K. Rowling')")
+      return
+    }
+    // Reflect the normalised version back into the input so the user sees the fix
+    if (fandom !== a3Fandom) setA3Fandom(fandom)
+    console.log("[ficatlas] Deep AO3 scrape starting", {
+      fandom, minWords: a3MinWords, maxWords: a3MaxWords,
+      completeOnly: a3CompleteOnly, sort: a3Sort, pages: a3Pages,
+    })
+    setA3Busy(true); setA3Msg("🔄 Hitting AO3… (3s polite delay between pages, this can take 10–60s)")
+    const t0 = Date.now()
     try {
       const fd = new FormData()
-      fd.append("fandom", a3Fandom.trim())
+      fd.append("fandom", fandom)
       if (a3MinWords.trim()) fd.append("min_words", a3MinWords.trim())
       if (a3MaxWords.trim()) fd.append("max_words", a3MaxWords.trim())
       if (a3CompleteOnly) fd.append("complete_only", "true")
       fd.append("sort", a3Sort)
       fd.append("max_pages", a3Pages || "3")
-      const r = await fetch(`${API_BASE}/api/library/discover-ao3`, { method: "POST", body: fd })
-      const data = await r.json()
+      const url = `${API_BASE}/api/library/discover-ao3`
+      console.log("[ficatlas] POST", url)
+      const r = await fetch(url, { method: "POST", body: fd })
+      const data = await r.json().catch(() => ({}))
+      const dt = ((Date.now() - t0) / 1000).toFixed(1)
+      console.log(`[ficatlas] Response in ${dt}s`, { status: r.status, ok: r.ok, data })
+
+      if (!r.ok) {
+        setA3Msg(`❌ HTTP ${r.status} after ${dt}s — ${data.detail || data.error || "backend error (check sudo docker compose logs backend)"}`)
+        return
+      }
       if (data.ok) {
-        setA3Msg(`Scraped ${data.found} works matching filters, added ${data.newly_indexed} new to the index.`)
+        const diag = data.pages_failed ? `, ${data.pages_failed} page fetches failed` : ""
+        if (data.found === 0) {
+          setA3Msg(`✓ Done in ${dt}s — 0 works matched (${data.pages_ok} pages fetched OK${diag}). Try: a less narrow filter, the canonical AO3 tag name like 'Harry Potter - J. K. Rowling', or run on the server to inspect: curl -X POST -d "fandom=${encodeURIComponent(fandom)}" http://localhost:3000/api/library/discover-ao3`)
+        } else {
+          setA3Msg(`✓ Done in ${dt}s — scraped ${data.found} works (${data.pages_ok} pages${diag}), added ${data.newly_indexed} new to the index.`)
+        }
       } else {
-        setA3Msg(data.error || "AO3 deep discovery failed")
+        setA3Msg(`❌ ${data.detail || data.error || "AO3 deep discovery failed"} (after ${dt}s)`)
       }
     } catch (e: any) {
-      setA3Msg(`Failed: ${e.message}`)
+      const dt = ((Date.now() - t0) / 1000).toFixed(1)
+      console.error("[ficatlas] Deep AO3 scrape failed", e)
+      setA3Msg(`❌ Network error after ${dt}s: ${e.message || e}. Check the backend is up: curl http://localhost:3000/api/stats/totals`)
     } finally {
       setA3Busy(false)
     }
@@ -296,14 +336,18 @@ export default function LibraryPage() {
       fd.append("sort", hpSort)
       fd.append("max_pages", hpPages || "3")
       const r = await fetch(`${API_BASE}/api/library/discover-hpffa`, { method: "POST", body: fd })
-      const data = await r.json()
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        setHpMsg(`HTTP ${r.status}: ${data.detail || data.error || "Backend error"}`)
+        return
+      }
       if (data.ok) {
         setHpMsg(`Pulled ${data.found} stories from the HPFFA archive, added ${data.newly_indexed} new to the index.`)
       } else {
-        setHpMsg(data.error || data.detail || "HPFFA discovery failed")
+        setHpMsg(data.detail || data.error || "HPFFA discovery failed")
       }
     } catch (e: any) {
-      setHpMsg(`Failed: ${e.message}`)
+      setHpMsg(`Failed: ${e.message || e}`)
     } finally {
       setHpBusy(false)
     }
@@ -533,13 +577,19 @@ export default function LibraryPage() {
             </p>
             <div className="import-row">
               <input type="text" className="import-input"
-                placeholder="Harry Potter - J. K. Rowling"
+                placeholder="Canonical tag, e.g. Harry Potter - J. K. Rowling"
                 value={a3Fandom} onChange={e => setA3Fandom(e.target.value)}
                 disabled={a3Busy} onKeyDown={e => e.key === "Enter" && discoverAo3Deep()} />
-              <button className="btn btn--primary" onClick={discoverAo3Deep} disabled={a3Busy || !a3Fandom}>
-                {a3Busy ? "Scraping…" : "Scrape filtered"}
+              <button className="btn btn--primary" onClick={discoverAo3Deep} disabled={a3Busy}>
+                {a3Busy ? `Scraping… ${a3Elapsed}s` : "Scrape filtered"}
               </button>
             </div>
+            {a3Busy && (
+              <div className="alert" style={{marginTop:10, background:"var(--surface2)", borderColor:"var(--border)"}}>
+                <span className="scrape-spinner" /> Working on it — {a3Elapsed}s elapsed.
+                AO3 limits us to one request every 3 seconds, so {a3Pages || "3"} pages takes ~{(parseInt(a3Pages || "3") * 3) + 4}s minimum. Watch the browser console (F12) for verbose logs.
+              </div>
+            )}
             <div className="feed-filters">
               <input type="number" className="setting-input" placeholder="Min words"
                 value={a3MinWords} onChange={e => setA3MinWords(e.target.value)}

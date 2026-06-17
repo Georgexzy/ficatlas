@@ -1365,3 +1365,16 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 @media (max-width: 640px) {
   .reader-fab { bottom: 16px; right: 16px; width: 44px; height: 44px; }
 }
+
+/* ── Inline scrape spinner ───────────────────────────────────────────────── */
+.scrape-spinner {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: scrape-spin 0.8s linear infinite;
+  vertical-align: -2px;
+  margin-right: 8px;
+}
+@keyframes scrape-spin { to { transform: rotate(360deg); } }

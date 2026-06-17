@@ -261,14 +261,23 @@ async def scrape_tag_works(
     ratings: list[str] | None = None,
     max_pages: int = 5,
     collection: str | None = None,
-) -> list[dict]:
+) -> dict:
     """
     Scrape filtered works from a tag (or an AO3 collection) with pagination.
-    Default max_pages=5 yields up to 100 works per call. Bumping it indexes deeper.
-    Set `collection` (e.g. "hpfanfiction_hpff") to scrape Open Doors imports.
+    Returns a diagnostic dict so callers can distinguish "fetched but no matches"
+    from "all fetches failed":
+        {
+            "entries":      list of work dicts,
+            "pages_ok":     int — how many pages came back 200,
+            "pages_failed": int — how many pages failed (rate limit, 5xx, network),
+            "tried_url":    str — first URL we hit (for debugging),
+        }
     """
     all_entries: list[dict] = []
     seen_ids: set[str] = set()
+    pages_ok = 0
+    pages_failed = 0
+    first_url = ""
 
     async with httpx.AsyncClient(
         headers=HEADERS, timeout=30, follow_redirects=True,
@@ -280,12 +289,15 @@ async def scrape_tag_works(
                 excluded_tags=excluded_tags, ratings=ratings, page=page,
                 collection=collection,
             )
+            if page == 1: first_url = path
             log.info(f"AO3 scrape page {page}: {path[:120]}")
             r = await _get_with_fallback(client, path)
             if not r:
+                pages_failed += 1
                 log.warning(f"Page {page} failed, stopping")
                 break
 
+            pages_ok += 1
             entries, has_next = parse_works_page(r.text)
             new = [e for e in entries if e["site_id"] not in seen_ids]
             for e in new: seen_ids.add(e["site_id"])
@@ -297,4 +309,9 @@ async def scrape_tag_works(
             if page < max_pages:
                 await asyncio.sleep(REQUEST_DELAY)
 
-    return all_entries
+    return {
+        "entries":      all_entries,
+        "pages_ok":     pages_ok,
+        "pages_failed": pages_failed,
+        "tried_url":    first_url,
+    }

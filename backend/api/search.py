@@ -187,11 +187,25 @@ async def search(
         ))
 
     def arr_inc(col, csv_val):
+        """Permissive array-includes: a story matches if either the field contains
+        ALL requested values OR the field is empty/NULL (we can't prove it doesn't
+        match). This unifies search across sites with different metadata coverage —
+        HF FFN dump rows with empty character/relationship/tag arrays no longer get
+        excluded from character/ship/tag-filtered searches.
+        """
         if not csv_val: return None
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
-        return and_(*[func.array_to_string(col, ",").ilike(f"%{v}%") for v in vals]) if vals else None
+        if not vals: return None
+        empty = or_(col.is_(None), func.cardinality(col) == 0)
+        return and_(*[
+            or_(func.array_to_string(col, ",").ilike(f"%{v}%"), empty)
+            for v in vals
+        ])
 
     def arr_exc(col, csv_val):
+        """Strict exclude: only kick out stories that DEFINITELY have the unwanted
+        value. Empty arrays pass — we can't confirm presence of what we're excluding.
+        """
         if not csv_val: return None
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
         return and_(*[~func.array_to_string(col, ",").ilike(f"%{v}%") for v in vals]) if vals else None
@@ -215,12 +229,14 @@ async def search(
     if ratings:
         r_vals = [r.strip().upper() for r in ratings.split(",")]
         valid  = [RatingEnum(r) for r in r_vals if r in RatingEnum._value2member_map_]
-        if valid: filters.append(Story.rating.in_(valid))
+        # Permissive: stories with NULL rating still pass (HF FFN dump rows etc)
+        if valid: filters.append(or_(Story.rating.in_(valid), Story.rating.is_(None)))
 
     if exclude_ratings:
         r_vals = [r.strip().upper() for r in exclude_ratings.split(",")]
         valid  = [RatingEnum(r) for r in r_vals if r in RatingEnum._value2member_map_]
-        if valid: filters.append(Story.rating.notin_(valid))
+        # Stories with NULL rating pass an exclude (we can't confirm they're rated)
+        if valid: filters.append(or_(Story.rating.notin_(valid), Story.rating.is_(None)))
 
     if crossovers == "only":    filters.append(Story.is_crossover == True)
     elif crossovers == "exclude": filters.append(Story.is_crossover == False)

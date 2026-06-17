@@ -32,16 +32,30 @@ PRIMARY = "https://archiveofourown.org"
 MIRROR  = "https://archive.transformativeworks.org"
 
 HEADERS = {
-    "User-Agent": "FicAtlasBot/1.0 (+https://github.com/Georgexzy/ficatlas; fanfic discovery)",
-    "Accept": "application/atom+xml, application/xml, text/xml, text/html",
+    # AO3 doesn't formally rate-limit by UA but their CDN happily 5xxs on custom bot UAs.
+    # Send a regular browser fingerprint; we already throttle ourselves to <1 req/s.
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+              "application/atom+xml,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 REQUEST_DELAY = 4.0
 
 
 def ao3_escape(name: str) -> str:
-    """Apply AO3's quirky URL escaping: . → *d*, / → *s*, & → *a*, space → %20"""
-    s = name.strip()
+    """Apply AO3's quirky URL escaping: . → *d*, / → *s*, & → *a*, space → %20
+
+    Defensively collapses internal whitespace runs to a single space — AO3
+    canonical tags never contain double spaces, but users frequently paste them
+    from sources that do (autocomplete, copy/paste from articles, etc).
+    """
+    import re
+    s = re.sub(r"\s+", " ", name).strip()
     # Apply substitutions in order; do NOT urlencode the * characters themselves
     s = s.replace("&", "*a*")
     s = s.replace(".", "*d*")
@@ -60,29 +74,45 @@ def ao3_escape(name: str) -> str:
     return "".join(out)
 
 
+def _fmt_err(e: Exception) -> str:
+    """httpx exceptions often have empty str(); show class + repr too."""
+    msg = str(e) or ""
+    cls = e.__class__.__name__
+    if msg:
+        return f"{cls}: {msg}"
+    # Fall back to repr (shows constructor args) when str() is empty
+    return f"{cls}({e!r})"
+
+
 async def _get_with_fallback(client: httpx.AsyncClient, path: str) -> httpx.Response | None:
-    """Try primary, fall back to mirror on origin errors. Return None on hard failure."""
+    """Try primary, fall back to mirror on origin errors. One retry per host on
+    transient exceptions (TLS, connection reset, timeout). Return None on hard failure."""
+    import asyncio
     last_status = None
     for base in (PRIMARY, MIRROR):
-        try:
-            r = await client.get(f"{base}{path}")
-            last_status = r.status_code
-            if r.status_code == 200:
-                return r
-            if r.status_code in (525, 503, 502, 500):
-                log.warning(f"{base}{path} → {r.status_code}, trying fallback")
-                continue
-            if r.status_code in (429, 418):
-                log.warning(f"{base}{path} → {r.status_code} (rate limited)")
-                return None
-            # 404 from primary: the mirror may have different routing; try once
-            if r.status_code == 404 and base == PRIMARY:
-                log.info(f"{base}{path} → 404, trying mirror")
-                continue
-            log.warning(f"{base}{path} → {r.status_code}")
-        except Exception as e:
-            log.warning(f"{base}{path} failed: {e}")
-            continue
+        for attempt in (1, 2):
+            try:
+                r = await client.get(f"{base}{path}")
+                last_status = r.status_code
+                if r.status_code == 200:
+                    return r
+                if r.status_code in (525, 503, 502, 500):
+                    log.warning(f"{base}{path} → {r.status_code} (attempt {attempt}), trying fallback")
+                    break  # try mirror
+                if r.status_code in (429, 418):
+                    log.warning(f"{base}{path} → {r.status_code} (rate limited)")
+                    return None
+                # 404 from primary: the mirror may have different routing; try once
+                if r.status_code == 404 and base == PRIMARY:
+                    log.info(f"{base}{path} → 404, trying mirror")
+                    break
+                log.warning(f"{base}{path} → {r.status_code}")
+                break
+            except Exception as e:
+                log.warning(f"{base}{path} attempt {attempt} failed: {_fmt_err(e)}")
+                if attempt == 1:
+                    await asyncio.sleep(1.5)   # back off briefly before retry
+                    continue
     log.warning(f"All fallbacks failed for {path} (last status: {last_status})")
     return None
 
