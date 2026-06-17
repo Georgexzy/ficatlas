@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
 interface SiteStat { site: string; count: number; last_indexed: string | null }
-interface Totals   { stories: number; hosted: number; total_words: number; dlp?: number }
+interface Totals   { stories: number; hosted: number; total_words: number; dlp?: number; hpffa?: number }
 
 const SITE_LABELS: Record<string, string> = {
   ao3: "AO3", ffnet: "FF.net", fictionalley: "FicAlley",
@@ -56,6 +56,9 @@ export default function IndexStatus() {
                 <div><dt>Words</dt><dd>{fmt(totals.total_words)}</dd></div>
                 {totals.dlp != null && totals.dlp > 0 && (
                   <div><dt>DLP curated</dt><dd>{totals.dlp.toLocaleString()}</dd></div>
+                )}
+                {totals.hpffa != null && totals.hpffa > 0 && (
+                  <div><dt>HPFFA archive</dt><dd>{totals.hpffa.toLocaleString()}</dd></div>
                 )}
               </dl>
             )}

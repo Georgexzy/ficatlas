@@ -63,9 +63,14 @@ def build_works_url(
     ratings: list[str] | None = None,
     language_id: str | None = None,
     page: int = 1,
+    collection: str | None = None,     # e.g. "hpfanfiction_hpff" for HPFFA Open Doors import
 ) -> str:
-    """Build a tag-works URL with the requested filter params."""
-    escaped = ao3_escape(tag)
+    """Build a tag-works URL with the requested filter params.
+    If `collection` is set, scopes to /collections/{slug}/works (Open Doors imports
+    like HPFFA, fanlib.net, etc. live here) instead of /tags/{tag}/works.
+    `tag` is still applied as a fandom filter inside the collection.
+    """
+    escaped = ao3_escape(tag) if tag else None
     params: list[str] = []
 
     def add(k: str, v):
@@ -94,6 +99,13 @@ def build_works_url(
 
     if page > 1:
         add("page", page)
+
+    if collection:
+        # Inside a collection, optionally narrow by fandom via the query field
+        if escaped:
+            from urllib.parse import quote
+            add("work_search%5Bfandom_names%5D", quote(tag))
+        return f"/collections/{collection}/works?" + "&".join(params)
 
     return f"/tags/{escaped}/works?" + "&".join(params)
 
@@ -248,10 +260,12 @@ async def scrape_tag_works(
     excluded_tags: list[str] | None = None,
     ratings: list[str] | None = None,
     max_pages: int = 5,
+    collection: str | None = None,
 ) -> list[dict]:
     """
-    Scrape filtered works from a tag with pagination.
+    Scrape filtered works from a tag (or an AO3 collection) with pagination.
     Default max_pages=5 yields up to 100 works per call. Bumping it indexes deeper.
+    Set `collection` (e.g. "hpfanfiction_hpff") to scrape Open Doors imports.
     """
     all_entries: list[dict] = []
     seen_ids: set[str] = set()
@@ -264,8 +278,9 @@ async def scrape_tag_works(
                 tag, min_words=min_words, max_words=max_words,
                 complete_only=complete_only, sort=sort, direction=direction,
                 excluded_tags=excluded_tags, ratings=ratings, page=page,
+                collection=collection,
             )
-            log.info(f"AO3 tag-works scrape page {page}: {path[:120]}")
+            log.info(f"AO3 scrape page {page}: {path[:120]}")
             r = await _get_with_fallback(client, path)
             if not r:
                 log.warning(f"Page {page} failed, stopping")

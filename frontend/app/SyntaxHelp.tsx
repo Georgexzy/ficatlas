@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 const EXAMPLES = [
   { group: "Basic", rows: [
@@ -42,31 +42,44 @@ const EXAMPLES = [
 
 export default function SyntaxHelp() {
   const [open, setOpen] = useState(false)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const btnRef   = useRef<HTMLButtonElement | null>(null)
 
-  // Close on Escape
+  // Close on Escape or outside-click
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false) }
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (panelRef.current?.contains(t)) return         // click inside panel
+      if (btnRef.current?.contains(t)) return           // click on the trigger toggles
+      setOpen(false)
+    }
     window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
+    // capture phase so we close even if a child stops propagation
+    document.addEventListener("click", onClick, true)
+    return () => {
+      window.removeEventListener("keydown", onKey)
+      document.removeEventListener("click", onClick, true)
+    }
   }, [open])
 
   return (
     <div className="syntax-help">
-      <button className="syntax-help__btn" onClick={() => setOpen(o => !o)}
+      <button ref={btnRef} className="syntax-help__btn" onClick={() => setOpen(o => !o)}
               title="Search syntax help" aria-label="Search syntax help">?</button>
 
       {open && (
         <>
-          <button className="syntax-help__backdrop" onClick={() => setOpen(false)} aria-label="Close" />
-          <div className="syntax-help__panel" role="dialog" aria-modal="true">
+          <div className="syntax-help__backdrop" aria-hidden="true" />
+          <div ref={panelRef} className="syntax-help__panel" role="dialog" aria-modal="true">
             <div className="syntax-help__header">
               <p className="syntax-help__title">Search Syntax</p>
               <button className="syntax-help__close" onClick={() => setOpen(false)} aria-label="Close">✕</button>
             </div>
             <p className="syntax-help__intro">
               Operators work in any order. Quotes optional for multi-word values — unquoted values
-              read until the next operator. Press <kbd>Esc</kbd> to close.
+              read until the next operator. Click outside or press <kbd>Esc</kbd> to close.
             </p>
             {EXAMPLES.map(group => (
               <div key={group.group} className="syntax-help__group">

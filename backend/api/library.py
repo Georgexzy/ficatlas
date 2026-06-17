@@ -728,6 +728,48 @@ async def discover_ao3(
     }
 
 
+# ── HPFFA via the AO3 Open Doors collection ──────────────────────────────────
+
+@router.post("/discover-hpffa")
+async def discover_hpffa(
+    min_words: Optional[int] = Form(None),
+    max_words: Optional[int] = Form(None),
+    complete_only: bool = Form(False),
+    sort: str = Form("revised_at"),
+    max_pages: int = Form(5),
+    db: Session = Depends(get_db),
+):
+    """
+    Pulls stories from the HarryPotterFanfiction.com archive — but via AO3's
+    Open Doors collection (`/collections/hpfanfiction_hpff`) rather than scraping
+    HPFFA directly. HPFFA closed to new works in 2016 and was imported wholesale
+    to AO3 starting late 2021; the AO3 collection is the canonical, queryable,
+    metadata-rich source. Stories arrive with proper AO3 tags/characters/
+    relationships, work normally with FicHub for full-text import, and gain
+    the `hpffa_archive` provenance tag for easy filtering later.
+    """
+    from live_fetch.ao3_works_scraper import scrape_tag_works
+    from live_fetch.persist import persist_live_results
+
+    entries = await scrape_tag_works(
+        tag="",                                       # no fandom filter; whole collection
+        min_words=min_words, max_words=max_words,
+        complete_only=complete_only, sort=sort,
+        max_pages=max(1, min(max_pages, 20)),
+        collection="hpfanfiction_hpff",
+    )
+
+    # Mark provenance so we can filter "HPFFA archive only" in the UI
+    for e in entries:
+        e["tags"] = list(set((e.get("tags") or []) + ["hpffa_archive"]))
+
+    inserted = persist_live_results(db, entries)
+    return {
+        "ok": True, "source": "hpffa_via_ao3",
+        "found": len(entries), "newly_indexed": inserted,
+    }
+
+
 # ── Admin: remove orphaned example/seed stories ──────────────────────────────
 
 @router.delete("/admin/cleanup-seeds")

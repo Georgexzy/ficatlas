@@ -135,24 +135,38 @@ export default function StoryPage() {
               {importing ? "Importing…" : "Import & Read here"}
             </button>
           )}
-          {!story.is_hosted && story.site !== "ao3" && story.site !== "ffnet" && (
-            <a href={story.site === "fictionalley"
-                  ? `https://web.archive.org/web/2020/${story.url}`
-                  : story.url}
-              target="_blank" rel="noopener noreferrer" className="btn btn--primary">
-              Read on {story.site === "fictionalley" ? "Wayback" : (SITE_LABELS[story.site] ?? story.site)} ↗
-            </a>
-          )}
+          {!story.is_hosted && story.site !== "ao3" && story.site !== "ffnet" && (() => {
+            // FicAlley snapshots were crawled with explicit :80 port — inject if missing
+            let target = story.url
+            if (story.site === "fictionalley") {
+              let u = story.url
+              if (u.includes("fictionalley.org") && !u.includes("fictionalley.org:")) {
+                u = u.replace("fictionalley.org/", "fictionalley.org:80/")
+              }
+              target = `https://web.archive.org/web/2010/${u}`
+            }
+            return (
+              <a href={target} target="_blank" rel="noopener noreferrer" className="btn btn--primary">
+                Read on {story.site === "fictionalley" ? "Wayback" : (SITE_LABELS[story.site] ?? story.site)} ↗
+              </a>
+            )
+          })()}
           <button className={`btn ${bookmarked ? "btn--on" : ""}`} onClick={toggleBookmark}>
             {bookmarked ? "★ Bookmarked" : "☆ Bookmark"}
           </button>
-          {/* For hosted FicAlley stories, expose Wayback alongside the in-app reader since FicAlley is defunct */}
-          {story.is_hosted && story.site === "fictionalley" && (
-            <a href={`https://web.archive.org/web/2020/${story.url}`}
-              target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
-              View on Wayback ↗
-            </a>
-          )}
+          {/* For hosted FicAlley stories, expose Wayback alongside the in-app reader */}
+          {story.is_hosted && story.site === "fictionalley" && (() => {
+            let u = story.url
+            if (u.includes("fictionalley.org") && !u.includes("fictionalley.org:")) {
+              u = u.replace("fictionalley.org/", "fictionalley.org:80/")
+            }
+            return (
+              <a href={`https://web.archive.org/web/2010/${u}`}
+                target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
+                View on Wayback ↗
+              </a>
+            )
+          })()}
           {story.wayback_url && (
             <a href={story.wayback_url} target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
               Wayback ↗

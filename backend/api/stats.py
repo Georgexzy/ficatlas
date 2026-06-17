@@ -29,4 +29,9 @@ async def total_stats(db: Session = Depends(get_db)):
     dlp = db.query(func.count(Story.id)).filter(
         Story.tags.any("dlp_library")  # type: ignore[arg-type]
     ).scalar() or 0
-    return {"stories": stories, "hosted": hosted, "total_words": int(total_words), "dlp": dlp}
+    # HPFFA archive count (imported via AO3 Open Doors)
+    hpffa = db.query(func.count(Story.id)).filter(
+        Story.tags.any("hpffa_archive")  # type: ignore[arg-type]
+    ).scalar() or 0
+    return {"stories": stories, "hosted": hosted, "total_words": int(total_words),
+            "dlp": dlp, "hpffa": hpffa}

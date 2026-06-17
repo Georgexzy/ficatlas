@@ -227,14 +227,23 @@ async def search(
 
     if status:
         s_vals = [StatusEnum(s.strip()) for s in status.split(",") if s.strip() in StatusEnum.__members__]
-        if s_vals: filters.append(Story.status.in_(s_vals))
+        if s_vals:
+            # Permissive: a story with NULL status (e.g. from HF FFN dump) still passes —
+            # we can't prove it doesn't match the user's filter, so don't exclude it.
+            filters.append(or_(Story.status.in_(s_vals), Story.status.is_(None)))
 
-    if language:        filters.append(Story.language.ilike(language))
-    if word_count_min:  filters.append(Story.word_count >= word_count_min)
-    if word_count_max:  filters.append(Story.word_count <= word_count_max)
-    if updated_after:   filters.append(Story.updated_at >= updated_after)
-    if updated_before:  filters.append(Story.updated_at <= updated_before)
-    if published_after: filters.append(Story.published_at >= published_after)
+    if language:
+        filters.append(or_(Story.language.ilike(language), Story.language.is_(None)))
+    if word_count_min:
+        filters.append(or_(Story.word_count >= word_count_min, Story.word_count == 0))
+    if word_count_max:
+        filters.append(or_(Story.word_count <= word_count_max, Story.word_count == 0))
+    if updated_after:
+        filters.append(or_(Story.updated_at >= updated_after, Story.updated_at.is_(None)))
+    if updated_before:
+        filters.append(or_(Story.updated_at <= updated_before, Story.updated_at.is_(None)))
+    if published_after:
+        filters.append(or_(Story.published_at >= published_after, Story.published_at.is_(None)))
 
     if filters:
         db_query = db_query.filter(and_(*filters))

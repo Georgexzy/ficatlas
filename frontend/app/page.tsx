@@ -9,6 +9,38 @@ import { searchStories, formatWordCount, formatNumber, chapterDisplay,
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import IndexStatus from "./IndexStatus"
 import SyntaxHelp from "./SyntaxHelp"
+import { useAuth } from "@/lib/auth"
+
+// Header user menu - shows login/signup or username + logout
+function UserMenu() {
+  const { user, logout, loading } = useAuth()
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (!t.closest(".user-menu")) setOpen(false)
+    }
+    document.addEventListener("click", close)
+    return () => document.removeEventListener("click", close)
+  }, [open])
+  if (loading) return null
+  if (!user) return <Link href="/login" className="header__link">Sign in</Link>
+  return (
+    <div className="user-menu">
+      <button className="user-menu__btn" onClick={() => setOpen(o => !o)}>
+        <span className="user-menu__avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+        <span className="user-menu__name">{user.username}</span>
+      </button>
+      {open && (
+        <div className="user-menu__dropdown">
+          <p className="user-menu__hint">Bookmarks &amp; progress sync to this account.</p>
+          <button onClick={async () => { await logout(); setOpen(false) }}>Sign out</button>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function csv(s?: string): string[] {
@@ -201,10 +233,16 @@ function StoryCard({ story }: { story: StoryCard }) {
     }
   }
 
-  // External link: for FicAlley use Wayback (site is defunct), otherwise the original URL
-  const externalUrl = story.site === "fictionalley"
-    ? `https://web.archive.org/web/2020/${story.url}`
-    : story.url
+  // External link: FicAlley is defunct, link to Wayback. Snapshots were crawled with
+  // the explicit :80 port in the URL, so we need to inject it for Wayback to match.
+  const externalUrl = (() => {
+    if (story.site !== "fictionalley") return story.url
+    let u = story.url
+    if (u.includes("fictionalley.org") && !u.includes("fictionalley.org:")) {
+      u = u.replace("fictionalley.org/", "fictionalley.org:80/")
+    }
+    return `https://web.archive.org/web/2010/${u}`
+  })()
   const externalLabel = story.site === "fictionalley"
     ? "Open on Wayback ↗"
     : `Open on ${SITE_LABELS[story.site] ?? story.site} ↗`
@@ -538,6 +576,7 @@ export default function SearchPage() {
         <div className="header__right">
           <Link href="/library" className="header__link">Library</Link>
           <Link href="/settings" className="header__link">Settings</Link>
+          <UserMenu />
           <IndexStatus />
           <label className="toggle-label">
             <input type="checkbox" checked={explicit} onChange={e => setExplicit(e.target.checked)} className="sr-only" />
@@ -611,7 +650,10 @@ export default function SearchPage() {
               placeholder="e.g. slow burn" highlighted={parsedLive.tags} />
           </FilterSection>
 
-          <FilterSection label="Curation" count={incTags.includes("dlp_library") ? 1 : 0}>
+          <FilterSection label="Curation" count={
+            (incTags.includes("dlp_library") ? 1 : 0) +
+            (incTags.includes("hpffa_archive") ? 1 : 0)
+          }>
             <label className="curated-check">
               <input type="checkbox"
                 checked={incTags.includes("dlp_library")}
@@ -619,6 +661,14 @@ export default function SearchPage() {
                   ? [...t, "dlp_library"]
                   : t.filter(x => x !== "dlp_library"))} />
               <span>DLP curated only</span>
+            </label>
+            <label className="curated-check">
+              <input type="checkbox"
+                checked={incTags.includes("hpffa_archive")}
+                onChange={e => setIncTags(t => e.target.checked
+                  ? [...t, "hpffa_archive"]
+                  : t.filter(x => x !== "hpffa_archive"))} />
+              <span>HPFFA archive only</span>
             </label>
           </FilterSection>
 

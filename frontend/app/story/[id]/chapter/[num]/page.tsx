@@ -161,7 +161,7 @@ export default function ChapterPage() {
   return (
     <div className="reader-shell" data-width={width} data-font={fontFamily}>
       <div className="reader-progress" style={{ width: `${scrollPct}%` }} />
-      <div className="reader-topbar">
+      <div className="reader-topbar reader-topbar--sticky">
         <Link href={`/story/${storyId}`} className="back-link">← {story.title}</Link>
         <div className="reader-controls">
           <button className="reader-ctrl" onClick={() => setFontFamily(f => f === "serif" ? "sans" : "serif")}
@@ -172,6 +172,11 @@ export default function ChapterPage() {
           <button className="reader-ctrl" onClick={() => setFontSize(s => Math.min(s + 1, 24))} aria-label="Larger">A+</button>
         </div>
       </div>
+
+      {/* Floating exit button — exit reader from anywhere without scrolling up */}
+      <Link href={`/story/${storyId}`} className="reader-fab" title="Back to story page" aria-label="Exit reader">
+        ✕
+      </Link>
 
       <article className="reader" data-width={width} data-font={fontFamily} style={{ fontSize: `${fontSize}px` }}>
         <header className="reader__header">

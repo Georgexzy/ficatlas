@@ -55,6 +55,15 @@ export default function LibraryPage() {
   const [a3Busy, setA3Busy] = useState(false)
   const [a3Msg, setA3Msg] = useState<string | null>(null)
 
+  // HPFFA discovery (via AO3 Open Doors collection)
+  const [hpMinWords, setHpMinWords] = useState("")
+  const [hpMaxWords, setHpMaxWords] = useState("")
+  const [hpCompleteOnly, setHpCompleteOnly] = useState(false)
+  const [hpSort, setHpSort] = useState("revised_at")
+  const [hpPages, setHpPages] = useState("3")
+  const [hpBusy, setHpBusy] = useState(false)
+  const [hpMsg, setHpMsg] = useState<string | null>(null)
+
   // Tracked fandom (auto-polled on every site load)
   const [trackedFandom, setTrackedFandom] = useState("")
   const [savingTracked, setSavingTracked] = useState(false)
@@ -274,6 +283,29 @@ export default function LibraryPage() {
       setA3Msg(`Failed: ${e.message}`)
     } finally {
       setA3Busy(false)
+    }
+  }
+
+  const discoverHpffa = async () => {
+    setHpBusy(true); setHpMsg(null)
+    try {
+      const fd = new FormData()
+      if (hpMinWords.trim()) fd.append("min_words", hpMinWords.trim())
+      if (hpMaxWords.trim()) fd.append("max_words", hpMaxWords.trim())
+      if (hpCompleteOnly) fd.append("complete_only", "true")
+      fd.append("sort", hpSort)
+      fd.append("max_pages", hpPages || "3")
+      const r = await fetch(`${API_BASE}/api/library/discover-hpffa`, { method: "POST", body: fd })
+      const data = await r.json()
+      if (data.ok) {
+        setHpMsg(`Pulled ${data.found} stories from the HPFFA archive, added ${data.newly_indexed} new to the index.`)
+      } else {
+        setHpMsg(data.error || data.detail || "HPFFA discovery failed")
+      }
+    } catch (e: any) {
+      setHpMsg(`Failed: ${e.message}`)
+    } finally {
+      setHpBusy(false)
     }
   }
 
@@ -535,6 +567,49 @@ export default function LibraryPage() {
                 style={{ width: 80 }} min={1} max={20} />
             </div>
             {a3Msg && <div className="alert alert--success" style={{marginTop:10}}>{a3Msg}</div>}
+          </section>
+
+          <section className="import-section">
+            <h3>HarryPotterFanfiction.com archive (via AO3 Open Doors)</h3>
+            <p className="import-help">
+              HPFFA closed to new works in 2016 and was imported wholesale to AO3 in late 2021 as
+              the <code>hpfanfiction_hpff</code> collection (~85k stories). We pull from there so
+              every result has full AO3 metadata — tags, characters, relationships, warnings — and
+              imports work normally via FicHub. Stories get a <code>hpffa_archive</code> tag for
+              easy filtering later.
+            </p>
+            <div className="import-row">
+              <button className="btn btn--primary" onClick={discoverHpffa} disabled={hpBusy}>
+                {hpBusy ? "Scraping HPFFA collection…" : "Scrape HPFFA collection"}
+              </button>
+            </div>
+            <div className="feed-filters">
+              <input type="number" className="setting-input" placeholder="Min words"
+                value={hpMinWords} onChange={e => setHpMinWords(e.target.value)}
+                style={{ flex: 1 }} min={0} step={1000} />
+              <input type="number" className="setting-input" placeholder="Max words"
+                value={hpMaxWords} onChange={e => setHpMaxWords(e.target.value)}
+                style={{ flex: 1 }} min={0} step={1000} />
+              <label className="feed-filters__check">
+                <input type="checkbox" checked={hpCompleteOnly}
+                  onChange={e => setHpCompleteOnly(e.target.checked)} />
+                <span>Complete</span>
+              </label>
+            </div>
+            <div className="feed-filters" style={{marginTop:6}}>
+              <select className="setting-select" value={hpSort}
+                onChange={e => setHpSort(e.target.value)} style={{flex:1}}>
+                <option value="revised_at">Recently updated</option>
+                <option value="created_at">Recently added to AO3</option>
+                <option value="kudos_count">Most kudos</option>
+                <option value="word_count">Word count</option>
+                <option value="hits">Most hits</option>
+              </select>
+              <input type="number" className="setting-input" placeholder="Pages"
+                value={hpPages} onChange={e => setHpPages(e.target.value)}
+                style={{ width: 80 }} min={1} max={20} />
+            </div>
+            {hpMsg && <div className="alert alert--success" style={{marginTop:10}}>{hpMsg}</div>}
           </section>
 
           <section className="import-section">

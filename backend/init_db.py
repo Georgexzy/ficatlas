@@ -97,6 +97,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_chapters_story_number ON chapters (story_id
 -- Idempotent schema additions for existing deployments
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS cross_post_urls TEXT[] DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS ix_stories_cross_post_urls ON stories USING gin (cross_post_urls);
+
+-- User accounts (added in user-accounts release)
+CREATE TABLE IF NOT EXISTS users (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username      VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+    last_login    TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_users_username ON users (username);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    token       VARCHAR(80) PRIMARY KEY,
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMP NOT NULL,
+    last_used   TIMESTAMP DEFAULT NOW(),
+    user_agent  VARCHAR(255)
+);
+CREATE INDEX IF NOT EXISTS ix_user_sessions_user ON user_sessions (user_id);
+
+CREATE TABLE IF NOT EXISTS user_data (
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key        VARCHAR(50) NOT NULL,
+    value      JSONB NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (user_id, key)
+);
+CREATE INDEX IF NOT EXISTS ix_user_data_user ON user_data (user_id);
 """
 
 def init():
