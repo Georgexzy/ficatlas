@@ -13,7 +13,7 @@ import { useAuth } from "@/lib/auth"
 
 // Header user menu - shows login/signup or username + logout
 function UserMenu() {
-  const { user, logout, loading } = useAuth()
+  const { user, logout, loading, syncing } = useAuth()
   const [open, setOpen] = useState(false)
   useEffect(() => {
     if (!open) return
@@ -29,12 +29,19 @@ function UserMenu() {
   return (
     <div className="user-menu">
       <button className="user-menu__btn" onClick={() => setOpen(o => !o)}>
-        <span className="user-menu__avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+        <span className="user-menu__avatar">
+          {user.username.slice(0, 1).toUpperCase()}
+          {syncing && <span className="user-menu__sync-dot" title="Syncing…" />}
+        </span>
         <span className="user-menu__name">{user.username}</span>
       </button>
       {open && (
         <div className="user-menu__dropdown">
-          <p className="user-menu__hint">Bookmarks &amp; progress sync to this account.</p>
+          <p className="user-menu__hint">
+            {syncing ? "⟳ Syncing your data…" : "Bookmarks, progress & settings sync to this account."}
+          </p>
+          <Link href="/account" className="user-menu__link" onClick={() => setOpen(false)}>Account &amp; sync</Link>
+          <Link href="/library" className="user-menu__link" onClick={() => setOpen(false)}>My library</Link>
           <button onClick={async () => { await logout(); setOpen(false) }}>Sign out</button>
         </div>
       )}

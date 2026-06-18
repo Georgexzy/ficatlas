@@ -1627,3 +1627,68 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   .reader-topbar { padding: 8px 12px; }
   .back-link { max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
+
+/* ── Account page ────────────────────────────────────────────────────────── */
+.back-link-plain {
+  display: inline-block; color: var(--text-dim); text-decoration: none;
+  font-size: 13px; margin-bottom: 16px;
+}
+.back-link-plain:hover { color: var(--text); }
+
+.account-identity { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.account-avatar {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: var(--accent); color: #1a1612;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 20px; flex-shrink: 0;
+}
+.account-username { font-size: 18px; font-weight: 600; margin: 0; }
+.account-meta { font-size: 13px; color: var(--text-faint); margin: 2px 0 0; }
+
+.account-sync-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 10px 0; border-top: 1px solid var(--border);
+}
+.account-sync-status { font-size: 13px; color: var(--text-dim); }
+.account-help { font-size: 13px; color: var(--text-faint); line-height: 1.6; margin: 8px 0 0; }
+.account-success { color: var(--green); font-size: 13px; margin: 10px 0 0; }
+.account-error { color: #ff8a8a; font-size: 13px; margin: 10px 0 0; }
+
+.account-form { display: flex; flex-direction: column; gap: 10px; max-width: 360px; }
+.account-danger-actions { display: flex; gap: 10px; }
+
+.session-list { list-style: none; margin: 0 0 14px; padding: 0; }
+.session-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.session-item:last-child { border-bottom: none; }
+.session-device { display: block; font-size: 14px; color: var(--text); }
+.session-current {
+  display: inline-block; margin-left: 8px; font-size: 11px;
+  background: var(--accent); color: #1a1612; border-radius: 999px;
+  padding: 1px 8px; font-weight: 600;
+}
+.session-time { display: block; font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+
+.settings-group--danger { border: 1px solid rgba(220,80,80,0.3); border-radius: 10px; padding: 16px; }
+.btn--danger { background: #c0392b; color: #fff; border: none; }
+.btn--danger:hover { background: #d84a3a; }
+
+/* Sync dot on the avatar */
+.user-menu__avatar { position: relative; }
+.user-menu__sync-dot {
+  position: absolute; bottom: -1px; right: -1px;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--green); border: 2px solid var(--bg);
+  animation: sync-pulse 1s ease-in-out infinite;
+}
+@keyframes sync-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
+
+.user-menu__link {
+  display: block; padding: 8px 12px; border-radius: 6px;
+  color: var(--text); text-decoration: none; font-size: 13px;
+  background: var(--surface2); border: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.user-menu__link:hover { background: var(--surface3); }
