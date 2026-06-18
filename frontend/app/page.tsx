@@ -284,13 +284,15 @@ function StoryCard({ story }: { story: StoryCard }) {
       {story.summary && <p className="card__summary">{story.summary}</p>}
 
       <div className="card__meta">
-        <span title="Words">📄 {formatWordCount(story.word_count)}</span>
+        {story.word_count > 0
+          ? <span title="Words">📄 {formatWordCount(story.word_count)}</span>
+          : <span title="Word count not in metadata" className="card__meta-muted">📄 —</span>}
         <span className="dot">·</span>
         <span title="Chapters">{chapterDisplay(story.chapter_count, story.chapter_count_total)} ch</span>
         {story.kudos > 0 && <><span className="dot">·</span><span title="Kudos">♥ {formatNumber(story.kudos)}</span></>}
         {story.hits > 0 && <><span className="dot">·</span><span title="Hits">👁 {formatNumber(story.hits)}</span></>}
         {story.comments > 0 && <><span className="dot">·</span><span title="Comments">💬 {formatNumber(story.comments)}</span></>}
-        {story.language !== "English" && <><span className="dot">·</span><span>{story.language}</span></>}
+        {story.language && story.language !== "English" && <><span className="dot">·</span><span>{story.language}</span></>}
         {story.updated_at && <><span className="dot">·</span><span title="Last updated">{story.updated_at.split("T")[0]}</span></>}
       </div>
 
@@ -337,7 +339,7 @@ function StoryCard({ story }: { story: StoryCard }) {
 }
 
 // ── Empty / loading states ────────────────────────────────────────────────────
-function EmptyState({ onPick }: { onPick: (q: string) => void }) {
+function EmptyState({ onPick, onSurprise }: { onPick: (q: string) => void; onSurprise: () => void }) {
   const examples = [
     "ship:Draco/Hermione >100k complete",
     "fandom: Harry Potter marauders wip updated:2y",
@@ -353,6 +355,7 @@ function EmptyState({ onPick }: { onPick: (q: string) => void }) {
           <button key={ex} className="empty__ex" onClick={() => onPick(ex)}>{ex}</button>
         ))}
       </div>
+      <button className="empty__surprise" onClick={onSurprise}>🎲 Surprise me</button>
     </div>
   )
 }
@@ -404,6 +407,14 @@ export default function SearchPage() {
   const [liveCount,    setLiveCount]    = useState(0)
   const [parsedTokens, setParsedTokens] = useState<ParsedToken[]>([])
   const [refreshing,   setRefreshing]   = useState(false)
+  // Mobile filter drawer (sidebar becomes a slide-out panel on phones)
+  const [filtersOpen,  setFiltersOpen]  = useState(false)
+  // Prevent background scroll while the drawer is open
+  useEffect(() => {
+    if (typeof document === "undefined") return
+    document.body.style.overflow = filtersOpen ? "hidden" : ""
+    return () => { document.body.style.overflow = "" }
+  }, [filtersOpen])
   const [refreshMsg,   setRefreshMsg]   = useState<string | null>(null)
   const [importing,    setImporting]    = useState(false)
   const [importMsg,    setImportMsg]    = useState<string | null>(null)
@@ -530,9 +541,12 @@ export default function SearchPage() {
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
       status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort])
 
-  const doSearch = useCallback(async (resetPage = true) => {
-    const pg = resetPage ? 1 : page
+  const doSearch = useCallback(async (resetPage = true, explicitPage?: number) => {
+    // explicitPage lets pagination pass the target page directly, avoiding the
+    // stale-closure bug where setPage(p=>p+1) hadn't flushed before doSearch ran.
+    const pg = explicitPage ?? (resetPage ? 1 : page)
     if (resetPage) setPage(1)
+    else if (explicitPage) setPage(explicitPage)
     const p = buildParams(pg)
 
     const qs = new URLSearchParams()
@@ -556,17 +570,52 @@ export default function SearchPage() {
       setResults(data)
       setLiveCount((data as any).live_count ?? 0)
       setParsedTokens((data as any).parsed_tokens ?? [])
+      // Scroll to top of results on page change for a clean reading position
+      if (explicitPage && explicitPage > 1) {
+        window.scrollTo({ top: 0, behavior: "smooth" })
+      }
     } catch (e: any) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
-  }, [buildParams, page, pathname, router])
+  }, [buildParams, page, pathname, router, query])
 
   const removeToken = (raw: string) =>
     setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim())
 
+  const surpriseMe = useCallback(async () => {
+    setLoading(true); setError(null)
+    try {
+      const API_BASE = ""
+      // Use the current fandom filter if the user has one set, for relevant surprises.
+      const params = new URLSearchParams({ count: "8" })
+      if (incFandoms.length > 0) params.set("fandom", incFandoms[0])
+      const r = await fetch(`${API_BASE}/api/search/random?${params.toString()}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const cards = await r.json()
+      setResults({
+        total: cards.length, page: 1, per_page: cards.length,
+        results: cards, sites_searched: [], live_count: 0,
+      } as any)
+      setLiveCount(0); setParsedTokens([])
+      window.scrollTo({ top: 0, behavior: "smooth" })
+    } catch (e: any) {
+      setError(e.message || "Couldn't fetch random stories")
+    } finally {
+      setLoading(false)
+    }
+  }, [incFandoms])
+
   const totalPages = results ? Math.ceil(results.total / results.per_page) : 0
+
+  // Count active filters for the mobile drawer badge
+  const activeFilterCount =
+    incFandoms.length + incChars.length + incShips.length + incTags.length +
+    excFandoms.length + excChars.length + excShips.length + excTags.length +
+    (wordMin != null ? 1 : 0) + (wordMax != null ? 1 : 0) +
+    incRatings.length + status.length +
+    (searchWithin ? 1 : 0)
 
   return (
     <div className="shell">
@@ -587,8 +636,15 @@ export default function SearchPage() {
       </header>
 
       <div className="layout">
-        {/* ── Sidebar ── */}
-        <aside className="sidebar">
+        {/* Mobile filter backdrop — tap to close the drawer */}
+        {filtersOpen && <div className="sidebar-backdrop" onClick={() => setFiltersOpen(false)} />}
+
+        {/* ── Sidebar (slide-out drawer on mobile) ── */}
+        <aside className={`sidebar ${filtersOpen ? "sidebar--open" : ""}`}>
+          <div className="sidebar__mobile-head">
+            <span>Filters</span>
+            <button className="sidebar__close" onClick={() => setFiltersOpen(false)} aria-label="Close filters">✕</button>
+          </div>
           <div className="sidebar__top">
             <label className="sidebar__label">Sort</label>
             <select value={sort} onChange={e => setSort(e.target.value)} className="select">
@@ -762,6 +818,14 @@ export default function SearchPage() {
               value={searchWithin} onChange={e => setSearchWithin(e.target.value)}
               className="input-sm w-full" />
           </div>
+
+          {/* Mobile-only: apply filters and close the drawer */}
+          <div className="sidebar__mobile-apply">
+            <button className="btn btn--primary w-full"
+              onClick={() => { setFiltersOpen(false); doSearch() }}>
+              Apply filters
+            </button>
+          </div>
         </aside>
 
         {/* ── Main ── */}
@@ -799,13 +863,32 @@ export default function SearchPage() {
             }} />
           </div>
 
+          {/* Mobile-only filters trigger — opens the slide-out filter drawer */}
+          <button className="filters-trigger" onClick={() => setFiltersOpen(true)}>
+            <span className="filters-trigger__icon">⚙</span> Filters &amp; sort
+            {activeFilterCount > 0 && <span className="filters-trigger__badge">{activeFilterCount}</span>}
+          </button>
+
           {error && <div className="alert alert--error">{error}</div>}
+
+          {loading && !results && (
+            <div className="story-list" aria-busy="true" aria-label="Loading results">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="card-skeleton">
+                  <div className="skel-line skel-line--title" />
+                  <div className="skel-line" />
+                  <div className="skel-line skel-line--short" />
+                  <div className="skel-line skel-line--meta" />
+                </div>
+              ))}
+            </div>
+          )}
 
           {results && (
             <>
               <div className="results-bar">
                 <span className="results-bar__count">
-                  <strong>{results.total.toLocaleString()}</strong> stories
+                  <strong>{results.total.toLocaleString()}{results.count_is_capped ? "+" : ""}</strong> stories
                   {results.sites_searched.length > 0 && ` · ${results.sites_searched.map(s => SITE_LABELS[s] ?? s).join(" + ")}`}
                   {liveCount > 0 && <span className="results-bar__live"> +{liveCount} live</span>}
                 </span>
@@ -840,18 +923,20 @@ export default function SearchPage() {
               {totalPages > 1 && (
                 <div className="pagination">
                   <button disabled={page <= 1}
-                    onClick={() => { setPage(p => p - 1); doSearch(false) }}
+                    onClick={() => doSearch(false, Math.max(1, page - 1))}
                     className="page-btn">← Previous</button>
                   <span className="pagination__info">Page {page} of {totalPages}</span>
                   <button disabled={page >= totalPages}
-                    onClick={() => { setPage(p => p + 1); doSearch(false) }}
+                    onClick={() => doSearch(false, page + 1)}
                     className="page-btn">Next →</button>
                 </div>
               )}
             </>
           )}
 
-          {!results && !loading && <EmptyState onPick={(q) => { setQuery(q); setTimeout(() => doSearch(), 0) }} />}
+          {!results && !loading && <EmptyState
+            onPick={(q) => { setQuery(q); setTimeout(() => doSearch(), 0) }}
+            onSurprise={surpriseMe} />}
         </main>
       </div>
     </div>

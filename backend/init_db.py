@@ -98,6 +98,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_chapters_story_number ON chapters (story_id
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS cross_post_urls TEXT[] DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS ix_stories_cross_post_urls ON stories USING gin (cross_post_urls);
 
+-- Performance: the search filters use array_to_string(col,',') ILIKE '%v%' which
+-- can't use a plain GIN index. A trigram index on the stringified fandom array
+-- makes the primary-axis fandom filter fast even on millions of rows.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS ix_stories_fandoms_trgm ON stories
+    USING gin (array_to_string(fandoms, ',') gin_trgm_ops);
+-- Composite index for the most common access pattern: filter by word_count, sort by kudos.
+CREATE INDEX IF NOT EXISTS ix_stories_kudos_desc ON stories (kudos DESC);
+CREATE INDEX IF NOT EXISTS ix_stories_wc_kudos ON stories (word_count, kudos DESC);
+
 -- User accounts (added in user-accounts release)
 CREATE TABLE IF NOT EXISTS users (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

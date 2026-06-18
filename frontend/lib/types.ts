@@ -39,10 +39,13 @@ export interface StoryCard {
 
 export interface SearchResponse {
   total: number
+  count_is_capped?: boolean
   page: number
   per_page: number
   results: StoryCard[]
   sites_searched: string[]
+  live_count?: number
+  parsed_tokens?: any[]
 }
 
 export interface SearchParams {

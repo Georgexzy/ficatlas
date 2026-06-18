@@ -700,39 +700,79 @@ async def discover_ao3(
     ratings: Optional[str] = Form(None),       # comma-separated, e.g. "T,M,E"
     excluded_tags: Optional[str] = Form(None), # comma-separated
     max_pages: int = Form(5),                  # 5 pages = ~100 works
-    db: Session = Depends(get_db),
 ):
     """
-    Deep AO3 discovery via the tag-works listing page. Supports filtering by
-    word count, completion, rating, excluded tags, with sorting and pagination.
-    This goes beyond the 25-work feed limit — set max_pages higher for deeper scrapes.
+    Kick off a deep AO3 discovery as an ASYNC JOB. Returns immediately with a
+    job_id; poll `GET /api/library/jobs/{job_id}` for progress. The job runs
+    until done. This decouples the long-running scrape (10-60s) from the HTTP
+    request so it survives any proxy / Tailscale / Next.js timeout.
     """
     from live_fetch.ao3_works_scraper import scrape_tag_works
     from live_fetch.persist import persist_live_results
+    from live_fetch.jobs import new_job, run_in_background
+    from live_fetch.ao3_feeds import ao3_cooldown_remaining
+    from db.session import db_session
+
+    # Short-circuit if AO3 just blanket-blocked us — don't start a doomed job.
+    cooldown = ao3_cooldown_remaining()
+    if cooldown > 0:
+        raise HTTPException(
+            429,
+            f"AO3 is currently blocking us ({int(cooldown)}s cooldown remaining). "
+            f"AO3's Cloudflare intermittently blocks datacenter IPs. Wait it out "
+            f"or POST /api/library/admin/clear-ao3-cooldown to force-retry."
+        )
 
     ratings_list = [r.strip().upper() for r in (ratings or "").split(",") if r.strip()] or None
     excluded_tags_list = [t.strip() for t in (excluded_tags or "").split(",") if t.strip()] or None
+    capped_pages = max(1, min(max_pages, 20))   # 20 pages = ~400 works
 
-    result = await scrape_tag_works(
-        fandom,
-        min_words=min_words, max_words=max_words,
-        complete_only=complete_only, sort=sort, direction=direction,
-        ratings=ratings_list, excluded_tags=excluded_tags_list,
-        max_pages=max(1, min(max_pages, 20)),
-    )
-    entries = result["entries"]
+    job_id, state = new_job("discover-ao3")
+    state["fandom"] = fandom
+    state["max_pages"] = capped_pages
 
-    # Surface a real error if NO pages came back (network/rate-limit/bad tag)
-    if result["pages_failed"] > 0 and result["pages_ok"] == 0:
-        raise HTTPException(502, f"AO3 unreachable or no snapshot for tag — tried {result['tried_url']}")
+    async def _run():
+        try:
+            def on_progress(snap):
+                state.update(snap)
+            result = await scrape_tag_works(
+                fandom,
+                min_words=min_words, max_words=max_words,
+                complete_only=complete_only, sort=sort, direction=direction,
+                ratings=ratings_list, excluded_tags=excluded_tags_list,
+                max_pages=capped_pages, on_progress=on_progress,
+            )
+            entries = result["entries"]
+            state["pages_ok"]     = result["pages_ok"]
+            state["pages_failed"] = result["pages_failed"]
+            state["tried_url"]    = result["tried_url"]
 
-    inserted = persist_live_results(db, entries)
-    return {
-        "ok": True, "fandom": fandom,
-        "found": len(entries), "newly_indexed": inserted,
-        "pages_ok": result["pages_ok"], "pages_failed": result["pages_failed"],
-        "tried_url": result["tried_url"],
-    }
+            if result["pages_failed"] > 0 and result["pages_ok"] == 0:
+                state["status"]   = "error"
+                state["error"]    = (
+                    f"AO3 didn't respond within timeout (likely throttling our IP — "
+                    f"this is intermittent for datacenter IPs). Try again in a few minutes, "
+                    f"or try a different fandom. URL tried: {result['tried_url']}"
+                )
+                state["progress"] = "AO3 fetches all failed (likely throttled)"
+            else:
+                state["progress"] = f"Persisting {len(entries)} works to DB…"
+                with db_session() as db:
+                    inserted = persist_live_results(db, entries)
+                state["found"]         = len(entries)
+                state["newly_indexed"] = inserted
+                state["status"]        = "done"
+                state["progress"]      = f"Done — {len(entries)} found, {inserted} new"
+        except Exception as e:
+            log.exception("discover-ao3 job failed")
+            state["status"]   = "error"
+            state["error"]    = f"{e.__class__.__name__}: {e}"
+            state["progress"] = "Crashed — see backend log"
+        finally:
+            state["finished_at"] = datetime.utcnow().isoformat()
+
+    run_in_background(_run)
+    return {"ok": True, "job_id": job_id}
 
 
 # ── HPFFA via the AO3 Open Doors collection ──────────────────────────────────
@@ -744,42 +784,107 @@ async def discover_hpffa(
     complete_only: bool = Form(False),
     sort: str = Form("revised_at"),
     max_pages: int = Form(5),
-    db: Session = Depends(get_db),
 ):
     """
-    Pulls stories from the HarryPotterFanfiction.com archive — but via AO3's
-    Open Doors collection (`/collections/hpfanfiction_hpff`) rather than scraping
-    HPFFA directly. HPFFA closed to new works in 2016 and was imported wholesale
-    to AO3 starting late 2021; the AO3 collection is the canonical, queryable,
-    metadata-rich source. Stories arrive with proper AO3 tags/characters/
-    relationships, work normally with FicHub for full-text import, and gain
-    the `hpffa_archive` provenance tag for easy filtering later.
+    Pulls stories from the HPFFA Open Doors collection on AO3 as an async job.
+    Same pattern as discover-ao3 — returns job_id, poll /library/jobs/{id}.
     """
     from live_fetch.ao3_works_scraper import scrape_tag_works
     from live_fetch.persist import persist_live_results
+    from live_fetch.jobs import new_job, run_in_background
+    from live_fetch.ao3_feeds import ao3_cooldown_remaining
+    from db.session import db_session
 
-    result = await scrape_tag_works(
-        tag="",                                       # no fandom filter; whole collection
-        min_words=min_words, max_words=max_words,
-        complete_only=complete_only, sort=sort,
-        max_pages=max(1, min(max_pages, 20)),
-        collection="hpfanfiction_hpff",
-    )
-    entries = result["entries"]
+    cooldown = ao3_cooldown_remaining()
+    if cooldown > 0:
+        raise HTTPException(
+            429,
+            f"AO3 is currently blocking us ({int(cooldown)}s cooldown remaining). "
+            f"HPFFA discovery hits the AO3 Open Doors collection, so it's affected too. "
+            f"Wait it out or clear via /api/library/admin/clear-ao3-cooldown."
+        )
 
-    if result["pages_failed"] > 0 and result["pages_ok"] == 0:
-        raise HTTPException(502, f"AO3 unreachable — tried {result['tried_url']}")
+    capped_pages = max(1, min(max_pages, 20))
+    job_id, state = new_job("discover-hpffa")
+    state["max_pages"] = capped_pages
 
-    # Mark provenance so we can filter "HPFFA archive only" in the UI
-    for e in entries:
-        e["tags"] = list(set((e.get("tags") or []) + ["hpffa_archive"]))
+    async def _run():
+        try:
+            def on_progress(snap):
+                state.update(snap)
+            result = await scrape_tag_works(
+                tag="", min_words=min_words, max_words=max_words,
+                complete_only=complete_only, sort=sort,
+                max_pages=capped_pages, collection="hpfanfiction_hpff",
+                on_progress=on_progress,
+            )
+            entries = result["entries"]
+            state["pages_ok"]     = result["pages_ok"]
+            state["pages_failed"] = result["pages_failed"]
 
-    inserted = persist_live_results(db, entries)
+            if result["pages_failed"] > 0 and result["pages_ok"] == 0:
+                state["status"]   = "error"
+                state["error"]    = "AO3 unreachable"
+                state["progress"] = "Failed"
+            else:
+                state["progress"] = f"Persisting {len(entries)} works…"
+                # Tag provenance
+                for e in entries:
+                    e["tags"] = list(set((e.get("tags") or []) + ["hpffa_archive"]))
+                with db_session() as db:
+                    inserted = persist_live_results(db, entries)
+                state["found"]         = len(entries)
+                state["newly_indexed"] = inserted
+                state["status"]        = "done"
+                state["progress"]      = f"Done — {len(entries)} found, {inserted} new"
+        except Exception as e:
+            log.exception("discover-hpffa job failed")
+            state["status"]   = "error"
+            state["error"]    = f"{e.__class__.__name__}: {e}"
+            state["progress"] = "Crashed — see backend log"
+        finally:
+            state["finished_at"] = datetime.utcnow().isoformat()
+
+    run_in_background(_run)
+    return {"ok": True, "job_id": job_id}
+
+
+@router.get("/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """Poll for an async discover-* job. Returns 404 once the job has aged out
+    of the in-memory store (~15 min after completion)."""
+    from live_fetch.jobs import get_job
+    state = get_job(job_id)
+    if not state:
+        raise HTTPException(404, "Job not found or has aged out (jobs are retained 15 min after completion)")
+    return state
+
+
+@router.get("/ao3-status")
+async def ao3_status():
+    """Return current AO3 reachability state — whether we're in a cooldown
+    after repeated failures, and how long until we'll retry. The UI uses
+    this to grey out the AO3-dependent buttons when AO3 is unreachable."""
+    from live_fetch.ao3_feeds import ao3_cooldown_remaining
+    cd = ao3_cooldown_remaining()
     return {
-        "ok": True, "source": "hpffa_via_ao3",
-        "found": len(entries), "newly_indexed": inserted,
-        "pages_ok": result["pages_ok"], "pages_failed": result["pages_failed"],
+        "cooldown_active":    cd > 0,
+        "cooldown_remaining": int(cd),
+        "message": (
+            f"AO3 unreachable — {int(cd)}s cooldown active (Cloudflare-blocking our datacenter IP)"
+            if cd > 0 else "AO3 reachable (no cooldown active)"
+        ),
     }
+
+
+@router.post("/admin/clear-ao3-cooldown")
+async def clear_ao3_cooldown_endpoint():
+    """Force-clear the AO3 cooldown so the next scrape will retry immediately.
+    Useful when you know AO3 has come back (e.g. you tested with curl from the
+    server and got a 200), but our cooldown timer hasn't expired yet."""
+    from live_fetch.ao3_feeds import clear_ao3_cooldown
+    clear_ao3_cooldown()
+    return {"ok": True, "message": "AO3 cooldown cleared. Next request will hit AO3 fresh."}
 
 
 # ── Admin: remove orphaned example/seed stories ──────────────────────────────

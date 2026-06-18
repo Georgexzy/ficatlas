@@ -782,9 +782,74 @@ kbd {
 }
 
 /* ── Responsive: stack search bar on mobile ───────────────────────────────── */
-@media (max-width: 640px) {
-  .sidebar { display: none; }
-  .main { padding: 14px; }
+/* ── Mobile filters trigger (hidden on desktop) ──────────────────────────── */
+.filters-trigger { display: none; }
+.sidebar__mobile-head { display: none; }
+.sidebar__mobile-apply { display: none; }
+.sidebar-backdrop { display: none; }
+
+/* ── Tablet: narrower sidebar, tighter padding ───────────────────────────── */
+@media (max-width: 960px) {
+  .sidebar { width: 190px; }
+  .main { padding: 18px 18px 40px; }
+}
+
+/* ── Mobile: sidebar becomes a slide-out drawer ──────────────────────────── */
+@media (max-width: 700px) {
+  .layout { display: block; }
+
+  /* Drawer trigger button shows under the search bar */
+  .filters-trigger {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface2); border: 1px solid var(--border2);
+    color: var(--text); padding: 10px 16px; border-radius: 8px;
+    font-size: 14px; cursor: pointer; margin: 4px 0 14px;
+    width: 100%; justify-content: center;
+  }
+  .filters-trigger__icon { font-size: 15px; }
+  .filters-trigger__badge {
+    background: var(--accent); color: #1a1612; border-radius: 999px;
+    min-width: 20px; height: 20px; padding: 0 6px; font-size: 12px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+
+  /* Sidebar off-canvas by default, slides in when --open */
+  .sidebar {
+    display: block;
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: 86vw; max-width: 340px; z-index: 200;
+    max-height: 100vh; min-height: 100vh;
+    border-right: 1px solid var(--border);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.4);
+    padding-top: 0;
+  }
+  .sidebar--open { transform: translateX(0); }
+
+  .sidebar-backdrop {
+    display: block; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5); z-index: 150;
+  }
+
+  .sidebar__mobile-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 16px 12px; border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 16px; position: sticky; top: 0;
+    background: var(--surface); z-index: 1;
+  }
+  .sidebar__close {
+    background: none; border: none; color: var(--text-dim);
+    font-size: 20px; cursor: pointer; padding: 4px 8px; line-height: 1;
+  }
+  .sidebar__mobile-apply { display: block; padding: 14px; }
+
+  /* Touch-friendly tap targets inside the drawer */
+  .sidebar select, .sidebar .input-sm, .sidebar input[type="text"],
+  .sidebar input[type="number"] { min-height: 40px; font-size: 15px; }
+  .curated-check, .site-check, .filter-check { padding: 6px 0; }
+
+  .main { padding: 12px 14px 32px; }
   .search-bar { flex-wrap: wrap; }
   .search-input-wrap { width: 100%; }
   .search-btn { width: 100%; }
@@ -792,6 +857,30 @@ kbd {
   .results-bar { flex-wrap: wrap; gap: 6px; }
   .card__title-row { flex-direction: column; }
   .card__badges { justify-content: flex-start; }
+
+  /* Header: tighten and let the user menu collapse to avatar only */
+  .header { padding: 0 12px; gap: 8px; }
+  .header__link { font-size: 13px; }
+  .toggle-label { font-size: 12px; }
+
+  /* Cards: comfortable touch spacing */
+  .card { padding: 16px; }
+  .card__title { font-size: 17px; }
+
+  /* Pagination buttons full-width-ish and tappable */
+  .pagination { gap: 12px; }
+  .page-btn { min-height: 44px; padding: 0 18px; }
+
+  /* Reader controls wrap on small screens */
+  .reader-controls { flex-wrap: wrap; gap: 6px; }
+  .reader-ctrl { min-height: 38px; }
+}
+
+/* ── Small phones: stack header items ────────────────────────────────────── */
+@media (max-width: 420px) {
+  .header__right { gap: 6px; }
+  .header__link { padding: 4px 6px; }
+  .logo { font-size: 18px; }
 }
 
 /* ── Bulk upload progress ─────────────────────────────────────────────────── */
@@ -1378,3 +1467,163 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   margin-right: 8px;
 }
 @keyframes scrape-spin { to { transform: rotate(360deg); } }
+
+/* ── Search UX polish batch ──────────────────────────────────────────────── */
+.card__meta-muted { color: var(--text-faint); opacity: 0.6; }
+
+/* Sticky pagination feels more app-like on long result pages */
+.pagination {
+  position: sticky; bottom: 0;
+  background: linear-gradient(to top, var(--bg) 60%, transparent);
+  padding: 16px 0 8px; z-index: 10;
+}
+
+/* Loading skeleton shimmer for result cards */
+.card-skeleton {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 18px 20px; margin-bottom: 14px; background: var(--surface);
+}
+.skel-line {
+  height: 12px; border-radius: 4px; margin-bottom: 10px;
+  background: linear-gradient(90deg, var(--surface2) 25%, var(--surface3) 50%, var(--surface2) 75%);
+  background-size: 200% 100%; animation: skel 1.2s ease-in-out infinite;
+}
+.skel-line--title { height: 18px; width: 55%; margin-bottom: 14px; }
+.skel-line--short { width: 30%; }
+.skel-line--meta  { width: 45%; height: 10px; }
+@keyframes skel { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
+
+/* Active-filter chips summary above results */
+.active-filters {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-bottom: 16px;
+}
+.active-filter-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 999px; padding: 4px 10px 4px 12px; font-size: 12px;
+  color: var(--text-dim);
+}
+.active-filter-chip button {
+  background: none; border: none; color: var(--text-faint); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 0; transition: color 0.15s;
+}
+.active-filter-chip button:hover { color: var(--accent); }
+.active-filters__clear {
+  background: none; border: none; color: var(--accent); cursor: pointer;
+  font-size: 12px; text-decoration: underline; padding: 4px;
+}
+
+/* ── Reader themes (sepia / dark) ────────────────────────────────────────── */
+.reader-shell[data-theme="sepia"] {
+  background: #f4ecd8;
+}
+.reader-shell[data-theme="sepia"] .reader,
+.reader-shell[data-theme="sepia"] .reader__title,
+.reader-shell[data-theme="sepia"] .reader__body {
+  color: #4a3f2f;
+}
+.reader-shell[data-theme="sepia"] .reader-topbar--sticky {
+  background: rgba(244, 236, 216, 0.92);
+  border-bottom-color: #ddd0b0;
+}
+.reader-shell[data-theme="sepia"] .reader-ctrl,
+.reader-shell[data-theme="sepia"] .back-link {
+  color: #6b5d45;
+}
+.reader-shell[data-theme="sepia"] .reader__note {
+  background: #ebe0c4; border-color: #ddd0b0;
+}
+
+.reader-shell[data-theme="dark"] {
+  background: #0e0e10;
+}
+.reader-shell[data-theme="dark"] .reader,
+.reader-shell[data-theme="dark"] .reader__title,
+.reader-shell[data-theme="dark"] .reader__body {
+  color: #c9c6c0;
+}
+.reader-shell[data-theme="dark"] .reader-topbar--sticky {
+  background: rgba(14, 14, 16, 0.92);
+  border-bottom-color: #26262a;
+}
+.reader-shell[data-theme="dark"] .reader__note {
+  background: #18181b; border-color: #26262a;
+}
+
+/* ── Bulk URL import ─────────────────────────────────────────────────────── */
+.bulk-urls {
+  width: 100%; resize: vertical; min-height: 120px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px;
+  line-height: 1.5; padding: 12px 14px;
+}
+.bulk-stat { font-size: 13px; color: var(--text-dim); }
+.bulk-progress-bar {
+  height: 6px; background: var(--surface2); border-radius: 3px;
+  margin-top: 12px; overflow: hidden;
+}
+.bulk-progress-bar__fill {
+  height: 100%; background: var(--accent); transition: width 0.3s ease;
+}
+.bulk-results {
+  list-style: none; margin: 14px 0 0; padding: 0;
+  max-height: 320px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.bulk-results li {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 8px 12px; font-size: 13px; border-bottom: 1px solid var(--border);
+}
+.bulk-results li:last-child { border-bottom: none; }
+.bulk-result__icon { flex-shrink: 0; font-weight: 700; }
+.bulk-result--ok .bulk-result__icon { color: var(--green); }
+.bulk-result--fail .bulk-result__icon { color: #ff8a8a; }
+.bulk-result__detail { flex: 1; color: var(--text); }
+.bulk-result__url { color: var(--text-faint); font-size: 11px; font-family: ui-monospace, monospace; }
+
+/* ── Surprise me button ──────────────────────────────────────────────────── */
+.empty__surprise {
+  margin-top: 24px;
+  background: var(--surface2); border: 1px solid var(--border2);
+  color: var(--text); padding: 10px 22px; border-radius: 999px;
+  font-size: 14px; cursor: pointer; transition: all 0.15s;
+}
+.empty__surprise:hover {
+  background: var(--accent); color: #1a1612; border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+/* ── Mobile: library + settings + reader containers ──────────────────────── */
+@media (max-width: 700px) {
+  .library-shell { padding: 16px 14px 64px; }
+  /* Tabs scroll horizontally instead of wrapping/squishing */
+  .library-tabs {
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap; scrollbar-width: none;
+  }
+  .library-tabs::-webkit-scrollbar { display: none; }
+  .library-tab { white-space: nowrap; flex-shrink: 0; padding: 10px 14px; }
+
+  /* Settings page comfortable on phone */
+  .settings-shell, .settings-page { padding: 16px 14px 64px !important; }
+
+  /* Import drop zone taller for easier tapping */
+  .import-drop { min-height: 120px; }
+  .import-row { flex-wrap: wrap; }
+  .import-input { width: 100%; }
+
+  /* Hosted book grid: 2 columns on phones instead of squeezed 3–4 */
+  .books-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 14px; }
+
+  /* Story detail action buttons stack full-width */
+  .story-detail__actions { flex-direction: column; }
+  .story-detail__actions .btn { width: 100%; }
+}
+
+/* Reader: comfortable column + padding on phones */
+@media (max-width: 700px) {
+  .reader { padding-left: 18px !important; padding-right: 18px !important; }
+  .reader[data-width="wide"], .reader[data-width="narrow"] { max-width: 100% !important; }
+  .reader-topbar { padding: 8px 12px; }
+  .back-link { max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}

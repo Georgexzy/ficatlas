@@ -58,6 +58,7 @@ class ParsedToken(BaseModel):
 
 class SearchResponse(BaseModel):
     total: int
+    count_is_capped: bool = False  # True when total hit the count ceiling (show "5000+")
     page: int
     per_page: int
     results: List[StoryCard]
@@ -186,19 +187,29 @@ async def search(
             Story.summary.ilike(f"%{search_within}%"),
         ))
 
-    def arr_inc(col, csv_val):
-        """Permissive array-includes: a story matches if either the field contains
-        ALL requested values OR the field is empty/NULL (we can't prove it doesn't
-        match). This unifies search across sites with different metadata coverage —
-        HF FFN dump rows with empty character/relationship/tag arrays no longer get
-        excluded from character/ship/tag-filtered searches.
+    def arr_inc(col, csv_val, permissive_empty=True):
+        """Array-includes filter.
+
+        permissive_empty=True (default, for secondary facets like characters/ships/
+        tags): a story matches if it contains ALL requested values OR has no data for
+        that field. Missing secondary metadata shouldn't exclude a story.
+
+        permissive_empty=False (for the FANDOM axis): empty arrays do NOT match. A
+        story with no fandom listed should never surface under a specific-fandom
+        search, otherwise the millions of empty-fandom dump rows leak into every
+        fandom query and wildly inflate the count.
         """
         if not csv_val: return None
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
         if not vals: return None
-        empty = or_(col.is_(None), func.cardinality(col) == 0)
+        if permissive_empty:
+            empty = or_(col.is_(None), func.cardinality(col) == 0)
+            return and_(*[
+                or_(func.array_to_string(col, ",").ilike(f"%{v}%"), empty)
+                for v in vals
+            ])
         return and_(*[
-            or_(func.array_to_string(col, ",").ilike(f"%{v}%"), empty)
+            func.array_to_string(col, ",").ilike(f"%{v}%")
             for v in vals
         ])
 
@@ -210,8 +221,12 @@ async def search(
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
         return and_(*[~func.array_to_string(col, ",").ilike(f"%{v}%") for v in vals]) if vals else None
 
+    # Fandom is the primary axis → strict. Everything else → permissive on empty.
+    f = arr_inc(Story.fandoms, fandoms, permissive_empty=False)
+    if f is not None: filters.append(f)
+
     for col, val in [
-        (Story.fandoms, fandoms), (Story.characters, characters),
+        (Story.characters, characters),
         (Story.relationships, relationships), (Story.tags, tags),
         (Story.warnings, warnings), (Story.categories, categories),
     ]:
@@ -251,9 +266,11 @@ async def search(
     if language:
         filters.append(or_(Story.language.ilike(language), Story.language.is_(None)))
     if word_count_min:
-        filters.append(or_(Story.word_count >= word_count_min, Story.word_count == 0))
+        # Permissive on NULL (unknown metadata) but NOT on 0 — a literal 0-word
+        # story is fanart/art/placeholder and must be excluded by a min-words filter.
+        filters.append(or_(Story.word_count >= word_count_min, Story.word_count.is_(None)))
     if word_count_max:
-        filters.append(or_(Story.word_count <= word_count_max, Story.word_count == 0))
+        filters.append(or_(Story.word_count <= word_count_max, Story.word_count.is_(None)))
     if updated_after:
         filters.append(or_(Story.updated_at >= updated_after, Story.updated_at.is_(None)))
     if updated_before:
@@ -264,7 +281,13 @@ async def search(
     if filters:
         db_query = db_query.filter(and_(*filters))
 
-    total = db_query.count()
+    # Counting all matching rows on a multi-million table is the slowest part of
+    # search. We only need an exact count up to a ceiling; beyond that "5000+" is
+    # fine for pagination UI. This caps the count subquery for big result sets.
+    COUNT_CEILING = 5000
+    count_subq = db_query.order_by(None).limit(COUNT_CEILING + 1).subquery()
+    total = db.query(func.count()).select_from(count_subq).scalar() or 0
+    count_is_capped = total > COUNT_CEILING
 
     sort_expr = SORT_MAP.get(sort)
     db_query  = db_query.order_by(sort_expr if sort_expr is not None else Story.kudos.desc())
@@ -312,13 +335,15 @@ async def search(
         except Exception:
             pass  # live fetch failure is non-fatal
 
-    # Merge: live results at top (they're fresher), then indexed
+    # Merge: live results (fresher) shown first on page 1, then the full indexed page.
+    # We do NOT truncate indexed cards — that was dropping indexed results off page 1
+    # so they never reappeared on page 2. Live cards are extra discovery on top of
+    # page 1 only; pagination through `total` is driven purely by the indexed count.
     merged = live_cards + indexed_cards
-    # Respect per_page after merge
-    merged = merged[:per_page]
 
     return SearchResponse(
-        total=total + len(live_cards),
+        total=total,                          # stable across pages — indexed count only
+        count_is_capped=count_is_capped,
         page=page,
         per_page=per_page,
         results=merged,
@@ -326,6 +351,25 @@ async def search(
         live_count=len(live_cards),
         parsed_tokens=[ParsedToken(**t) for t in parsed_tokens],
     )
+
+
+@router.get("/random", response_model=List[StoryCard])
+async def random_stories(
+    count: int = Query(3, ge=1, le=12),
+    fandom: Optional[str] = Query(None),
+    min_words: Optional[int] = Query(None, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Surprise-me discovery: returns N random stories, optionally constrained by
+    fandom and a minimum word count (so you don't get art/drabbles). Uses
+    TABLESAMPLE-style random ordering. Biased toward stories with real metadata
+    (non-zero word count) so results are actually readable."""
+    q = db.query(Story).filter(Story.word_count > (min_words or 1000))
+    if fandom:
+        q = q.filter(func.array_to_string(Story.fandoms, ",").ilike(f"%{fandom.strip()}%"))
+    # ORDER BY random() is fine at this scale for a handful of rows.
+    rows = q.order_by(func.random()).limit(count).all()
+    return [_to_card(s) for s in rows]
 
 
 # ── Serialisers ───────────────────────────────────────────────────────────────

@@ -26,6 +26,8 @@ export default function ChapterPage() {
   const [fontSize, setFontSize] = useState(17)
   const [fontFamily, setFontFamily] = useState<"serif" | "sans">("serif")
   const [width, setWidth] = useState<"narrow" | "wide">("narrow")
+  const [lineHeight, setLineHeight] = useState(1.7)
+  const [theme, setTheme] = useState<"default" | "sepia" | "dark">("default")
   const [scrollPct, setScrollPct] = useState(0)
 
   useEffect(() => {
@@ -35,6 +37,10 @@ export default function ChapterPage() {
     if (savedFont === "sans" || savedFont === "serif") setFontFamily(savedFont)
     const savedWidth = localStorage.getItem("ficatlas:reader_width")
     if (savedWidth === "narrow" || savedWidth === "wide") setWidth(savedWidth)
+    const savedLH = localStorage.getItem("ficatlas:reader_lineheight")
+    if (savedLH) setLineHeight(Number(savedLH))
+    const savedTheme = localStorage.getItem("ficatlas:reader_theme")
+    if (savedTheme === "sepia" || savedTheme === "dark" || savedTheme === "default") setTheme(savedTheme)
 
     // Fall back to server settings if localStorage is empty (different browser etc.)
     if (!savedFont || !savedWidth) {
@@ -58,6 +64,12 @@ export default function ChapterPage() {
   useEffect(() => {
     localStorage.setItem("ficatlas:reader_width", width)
   }, [width])
+  useEffect(() => {
+    localStorage.setItem("ficatlas:reader_lineheight", String(lineHeight))
+  }, [lineHeight])
+  useEffect(() => {
+    localStorage.setItem("ficatlas:reader_theme", theme)
+  }, [theme])
 
   // Reading progress bar
   useEffect(() => {
@@ -148,6 +160,7 @@ export default function ChapterPage() {
       if (e.key === "ArrowRight" && story && num < story.chapter_count) router.push(`/story/${storyId}/chapter/${num + 1}`)
       if (e.key === "+" || e.key === "=") setFontSize(s => Math.min(s + 1, 24))
       if (e.key === "-") setFontSize(s => Math.max(s - 1, 13))
+      if (e.key === "t") setTheme(t => t === "default" ? "sepia" : t === "sepia" ? "dark" : "default")
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
@@ -159,15 +172,21 @@ export default function ChapterPage() {
   const hasNext = num < story.chapter_count
 
   return (
-    <div className="reader-shell" data-width={width} data-font={fontFamily}>
+    <div className="reader-shell" data-width={width} data-font={fontFamily} data-theme={theme}>
       <div className="reader-progress" style={{ width: `${scrollPct}%` }} />
       <div className="reader-topbar reader-topbar--sticky">
         <Link href={`/story/${storyId}`} className="back-link">← {story.title}</Link>
         <div className="reader-controls">
+          <button className="reader-ctrl" onClick={() => setTheme(t => t === "default" ? "sepia" : t === "sepia" ? "dark" : "default")}
+            title="Cycle theme (t)">{theme === "default" ? "◐ Light" : theme === "sepia" ? "◖ Sepia" : "◑ Dark"}</button>
           <button className="reader-ctrl" onClick={() => setFontFamily(f => f === "serif" ? "sans" : "serif")}
             title="Toggle serif / sans">{fontFamily === "serif" ? "Serif" : "Sans"}</button>
           <button className="reader-ctrl" onClick={() => setWidth(w => w === "narrow" ? "wide" : "narrow")}
             title="Toggle column width">{width === "narrow" ? "↔ Wide" : "↔ Narrow"}</button>
+          <button className="reader-ctrl" onClick={() => setLineHeight(l => Math.max(1.3, +(l - 0.1).toFixed(1)))}
+            title="Tighter line spacing" aria-label="Tighter lines">↕−</button>
+          <button className="reader-ctrl" onClick={() => setLineHeight(l => Math.min(2.4, +(l + 0.1).toFixed(1)))}
+            title="Looser line spacing" aria-label="Looser lines">↕+</button>
           <button className="reader-ctrl" onClick={() => setFontSize(s => Math.max(s - 1, 13))} aria-label="Smaller">A-</button>
           <button className="reader-ctrl" onClick={() => setFontSize(s => Math.min(s + 1, 24))} aria-label="Larger">A+</button>
         </div>
@@ -178,7 +197,7 @@ export default function ChapterPage() {
         ✕
       </Link>
 
-      <article className="reader" data-width={width} data-font={fontFamily} style={{ fontSize: `${fontSize}px` }}>
+      <article className="reader" data-width={width} data-font={fontFamily} style={{ fontSize: `${fontSize}px`, lineHeight }}>
         <header className="reader__header">
           <p className="reader__breadcrumb">Chapter {num} of {story.chapter_count}</p>
           <h1 className="reader__title">{chapter.title || `Chapter ${num}`}</h1>
@@ -210,7 +229,7 @@ export default function ChapterPage() {
           onClick={() => router.push(`/story/${storyId}/chapter/${num + 1}`)}>Next →</button>
       </nav>
 
-      <p className="reader-hint">← → to navigate · + − to resize · serif/sans &amp; width toggles above</p>
+      <p className="reader-hint">← → navigate · + − text size · ↕ line spacing · t theme · serif/sans &amp; width toggles above</p>
     </div>
   )
 }

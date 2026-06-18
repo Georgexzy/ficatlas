@@ -46,6 +46,55 @@ HEADERS = {
 
 REQUEST_DELAY = 4.0
 
+# ── AO3 cooldown guard ───────────────────────────────────────────────────────
+# AO3 sometimes blanket-blocks datacenter IPs (525 + ReadTimeouts on every URL,
+# even the lightweight atom feeds). Hammering it during a block just reinforces
+# the block on their side and wastes our time. When we see consecutive failures
+# across requests, we enter a 5-minute cooldown and short-circuit all AO3 calls
+# without even making the TCP connection.
+_BLOCK_COOLDOWN_SECONDS = 300       # 5 minutes
+_FAIL_THRESHOLD          = 3         # this many consecutive fails → enter cooldown
+_recent_failures: list[float] = []   # unix timestamps of recent network failures
+_cooldown_until: float = 0.0
+
+
+def _record_failure() -> None:
+    """Record a transient AO3 failure (525, ReadTimeout, etc).
+    After _FAIL_THRESHOLD consecutive failures within a short window, start a cooldown."""
+    import time
+    global _cooldown_until
+    now = time.time()
+    # Keep only failures within the last 2 minutes
+    _recent_failures[:] = [t for t in _recent_failures if now - t < 120]
+    _recent_failures.append(now)
+    if len(_recent_failures) >= _FAIL_THRESHOLD:
+        _cooldown_until = now + _BLOCK_COOLDOWN_SECONDS
+        log.warning(
+            f"AO3 cooldown triggered — {len(_recent_failures)} fails in last 2min, "
+            f"skipping all AO3 calls for {_BLOCK_COOLDOWN_SECONDS}s"
+        )
+        _recent_failures.clear()
+
+
+def _record_success() -> None:
+    """Reset the failure counter on a successful AO3 response."""
+    _recent_failures.clear()
+
+
+def ao3_cooldown_remaining() -> float:
+    """Seconds until AO3 cooldown lifts (0.0 if not in cooldown). Callers can
+    short-circuit before even starting a job if this is non-zero."""
+    import time
+    return max(0.0, _cooldown_until - time.time())
+
+
+def clear_ao3_cooldown() -> None:
+    """Force-reset the cooldown (for manual recovery via admin endpoint)."""
+    global _cooldown_until
+    _cooldown_until = 0.0
+    _recent_failures.clear()
+    log.info("AO3 cooldown manually cleared")
+
 
 def ao3_escape(name: str) -> str:
     """Apply AO3's quirky URL escaping: . → *d*, / → *s*, & → *a*, space → %20
@@ -86,33 +135,53 @@ def _fmt_err(e: Exception) -> str:
 
 async def _get_with_fallback(client: httpx.AsyncClient, path: str) -> httpx.Response | None:
     """Try primary, fall back to mirror on origin errors. One retry per host on
-    transient exceptions (TLS, connection reset, timeout). Return None on hard failure."""
-    import asyncio
+    transient exceptions (TLS, connection reset, timeout). Return None on hard failure.
+    Total budget on a failing fetch is ~35s (2 hosts × 15s per attempt + retry backoffs)
+    so the UI doesn't have to wait minutes for AO3 to admit it's not coming back.
+
+    Short-circuits if AO3 is in cooldown (recent burst of failures detected).
+    """
+    import asyncio, time
+
+    # If AO3 just blanket-blocked us, don't bother attempting — fail fast so the
+    # job runner can surface a helpful "in cooldown" error to the UI.
+    cooldown = ao3_cooldown_remaining()
+    if cooldown > 0:
+        log.info(f"AO3 in cooldown for {cooldown:.0f}s more — skipping {path[:80]}")
+        return None
+
     last_status = None
+    saw_transient_failure = False
     for base in (PRIMARY, MIRROR):
         for attempt in (1, 2):
             try:
-                r = await client.get(f"{base}{path}")
+                r = await client.get(f"{base}{path}", timeout=15)
                 last_status = r.status_code
                 if r.status_code == 200:
+                    _record_success()
                     return r
                 if r.status_code in (525, 503, 502, 500):
+                    saw_transient_failure = True
                     log.warning(f"{base}{path} → {r.status_code} (attempt {attempt}), trying fallback")
                     break  # try mirror
                 if r.status_code in (429, 418):
+                    saw_transient_failure = True
                     log.warning(f"{base}{path} → {r.status_code} (rate limited)")
+                    _record_failure()
                     return None
-                # 404 from primary: the mirror may have different routing; try once
                 if r.status_code == 404 and base == PRIMARY:
                     log.info(f"{base}{path} → 404, trying mirror")
                     break
                 log.warning(f"{base}{path} → {r.status_code}")
                 break
             except Exception as e:
+                saw_transient_failure = True
                 log.warning(f"{base}{path} attempt {attempt} failed: {_fmt_err(e)}")
                 if attempt == 1:
-                    await asyncio.sleep(1.5)   # back off briefly before retry
+                    await asyncio.sleep(1.0)
                     continue
+    if saw_transient_failure:
+        _record_failure()
     log.warning(f"All fallbacks failed for {path} (last status: {last_status})")
     return None
 

@@ -261,6 +261,7 @@ async def scrape_tag_works(
     ratings: list[str] | None = None,
     max_pages: int = 5,
     collection: str | None = None,
+    on_progress: callable = None,    # optional: invoked with a dict {page, pages_ok, pages_failed, found}
 ) -> dict:
     """
     Scrape filtered works from a tag (or an AO3 collection) with pagination.
@@ -272,6 +273,8 @@ async def scrape_tag_works(
             "pages_failed": int — how many pages failed (rate limit, 5xx, network),
             "tried_url":    str — first URL we hit (for debugging),
         }
+    If `on_progress` is supplied, it's called after each page attempt with a
+    snapshot of progress so a background runner can stream updates to the UI.
     """
     all_entries: list[dict] = []
     seen_ids: set[str] = set()
@@ -291,10 +294,16 @@ async def scrape_tag_works(
             )
             if page == 1: first_url = path
             log.info(f"AO3 scrape page {page}: {path[:120]}")
+            if on_progress:
+                on_progress({"page": page, "pages_ok": pages_ok, "pages_failed": pages_failed,
+                             "found": len(all_entries), "msg": f"Fetching page {page} of {max_pages}…"})
             r = await _get_with_fallback(client, path)
             if not r:
                 pages_failed += 1
                 log.warning(f"Page {page} failed, stopping")
+                if on_progress:
+                    on_progress({"page": page, "pages_ok": pages_ok, "pages_failed": pages_failed,
+                                 "found": len(all_entries), "msg": f"Page {page} failed, stopping"})
                 break
 
             pages_ok += 1
@@ -303,6 +312,10 @@ async def scrape_tag_works(
             for e in new: seen_ids.add(e["site_id"])
             all_entries.extend(new)
             log.info(f"  page {page}: {len(entries)} works ({len(new)} new), has_next={has_next}")
+            if on_progress:
+                on_progress({"page": page, "pages_ok": pages_ok, "pages_failed": pages_failed,
+                             "found": len(all_entries),
+                             "msg": f"Page {page}: {len(entries)} works ({len(all_entries)} total)"})
 
             if not has_next or len(entries) == 0:
                 break

@@ -98,7 +98,13 @@ def _parse_blurb(item) -> Optional[dict]:
 
         def stat(cls):
             el = item.select_one(f"dd.{cls}")
-            return int(el.get_text(strip=True).replace(",", "") or 0) if el else 0
+            if not el:
+                return 0
+            # AO3 stats can contain nbsp, commas, and trailing labels. Pull digits only.
+            import re as _re
+            txt = el.get_text(strip=True).replace("\xa0", " ")
+            digits = _re.sub(r"[^\d]", "", txt)
+            return int(digits) if digits else 0
 
         status_el = item.select_one("dt.status")
         status = "complete" if status_el and "Completed" in status_el.get_text() else "in_progress"

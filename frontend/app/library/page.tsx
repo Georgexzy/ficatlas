@@ -25,6 +25,12 @@ export default function LibraryPage() {
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null)
   const [uploadErrors, setUploadErrors] = useState<{ filename: string; error: string }[]>([])
 
+  // Bulk URL import
+  const [bulkUrls, setBulkUrls] = useState("")
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; ok: number; failed: number } | null>(null)
+  const [bulkResults, setBulkResults] = useState<{ url: string; ok: boolean; detail: string }[]>([])
+
   // Feed discovery (AO3)
   const [feedFandom, setFeedFandom] = useState("")
   const [feedMinWords, setFeedMinWords] = useState("")
@@ -158,6 +164,42 @@ export default function LibraryPage() {
     }
   }
 
+  const importBulkUrls = async () => {
+    // Parse one URL per line, dedupe, keep only http(s) links.
+    const urls = Array.from(new Set(
+      bulkUrls.split(/[\n,\s]+/).map(u => u.trim()).filter(u => /^https?:\/\//i.test(u))
+    ))
+    if (urls.length === 0) { setImportError("Paste at least one valid http(s) URL, one per line."); return }
+    setBulkBusy(true); setImportError(null); setImportMsg(null)
+    setBulkResults([])
+    setBulkProgress({ done: 0, total: urls.length, ok: 0, failed: 0 })
+    const results: { url: string; ok: boolean; detail: string }[] = []
+    let ok = 0, failed = 0
+    // Sequential to be polite to FicHub and avoid hammering. ~1–3s each.
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i]
+      try {
+        const fd = new FormData(); fd.append("url", url)
+        const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+        if (!r.ok) {
+          const t = await r.text().catch(() => "")
+          throw new Error(t || `HTTP ${r.status}`)
+        }
+        const data = await r.json()
+        ok++
+        results.push({ url, ok: true, detail: `${data.title || "Imported"} (${data.chapters ?? "?"} ch)` })
+      } catch (e: any) {
+        failed++
+        results.push({ url, ok: false, detail: (e.message || "failed").slice(0, 120) })
+      }
+      setBulkProgress({ done: i + 1, total: urls.length, ok, failed })
+      setBulkResults([...results])
+    }
+    setBulkBusy(false)
+    setImportMsg(`Bulk import done — ${ok} imported, ${failed} failed of ${urls.length}.`)
+    loadHosted()
+  }
+
   const uploadEpubs = async (fileList: FileList | File[]) => {
     const files = Array.from(fileList).filter(f => f.name.toLowerCase().endsWith(".epub"))
     if (files.length === 0) { setImportError("No .epub files found"); return }
@@ -280,14 +322,15 @@ export default function LibraryPage() {
       setA3Msg("⚠ Enter a fandom name first (e.g. 'Harry Potter - J. K. Rowling')")
       return
     }
-    // Reflect the normalised version back into the input so the user sees the fix
     if (fandom !== a3Fandom) setA3Fandom(fandom)
+
     console.log("[ficatlas] Deep AO3 scrape starting", {
       fandom, minWords: a3MinWords, maxWords: a3MaxWords,
       completeOnly: a3CompleteOnly, sort: a3Sort, pages: a3Pages,
     })
-    setA3Busy(true); setA3Msg("🔄 Hitting AO3… (3s polite delay between pages, this can take 10–60s)")
+    setA3Busy(true); setA3Msg("🔄 Starting AO3 scrape job…")
     const t0 = Date.now()
+
     try {
       const fd = new FormData()
       fd.append("fandom", fandom)
@@ -296,38 +339,73 @@ export default function LibraryPage() {
       if (a3CompleteOnly) fd.append("complete_only", "true")
       fd.append("sort", a3Sort)
       fd.append("max_pages", a3Pages || "3")
-      const url = `${API_BASE}/api/library/discover-ao3`
-      console.log("[ficatlas] POST", url)
-      const r = await fetch(url, { method: "POST", body: fd })
-      const data = await r.json().catch(() => ({}))
-      const dt = ((Date.now() - t0) / 1000).toFixed(1)
-      console.log(`[ficatlas] Response in ${dt}s`, { status: r.status, ok: r.ok, data })
+      const startR = await fetch(`${API_BASE}/api/library/discover-ao3`, { method: "POST", body: fd })
+      const startData = await startR.json().catch(() => ({}))
 
-      if (!r.ok) {
-        setA3Msg(`❌ HTTP ${r.status} after ${dt}s — ${data.detail || data.error || "backend error (check sudo docker compose logs backend)"}`)
+      // 429 → AO3 is in cooldown. The backend has already refused; give the user
+      // a clear message and don't start a doomed job.
+      if (startR.status === 429) {
+        setA3Msg(`⏳ ${startData.detail || "AO3 is blocking our IP — cooldown active."} ` +
+          `Try again in a few minutes, or use the HF dump / DLP / FicHub paths which work fine.`)
         return
       }
-      if (data.ok) {
-        const diag = data.pages_failed ? `, ${data.pages_failed} page fetches failed` : ""
-        if (data.found === 0) {
-          setA3Msg(`✓ Done in ${dt}s — 0 works matched (${data.pages_ok} pages fetched OK${diag}). Try: a less narrow filter, the canonical AO3 tag name like 'Harry Potter - J. K. Rowling', or run on the server to inspect: curl -X POST -d "fandom=${encodeURIComponent(fandom)}" http://localhost:3000/api/library/discover-ao3`)
-        } else {
-          setA3Msg(`✓ Done in ${dt}s — scraped ${data.found} works (${data.pages_ok} pages${diag}), added ${data.newly_indexed} new to the index.`)
+      if (!startR.ok || !startData.job_id) {
+        setA3Msg(`❌ Failed to start: HTTP ${startR.status} — ${startData.detail || "no job_id returned"}`)
+        return
+      }
+      const jobId = startData.job_id
+      console.log("[ficatlas] job started", jobId)
+
+      // 2) Poll for progress every 1.5s
+      const pollUrl = `${API_BASE}/api/library/jobs/${jobId}`
+      let lastProgress = ""
+      while (true) {
+        await new Promise(r => setTimeout(r, 1500))
+        const pr = await fetch(pollUrl)
+        if (!pr.ok) {
+          setA3Msg(`❌ Lost track of job ${jobId} (HTTP ${pr.status}).`)
+          return
         }
-      } else {
-        setA3Msg(`❌ ${data.detail || data.error || "AO3 deep discovery failed"} (after ${dt}s)`)
+        const j = await pr.json()
+        if (j.progress && j.progress !== lastProgress) {
+          lastProgress = j.progress
+          setA3Msg(`🔄 ${j.progress} (pages: ${j.pages_ok || 0} ok / ${j.pages_failed || 0} failed, ${j.found || 0} works)`)
+        }
+        if (j.status === "done") {
+          const dt = ((Date.now() - t0) / 1000).toFixed(1)
+          if (j.found === 0) {
+            setA3Msg(`✓ Done in ${dt}s — 0 works matched (${j.pages_ok} pages OK${j.pages_failed ? `, ${j.pages_failed} failed` : ""}). Try a broader filter or the canonical AO3 tag.`)
+          } else {
+            setA3Msg(`✓ Done in ${dt}s — ${j.found} works, ${j.newly_indexed} new to the index.`)
+          }
+          console.log(`[ficatlas] job ${jobId} done in ${dt}s`, j)
+          return
+        }
+        if (j.status === "error") {
+          const dt = ((Date.now() - t0) / 1000).toFixed(1)
+          const msg = j.error || "unknown error"
+          // Special-case the throttle/block path so the user knows it's not a bug.
+          if (msg.includes("timeout") || msg.includes("throttl") || msg.includes("525")) {
+            setA3Msg(`⛔ AO3 isn't responding (after ${dt}s). This is AO3's Cloudflare blocking our VPS's IP — happens intermittently for datacenter IPs. Try again in 5–10 minutes, or use the HF dump / DLP / FicHub paths instead.`)
+          } else {
+            setA3Msg(`❌ Job failed after ${dt}s: ${msg}`)
+          }
+          console.error(`[ficatlas] job ${jobId} failed`, j)
+          return
+        }
       }
     } catch (e: any) {
       const dt = ((Date.now() - t0) / 1000).toFixed(1)
       console.error("[ficatlas] Deep AO3 scrape failed", e)
-      setA3Msg(`❌ Network error after ${dt}s: ${e.message || e}. Check the backend is up: curl http://localhost:3000/api/stats/totals`)
+      setA3Msg(`❌ Network error after ${dt}s: ${e.message || e}.`)
     } finally {
       setA3Busy(false)
     }
   }
 
   const discoverHpffa = async () => {
-    setHpBusy(true); setHpMsg(null)
+    setHpBusy(true); setHpMsg("🔄 Starting HPFFA collection scrape job…")
+    const t0 = Date.now()
     try {
       const fd = new FormData()
       if (hpMinWords.trim()) fd.append("min_words", hpMinWords.trim())
@@ -335,19 +413,36 @@ export default function LibraryPage() {
       if (hpCompleteOnly) fd.append("complete_only", "true")
       fd.append("sort", hpSort)
       fd.append("max_pages", hpPages || "3")
-      const r = await fetch(`${API_BASE}/api/library/discover-hpffa`, { method: "POST", body: fd })
-      const data = await r.json().catch(() => ({}))
-      if (!r.ok) {
-        setHpMsg(`HTTP ${r.status}: ${data.detail || data.error || "Backend error"}`)
+      const startR = await fetch(`${API_BASE}/api/library/discover-hpffa`, { method: "POST", body: fd })
+      const startData = await startR.json().catch(() => ({}))
+      if (!startR.ok || !startData.job_id) {
+        setHpMsg(`❌ Failed to start: HTTP ${startR.status} — ${startData.detail || "no job_id returned"}`)
         return
       }
-      if (data.ok) {
-        setHpMsg(`Pulled ${data.found} stories from the HPFFA archive, added ${data.newly_indexed} new to the index.`)
-      } else {
-        setHpMsg(data.detail || data.error || "HPFFA discovery failed")
+      const jobId = startData.job_id
+      let lastProgress = ""
+      while (true) {
+        await new Promise(r => setTimeout(r, 1500))
+        const pr = await fetch(`${API_BASE}/api/library/jobs/${jobId}`)
+        if (!pr.ok) { setHpMsg(`❌ Lost track of job ${jobId} (HTTP ${pr.status})`); return }
+        const j = await pr.json()
+        if (j.progress && j.progress !== lastProgress) {
+          lastProgress = j.progress
+          setHpMsg(`🔄 ${j.progress} (pages: ${j.pages_ok || 0} ok / ${j.pages_failed || 0} failed, ${j.found || 0} works)`)
+        }
+        if (j.status === "done") {
+          const dt = ((Date.now() - t0) / 1000).toFixed(1)
+          setHpMsg(`✓ Done in ${dt}s — pulled ${j.found} stories from HPFFA, added ${j.newly_indexed} new to the index.`)
+          return
+        }
+        if (j.status === "error") {
+          const dt = ((Date.now() - t0) / 1000).toFixed(1)
+          setHpMsg(`❌ Job failed after ${dt}s: ${j.error || "unknown error"}`)
+          return
+        }
       }
     } catch (e: any) {
-      setHpMsg(`Failed: ${e.message || e}`)
+      setHpMsg(`❌ Network error: ${e.message || e}`)
     } finally {
       setHpBusy(false)
     }
@@ -494,6 +589,52 @@ export default function LibraryPage() {
                 {importing ? "Importing…" : "Import"}
               </button>
             </div>
+          </section>
+
+          <section className="import-section">
+            <h3>Bulk import from URL list</h3>
+            <p className="import-help">
+              Paste many AO3 / FanFiction.net links — one per line. Each is fetched
+              via FicHub in turn (politely, ~1–3s each), so a long list takes a while.
+              Leave the tab open while it runs.
+            </p>
+            <textarea
+              className="import-input bulk-urls"
+              placeholder={"https://archiveofourown.org/works/12345\nhttps://www.fanfiction.net/s/67890/1/\n…"}
+              value={bulkUrls}
+              onChange={e => setBulkUrls(e.target.value)}
+              disabled={bulkBusy}
+              rows={6}
+            />
+            <div className="import-row" style={{ marginTop: 8 }}>
+              <button className="btn btn--primary" onClick={importBulkUrls} disabled={bulkBusy || !bulkUrls.trim()}>
+                {bulkBusy && bulkProgress
+                  ? `Importing ${bulkProgress.done}/${bulkProgress.total}…`
+                  : "Import all"}
+              </button>
+              {bulkProgress && (
+                <span className="bulk-stat">
+                  ✓ {bulkProgress.ok} imported · ✗ {bulkProgress.failed} failed
+                </span>
+              )}
+            </div>
+            {bulkProgress && (
+              <div className="bulk-progress-bar">
+                <div className="bulk-progress-bar__fill"
+                  style={{ width: `${(bulkProgress.done / bulkProgress.total) * 100}%` }} />
+              </div>
+            )}
+            {bulkResults.length > 0 && (
+              <ul className="bulk-results">
+                {bulkResults.slice().reverse().map((r, i) => (
+                  <li key={i} className={r.ok ? "bulk-result--ok" : "bulk-result--fail"}>
+                    <span className="bulk-result__icon">{r.ok ? "✓" : "✗"}</span>
+                    <span className="bulk-result__detail">{r.detail}</span>
+                    <span className="bulk-result__url">{r.url.replace(/^https?:\/\//, "")}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
           <section className="import-section">
