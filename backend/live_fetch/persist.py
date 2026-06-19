@@ -40,6 +40,9 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
     saved = 0
     skipped_existing = 0
     failed = 0
+    merged_crosspost = 0
+
+    from live_fetch.crosspost import find_crosspost_for
 
     for d in live_results:
         url = d.get("url")
@@ -50,6 +53,28 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
             skipped_existing += 1
             continue
 
+        # Cross-post check: does this same work already exist from another site?
+        # If so, just record this URL as an alternate link rather than making a
+        # duplicate row. Conservative title+author match (see crosspost.py).
+        try:
+            existing_work = find_crosspost_for(
+                db, d.get("title") or "", d.get("author") or "", exclude_url=url
+            )
+        except Exception:
+            existing_work = None
+        if existing_work is not None:
+            try:
+                alts = set(existing_work.cross_post_urls or [])
+                if url not in alts and url != existing_work.url:
+                    alts.add(url)
+                    existing_work.cross_post_urls = sorted(alts)
+                    existing_work.is_crossover = existing_work.is_crossover or False
+                    db.commit()
+                    merged_crosspost += 1
+                existing_urls.add(url)
+                continue
+            except Exception:
+                db.rollback()
         try:
             site_id = d["id"].replace("live_ao3_", "")
             updated_at = None
@@ -103,11 +128,11 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
             failed += 1
             log.warning(f"Skip live persist for {url}: {e}")
 
-    if saved or failed or skipped_existing:
+    if saved or failed or skipped_existing or merged_crosspost:
         log.info(
             f"persist_live_results: saved={saved} "
-            f"already_indexed={skipped_existing} failed={failed} "
-            f"(of {len(live_results)} candidates)"
+            f"already_indexed={skipped_existing} cross_post_merged={merged_crosspost} "
+            f"failed={failed} (of {len(live_results)} candidates)"
         )
 
     return saved

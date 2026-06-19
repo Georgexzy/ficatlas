@@ -35,6 +35,7 @@ export interface StoryCard {
   updated_at?: string
   is_live?: boolean
   is_hosted?: boolean
+  cross_post_urls?: string[]
 }
 
 export interface SearchResponse {
@@ -82,5 +83,5 @@ export interface SearchParams {
   sort?: string
   page?: number
   per_page?: number
-}
   live?: boolean
+}

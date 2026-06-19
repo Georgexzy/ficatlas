@@ -29,6 +29,7 @@ export default function StoryPage() {
   const [error, setError] = useState<string | null>(null)
   const [bookmarked, setBookmarked] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [similar, setSimilar] = useState<any[]>([])
 
   useEffect(() => {
     if (!id) return
@@ -36,6 +37,11 @@ export default function StoryPage() {
       .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
       .then(setStory)
       .catch(e => setError(String(e)))
+    // Fetch similar stories in parallel (non-blocking; failures are silent)
+    fetch(`${API_BASE}/api/stories/${id}/similar?count=6`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setSimilar(Array.isArray(d) ? d : []))
+      .catch(() => {})
   }, [id])
 
   // Bookmark state from localStorage
@@ -154,6 +160,13 @@ export default function StoryPage() {
           <button className={`btn ${bookmarked ? "btn--on" : ""}`} onClick={toggleBookmark}>
             {bookmarked ? "★ Bookmarked" : "☆ Bookmark"}
           </button>
+          {story.is_hosted && story.chapters.length > 0 && (
+            <a href={`/api/stories/${story.id}/export.epub`}
+              className="btn btn--ghost" download
+              title="Download as EPUB for offline reading">
+              ↓ EPUB
+            </a>
+          )}
           {/* For hosted FicAlley stories, expose Wayback alongside the in-app reader */}
           {story.is_hosted && story.site === "fictionalley" && (() => {
             let u = story.url
@@ -174,8 +187,12 @@ export default function StoryPage() {
           )}
           {story.cross_post_urls?.map(url => {
             const kind = url.includes("archiveofourown.org") ? "AO3"
+                       : url.includes("squidgeworld.org") ? "SquidgeWorld"
                        : url.includes("fanfiction.net") ? "FF.net"
+                       : url.includes("fictionalley") ? "FictionAlley"
+                       : url.startsWith("seed://") ? null
                        : "Mirror"
+            if (!kind) return null
             return (
               <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
                 Also on {kind} ↗
@@ -263,6 +280,24 @@ export default function StoryPage() {
                 </li>
               ))}
             </ol>
+          </section>
+        )}
+
+        {similar.length > 0 && (
+          <section className="similar-stories">
+            <h3>If you like this, try…</h3>
+            <div className="similar-grid">
+              {similar.map(s => (
+                <Link key={s.id} href={`/story/${s.id}`} className="similar-card">
+                  <span className="similar-card__title">{s.title}</span>
+                  <span className="similar-card__author">by {s.author}</span>
+                  <span className="similar-card__meta">
+                    {s.word_count > 0 ? `${Math.round(s.word_count / 1000)}k words` : ""}
+                    {s.relationships?.[0] ? ` · ${s.relationships[0]}` : ""}
+                  </span>
+                </Link>
+              ))}
+            </div>
           </section>
         )}
       </article>

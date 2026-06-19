@@ -110,7 +110,7 @@ def build_works_url(
     return f"/tags/{escaped}/works?" + "&".join(params)
 
 
-def _parse_work_blurb(blurb_html: str) -> dict | None:
+def _parse_work_blurb(blurb_html: str, host: str = "https://archiveofourown.org") -> dict | None:
     """Parse a single work <li class='work blurb group'>...</li> into our story dict."""
     # Work ID
     id_m = re.search(r'<li[^>]+id="work_(\d+)"', blurb_html)
@@ -212,7 +212,7 @@ def _parse_work_blurb(blurb_html: str) -> dict | None:
     return {
         "id":           f"live_ao3_{work_id}",
         "site_id":      work_id,
-        "url":          f"https://archiveofourown.org/works/{work_id}",
+        "url":          f"{host}/works/{work_id}",
         "title":        title,
         "author":       author,
         "summary":      summary,
@@ -236,13 +236,13 @@ def _parse_work_blurb(blurb_html: str) -> dict | None:
     }
 
 
-def parse_works_page(html_text: str) -> tuple[list[dict], bool]:
+def parse_works_page(html_text: str, host: str = "https://archiveofourown.org") -> tuple[list[dict], bool]:
     """Parse a tag-works HTML page. Returns (entries, has_next_page)."""
     blurbs = re.findall(
         r'(<li[^>]+id="work_\d+"[^>]+class="[^"]*work blurb[^"]*"[^>]*>.*?</li>)',
         html_text, re.DOTALL,
     )
-    entries = [e for e in (_parse_work_blurb(b) for b in blurbs) if e]
+    entries = [e for e in (_parse_work_blurb(b, host) for b in blurbs) if e]
 
     # "next page" link presence
     has_next = bool(re.search(r'<a[^>]+rel="next"', html_text))
@@ -261,6 +261,7 @@ async def scrape_tag_works(
     ratings: list[str] | None = None,
     max_pages: int = 5,
     collection: str | None = None,
+    base_url: str | None = None,        # non-AO3 Otwarchive host, e.g. https://squidgeworld.org
     on_progress: callable = None,    # optional: invoked with a dict {page, pages_ok, pages_failed, found}
 ) -> dict:
     """
@@ -297,7 +298,7 @@ async def scrape_tag_works(
             if on_progress:
                 on_progress({"page": page, "pages_ok": pages_ok, "pages_failed": pages_failed,
                              "found": len(all_entries), "msg": f"Fetching page {page} of {max_pages}…"})
-            r = await _get_with_fallback(client, path)
+            r = await _get_with_fallback(client, path, bases=(base_url,) if base_url else None)
             if not r:
                 pages_failed += 1
                 log.warning(f"Page {page} failed, stopping")
@@ -307,7 +308,7 @@ async def scrape_tag_works(
                 break
 
             pages_ok += 1
-            entries, has_next = parse_works_page(r.text)
+            entries, has_next = parse_works_page(r.text, host=base_url or "https://archiveofourown.org")
             new = [e for e in entries if e["site_id"] not in seen_ids]
             for e in new: seen_ids.add(e["site_id"])
             all_entries.extend(new)

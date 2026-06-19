@@ -44,6 +44,7 @@ class StoryCard(BaseModel):
     updated_at: Optional[str] = None
     is_live: bool = False          # true = came from live fetch, not index
     is_hosted: bool = False        # true = full text stored locally, one-click reader
+    cross_post_urls: List[str] = []  # same work on other sites (deduped result)
 
     class Config:
         from_attributes = True
@@ -393,6 +394,7 @@ def _to_card(s: Story) -> StoryCard:
         updated_at=s.updated_at.isoformat() if s.updated_at else None,
         is_live=False,
         is_hosted=bool(s.is_hosted),
+        cross_post_urls=s.cross_post_urls or [],
     )
 
 

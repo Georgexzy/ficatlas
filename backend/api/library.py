@@ -849,6 +849,188 @@ async def discover_hpffa(
     return {"ok": True, "job_id": job_id}
 
 
+# ── HexFiles (Harry Potter FanFic Archive) via AO3 Open Doors ────────────────
+
+@router.post("/discover-hexfiles")
+async def discover_hexfiles(
+    min_words: Optional[int] = Form(None),
+    max_words: Optional[int] = Form(None),
+    complete_only: bool = Form(False),
+    sort: str = Form("revised_at"),
+    max_pages: int = Form(5),
+):
+    """Pull stories from the Harry Potter FanFic Archive ("the HexFiles") Open
+    Doors collection on AO3. This is a SEPARATE ~18k-member archive from HPFFA —
+    it was run by Chad (CazBandit), moved to AO3 in Nov 2021 under the collection
+    slug `harrypotterfanficarchive`. Async job; poll /library/jobs/{id}."""
+    from live_fetch.ao3_works_scraper import scrape_tag_works
+    from live_fetch.persist import persist_live_results
+    from live_fetch.jobs import new_job, run_in_background
+    from live_fetch.ao3_feeds import ao3_cooldown_remaining
+    from db.session import db_session
+
+    cooldown = ao3_cooldown_remaining()
+    if cooldown > 0:
+        raise HTTPException(
+            429,
+            f"AO3 is currently blocking us ({int(cooldown)}s cooldown remaining). "
+            f"HexFiles discovery hits the AO3 Open Doors collection, so it's affected too."
+        )
+
+    capped_pages = max(1, min(max_pages, 20))
+    job_id, state = new_job("discover-hexfiles")
+    state["max_pages"] = capped_pages
+
+    async def _run():
+        try:
+            def on_progress(snap):
+                state.update(snap)
+            result = await scrape_tag_works(
+                tag="", min_words=min_words, max_words=max_words,
+                complete_only=complete_only, sort=sort,
+                max_pages=capped_pages, collection="harrypotterfanficarchive",
+                on_progress=on_progress,
+            )
+            entries = result["entries"]
+            state["pages_ok"]     = result["pages_ok"]
+            state["pages_failed"] = result["pages_failed"]
+
+            if result["pages_failed"] > 0 and result["pages_ok"] == 0:
+                state["status"]   = "error"
+                state["error"]    = "AO3 unreachable"
+                state["progress"] = "Failed"
+            else:
+                state["progress"] = f"Persisting {len(entries)} works…"
+                for e in entries:
+                    e["tags"] = list(set((e.get("tags") or []) + ["hexfiles_archive"]))
+                with db_session() as db:
+                    inserted = persist_live_results(db, entries)
+                state["found"]         = len(entries)
+                state["newly_indexed"] = inserted
+                state["status"]        = "done"
+                state["progress"]      = f"Done — {len(entries)} found, {inserted} new"
+        except Exception as e:
+            log.exception("discover-hexfiles job failed")
+            state["status"]   = "error"
+            state["error"]    = f"{e.__class__.__name__}: {e}"
+            state["progress"] = "Crashed — see backend log"
+        finally:
+            state["finished_at"] = datetime.utcnow().isoformat()
+
+    run_in_background(_run)
+    return {"ok": True, "job_id": job_id}
+
+
+# ── SquidgeWorld archive (Otwarchive software, ~30k mostly-HP works) ──────────
+
+@router.post("/discover-squidgeworld")
+async def discover_squidgeworld(
+    fandom: str = Form("Harry Potter - J. K. Rowling"),
+    min_words: Optional[int] = Form(None),
+    max_words: Optional[int] = Form(None),
+    complete_only: bool = Form(False),
+    sort: str = Form("revised_at"),
+    max_pages: int = Form(5),
+):
+    """Scrape SquidgeWorld Archive (squidgeworld.org). It runs the same OTW
+    'Otwarchive' software as AO3, so its /works listing shares AO3's HTML
+    structure — we reuse the AO3 works scraper pointed at the SquidgeWorld host.
+    Async job; poll /library/jobs/{id}."""
+    from live_fetch.ao3_works_scraper import scrape_tag_works
+    from live_fetch.persist import persist_live_results
+    from live_fetch.jobs import new_job, run_in_background
+    from db.session import db_session
+
+    capped_pages = max(1, min(max_pages, 20))
+    job_id, state = new_job("discover-squidgeworld")
+    state["max_pages"] = capped_pages
+
+    async def _run():
+        try:
+            def on_progress(snap):
+                state.update(snap)
+            result = await scrape_tag_works(
+                tag=fandom, min_words=min_words, max_words=max_words,
+                complete_only=complete_only, sort=sort,
+                max_pages=capped_pages,
+                base_url="https://squidgeworld.org",
+                on_progress=on_progress,
+            )
+            entries = result["entries"]
+            state["pages_ok"]     = result["pages_ok"]
+            state["pages_failed"] = result["pages_failed"]
+
+            if result["pages_failed"] > 0 and result["pages_ok"] == 0:
+                state["status"]   = "error"
+                state["error"]    = "SquidgeWorld unreachable"
+                state["progress"] = "Failed"
+            else:
+                state["progress"] = f"Persisting {len(entries)} works…"
+                for e in entries:
+                    e["tags"] = list(set((e.get("tags") or []) + ["squidgeworld_archive"]))
+                with db_session() as db:
+                    inserted = persist_live_results(db, entries)
+                state["found"]         = len(entries)
+                state["newly_indexed"] = inserted
+                state["status"]        = "done"
+                state["progress"]      = f"Done — {len(entries)} found, {inserted} new"
+        except Exception as e:
+            log.exception("discover-squidgeworld job failed")
+            state["status"]   = "error"
+            state["error"]    = f"{e.__class__.__name__}: {e}"
+            state["progress"] = "Crashed — see backend log"
+        finally:
+            state["finished_at"] = datetime.utcnow().isoformat()
+
+    run_in_background(_run)
+    return {"ok": True, "job_id": job_id}
+
+
+# ── Cross-post dedup (one-shot batch over existing data) ─────────────────────
+
+@router.post("/dedup-crossposts")
+async def dedup_crossposts(limit: Optional[int] = Form(None)):
+    """Scan existing stories and merge cross-posted copies (same title+author on
+    different sites) into single canonical rows, recording the alternates in
+    cross_post_urls and keeping the most-recently-updated copy's hosted text.
+    Async job; poll /library/jobs/{id}."""
+    from live_fetch.jobs import new_job, run_in_background
+    from live_fetch.crosspost import group_existing, merge_group
+    from db.session import db_session
+
+    job_id, state = new_job("dedup-crossposts")
+
+    async def _run():
+        try:
+            state["progress"] = "Scanning for cross-posted works…"
+            with db_session() as db:
+                groups = group_existing(db, limit=limit)
+                state["groups_found"] = len(groups)
+                merged = 0
+                for i, group in enumerate(groups):
+                    try:
+                        merge_group(db, group)
+                        db.commit()
+                        merged += len(group) - 1
+                    except Exception:
+                        db.rollback()
+                    if i % 50 == 0:
+                        state["progress"] = f"Merged {merged} duplicates across {i}/{len(groups)} groups…"
+                state["duplicates_merged"] = merged
+                state["status"]   = "done"
+                state["progress"] = f"Done — merged {merged} duplicate rows across {len(groups)} works"
+        except Exception as e:
+            log.exception("dedup-crossposts job failed")
+            state["status"]   = "error"
+            state["error"]    = f"{e.__class__.__name__}: {e}"
+            state["progress"] = "Crashed — see backend log"
+        finally:
+            state["finished_at"] = datetime.utcnow().isoformat()
+
+    run_in_background(_run)
+    return {"ok": True, "job_id": job_id}
+
+
 @router.get("/jobs/{job_id}")
 async def get_job_status(job_id: str):
     """Poll for an async discover-* job. Returns 404 once the job has aged out

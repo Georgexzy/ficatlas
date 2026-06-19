@@ -133,32 +133,42 @@ def _fmt_err(e: Exception) -> str:
     return f"{cls}({e!r})"
 
 
-async def _get_with_fallback(client: httpx.AsyncClient, path: str) -> httpx.Response | None:
+async def _get_with_fallback(
+    client: httpx.AsyncClient, path: str, bases: tuple[str, ...] | None = None
+) -> httpx.Response | None:
     """Try primary, fall back to mirror on origin errors. One retry per host on
     transient exceptions (TLS, connection reset, timeout). Return None on hard failure.
     Total budget on a failing fetch is ~35s (2 hosts × 15s per attempt + retry backoffs)
     so the UI doesn't have to wait minutes for AO3 to admit it's not coming back.
 
     Short-circuits if AO3 is in cooldown (recent burst of failures detected).
+
+    `bases` overrides the host list. When set to a non-AO3 host (e.g. SquidgeWorld,
+    which runs the same Otwarchive software), the AO3 cooldown and failure tracking
+    are bypassed so one archive's outage doesn't affect the other.
     """
     import asyncio, time
 
+    use_bases = bases or (PRIMARY, MIRROR)
+    is_ao3 = bases is None
+
     # If AO3 just blanket-blocked us, don't bother attempting — fail fast so the
     # job runner can surface a helpful "in cooldown" error to the UI.
-    cooldown = ao3_cooldown_remaining()
-    if cooldown > 0:
-        log.info(f"AO3 in cooldown for {cooldown:.0f}s more — skipping {path[:80]}")
-        return None
+    if is_ao3:
+        cooldown = ao3_cooldown_remaining()
+        if cooldown > 0:
+            log.info(f"AO3 in cooldown for {cooldown:.0f}s more — skipping {path[:80]}")
+            return None
 
     last_status = None
     saw_transient_failure = False
-    for base in (PRIMARY, MIRROR):
+    for base in use_bases:
         for attempt in (1, 2):
             try:
                 r = await client.get(f"{base}{path}", timeout=15)
                 last_status = r.status_code
                 if r.status_code == 200:
-                    _record_success()
+                    if is_ao3: _record_success()
                     return r
                 if r.status_code in (525, 503, 502, 500):
                     saw_transient_failure = True
@@ -167,9 +177,9 @@ async def _get_with_fallback(client: httpx.AsyncClient, path: str) -> httpx.Resp
                 if r.status_code in (429, 418):
                     saw_transient_failure = True
                     log.warning(f"{base}{path} → {r.status_code} (rate limited)")
-                    _record_failure()
+                    if is_ao3: _record_failure()
                     return None
-                if r.status_code == 404 and base == PRIMARY:
+                if r.status_code == 404 and base == use_bases[0] and len(use_bases) > 1:
                     log.info(f"{base}{path} → 404, trying mirror")
                     break
                 log.warning(f"{base}{path} → {r.status_code}")
@@ -180,7 +190,7 @@ async def _get_with_fallback(client: httpx.AsyncClient, path: str) -> httpx.Resp
                 if attempt == 1:
                     await asyncio.sleep(1.0)
                     continue
-    if saw_transient_failure:
+    if saw_transient_failure and is_ao3:
         _record_failure()
     log.warning(f"All fallbacks failed for {path} (last status: {last_status})")
     return None

@@ -1,5 +1,5 @@
 "use client"
-import { useState, useCallback, useTransition, useEffect } from "react"
+import { useState, useCallback, useTransition, useEffect, useRef } from "react"
 import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import Link from "next/link"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
@@ -116,23 +116,82 @@ function FilterSection({ label, children, defaultOpen = false, highlighted = fal
 }
 
 // ── Tag input (add/remove chips) ──────────────────────────────────────────────
-function TagInput({ value, onChange, placeholder, highlighted = [] }: {
-  value: string[]; onChange: (v: string[]) => void; placeholder?: string; highlighted?: string[]
+function TagInput({ value, onChange, placeholder, highlighted = [], kind }: {
+  value: string[]; onChange: (v: string[]) => void; placeholder?: string
+  highlighted?: string[]; kind?: "fandom" | "relationship" | "character" | "tag"
 }) {
   const [input, setInput] = useState("")
+  const [suggestions, setSuggestions] = useState<{ value: string; count: number }[]>([])
+  const [showSug, setShowSug] = useState(false)
+  const [activeIdx, setActiveIdx] = useState(-1)
+  const boxRef = useRef<HTMLDivElement | null>(null)
+
   const add = (val?: string) => {
     const v = (val ?? input).trim()
     if (v && !value.includes(v)) onChange([...value, v])
-    setInput("")
+    setInput(""); setSuggestions([]); setShowSug(false); setActiveIdx(-1)
   }
+
+  // Debounced autocomplete fetch
+  useEffect(() => {
+    if (!kind) return
+    const q = input.trim()
+    if (q.length < 1) { setSuggestions([]); return }
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/stats/suggest?kind=${kind}&q=${encodeURIComponent(q)}&limit=8`)
+        if (r.ok) {
+          const data = await r.json()
+          setSuggestions(data); setShowSug(true); setActiveIdx(-1)
+        }
+      } catch {}
+    }, 200)
+    return () => clearTimeout(t)
+  }, [input, kind])
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    if (!showSug) return
+    const close = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setShowSug(false)
+    }
+    document.addEventListener("click", close)
+    return () => document.removeEventListener("click", close)
+  }, [showSug])
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (showSug && suggestions.length > 0) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx(i => Math.min(i + 1, suggestions.length - 1)); return }
+      if (e.key === "ArrowUp")   { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, -1)); return }
+      if (e.key === "Enter" && activeIdx >= 0) { e.preventDefault(); add(suggestions[activeIdx].value); return }
+      if (e.key === "Escape") { setShowSug(false); return }
+    }
+    if (e.key === "Enter") { e.preventDefault(); add() }
+  }
+
   return (
-    <div className="tag-input">
+    <div className="tag-input" ref={boxRef}>
       <div className="tag-input__row">
-        <input value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); add() } }}
+        <input value={input}
+          onChange={e => setInput(e.target.value)}
+          onFocus={() => { if (suggestions.length) setShowSug(true) }}
+          onKeyDown={onKeyDown}
           placeholder={placeholder} className="tag-input__field" />
         <button onClick={() => add()} className="tag-input__add" aria-label="Add">+</button>
       </div>
+      {showSug && suggestions.length > 0 && (
+        <ul className="tag-suggest">
+          {suggestions.map((s, i) => (
+            <li key={s.value}
+              className={`tag-suggest__item ${i === activeIdx ? "tag-suggest__item--active" : ""}`}
+              onMouseDown={e => { e.preventDefault(); add(s.value) }}
+              onMouseEnter={() => setActiveIdx(i)}>
+              <span className="tag-suggest__value">{s.value}</span>
+              <span className="tag-suggest__count">{s.count.toLocaleString()}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {value.length > 0 && (
         <div className="tag-input__chips">
           {value.map(v => (
@@ -264,6 +323,12 @@ function StoryCard({ story }: { story: StoryCard }) {
           <Link href={`/story/${story.id}`} className="card__title">{story.title}</Link>
           <div className="card__badges">
             <span className={`badge badge--site-${story.site}`}>{SITE_LABELS[story.site] ?? story.site}</span>
+            {story.cross_post_urls && story.cross_post_urls.length > 0 && (
+              <span className="badge badge--crosspost"
+                title={`Also posted on:\n${story.cross_post_urls.join("\n")}`}>
+                +{story.cross_post_urls.length} {story.cross_post_urls.length === 1 ? "copy" : "copies"}
+              </span>
+            )}
             {story.rating && <span className={`badge badge--rating badge--${story.rating.toLowerCase()}`}>{RATING_LABELS[story.rating] ?? story.rating}</span>}
             {story.status === "complete" && <span className="badge badge--complete">Complete</span>}
             {story.tags?.includes("dlp_library") && <span className="badge badge--dlp" title="Curated by DarkLordPotter">DLP</span>}
@@ -695,22 +760,22 @@ export default function SearchPage() {
 
           <FilterSection label="Fandoms" highlighted={parsedLive.fandoms.length > 0} count={incFandoms.length}>
             <TagInput value={incFandoms} onChange={setIncFandoms}
-              placeholder="e.g. Harry Potter" highlighted={parsedLive.fandoms} />
+              placeholder="e.g. Harry Potter" highlighted={parsedLive.fandoms} kind="fandom" />
           </FilterSection>
 
           <FilterSection label="Relationships" highlighted={parsedLive.relationships.length > 0} count={incShips.length}>
             <TagInput value={incShips} onChange={setIncShips}
-              placeholder="e.g. Draco/Hermione" highlighted={parsedLive.relationships} />
+              placeholder="e.g. Draco/Hermione" highlighted={parsedLive.relationships} kind="relationship" />
           </FilterSection>
 
           <FilterSection label="Characters" highlighted={parsedLive.characters.length > 0} count={incChars.length}>
             <TagInput value={incChars} onChange={setIncChars}
-              placeholder="e.g. Hermione Granger" highlighted={parsedLive.characters} />
+              placeholder="e.g. Hermione Granger" highlighted={parsedLive.characters} kind="character" />
           </FilterSection>
 
           <FilterSection label="Additional Tags" highlighted={parsedLive.tags.length > 0} count={incTags.length}>
             <TagInput value={incTags} onChange={setIncTags}
-              placeholder="e.g. slow burn" highlighted={parsedLive.tags} />
+              placeholder="e.g. slow burn" highlighted={parsedLive.tags} kind="tag" />
           </FilterSection>
 
           <FilterSection label="Curation" count={
@@ -740,22 +805,22 @@ export default function SearchPage() {
 
           <FilterSection label="Fandoms" highlighted={parsedLive.excFandoms.length > 0} count={excFandoms.length}>
             <TagInput value={excFandoms} onChange={setExcFandoms}
-              placeholder="Exclude fandom…" highlighted={parsedLive.excFandoms} />
+              placeholder="Exclude fandom…" highlighted={parsedLive.excFandoms} kind="fandom" />
           </FilterSection>
 
           <FilterSection label="Relationships" highlighted={parsedLive.excRelationships.length > 0} count={excShips.length}>
             <TagInput value={excShips} onChange={setExcShips}
-              placeholder="Exclude pairing…" highlighted={parsedLive.excRelationships} />
+              placeholder="Exclude pairing…" highlighted={parsedLive.excRelationships} kind="relationship" />
           </FilterSection>
 
           <FilterSection label="Characters" highlighted={parsedLive.excCharacters.length > 0} count={excChars.length}>
             <TagInput value={excChars} onChange={setExcChars}
-              placeholder="Exclude character…" highlighted={parsedLive.excCharacters} />
+              placeholder="Exclude character…" highlighted={parsedLive.excCharacters} kind="character" />
           </FilterSection>
 
           <FilterSection label="Additional Tags" highlighted={parsedLive.excTags.length > 0} count={excTags.length}>
             <TagInput value={excTags} onChange={setExcTags}
-              placeholder="Exclude tag…" highlighted={parsedLive.excTags} />
+              placeholder="Exclude tag…" highlighted={parsedLive.excTags} kind="tag" />
           </FilterSection>
 
           <hr className="sidebar__rule" />

@@ -69,6 +69,9 @@ export default function LibraryPage() {
   const [hpPages, setHpPages] = useState("3")
   const [hpBusy, setHpBusy] = useState(false)
   const [hpMsg, setHpMsg] = useState<string | null>(null)
+  // Extra HP archive sources + dedup
+  const [archBusy, setArchBusy] = useState<string | null>(null)
+  const [archMsg, setArchMsg] = useState<string | null>(null)
 
   // Tracked fandom (auto-polled on every site load)
   const [trackedFandom, setTrackedFandom] = useState("")
@@ -448,6 +451,55 @@ export default function LibraryPage() {
     }
   }
 
+  // Generic async-job runner for the extra archive sources (HexFiles,
+  // SquidgeWorld) and the cross-post dedup batch. All share the job-poll shape.
+  const runArchiveJob = async (
+    key: string, endpoint: string, label: string, body: Record<string, string> = {}
+  ) => {
+    setArchBusy(key); setArchMsg(`🔄 Starting ${label}…`)
+    const t0 = Date.now()
+    try {
+      const fd = new FormData()
+      for (const [k, v] of Object.entries(body)) fd.append(k, v)
+      const startR = await fetch(`${API_BASE}/api/library/${endpoint}`, { method: "POST", body: fd })
+      const startData = await startR.json().catch(() => ({}))
+      if (!startR.ok || !startData.job_id) {
+        setArchMsg(`❌ Failed to start ${label}: HTTP ${startR.status} — ${startData.detail || "no job_id"}`)
+        return
+      }
+      const jobId = startData.job_id
+      let last = ""
+      while (true) {
+        await new Promise(r => setTimeout(r, 1500))
+        const pr = await fetch(`${API_BASE}/api/library/jobs/${jobId}`)
+        if (!pr.ok) { setArchMsg(`❌ Lost track of job (HTTP ${pr.status})`); return }
+        const j = await pr.json()
+        if (j.progress && j.progress !== last) {
+          last = j.progress
+          setArchMsg(`🔄 ${j.progress}`)
+        }
+        if (j.status === "done") {
+          const dt = ((Date.now() - t0) / 1000).toFixed(1)
+          const extra = j.newly_indexed != null
+            ? ` — ${j.found ?? 0} found, ${j.newly_indexed} new`
+            : j.duplicates_merged != null
+              ? ` — merged ${j.duplicates_merged} duplicate rows across ${j.groups_found ?? 0} works`
+              : ""
+          setArchMsg(`✓ ${label} done in ${dt}s${extra}.`)
+          return
+        }
+        if (j.status === "error") {
+          setArchMsg(`❌ ${label} failed: ${j.error || "unknown error"}`)
+          return
+        }
+      }
+    } catch (e: any) {
+      setArchMsg(`❌ Network error: ${e.message || e}`)
+    } finally {
+      setArchBusy(null)
+    }
+  }
+
   const discoverDlp = async () => {
     setDlpBusy(true); setDlpMsg(null); setDlpEntries([])
     try {
@@ -801,6 +853,55 @@ export default function LibraryPage() {
                 style={{ width: 80 }} min={1} max={20} />
             </div>
             {hpMsg && <div className="alert alert--success" style={{marginTop:10}}>{hpMsg}</div>}
+          </section>
+
+          <section className="import-section">
+            <h3>More Harry Potter archives</h3>
+            <p className="import-help">
+              Two further archives. <strong>The HexFiles</strong> (Harry Potter FanFic
+              Archive) is a separate ~18k-member eFiction site that also moved to AO3
+              Open Doors in 2021 (collection <code>harrypotterfanficarchive</code>);
+              tagged <code>hexfiles_archive</code>. <strong>SquidgeWorld</strong> runs the
+              same Otwarchive software as AO3 (~30k mostly-HP works) so we scrape its
+              works listing directly; tagged <code>squidgeworld_archive</code>.
+            </p>
+            <div className="import-row" style={{ gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn--primary"
+                onClick={() => runArchiveJob("hexfiles", "discover-hexfiles", "HexFiles scrape", { max_pages: "5" })}
+                disabled={archBusy !== null}>
+                {archBusy === "hexfiles" ? "Scraping HexFiles…" : "Scrape HexFiles"}
+              </button>
+              <button className="btn btn--primary"
+                onClick={() => runArchiveJob("squidge", "discover-squidgeworld", "SquidgeWorld scrape", { max_pages: "5" })}
+                disabled={archBusy !== null}>
+                {archBusy === "squidge" ? "Scraping SquidgeWorld…" : "Scrape SquidgeWorld"}
+              </button>
+            </div>
+            <p className="import-help" style={{ marginTop: 14 }}>
+              There's also a 112k-story metadata seed (titles/authors/summaries scraped
+              with permission from AO3) you can bulk-import from the command line:
+              <code>docker compose exec backend python janelleshane_importer.py --download</code>
+            </p>
+            {archMsg && <div className="alert alert--success" style={{ marginTop: 10 }}>{archMsg}</div>}
+          </section>
+
+          <section className="import-section">
+            <h3>Merge cross-posted duplicates</h3>
+            <p className="import-help">
+              Many fics are posted on more than one site. This scans the index and merges
+              copies of the same work (matched by title + author) into a single result
+              with links to every version, keeping the most-recently-updated copy's hosted
+              text. New imports are deduped automatically — run this once to clean up
+              everything already indexed.
+            </p>
+            <div className="import-row">
+              <button className="btn btn--primary"
+                onClick={() => runArchiveJob("dedup", "dedup-crossposts", "Cross-post dedup")}
+                disabled={archBusy !== null}>
+                {archBusy === "dedup" ? "Merging duplicates…" : "Merge cross-posted duplicates"}
+              </button>
+            </div>
+            {archBusy === "dedup" && archMsg && <div className="alert alert--success" style={{ marginTop: 10 }}>{archMsg}</div>}
           </section>
 
           <section className="import-section">

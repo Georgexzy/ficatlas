@@ -98,12 +98,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_chapters_story_number ON chapters (story_id
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS cross_post_urls TEXT[] DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS ix_stories_cross_post_urls ON stories USING gin (cross_post_urls);
 
--- Performance: the search filters use array_to_string(col,',') ILIKE '%v%' which
--- can't use a plain GIN index. A trigram index on the stringified fandom array
--- makes the primary-axis fandom filter fast even on millions of rows.
+-- Performance note: we previously tried a functional trigram index on
+-- array_to_string(fandoms, ',') to speed up substring fandom matching, but
+-- array_to_string is not IMMUTABLE so Postgres rejects it in an index expression.
+-- The plain GIN index on the fandoms array (ix_stories_fandoms, created above)
+-- already serves array containment/overlap, which is what most queries use.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
-CREATE INDEX IF NOT EXISTS ix_stories_fandoms_trgm ON stories
-    USING gin (array_to_string(fandoms, ',') gin_trgm_ops);
 -- Composite index for the most common access pattern: filter by word_count, sort by kudos.
 CREATE INDEX IF NOT EXISTS ix_stories_kudos_desc ON stories (kudos DESC);
 CREATE INDEX IF NOT EXISTS ix_stories_wc_kudos ON stories (word_count, kudos DESC);
@@ -136,16 +136,42 @@ CREATE TABLE IF NOT EXISTS user_data (
     PRIMARY KEY (user_id, key)
 );
 CREATE INDEX IF NOT EXISTS ix_user_data_user ON user_data (user_id);
+
+-- Facets table for tag autocomplete. Populated on demand by /api/stats/refresh-facets
+-- (or lazily). Holds distinct fandom/relationship/character/freeform values with
+-- their story counts so the suggest endpoint is instant instead of scanning 2.3M rows.
+CREATE TABLE IF NOT EXISTS facets (
+    kind   VARCHAR(20) NOT NULL,   -- fandom | relationship | character | tag
+    value  TEXT NOT NULL,
+    count  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (kind, value)
+);
+CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm ON facets USING gin (value gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC);
 """
 
 def init():
-    with engine.connect() as conn:
-        for stmt in SQL.split(";"):
-            s = stmt.strip()
-            if s:
-                conn.execute(text(s))
-        conn.commit()
-    print("Database initialised.")
+    """Run each DDL statement in its own transaction so a single failure (e.g. a
+    bad index on an older Postgres) can't roll back the creation of every table
+    after it. Failures are logged, not fatal — the app should still boot with
+    whatever succeeded."""
+    statements = [s.strip() for s in SQL.split(";") if s.strip()]
+    failed = []
+    for stmt in statements:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(stmt))
+                conn.commit()
+        except Exception as e:
+            # First line of the statement for a readable log, plus the error.
+            head = stmt.splitlines()[0][:80]
+            failed.append((head, str(e).splitlines()[0]))
+    if failed:
+        print(f"Database initialised with {len(failed)} skipped statement(s):")
+        for head, err in failed:
+            print(f"  - SKIPPED: {head}… ({err})")
+    else:
+        print("Database initialised.")
 
 if __name__ == "__main__":
     init()
