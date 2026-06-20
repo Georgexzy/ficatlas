@@ -20,6 +20,11 @@ DEFAULTS = {
     "feed_min_words":      "",        # blank = no min
     "feed_max_words":      "",        # blank = no max
     "feed_complete_only":  "false",
+    # Direct site crawling (AO3/FFN). OFF by default and rarely works from a
+    # datacenter IP — AO3 returns Cloudflare 525s and FFN is fully walled. The
+    # feed poller above is the reliable freshness path; this is for users on a
+    # residential IP / Tailscale exit node / WARP who can actually reach the sites.
+    "enable_direct_crawl": "false",
 }
 
 

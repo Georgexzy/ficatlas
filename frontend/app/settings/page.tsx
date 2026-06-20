@@ -17,6 +17,7 @@ interface Settings {
   feed_min_words: string
   feed_max_words: string
   feed_complete_only: string
+  enable_direct_crawl: string
 }
 
 const SITE_OPTIONS = [
@@ -150,6 +151,26 @@ export default function SettingsPage() {
             <span className="setting-row__hint">Skip works in progress.</span>
           </div>
           <Toggle on={settings.feed_complete_only === "true"} onToggle={v => update("feed_complete_only", String(v))} />
+        </div>
+      </section>
+
+      <section className="settings-group">
+        <h2 className="settings-group__title">Advanced: direct crawling</h2>
+        <p className="settings-group__hint">
+          When on, FicAtlas runs scheduled background crawls of AO3 and FF.net directly
+          (every few hours) instead of relying only on the Atom feed poller.
+          <strong> This rarely works from a cloud server</strong> — AO3 returns Cloudflare
+          errors (525) and FF.net is fully blocked from datacenter IPs. It only helps if
+          this server reaches the sites through a residential IP, a Tailscale exit node,
+          or Cloudflare WARP. Leave it off otherwise; the feed poller and one-click
+          imports are the reliable paths.
+        </p>
+        <div className="setting-row">
+          <div className="setting-row__label">
+            <span className="setting-row__name">Enable direct AO3 / FF.net crawling</span>
+            <span className="setting-row__hint">Takes effect on the next scheduled run (no restart needed). Check backend logs to confirm it's reaching the sites.</span>
+          </div>
+          <Toggle on={settings.enable_direct_crawl === "true"} onToggle={v => update("enable_direct_crawl", String(v))} />
         </div>
       </section>
 

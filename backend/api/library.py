@@ -12,6 +12,39 @@ from models.story import Story, Chapter, SiteEnum, RatingEnum, StatusEnum
 log = logging.getLogger(__name__)
 router = APIRouter()
 
+
+@router.get("/crawl-status")
+async def crawl_status(db: Session = Depends(get_db)):
+    """Read-only status for the direct-crawl feature so the settings toggle has
+    honest feedback: whether it's enabled, and how the last few scheduled crawls
+    actually went (so you can see the AO3/FFN blocks rather than guessing)."""
+    from api.settings import get_setting
+    from models.story import CrawlJob
+    enabled = str(get_setting(db, "enable_direct_crawl")).lower() == "true"
+    recent = []
+    try:
+        rows = (db.query(CrawlJob)
+                .order_by(CrawlJob.started_at.desc())
+                .limit(8).all())
+        for j in rows:
+            recent.append({
+                "site": j.site.value if hasattr(j.site, "value") else str(j.site),
+                "status": j.status,
+                "found": j.stories_found or 0,
+                "new": j.stories_new or 0,
+                "error": (j.error or "")[:200],
+                "started_at": j.started_at.isoformat() if j.started_at else None,
+                "finished_at": j.finished_at.isoformat() if j.finished_at else None,
+            })
+    except Exception:
+        pass
+    # Heuristic: if the most recent crawl failed with a 525/timeout, surface that.
+    blocked = any(
+        j["status"] == "failed" and ("525" in j["error"] or "timeout" in j["error"].lower())
+        for j in recent
+    )
+    return {"enabled": enabled, "blocked_recently": blocked, "recent_jobs": recent}
+
 # ── FicHub-powered downloads (works around Cloudflare on AO3/FFnet) ──────────
 
 FICHUB_API = "https://fichub.net/api/v0"

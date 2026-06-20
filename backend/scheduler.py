@@ -26,8 +26,29 @@ _next_run: dict[str, datetime | None] = {"ao3": None, "ffnet": None}
 _startup_task = None  # holds reference to startup poll so it isn't GC'd
 
 
+async def _direct_crawl_enabled() -> bool:
+    """Whether direct site crawling is on. The settings toggle (DB) takes priority;
+    the ENABLE_DIRECT_CRAWL env var is the fallback default. Checked at each run so
+    the toggle works without a restart."""
+    try:
+        from db.session import db_session
+        from api.settings import get_setting
+        with db_session() as db:
+            val = get_setting(db, "enable_direct_crawl")
+            if val:  # explicit DB value wins
+                return str(val).lower() == "true"
+    except Exception:
+        pass
+    return os.getenv("ENABLE_DIRECT_CRAWL", "false").lower() == "true"
+
+
 async def _run_crawl(site: str):
     """Wrapper that records timing and logs progress."""
+    # Honour the runtime toggle — skip quietly when direct crawling is disabled.
+    if not await _direct_crawl_enabled():
+        logger.debug(f"[scheduler] direct crawl disabled, skipping {site}")
+        return
+
     from crawlers.ao3 import AO3Crawler
     from crawlers.ffnet import FFNetCrawler
     from models.story import CrawlJob, SiteEnum
@@ -94,18 +115,21 @@ def start_scheduler():
         misfire_grace_time=600,
     )
 
-    # Legacy direct crawlers (Cloudflare-blocked from VPS IPs) — off unless explicitly enabled
-    if os.getenv("ENABLE_DIRECT_CRAWL", "false").lower() == "true":
-        scheduler.add_job(
-            _run_crawl, trigger=IntervalTrigger(hours=AO3_INTERVAL_HOURS),
-            args=["ao3"], id="crawl_ao3", replace_existing=True,
-            max_instances=1, misfire_grace_time=300,
-        )
-        scheduler.add_job(
-            _run_crawl, trigger=IntervalTrigger(hours=FFNET_INTERVAL_HOURS),
-            args=["ffnet"], id="crawl_ffnet", replace_existing=True,
-            max_instances=1, misfire_grace_time=300,
-        )
+    # Direct crawlers (AO3/FFN). Registered unconditionally so the in-app settings
+    # toggle can enable them at runtime without a restart — _run_crawl checks the
+    # DB setting on each run and skips when disabled. NOTE: these are Cloudflare-
+    # blocked from datacenter IPs (525/timeouts) and only work from a residential
+    # IP, Tailscale exit node, or Cloudflare WARP.
+    scheduler.add_job(
+        _run_crawl, trigger=IntervalTrigger(hours=AO3_INTERVAL_HOURS),
+        args=["ao3"], id="crawl_ao3", replace_existing=True,
+        max_instances=1, misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        _run_crawl, trigger=IntervalTrigger(hours=FFNET_INTERVAL_HOURS),
+        args=["ffnet"], id="crawl_ffnet", replace_existing=True,
+        max_instances=1, misfire_grace_time=300,
+    )
 
     scheduler.start()
 

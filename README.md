@@ -53,7 +53,8 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **FicHub** for any fresh per-URL fetch
 
 ### Settings & UX
-- **Settings page** at `/settings` — tracked fandom, poll-on-load, live AO3 fetch, default sites/sort/per-page, feed filters, reader font and width, explicit visibility. Persisted server-side
+- **Settings page** at `/settings` — tracked fandom, poll-on-load, live AO3 fetch, default sites/sort/per-page, feed filters, reader font and width, explicit visibility, and an advanced **direct-crawl toggle** (off by default). Persisted server-side
+- **Direct crawl toggle** — opt-in scheduled crawling of AO3/FF.net. The toggle is honest about reality: it rarely works from a datacenter IP (AO3 Cloudflare 525s, FF.net fully blocked) and only helps behind a residential IP / Tailscale exit node / WARP. Controlled at runtime from the DB setting (no restart); `GET /api/library/crawl-status` reports whether recent crawls were blocked
 - **Index status widget** — per-site counts, total stories, total words, DLP and HPFFA counts
 - **Fully responsive** — proper mobile viewport; on phones the filter sidebar becomes a slide-out drawer with a backdrop, an active-filter badge, and an Apply button (instead of being hidden). Tablet/phone/small-phone breakpoints, 40–44px touch targets, horizontally scrolling library tabs, 2-column book grid, full-width stacked actions. Works from any host over Tailscale/LAN
 - **Loading skeletons** while results load, smooth scroll-to-top on page change

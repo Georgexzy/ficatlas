@@ -74,6 +74,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const dirtyRef = useRef<Set<SyncKey>>(new Set())
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlightRef = useRef(false)
+  // Hash of the last successfully-synced snapshot. Guards against the merge loop:
+  // we skip the network call when local content matches what we already synced.
+  const lastSyncedHashRef = useRef<string>("")
 
   // Build a snapshot of all local sync keys that have data.
   const snapshot = useCallback((): Record<string, any> => {
@@ -87,35 +90,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Core sync: send a snapshot to /merge, adopt the merged result locally.
   // Robust against two-device divergence — the server merges, nothing is lost.
-  const doMerge = useCallback(async (keysHint?: Set<SyncKey>) => {
+  //
+  // CRITICAL: a content hash guards against an infinite sync loop. Adopting the
+  // merged response writes to localStorage, and several handlers (focus/online/
+  // interval) also trigger syncs; without comparing content we'd merge → write →
+  // merge → write forever, hammering the backend many times per second. We only
+  // hit the network when the local snapshot differs from what we last synced.
+  const doMerge = useCallback(async (keysHint?: Set<SyncKey>, force = false) => {
     if (!loggedInRef.current) return
     if (inFlightRef.current) {
-      // Coalesce: mark keys dirty, the in-flight call will re-run if needed.
       if (keysHint) keysHint.forEach(k => dirtyRef.current.add(k))
       return
     }
+
+    const body = snapshot()
+    const bodyHash = JSON.stringify(body)
+    // Nothing changed since the last successful sync → skip entirely. This is the
+    // loop-breaker. `force` (login/signup/manual) bypasses it for a guaranteed sync.
+    if (!force && bodyHash === lastSyncedHashRef.current) {
+      dirtyRef.current.clear()
+      return
+    }
+
     inFlightRef.current = true
     setSyncing(true)
     try {
-      const body = snapshot()
       const r = await fetch("/api/userdata/merge", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: bodyHash,
       })
       if (r.ok) {
         const merged = await r.json()
-        // Adopt merged values locally (without re-triggering sync loops)
+        // Adopt merged values locally (without re-triggering the setItem hook)
         for (const k of SYNC_KEYS) {
           if (merged[k] != null) writeLocal(k, merged[k])
         }
+        // Record the hash of what's now local so identical re-syncs are skipped.
+        lastSyncedHashRef.current = JSON.stringify(snapshot())
         setLastSyncAt(Date.now())
         dirtyRef.current.clear()
-        // Let components re-read updated localStorage
         window.dispatchEvent(new Event("ficatlas:storage-pulled"))
       } else {
-        // Keep dirty keys queued for the next attempt
         if (keysHint) keysHint.forEach(k => dirtyRef.current.add(k))
       }
     } catch {
@@ -123,11 +140,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       inFlightRef.current = false
       setSyncing(false)
-      // If more edits arrived while we were syncing, run again.
-      if (dirtyRef.current.size > 0) {
+      // Only re-run if there are genuinely new dirty keys AND the content now
+      // differs from what we just synced (prevents the write-back from looping).
+      if (dirtyRef.current.size > 0 && JSON.stringify(snapshot()) !== lastSyncedHashRef.current) {
         const pending = new Set(dirtyRef.current)
         dirtyRef.current.clear()
-        setTimeout(() => doMerge(pending), 400)
+        setTimeout(() => doMerge(pending), 800)
+      } else {
+        dirtyRef.current.clear()
       }
     }
   }, [snapshot])
@@ -152,7 +172,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const u = d?.user ?? null
         setUser(u)
         loggedInRef.current = !!u
-        if (u) doMerge()   // initial merge reconciles this device with the server
+        if (u) doMerge(undefined, true)   // initial merge reconciles this device with the server
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -194,7 +214,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const d = await r.json()
     setUser(d); loggedInRef.current = true
-    await doMerge()   // merge this device's local data with the account's server data
+    await doMerge(undefined, true)   // merge this device's local data with the account's server data
   }, [doMerge])
 
   const signup = useCallback(async (username: string, password: string) => {
@@ -207,17 +227,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const d = await r.json()
     setUser(d); loggedInRef.current = true
-    await doMerge()   // push existing local data up to the fresh account
+    await doMerge(undefined, true)   // push existing local data up to the fresh account
   }, [doMerge])
 
   const logout = useCallback(async () => {
     // Flush any pending edits before signing out so nothing is lost.
-    if (dirtyRef.current.size > 0) { try { await doMerge() } catch {} }
+    if (dirtyRef.current.size > 0) { try { await doMerge(undefined, true) } catch {} }
     try { await fetch("/api/auth/logout", { method: "POST", credentials: "include" }) } catch {}
     setUser(null); loggedInRef.current = false
   }, [doMerge])
 
-  const syncNow = useCallback(async () => { await doMerge() }, [doMerge])
+  const syncNow = useCallback(async () => { await doMerge(undefined, true) }, [doMerge])
 
   const changePassword = useCallback(async (current: string, next: string) => {
     const fd = new FormData()
