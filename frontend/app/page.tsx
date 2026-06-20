@@ -479,6 +479,9 @@ export default function SearchPage() {
   const [liveCount,    setLiveCount]    = useState(0)
   const [parsedTokens, setParsedTokens] = useState<ParsedToken[]>([])
   const [refreshing,   setRefreshing]   = useState(false)
+  // Tracks which query we've already auto-deepened for, so a thin-result search
+  // pulls fresh AO3 data once without looping on every re-render.
+  const autoDeepenedRef = useRef<string>("")
   // Mobile filter drawer (sidebar becomes a slide-out panel on phones)
   const [filtersOpen,  setFiltersOpen]  = useState(false)
   // Prevent background scroll while the drawer is open
@@ -646,12 +649,25 @@ export default function SearchPage() {
       if (explicitPage && explicitPage > 1) {
         window.scrollTo({ top: 0, behavior: "smooth" })
       }
+
+      // Auto-deepen: a casual searcher just wants fics. If this query returned
+      // very few results, AO3 is a selected site, and we haven't already deepened
+      // for this exact query, pull a deeper live batch once and re-search. The
+      // guard ref prevents looping. Only on a real query (page 1, has text/fandom).
+      const indexedCount = (data as any).total ?? 0
+      const thin = indexedCount < 5
+      const hasQuery = (pg === 1) && (query.trim().length > 0 || (p as any).fandoms)
+      if (thin && hasQuery && sites.includes("ao3")
+          && autoDeepenedRef.current !== query && !refreshing) {
+        autoDeepenedRef.current = query
+        refreshFromAO3()   // pulls 5 pages from AO3, persists, then re-searches
+      }
     } catch (e: any) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
-  }, [buildParams, page, pathname, router, query])
+  }, [buildParams, page, pathname, router, query, sites, refreshing])
 
   const removeToken = (raw: string) =>
     setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim())
@@ -981,8 +997,14 @@ export default function SearchPage() {
                     <p className="no-results__title">No stories matched</p>
                     <p className="no-results__sub">
                       Try removing a filter, broadening the word count, or checking a different site.
-                      {sites.includes("ao3") && " You can also pull fresh AO3 results with Refresh above."}
                     </p>
+                    {sites.includes("ao3") && (
+                      <button className="btn btn--primary no-results__fetch"
+                        onClick={refreshFromAO3} disabled={refreshing}>
+                        {refreshing ? "Searching AO3…" : "🔍 Search AO3 directly for this"}
+                      </button>
+                    )}
+                    {refreshMsg && <p className="no-results__refresh-msg">{refreshMsg}</p>}
                     <p className="no-results__hint">
                       Have a specific story in mind? Paste its AO3 or FF.net URL into the search bar to import it.
                     </p>

@@ -158,7 +158,8 @@ async def fetch_live_ao3(params: dict, limit: int = 20, pages: int = 1) -> list[
     all_results: list[dict] = []
     seen_ids: set[str] = set()
 
-    async with httpx.AsyncClient(headers=HEADERS, timeout=15, follow_redirects=True) as client:
+    from .ao3_feeds import AO3_LIVE_TIMEOUT
+    async with httpx.AsyncClient(headers=HEADERS, timeout=AO3_LIVE_TIMEOUT, follow_redirects=True) as client:
         for page_num in range(1, pages + 1):
             page_params = dict(params)
             page_params["page"] = page_num

@@ -10,11 +10,13 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Unified search** across AO3, FanFiction.net, FicAlley, HPFFA, and DLP-curated picks in one query
 - **Operator syntax** in any order: `fandom: Harry Potter ship:Draco/Hermione >100k complete updated:2y -tag:fluff`
 - **Tag autocomplete** — fandom, relationship, character and tag filter inputs suggest real values from the index as you type (with story counts), backed by a precomputed facets table so it's instant even on millions of rows
+- **Search-first discovery** — you don't need the Import tab to get fics: when a search returns few or no indexed results and AO3 is selected, the app auto-pulls a deeper live batch (and the no-results screen has a one-click "Search AO3 directly" button). The Import tab remains the full power-user control panel for bulk scrapes
+- **Canonical-tag autocomplete in Import** — the Import tab's fandom fields autocomplete index-first then fall back to AO3's canonical tag list (`/api/stats/suggest-canonical`), so you can discover and correctly spell new fandoms to scrape, avoiding malformed-tag errors
 - **Click-to-search tags** — every fandom, ship, character, freeform tag and warning is a link that pre-fills the corresponding filter
 - **"Surprise me"** — random discovery on the landing page (real stories only, no drabbles/art), optionally scoped to your active fandom filter
 - **Cross-site filter correctness** — fandom is matched strictly while secondary facets (character/ship/tag) and missing metadata (word count, status, rating, language) are matched permissively, so dump rows with sparse metadata surface correctly without flooding fandom searches
 - **Cross-post de-duplication** — the same fic posted on AO3, FF.net, SquidgeWorld etc. is collapsed into a single result. New imports are deduped automatically (conservative title + author matching); a one-shot batch (`dedup-crossposts`) cleans up already-indexed data. The canonical copy keeps every site's link and hosts the most recently updated full text. Cards show a "+N copies" badge; detail pages list "Also on X" links for each version
-- **AO3 deep filtered scrape** — paginated tag-works listing with full filter support, run as an async job with live progress, plus a cooldown guard when AO3's Cloudflare blocks the datacenter IP
+- **AO3 deep filtered scrape** — paginated tag-works listing with full filter support, run as an async job with live progress. AO3's heavy endpoints are slow (5–20s) but reachable from a normal connection; the app uses generous granular timeouts (patient read, quick connect) and retries 525s on the same host before giving up
 - **Five Harry Potter archives via AO3 Open Doors / Otwarchive**:
   - **HPFFA** — the ~85k-story HarryPotterFanfiction.com archive (collection `hpfanfiction_hpff`), tagged `hpffa_archive`
   - **HexFiles** — the separate ~18k-member Harry Potter FanFic Archive (collection `harrypotterfanficarchive`), tagged `hexfiles_archive`
@@ -54,7 +56,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 
 ### Settings & UX
 - **Settings page** at `/settings` — tracked fandom, poll-on-load, live AO3 fetch, default sites/sort/per-page, feed filters, reader font and width, explicit visibility, and an advanced **direct-crawl toggle** (off by default). Persisted server-side
-- **Direct crawl toggle** — opt-in scheduled crawling of AO3/FF.net. The toggle is honest about reality: it rarely works from a datacenter IP (AO3 Cloudflare 525s, FF.net fully blocked) and only helps behind a residential IP / Tailscale exit node / WARP. Controlled at runtime from the DB setting (no restart); `GET /api/library/crawl-status` reports whether recent crawls were blocked
+- **Direct crawl toggle** — opt-in scheduled crawling of AO3/FF.net. AO3 works from a normal home/residential connection (its heavy filtered-works and feed pages are just slow, ~5–20s, which the app now waits out with generous granular timeouts and same-host 525 retries). FF.net stays Cloudflare-blocked for direct server requests regardless of IP — use one-click FicHub URL import for it. Controlled at runtime from the DB setting (no restart); `GET /api/library/crawl-status` reports recent crawl outcomes
 - **Index status widget** — per-site counts, total stories, total words, DLP and HPFFA counts
 - **Fully responsive** — proper mobile viewport; on phones the filter sidebar becomes a slide-out drawer with a backdrop, an active-filter badge, and an Apply button (instead of being hidden). Tablet/phone/small-phone breakpoints, 40–44px touch targets, horizontally scrolling library tabs, 2-column book grid, full-width stacked actions. Works from any host over Tailscale/LAN
 - **Loading skeletons** while results load, smooth scroll-to-top on page change
@@ -235,7 +237,7 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 ## Known limitations
 
 - **FF.net live search and bulk crawling from cloud IPs** — FanFiction.net runs an aggressive interactive Cloudflare challenge that blocks server-side scraping from datacenter IPs entirely. URL-based import works through FicHub (which solves the challenge on its end). For bulk freshness you'd need a residential-proxy browser API.
-- **AO3 direct scraping** — AO3 rate-limits by IP and request rate, returning 418/429 when throttled and 525/503 when its origin is overloaded or its Cloudflare blocks the datacenter IP. FicAtlas uses **Atom feeds** rather than scraping search pages where possible, runs deep scrapes as async jobs with polite delays, and enters a cooldown when AO3 blanket-blocks. The reliable freshness paths are the HuggingFace dump, FicHub per-URL import, DLP, and FicAlley. A Tailscale exit node, Cloudflare WARP, or a residential proxy routes around datacenter-IP blocks.
+- **AO3 latency, not blocking** — from a normal residential connection AO3 is reachable, but its filtered-works and atom-feed endpoints are slow to generate (≈7s typical, spiking to 15–20s under load) and intermittently return Cloudflare 525s when their origin is overloaded. The app handles this with generous granular timeouts, same-host 525 retries with backoff, and a brief self-cooldown only after many consecutive failures (not a single slow response). On a datacenter IP AO3 may block outright (525/timeouts on everything) — a Tailscale exit node or WARP routes around that. The HuggingFace dump, FicHub per-URL import, DLP, and FicAlley remain the fastest bulk paths.
 
 ## Acknowledgements
 

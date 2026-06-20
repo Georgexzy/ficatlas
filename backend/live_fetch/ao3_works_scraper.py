@@ -28,7 +28,7 @@ import logging
 from datetime import datetime
 import httpx
 
-from .ao3_feeds import ao3_escape, HEADERS, _get_with_fallback, PRIMARY, MIRROR
+from .ao3_feeds import ao3_escape, HEADERS, _get_with_fallback, PRIMARY, MIRROR, AO3_TIMEOUT
 
 log = logging.getLogger(__name__)
 
@@ -284,7 +284,7 @@ async def scrape_tag_works(
     first_url = ""
 
     async with httpx.AsyncClient(
-        headers=HEADERS, timeout=30, follow_redirects=True,
+        headers=HEADERS, timeout=AO3_TIMEOUT, follow_redirects=True,
     ) as client:
         for page in range(1, max_pages + 1):
             path = build_works_url(

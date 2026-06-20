@@ -1,6 +1,85 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import Link from "next/link"
+
+const API_BASE_C = ""
+
+// Fandom input with index-first + AO3-canonical autocomplete. Suggesting from the
+// index is instant; falling back to AO3's canonical tags lets the user discover and
+// correctly spell NEW fandoms to scrape (and avoids the malformed-tag URLs that
+// broke earlier discover jobs). A drop-in replacement for a plain text input.
+function CanonicalFandomInput({
+  value, onChange, placeholder, disabled, onEnter, kind = "fandom",
+}: {
+  value: string; onChange: (v: string) => void; placeholder?: string
+  disabled?: boolean; onEnter?: () => void
+  kind?: "fandom" | "relationship" | "character" | "tag"
+}) {
+  const [sugs, setSugs] = useState<{ value: string; count: number | null; source: string }[]>([])
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(-1)
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const seq = useRef(0)
+
+  useEffect(() => {
+    const q = value.trim()
+    if (q.length < 2) { setSugs([]); return }
+    const mySeq = ++seq.current
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`${API_BASE_C}/api/stats/suggest-canonical?kind=${kind}&q=${encodeURIComponent(q)}&limit=8`)
+        if (r.ok && mySeq === seq.current) {
+          setSugs(await r.json()); setOpen(true); setActive(-1)
+        }
+      } catch {}
+    }, 250)
+    return () => clearTimeout(t)
+  }, [value, kind])
+
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener("click", close)
+    return () => document.removeEventListener("click", close)
+  }, [open])
+
+  const pick = (v: string) => { onChange(v); setSugs([]); setOpen(false); setActive(-1) }
+
+  return (
+    <div className="tag-input" ref={boxRef} style={{ flex: 1 }}>
+      <input type="text" className="import-input" style={{ width: "100%" }}
+        placeholder={placeholder} value={value} disabled={disabled}
+        onChange={e => onChange(e.target.value)}
+        onFocus={() => { if (sugs.length) setOpen(true) }}
+        onKeyDown={e => {
+          if (open && sugs.length) {
+            if (e.key === "ArrowDown") { e.preventDefault(); setActive(i => Math.min(i + 1, sugs.length - 1)); return }
+            if (e.key === "ArrowUp")   { e.preventDefault(); setActive(i => Math.max(i - 1, -1)); return }
+            if (e.key === "Enter" && active >= 0) { e.preventDefault(); pick(sugs[active].value); return }
+            if (e.key === "Escape") { setOpen(false); return }
+          }
+          if (e.key === "Enter" && onEnter) onEnter()
+        }} />
+      {open && sugs.length > 0 && (
+        <ul className="tag-suggest">
+          {sugs.map((s, i) => (
+            <li key={s.value + s.source}
+              className={`tag-suggest__item ${i === active ? "tag-suggest__item--active" : ""}`}
+              onMouseDown={e => { e.preventDefault(); pick(s.value) }}
+              onMouseEnter={() => setActive(i)}>
+              <span className="tag-suggest__value">{s.value}</span>
+              <span className="tag-suggest__count">
+                {s.source === "ao3" ? "AO3" : (s.count != null ? s.count.toLocaleString() : "")}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -739,10 +818,10 @@ export default function LibraryPage() {
               Only canonical AO3 tags have feeds. Newly found works get added to the search index.
             </p>
             <div className="import-row">
-              <input type="text" className="import-input"
+              <CanonicalFandomInput
                 placeholder="Harry Potter - J. K. Rowling"
-                value={feedFandom} onChange={e => setFeedFandom(e.target.value)}
-                disabled={feedBusy} onKeyDown={e => e.key === "Enter" && pollFeed()} />
+                value={feedFandom} onChange={setFeedFandom}
+                disabled={feedBusy} onEnter={pollFeed} />
               <button className="btn btn--primary" onClick={pollFeed} disabled={feedBusy || !feedFandom}>
                 {feedBusy ? "Polling…" : "Pull latest"}
               </button>
@@ -769,10 +848,10 @@ export default function LibraryPage() {
               Polite 3s delays between requests; a 5-page scrape takes ~15s.
             </p>
             <div className="import-row">
-              <input type="text" className="import-input"
+              <CanonicalFandomInput
                 placeholder="Canonical tag, e.g. Harry Potter - J. K. Rowling"
-                value={a3Fandom} onChange={e => setA3Fandom(e.target.value)}
-                disabled={a3Busy} onKeyDown={e => e.key === "Enter" && discoverAo3Deep()} />
+                value={a3Fandom} onChange={setA3Fandom}
+                disabled={a3Busy} onEnter={discoverAo3Deep} />
               <button className="btn btn--primary" onClick={discoverAo3Deep} disabled={a3Busy}>
                 {a3Busy ? `Scraping… ${a3Elapsed}s` : "Scrape filtered"}
               </button>

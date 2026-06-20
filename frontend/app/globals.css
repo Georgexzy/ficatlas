@@ -1759,3 +1759,9 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   background: var(--surface3); color: var(--text-dim);
   border: 1px solid var(--border2); cursor: help;
 }
+
+/* ── No-results active fetch ─────────────────────────────────────────────── */
+.no-results__fetch { margin: 16px auto 8px; display: inline-flex; }
+.no-results__refresh-msg {
+  color: var(--green); font-size: 13px; margin: 8px 0;
+}

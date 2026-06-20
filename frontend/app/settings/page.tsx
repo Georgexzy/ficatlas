@@ -158,12 +158,12 @@ export default function SettingsPage() {
         <h2 className="settings-group__title">Advanced: direct crawling</h2>
         <p className="settings-group__hint">
           When on, FicAtlas runs scheduled background crawls of AO3 and FF.net directly
-          (every few hours) instead of relying only on the Atom feed poller.
-          <strong> This rarely works from a cloud server</strong> — AO3 returns Cloudflare
-          errors (525) and FF.net is fully blocked from datacenter IPs. It only helps if
-          this server reaches the sites through a residential IP, a Tailscale exit node,
-          or Cloudflare WARP. Leave it off otherwise; the feed poller and one-click
-          imports are the reliable paths.
+          (every few hours) in addition to the Atom feed poller. AO3 works from a normal
+          home/residential connection — its heavy pages are just slow (5–20s), which the
+          app now waits out. <strong>FF.net remains Cloudflare-blocked</strong> for direct
+          server requests regardless of IP, so its crawler will keep failing; use one-click
+          URL import (via FicHub) for FF.net instead. Leave this off if you mainly rely on
+          feeds and imports.
         </p>
         <div className="setting-row">
           <div className="setting-row__label">

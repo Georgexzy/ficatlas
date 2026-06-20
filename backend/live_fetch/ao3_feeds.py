@@ -46,14 +46,26 @@ HEADERS = {
 
 REQUEST_DELAY = 4.0
 
+# AO3's filtered-works and atom-feed endpoints are SLOW to generate (measured ~7s
+# typical, spiking to 15-20s under load) but they DO respond. A granular timeout
+# connects quickly (so genuinely dead hosts fail fast) but waits patiently on the
+# read, so "slow" no longer gets misclassified as "failed". Used by explicit
+# discover jobs and feed polls where waiting is fine.
+AO3_TIMEOUT = httpx.Timeout(connect=8.0, read=40.0, write=10.0, pool=8.0)
+
+# For the live fetch that runs on EVERY search, a snappier ceiling — a search
+# shouldn't hang ~40s on a slow AO3. Best-effort: if AO3 is slow this time, the
+# indexed results still return and AO3 fills in on a later search.
+AO3_LIVE_TIMEOUT = httpx.Timeout(connect=6.0, read=12.0, write=8.0, pool=6.0)
+
 # ── AO3 cooldown guard ───────────────────────────────────────────────────────
 # AO3 sometimes blanket-blocks datacenter IPs (525 + ReadTimeouts on every URL,
 # even the lightweight atom feeds). Hammering it during a block just reinforces
 # the block on their side and wastes our time. When we see consecutive failures
 # across requests, we enter a 5-minute cooldown and short-circuit all AO3 calls
 # without even making the TCP connection.
-_BLOCK_COOLDOWN_SECONDS = 300       # 5 minutes
-_FAIL_THRESHOLD          = 3         # this many consecutive fails → enter cooldown
+_BLOCK_COOLDOWN_SECONDS = 90        # 90s — short; AO3 slowness is transient, not a ban
+_FAIL_THRESHOLD          = 6         # this many consecutive fails → brief cooldown
 _recent_failures: list[float] = []   # unix timestamps of recent network failures
 _cooldown_until: float = 0.0
 
@@ -163,17 +175,28 @@ async def _get_with_fallback(
     last_status = None
     saw_transient_failure = False
     for base in use_bases:
-        for attempt in (1, 2):
+        for attempt in (1, 2, 3):
             try:
-                r = await client.get(f"{base}{path}", timeout=15)
+                # AO3's heavy endpoints (filtered works lists, atom feeds) genuinely
+                # take 5-20s to generate — measured ~7s typical from a residential IP,
+                # spiking higher under load. A tight timeout turns "slow" into "failed"
+                # and drops us to the mirror, which 404s on tag URLs. Use a granular
+                # timeout: quick to connect, but patient on read.
+                r = await client.get(f"{base}{path}", timeout=AO3_TIMEOUT)
                 last_status = r.status_code
                 if r.status_code == 200:
                     if is_ao3: _record_success()
                     return r
                 if r.status_code in (525, 503, 502, 500):
+                    # 525 = Cloudflare couldn't reach AO3's origin; usually transient.
+                    # Retry the SAME host with backoff before giving up on it —
+                    # the mirror 404s on these tag URLs so falling over is pointless.
                     saw_transient_failure = True
-                    log.warning(f"{base}{path} → {r.status_code} (attempt {attempt}), trying fallback")
-                    break  # try mirror
+                    log.warning(f"{base}{path} → {r.status_code} (attempt {attempt})")
+                    if attempt < 3:
+                        await asyncio.sleep(2.0 * attempt)
+                        continue
+                    break  # exhausted retries on this host → try next base
                 if r.status_code in (429, 418):
                     saw_transient_failure = True
                     log.warning(f"{base}{path} → {r.status_code} (rate limited)")
@@ -187,8 +210,8 @@ async def _get_with_fallback(
             except Exception as e:
                 saw_transient_failure = True
                 log.warning(f"{base}{path} attempt {attempt} failed: {_fmt_err(e)}")
-                if attempt == 1:
-                    await asyncio.sleep(1.0)
+                if attempt < 3:
+                    await asyncio.sleep(2.0 * attempt)
                     continue
     if saw_transient_failure and is_ao3:
         _record_failure()
@@ -363,7 +386,7 @@ def _parse_atom(xml: str) -> list[dict]:
 
 async def fetch_feed(tag_id: str, limit: int = 25) -> list[dict]:
     """Fetch and parse a single AO3 tag Atom feed."""
-    async with httpx.AsyncClient(headers=HEADERS, timeout=20, follow_redirects=True) as client:
+    async with httpx.AsyncClient(headers=HEADERS, timeout=AO3_TIMEOUT, follow_redirects=True) as client:
         r = await _get_with_fallback(client, f"/tags/{tag_id}/feed.atom")
         if not r:
             return []
@@ -374,7 +397,7 @@ async def poll_feeds(tag_ids: list[str]) -> list[dict]:
     """Poll multiple tag feeds with polite delays. Returns merged, deduped entries."""
     all_entries = []
     seen = set()
-    async with httpx.AsyncClient(headers=HEADERS, timeout=20, follow_redirects=True) as client:
+    async with httpx.AsyncClient(headers=HEADERS, timeout=AO3_TIMEOUT, follow_redirects=True) as client:
         for i, tag_id in enumerate(tag_ids):
             if i > 0:
                 await asyncio.sleep(REQUEST_DELAY)
