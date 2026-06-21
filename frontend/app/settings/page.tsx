@@ -38,10 +38,24 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [autoDisabled, setAutoDisabled] = useState<{ ao3: boolean; ffnet: boolean }>({ ao3: false, ffnet: false })
+
+  const loadCrawlStatus = () =>
+    fetch(`${API_BASE}/api/library/crawl-status`).then(r => r.json())
+      .then(d => setAutoDisabled(d.auto_disabled || { ao3: false, ffnet: false })).catch(() => {})
 
   useEffect(() => {
     fetch(`${API_BASE}/api/settings`).then(r => r.json()).then(setSettings).catch(() => {})
+    loadCrawlStatus()
   }, [])
+
+  const resetBreaker = async (site: "ao3" | "ffnet") => {
+    try {
+      const fd = new FormData(); fd.append("site", site)
+      await fetch(`${API_BASE}/api/library/crawl-reset-breaker`, { method: "POST", body: fd })
+      loadCrawlStatus()
+    } catch {}
+  }
 
   const update = (key: keyof Settings, value: string) =>
     setSettings(s => s ? { ...s, [key]: value } : s)
@@ -110,7 +124,7 @@ export default function SettingsPage() {
         <div className="setting-row">
           <div className="setting-row__label">
             <span className="setting-row__name">Live AO3 fetch</span>
-            <span className="setting-row__hint">Pull fresh AO3 results on each search (slower but current).</span>
+            <span className="setting-row__hint">Top up each search with fresh AO3 results. Thin searches also auto-pull deeper from AO3.</span>
           </div>
           <Toggle on={settings.live_fetch === "true"} onToggle={v => update("live_fetch", String(v))} />
         </div>
@@ -172,6 +186,26 @@ export default function SettingsPage() {
           </div>
           <Toggle on={settings.enable_direct_crawl === "true"} onToggle={v => update("enable_direct_crawl", String(v))} />
         </div>
+        {(autoDisabled.ao3 || autoDisabled.ffnet) && (
+          <div className="setting-row">
+            <div className="setting-row__label">
+              <span className="setting-row__name">⚠ Auto-disabled crawlers</span>
+              <span className="setting-row__hint">
+                A site is paused automatically after repeated crawl failures so it stops
+                hammering a blocked endpoint and filling the log. Fix connectivity, then
+                re-enable it here — it&apos;ll resume on the next scheduled run.
+              </span>
+            </div>
+            <div className="setting-pills">
+              {autoDisabled.ao3 && (
+                <button className="pill" onClick={() => resetBreaker("ao3")}>Re-enable AO3</button>
+              )}
+              {autoDisabled.ffnet && (
+                <button className="pill" onClick={() => resetBreaker("ffnet")}>Re-enable FF.net</button>
+              )}
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="settings-group">

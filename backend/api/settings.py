@@ -25,6 +25,12 @@ DEFAULTS = {
     # feed poller above is the reliable freshness path; this is for users on a
     # residential IP / Tailscale exit node / WARP who can actually reach the sites.
     "enable_direct_crawl": "false",
+    # Per-site circuit breaker. When a site's scheduled crawl fails repeatedly
+    # (see CRAWL_FAIL_* env in scheduler.py), it's auto-disabled by flipping the
+    # matching flag below to "true". Blank/"false" = the site may crawl normally.
+    # Reset to "" in Settings to re-enable after fixing connectivity.
+    "crawl_disabled_ao3":   "",
+    "crawl_disabled_ffnet": "",
 }
 
 
@@ -42,6 +48,17 @@ def get_setting(db: Session, key: str) -> str:
     _ensure_table(db)
     row = db.execute(text("SELECT value FROM app_settings WHERE key=:k"), {"k": key}).first()
     return row[0] if row else DEFAULTS.get(key, "")
+
+
+def put_setting(db: Session, key: str, value: str) -> None:
+    """Upsert a setting from server-side code (used by the scheduler's crawler
+    circuit breaker). Mirrors the POST endpoint's write."""
+    _ensure_table(db)
+    db.execute(text("""
+        INSERT INTO app_settings (key, value) VALUES (:k, :v)
+        ON CONFLICT (key) DO UPDATE SET value = :v
+    """), {"k": key, "v": str(value)})
+    db.commit()
 
 
 @router.get("")

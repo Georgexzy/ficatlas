@@ -43,7 +43,24 @@ async def crawl_status(db: Session = Depends(get_db)):
         j["status"] == "failed" and ("525" in j["error"] or "timeout" in j["error"].lower())
         for j in recent
     )
-    return {"enabled": enabled, "blocked_recently": blocked, "recent_jobs": recent}
+    # Circuit-breaker state per site (auto-disabled after repeated failures).
+    auto_disabled = {
+        "ao3":   str(get_setting(db, "crawl_disabled_ao3")).lower() == "true",
+        "ffnet": str(get_setting(db, "crawl_disabled_ffnet")).lower() == "true",
+    }
+    return {"enabled": enabled, "blocked_recently": blocked,
+            "auto_disabled": auto_disabled, "recent_jobs": recent}
+
+
+@router.post("/crawl-reset-breaker")
+async def crawl_reset_breaker(site: str = Form(...), db: Session = Depends(get_db)):
+    """Re-enable a site that the circuit breaker auto-disabled after repeated
+    crawl failures. Clears the crawl_disabled_<site> flag."""
+    from api.settings import put_setting
+    if site not in ("ao3", "ffnet"):
+        raise HTTPException(400, "site must be 'ao3' or 'ffnet'")
+    put_setting(db, f"crawl_disabled_{site}", "")
+    return {"ok": True, "site": site, "re_enabled": True}
 
 # ── FicHub-powered downloads (works around Cloudflare on AO3/FFnet) ──────────
 

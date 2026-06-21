@@ -20,6 +20,12 @@ AO3_INTERVAL_HOURS   = float(os.getenv("CRAWL_INTERVAL_AO3_HOURS",  "6"))
 FFNET_INTERVAL_HOURS = float(os.getenv("CRAWL_INTERVAL_FFNET_HOURS", "4"))
 RUN_ON_STARTUP       = os.getenv("CRAWL_RUN_ON_STARTUP", "true").lower() == "true"
 
+# Circuit breaker: if a site's scheduled crawl racks up too many failures inside
+# the window, auto-disable that site so it stops hammering a blocked endpoint and
+# filling the log. The user re-enables it from Settings once connectivity is fixed.
+CRAWL_FAIL_THRESHOLD = int(os.getenv("CRAWL_FAIL_THRESHOLD", "5"))      # failures…
+CRAWL_FAIL_WINDOW_H  = float(os.getenv("CRAWL_FAIL_WINDOW_HOURS", "6")) # …within this many hours
+
 scheduler = AsyncIOScheduler(timezone="UTC")
 _last_run: dict[str, datetime | None] = {"ao3": None, "ffnet": None}
 _next_run: dict[str, datetime | None] = {"ao3": None, "ffnet": None}
@@ -42,6 +48,41 @@ async def _direct_crawl_enabled() -> bool:
     return os.getenv("ENABLE_DIRECT_CRAWL", "false").lower() == "true"
 
 
+def _site_crawl_disabled(db, site: str) -> bool:
+    """Has the circuit breaker auto-disabled this site?"""
+    try:
+        from api.settings import get_setting
+        return str(get_setting(db, f"crawl_disabled_{site}")).lower() == "true"
+    except Exception:
+        return False
+
+
+def _recent_failure_count(db, site: str) -> int:
+    """Count this site's failed crawl jobs within the breaker window."""
+    from datetime import timedelta
+    from models.story import CrawlJob, SiteEnum
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=CRAWL_FAIL_WINDOW_H)
+    try:
+        return (db.query(CrawlJob)
+                .filter(CrawlJob.site == SiteEnum(site),
+                        CrawlJob.status == "failed",
+                        CrawlJob.started_at >= cutoff)
+                .count())
+    except Exception:
+        return 0
+
+
+def _trip_breaker(db, site: str, fail_count: int):
+    """Auto-disable a site after too many failures, logged once."""
+    from api.settings import put_setting
+    put_setting(db, f"crawl_disabled_{site}", "true")
+    logger.warning(
+        f"[scheduler] CIRCUIT BREAKER: {site} crawl auto-disabled after "
+        f"{fail_count} failures in {CRAWL_FAIL_WINDOW_H:g}h. "
+        f"Re-enable in Settings once connectivity is restored."
+    )
+
+
 async def _run_crawl(site: str):
     """Wrapper that records timing and logs progress."""
     # Honour the runtime toggle — skip quietly when direct crawling is disabled.
@@ -57,6 +98,13 @@ async def _run_crawl(site: str):
     CRAWLERS = {"ao3": AO3Crawler, "ffnet": FFNetCrawler}
     if site not in CRAWLERS:
         return
+
+    # Circuit breaker: skip sites that have been auto-disabled after repeated
+    # failures. (User clears crawl_disabled_<site> in Settings to re-enable.)
+    with db_session() as db:
+        if _site_crawl_disabled(db, site):
+            logger.debug(f"[scheduler] {site} crawl is circuit-broken (auto-disabled), skipping")
+            return
 
     logger.info(f"[scheduler] Starting incremental crawl: {site}")
     _last_run[site] = datetime.now(timezone.utc)
@@ -99,6 +147,12 @@ async def _run_crawl(site: str):
                 j.status = "failed"
                 j.error  = str(e)
                 j.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            # After recording this failure, trip the breaker if the site has
+            # failed too many times in the window.
+            fails = _recent_failure_count(db, site)
+            if fails >= CRAWL_FAIL_THRESHOLD and not _site_crawl_disabled(db, site):
+                _trip_breaker(db, site, fails)
 
 
 def start_scheduler():
