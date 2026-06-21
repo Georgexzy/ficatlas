@@ -112,11 +112,12 @@ export default function LibraryPage() {
       const fd = new FormData()
       fd.append("dry_run", String(dryRun))
       const r = await fetch(`${API_BASE}/api/library/cleanup-preface-chapters`, { method: "POST", body: fd })
-      const data = await r.json()
-      if (!r.ok) { setPrefaceMsg(`Failed: ${data.detail || r.status}`); return }
+      let data: any = null
+      try { data = await r.json() } catch { /* server returned non-JSON (e.g. 500 page) */ }
+      if (!r.ok || !data) { setPrefaceMsg(`Failed (server error ${r.status}). Check backend logs.`); return }
       const n = data.affected_count ?? 0
       setPrefaceMsg(dryRun
-        ? (n === 0 ? "✓ No mis-split chapters found." : `Found ${n} stor${n === 1 ? "y" : "ies"} with a front-matter first chapter. Click \"Fix\" to clean them up.`)
+        ? (n === 0 ? "✓ No mis-split chapters found." : `Found ${n} stor${n === 1 ? "y" : "ies"} with a front-matter first chapter. Click "Fix" to clean them up.`)
         : (n === 0 ? "✓ Nothing needed fixing." : `✓ Fixed ${n} stor${n === 1 ? "y" : "ies"} — front-matter removed and chapters renumbered.`))
     } catch (e: any) {
       setPrefaceMsg(`Error: ${e.message || e}`)

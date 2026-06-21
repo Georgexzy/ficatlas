@@ -1239,16 +1239,32 @@ async def cleanup_preface_chapters(dry_run: bool = Form(False), db: Session = De
             affected.append({"id": str(s.id), "title": s.title,
                              "first_chapter_words": words, "label_hits": label_hits})
             if not dry_run:
-                db.delete(first)
-                # Renumber the remaining chapters down by one.
-                rest = (db.query(Chapter)
-                        .filter(Chapter.story_id == s.id, Chapter.number > first.number)
-                        .order_by(Chapter.number.asc())
-                        .all())
-                for ch in rest:
-                    ch.number -= 1
-                s.chapter_count = max(1, (s.chapter_count or 1) - 1)
-                db.commit()
+                try:
+                    removed_number = first.number
+                    db.delete(first)
+                    # Flush the delete FIRST so the old row leaves the
+                    # (story_id, number) unique index before we reuse number 1.
+                    db.flush()
+
+                    rest = (db.query(Chapter)
+                            .filter(Chapter.story_id == s.id,
+                                    Chapter.number > removed_number)
+                            .order_by(Chapter.number.asc())
+                            .all())
+                    # Two-phase renumber so an UPDATE never lands on a number
+                    # another row still holds: first move everyone to unique
+                    # negative temporaries, flush, then to the final values.
+                    for ch in rest:
+                        ch.number = -ch.number
+                    db.flush()
+                    for ch in rest:
+                        ch.number = (-ch.number) - 1
+                    s.chapter_count = max(1, (s.chapter_count or 1) - 1)
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    # Drop this one from the affected list since we didn't change it.
+                    affected[-1]["error"] = "skipped (renumber conflict)"
 
     return {"ok": True, "dry_run": dry_run, "affected_count": len(affected),
             "affected": affected[:100]}
