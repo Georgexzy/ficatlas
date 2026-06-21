@@ -103,6 +103,27 @@ export default function LibraryPage() {
     await deleteOfflineStory(id).catch(() => {})
     setOfflineStories(s => s.filter(x => x.id !== id))
   }
+  // Preface/mis-split chapter cleanup
+  const [prefaceBusy, setPrefaceBusy] = useState(false)
+  const [prefaceMsg, setPrefaceMsg] = useState<string | null>(null)
+  const cleanupPreface = async (dryRun: boolean) => {
+    setPrefaceBusy(true); setPrefaceMsg(dryRun ? "Scanning…" : "Fixing…")
+    try {
+      const fd = new FormData()
+      fd.append("dry_run", String(dryRun))
+      const r = await fetch(`${API_BASE}/api/library/cleanup-preface-chapters`, { method: "POST", body: fd })
+      const data = await r.json()
+      if (!r.ok) { setPrefaceMsg(`Failed: ${data.detail || r.status}`); return }
+      const n = data.affected_count ?? 0
+      setPrefaceMsg(dryRun
+        ? (n === 0 ? "✓ No mis-split chapters found." : `Found ${n} stor${n === 1 ? "y" : "ies"} with a front-matter first chapter. Click \"Fix\" to clean them up.`)
+        : (n === 0 ? "✓ Nothing needed fixing." : `✓ Fixed ${n} stor${n === 1 ? "y" : "ies"} — front-matter removed and chapters renumbered.`))
+    } catch (e: any) {
+      setPrefaceMsg(`Error: ${e.message || e}`)
+    } finally {
+      setPrefaceBusy(false)
+    }
+  }
 
   // Import state
   const [importUrl, setImportUrl] = useState("")
@@ -728,19 +749,24 @@ export default function LibraryPage() {
                   Saved on this device and readable with no connection. Stored in your browser —
                   clearing site data removes them.
                 </p>
-                {offlineStories.map(s => (
+                {offlineStories.map(s => {
+                  const p = progress[s.id]
+                  const href = p?.chapter ? `/story/${s.id}/chapter/${p.chapter}` : `/story/${s.id}/chapter/1`
+                  return (
                   <div key={s.id} className="library-item offline-item">
-                    <Link href={`/story/${s.id}/chapter/1`} className="offline-item__main">
+                    <Link href={href} className="offline-item__main">
                       <p className="library-item__title">{s.title}</p>
                       <p className="library-item__meta">
                         by {s.author} · {s.chapter_count} ch · {(s.word_count || 0).toLocaleString()} words ·
                         saved {new Date(s.savedAt).toLocaleDateString()}
+                        {p?.chapter ? ` · resume ch ${p.chapter}` : ""}
                       </p>
                     </Link>
                     <button className="offline-item__remove" title="Remove from this device"
                       onClick={() => removeOfflineStory(s.id)}>✕</button>
                   </div>
-                ))}
+                  )
+                })}
               </>}
         </div>
       )}
@@ -1007,6 +1033,30 @@ export default function LibraryPage() {
               <code>docker compose exec backend python janelleshane_importer.py --download</code>
             </p>
             {archMsg && <div className="alert alert--success" style={{ marginTop: 10 }}>{archMsg}</div>}
+          </section>
+
+          <section className="import-section">
+            <h3>Fix mis-split chapters</h3>
+            <p className="import-help">
+              Some imports accidentally saved the work&apos;s title page or the author&apos;s
+              preliminary notes as &quot;Chapter 1&quot;. This scans hosted stories, removes those
+              front-matter pages, and renumbers the real chapters. Safe to run anytime —
+              it only touches stories whose first chapter looks like a metadata/notes
+              page, and never empties a story.
+            </p>
+            <div className="import-row" style={{ gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn--ghost"
+                onClick={() => cleanupPreface(true)}
+                disabled={prefaceBusy}>
+                {prefaceBusy ? "Scanning…" : "Preview affected"}
+              </button>
+              <button className="btn btn--primary"
+                onClick={() => cleanupPreface(false)}
+                disabled={prefaceBusy}>
+                {prefaceBusy ? "Fixing…" : "Fix mis-split chapters"}
+              </button>
+            </div>
+            {prefaceMsg && <div className="alert alert--success" style={{ marginTop: 10 }}>{prefaceMsg}</div>}
           </section>
 
           <section className="import-section">

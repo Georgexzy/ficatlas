@@ -146,6 +146,18 @@ def parse_epub(data: bytes) -> dict:
         if html is None:
             continue
 
+        # Skip front-matter by filename: FicHub/AO3/Calibre EPUBs put the title
+        # page, preface, AO3 metadata block, author's-note preamble, dedication,
+        # and TOC in separate spine files named like these. These are NOT chapters
+        # — saving them was surfacing "author's preliminary notes" as Chapter 1.
+        href_lower = href.lower().split("/")[-1]
+        if any(marker in href_lower for marker in (
+            "titlepage", "title_page", "title-page", "preface", "frontmatter",
+            "front_matter", "cover", "nav", "toc", "contents", "dedication",
+            "colophon", "copyright", "about", "metadata",
+        )):
+            continue
+
         # Extract body content
         body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
         body = body_match.group(1) if body_match else html
@@ -153,6 +165,13 @@ def parse_epub(data: bytes) -> dict:
         # Pull chapter title
         title_match = re.search(r"<h\d[^>]*>(.*?)</h\d>", body, re.DOTALL)
         ch_title = re.sub(r"<[^>]+>", "", title_match.group(1)).strip() if title_match else None
+
+        # Skip front-matter by heading text: FicHub's preface page often has an
+        # <h1> like the work title with a "by Author" line and a summary/notes
+        # block rather than a real chapter heading.
+        if ch_title and ch_title.strip().lower() in ("preface", "title page", "notes",
+                                                      "summary", "tags", "table of contents"):
+            continue
 
         # Strip scripts/styles
         body = re.sub(r"<script.*?</script>", "", body, flags=re.DOTALL | re.IGNORECASE)
@@ -166,11 +185,57 @@ def parse_epub(data: bytes) -> dict:
         if words < 10:
             continue
 
+        # Heuristic: FicHub's first preface page embeds the AO3 metadata block —
+        # a cluster of "Rating:", "Fandom:", "Stats:" labels — and author preamble
+        # pages carry note markers ("A/N", "please review", "I don't own"). Either,
+        # on a short first page, is front matter, not the story.
+        if not chapters:  # only scrutinise the candidate first chapter
+            meta_labels = ("rating:", "archive warning:", "warning:", "category:",
+                           "fandom:", "relationship:", "character:", "additional tags:",
+                           "tags:", "stats:", "published:", "completed:", "words:",
+                           "chapters:", "summary:")
+            note_markers = ("a/n", "author's note", "authors note", "author note",
+                            "please review", "please r&r", "updates every",
+                            "disclaimer:", "i don't own", "i do not own")
+            low = text_only.lower()
+            label_hits = sum(1 for lbl in meta_labels if lbl in low)
+            note_hit = any(m in low for m in note_markers)
+            if ((label_hits >= 4 and words < 600) or
+                    (label_hits >= 2 and words < 200) or
+                    (note_hit and words < 250)):
+                continue
+
         chapters.append({
             "number": len(chapters) + 1, "title": ch_title, "content": body, "word_count": words,
         })
 
     total_words = sum(c["word_count"] for c in chapters)
+
+    # Safety net: if aggressive front-matter filtering left us with nothing (e.g.
+    # an unusual single-file EPUB), fall back to the old behaviour — read every
+    # spine item over 10 words — so we never lose the actual story.
+    if not chapters:
+        for href in ordered_hrefs:
+            html = None
+            for cand in [os.path.join(base_dir, href).replace("\\", "/").replace("./", "") if base_dir else href, href]:
+                try:
+                    html = z.read(cand).decode("utf-8", errors="ignore"); break
+                except KeyError:
+                    continue
+            if html is None:
+                continue
+            body_match = re.search(r"<body[^>]*>(.*?)</body>", html, re.DOTALL | re.IGNORECASE)
+            body = body_match.group(1) if body_match else html
+            body = re.sub(r"<script.*?</script>", "", body, flags=re.DOTALL | re.IGNORECASE)
+            body = re.sub(r"<style.*?</style>", "", body, flags=re.DOTALL | re.IGNORECASE)
+            title_match = re.search(r"<h\d[^>]*>(.*?)</h\d>", body, re.DOTALL)
+            ch_title = re.sub(r"<[^>]+>", "", title_match.group(1)).strip() if title_match else None
+            words = len(re.sub(r"<[^>]+>", " ", body).split())
+            if words < 10:
+                continue
+            chapters.append({"number": len(chapters) + 1, "title": ch_title, "content": body, "word_count": words})
+        total_words = sum(c["word_count"] for c in chapters)
+
     return {
         "title": title, "author": author, "language": lang,
         "summary": desc, "chapters": chapters, "word_count": total_words,
@@ -1125,3 +1190,65 @@ async def cleanup_seeds(db: Session = Depends(get_db)):
         db.delete(s)
     db.commit()
     return {"ok": True, "removed_count": len(removed), "removed": removed}
+
+
+@router.post("/cleanup-preface-chapters")
+async def cleanup_preface_chapters(dry_run: bool = Form(False), db: Session = Depends(get_db)):
+    """Fix already-imported stories whose first 'chapter' is actually FicHub/AO3
+    front matter (the metadata sheet + author's preliminary notes) rather than a
+    real chapter — the bug this addresses surfaced those as Chapter 1.
+
+    We look at each hosted story's first chapter and flag it as front matter if it
+    carries the AO3 metadata label cluster (Rating:/Fandom:/Stats: etc.) and is
+    short. Flagged first chapters are removed and the remaining chapters renumbered.
+    Pass dry_run=true to preview counts without changing anything.
+    """
+    from models.story import Story, Chapter
+
+    meta_labels = ("rating:", "archive warning:", "warning:", "category:", "fandom:",
+                   "relationship:", "character:", "additional tags:", "tags:", "stats:",
+                   "published:", "completed:", "words:", "chapters:", "summary:")
+    note_markers = ("a/n", "author's note", "authors note", "author note",
+                    "please review", "please r&r", "updates every",
+                    "disclaimer:", "i don't own", "i do not own")
+
+    affected = []
+    # Only stories with >1 chapter are safe to trim (never leave a story empty).
+    stories = (db.query(Story)
+               .filter(Story.is_hosted == True)  # noqa: E712
+               .filter(Story.chapter_count > 1)
+               .all())
+    for s in stories:
+        first = (db.query(Chapter)
+                 .filter(Chapter.story_id == s.id)
+                 .order_by(Chapter.number.asc())
+                 .first())
+        if not first or not first.content:
+            continue
+        text_only = re.sub(r"<[^>]+>", " ", first.content)
+        words = len(text_only.split())
+        low = text_only.lower()
+        label_hits = sum(1 for lbl in meta_labels if lbl in low)
+        note_hit = any(m in low for m in note_markers)
+        looks_like_frontmatter = ((label_hits >= 4 and words < 600) or
+                                  (label_hits >= 2 and words < 200) or
+                                  (note_hit and words < 250))
+        title_is_frontmatter = (first.title or "").strip().lower() in (
+            "preface", "title page", "notes", "summary", "tags", "table of contents")
+        if looks_like_frontmatter or title_is_frontmatter:
+            affected.append({"id": str(s.id), "title": s.title,
+                             "first_chapter_words": words, "label_hits": label_hits})
+            if not dry_run:
+                db.delete(first)
+                # Renumber the remaining chapters down by one.
+                rest = (db.query(Chapter)
+                        .filter(Chapter.story_id == s.id, Chapter.number > first.number)
+                        .order_by(Chapter.number.asc())
+                        .all())
+                for ch in rest:
+                    ch.number -= 1
+                s.chapter_count = max(1, (s.chapter_count or 1) - 1)
+                db.commit()
+
+    return {"ok": True, "dry_run": dry_run, "affected_count": len(affected),
+            "affected": affected[:100]}

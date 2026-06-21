@@ -268,7 +268,7 @@ export default function ChapterPage() {
           onClick={() => router.push(`/story/${storyId}/chapter/${num + 1}`)}>Next →</button>
       </nav>
 
-      <p className="reader-hint">Keys: ← → chapters · + − text size · ↕ line spacing · t theme. Serif/sans &amp; column width toggle above.</p>
+      <p className="reader-hint">Keys: ← → chapters · + − text size · t theme. Line spacing, serif/sans &amp; column width: buttons above.</p>
     </div>
   )
 }
