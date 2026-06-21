@@ -1,10 +1,12 @@
 import type { Metadata, Viewport } from "next"
 import { AuthProvider } from "@/lib/auth"
+import ServiceWorkerRegistration from "./ServiceWorkerRegistration"
 import "./globals.css"
 
 export const metadata: Metadata = {
   title: "FicAtlas — Search all fanfiction",
   description: "Find fanfiction across AO3, FF.net, and more in one search.",
+  manifest: "/manifest.json",
 }
 
 // Proper mobile scaling — without this, phones render the page at desktop
@@ -20,6 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
+        <ServiceWorkerRegistration />
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

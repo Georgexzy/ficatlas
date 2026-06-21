@@ -1777,3 +1777,24 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 .no-results__refresh-msg {
   color: var(--green); font-size: 13px; margin: 8px 0;
 }
+
+/* ── Offline reading ─────────────────────────────────────────────────────── */
+.offline-msg {
+  margin-top: 10px; font-size: 13px; color: var(--green);
+}
+.offline-tab__note {
+  font-size: 12px; color: var(--text-dim); margin-bottom: 12px;
+  padding: 8px 10px; background: var(--surface2); border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.offline-item {
+  display: flex; align-items: center; gap: 8px;
+}
+.offline-item__main { flex: 1; min-width: 0; }
+.offline-item__remove {
+  flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px;
+  background: var(--surface3); border: 1px solid var(--border2);
+  color: var(--text-faint); font-size: 12px; cursor: pointer;
+  transition: all 0.12s;
+}
+.offline-item__remove:hover { border-color: var(--red); color: var(--red); }

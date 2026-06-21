@@ -583,6 +583,36 @@ export default function SearchPage() {
   const tog = (arr: string[], set: (v: string[]) => void, id: string) =>
     set(arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id])
 
+  // Serialize the current filter-panel state into search-bar query syntax, so the
+  // bar always reflects exactly what's being searched (single source of truth). Free
+  // text already in the bar (non-filter words) is preserved; structured filters are
+  // rewritten from the panel. Multi-word values get quoted so they round-trip.
+  const serializeFiltersToQuery = useCallback((): string => {
+    const pq = parseQuery(query)
+    const freeText = pq.cleanText.trim()
+    const q = (v: string) => (/\s/.test(v) ? `"${v}"` : v)
+    const parts: string[] = []
+    incFandoms.forEach(v => parts.push(`fandom:${q(v)}`))
+    incShips.forEach(v => parts.push(`ship:${q(v)}`))
+    incChars.forEach(v => parts.push(`char:${q(v)}`))
+    incTags.forEach(v => parts.push(`tag:${q(v)}`))
+    excFandoms.forEach(v => parts.push(`-fandom:${q(v)}`))
+    excShips.forEach(v => parts.push(`-ship:${q(v)}`))
+    excChars.forEach(v => parts.push(`-char:${q(v)}`))
+    excTags.forEach(v => parts.push(`-tag:${q(v)}`))
+    if (incRatings.length) incRatings.forEach(v => parts.push(`rating:${v}`))
+    if (status.length === 1) parts.push(status[0] === "complete" ? "complete" : "wip")
+    // The parser only understands k/m-suffixed word counts (100k, 1m), not raw
+    // digits — format accordingly so the bar round-trips back to the same filter.
+    const wc = (n: number) => (n % 1_000_000 === 0 ? `${n / 1_000_000}m` : `${Math.round(n / 1000)}k`)
+    if (wordMin != null && wordMax != null) parts.push(`words:${wc(wordMin)}-${wc(wordMax)}`)
+    else if (wordMin != null) parts.push(`words:>${wc(wordMin)}`)
+    else if (wordMax != null) parts.push(`words:<${wc(wordMax)}`)
+    if (language) parts.push(`lang:${q(language)}`)
+    return [freeText, ...parts].filter(Boolean).join(" ")
+  }, [query, incFandoms, incShips, incChars, incTags, excFandoms, excShips,
+      excChars, excTags, incRatings, status, wordMin, wordMax, language])
+
   // Build search params
   const buildParams = useCallback((pg: number): SearchParams => {
     const pq = parseQuery(query)
@@ -673,16 +703,17 @@ export default function SearchPage() {
     }
   }, [buildParams, page, pathname, router, query, sites, refreshing])
 
-  // Auto-run the search when a sidebar filter changes — but only once the user
-  // has already searched at least once (so we don't fire on the empty landing).
+  // When a sidebar filter changes: mirror the full filter state into the search
+  // bar (so the bar is the single visible source of truth — "replace" model), then
+  // run the search. Gated behind hasSearchedRef so it doesn't fire on landing.
   // Debounced so dragging through several checkboxes doesn't spam requests.
-  // The search *bar* text is intentionally excluded here: typing in the bar
-  // commits on Enter/Search, not on every keystroke. This gives the filter panel
-  // immediate feedback so it's obvious the filters are applying.
   useEffect(() => {
-    if (!hasSearchedRef.current) return  // no auto-search before the first manual search
+    if (!hasSearchedRef.current) return
     if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current)
-    filterDebounceRef.current = setTimeout(() => { doSearch() }, 350)
+    filterDebounceRef.current = setTimeout(() => {
+      setQuery(serializeFiltersToQuery())
+      doSearch()
+    }, 350)
     return () => { if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,

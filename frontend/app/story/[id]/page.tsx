@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
+import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory } from "@/lib/offline"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -30,6 +31,11 @@ export default function StoryPage() {
   const [bookmarked, setBookmarked] = useState(false)
   const [importing, setImporting] = useState(false)
   const [similar, setSimilar] = useState<any[]>([])
+  // Offline save state
+  const [offlineSaved, setOfflineSaved] = useState(false)
+  const [savingOffline, setSavingOffline] = useState(false)
+  const [offlineProgress, setOfflineProgress] = useState<{ done: number; total: number } | null>(null)
+  const [offlineMsg, setOfflineMsg] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -88,6 +94,33 @@ export default function StoryPage() {
       alert(`Import failed: ${e.message || e}`)
       setImporting(false)
     }
+  }
+
+  // Check whether this story is already saved offline.
+  useEffect(() => {
+    if (id) isStoryOffline(id).then(setOfflineSaved).catch(() => {})
+  }, [id])
+
+  const saveOffline = async () => {
+    if (!story || savingOffline) return
+    setSavingOffline(true); setOfflineMsg(null); setOfflineProgress({ done: 0, total: story.chapter_count || 1 })
+    try {
+      const n = await downloadStoryForOffline(id, (done, total) => setOfflineProgress({ done, total }))
+      setOfflineSaved(true)
+      setOfflineMsg(`✓ Saved ${n} chapter${n === 1 ? "" : "s"} for offline reading.`)
+    } catch (e: any) {
+      setOfflineMsg(`Couldn't save offline: ${e.message || e}`)
+    } finally {
+      setSavingOffline(false); setOfflineProgress(null)
+    }
+  }
+
+  const removeOffline = async () => {
+    try {
+      await deleteOfflineStory(id)
+      setOfflineSaved(false)
+      setOfflineMsg("Removed from offline storage.")
+    } catch {}
   }
 
   if (error) return <div className="reader-shell"><Link href="/" className="back-link">← Back to search</Link><div className="alert alert--error">{error}</div></div>
@@ -167,6 +200,21 @@ export default function StoryPage() {
               ↓ EPUB
             </a>
           )}
+          {story.is_hosted && story.chapters.length > 0 && (
+            offlineSaved ? (
+              <button className="btn btn--on" onClick={removeOffline}
+                title="Saved on this device — tap to remove">
+                ✓ Saved offline
+              </button>
+            ) : (
+              <button className="btn btn--ghost" onClick={saveOffline} disabled={savingOffline}
+                title="Save all chapters to this device for reading with no connection">
+                {savingOffline
+                  ? `Saving ${offlineProgress?.done ?? 0}/${offlineProgress?.total ?? "…"}…`
+                  : "⤓ Save offline"}
+              </button>
+            )
+          )}
           {/* For hosted FicAlley stories, expose Wayback alongside the in-app reader */}
           {story.is_hosted && story.site === "fictionalley" && (() => {
             let u = story.url
@@ -200,6 +248,10 @@ export default function StoryPage() {
             )
           })}
         </div>
+
+        {offlineMsg && (
+          <p className="offline-msg">{offlineMsg}</p>
+        )}
 
         {story.tags?.includes("dlp_library") && (
           <div className="dlp-banner">

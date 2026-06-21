@@ -1,6 +1,7 @@
 "use client"
 import { useEffect, useState, useRef } from "react"
 import Link from "next/link"
+import { listOfflineStories, deleteOfflineStory } from "@/lib/offline"
 
 const API_BASE_C = ""
 
@@ -86,7 +87,7 @@ const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 interface Bookmark { id: string; title: string; author: string; site: string; url: string; savedAt: string }
 interface ProgressEntry { chapter: number; at: string; title: string }
 interface HostedStory { id: string; title: string; author: string; site: string; word_count: number; chapter_count: number; summary?: string; tags: string[] }
-type Tab = "hosted" | "bookmarks" | "reading" | "searches" | "import"
+type Tab = "hosted" | "bookmarks" | "reading" | "searches" | "offline" | "import"
 
 export default function LibraryPage() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
@@ -94,6 +95,14 @@ export default function LibraryPage() {
   const [recents, setRecents] = useState<string[]>([])
   const [hosted, setHosted] = useState<HostedStory[]>([])
   const [tab, setTab] = useState<Tab>("hosted")
+  const [offlineStories, setOfflineStories] = useState<any[]>([])
+  useEffect(() => {
+    if (tab === "offline") listOfflineStories().then(setOfflineStories).catch(() => {})
+  }, [tab])
+  const removeOfflineStory = async (id: string) => {
+    await deleteOfflineStory(id).catch(() => {})
+    setOfflineStories(s => s.filter(x => x.id !== id))
+  }
 
   // Import state
   const [importUrl, setImportUrl] = useState("")
@@ -468,7 +477,7 @@ export default function LibraryPage() {
           const msg = j.error || "unknown error"
           // Special-case the throttle/block path so the user knows it's not a bug.
           if (msg.includes("timeout") || msg.includes("throttl") || msg.includes("525")) {
-            setA3Msg(`⛔ AO3 isn't responding (after ${dt}s). This is AO3's Cloudflare blocking our VPS's IP — happens intermittently for datacenter IPs. Try again in 5–10 minutes, or use the HF dump / DLP / FicHub paths instead.`)
+            setA3Msg(`⛔ AO3 didn't respond in time (after ${dt}s). Its filtered pages are slow to generate and occasionally return a Cloudflare error when their origin is overloaded — usually transient. Try again in a minute or two, or use the HF dump / DLP / FicHub paths instead.`)
           } else {
             setA3Msg(`❌ Job failed after ${dt}s: ${msg}`)
           }
@@ -638,6 +647,9 @@ export default function LibraryPage() {
         <button className={`library-tab ${tab === "searches" ? "library-tab--on" : ""}`} onClick={() => setTab("searches")}>
           Searches <span className="library-tab__count">{recents.length}</span>
         </button>
+        <button className={`library-tab ${tab === "offline" ? "library-tab--on" : ""}`} onClick={() => setTab("offline")}>
+          Offline <span className="library-tab__count">{offlineStories.length}</span>
+        </button>
         <button className={`library-tab ${tab === "import" ? "library-tab--on" : ""}`} onClick={() => setTab("import")}>
           Import
         </button>
@@ -698,6 +710,36 @@ export default function LibraryPage() {
                   <Link key={i} href={`/?q=${encodeURIComponent(q)}`} className="library-item">
                     <p className="library-item__title">{q}</p>
                   </Link>
+                ))}
+              </>}
+        </div>
+      )}
+
+      {tab === "offline" && (
+        <div className="library-list">
+          {offlineStories.length === 0
+            ? <p className="library-empty">
+                No stories saved offline yet. On any readable story&apos;s page, tap
+                &quot;⤓ Save offline&quot; to download its chapters to this device — then you
+                can read it with no connection (handy when you can&apos;t reach the server).
+              </p>
+            : <>
+                <p className="offline-tab__note">
+                  Saved on this device and readable with no connection. Stored in your browser —
+                  clearing site data removes them.
+                </p>
+                {offlineStories.map(s => (
+                  <div key={s.id} className="library-item offline-item">
+                    <Link href={`/story/${s.id}/chapter/1`} className="offline-item__main">
+                      <p className="library-item__title">{s.title}</p>
+                      <p className="library-item__meta">
+                        by {s.author} · {s.chapter_count} ch · {(s.word_count || 0).toLocaleString()} words ·
+                        saved {new Date(s.savedAt).toLocaleDateString()}
+                      </p>
+                    </Link>
+                    <button className="offline-item__remove" title="Remove from this device"
+                      onClick={() => removeOfflineStory(s.id)}>✕</button>
+                  </div>
                 ))}
               </>}
         </div>
@@ -843,9 +885,11 @@ export default function LibraryPage() {
             <h3>Deep AO3 scrape (filtered, paginated)</h3>
             <p className="import-help">
               Where feeds give only the 25 newest works for a tag, this hits AO3&apos;s
-              filtered works page directly. Scrapes up to 20 works per page across
-              multiple pages — for example 5 pages = ~100 works matching your filters.
-              Polite 3s delays between requests; a 5-page scrape takes ~15s.
+              filtered works page directly — up to 20 works per page across multiple
+              pages (5 pages ≈ 100 works matching your filters). AO3&apos;s filtered pages
+              are slow to generate (~5–10s each), so a 5-page scrape typically takes
+              30–60s; it runs as a background job with live progress, so you can keep
+              browsing while it works.
             </p>
             <div className="import-row">
               <CanonicalFandomInput
@@ -859,7 +903,8 @@ export default function LibraryPage() {
             {a3Busy && (
               <div className="alert" style={{marginTop:10, background:"var(--surface2)", borderColor:"var(--border)"}}>
                 <span className="scrape-spinner" /> Working on it — {a3Elapsed}s elapsed.
-                AO3 limits us to one request every 3 seconds, so {a3Pages || "3"} pages takes ~{(parseInt(a3Pages || "3") * 3) + 4}s minimum. Watch the browser console (F12) for verbose logs.
+                AO3&apos;s filtered pages take ~5–10s each to generate, so {a3Pages || "3"} pages
+                usually takes {(parseInt(a3Pages || "3") * 7)}–{(parseInt(a3Pages || "3") * 10)}s. Watch the browser console (F12) for verbose logs.
               </div>
             )}
             <div className="feed-filters">
@@ -986,10 +1031,10 @@ export default function LibraryPage() {
           <section className="import-section">
             <h3>Discover FF.net works (via Wayback)</h3>
             <p className="import-help">
-              FF.net itself is blocked from our server by Cloudflare, but the Wayback
-              Machine's index isn't. We pull FF.net story URLs Wayback has archived,
-              then import each via FicHub. Filter by URL keyword (e.g. &quot;Harry-Potter&quot;)
-              to narrow results.
+              FF.net blocks direct server requests with a Cloudflare challenge (this is
+              true for any server, regardless of IP), but the Wayback Machine&apos;s index
+              isn&apos;t blocked. We pull FF.net story URLs Wayback has archived, then import
+              each via FicHub. Filter by URL keyword (e.g. &quot;Harry-Potter&quot;) to narrow results.
             </p>
             <div className="import-row">
               <input type="text" className="import-input"
@@ -1115,10 +1160,10 @@ sudo docker compose exec backend python ao3_dump_importer.py \\
             <details className="bulk-importer" open>
               <summary><strong>HuggingFace mrzjy/fanfiction_meta</strong> — 6.6M FFnet rows, metadata only ⭐ recommended</summary>
               <p>
-                The best free seed source for FFnet given that direct scraping is Cloudflare-blocked
-                from datacenter IPs. Covers FFnet story IDs 1 to ~10.9M (roughly 2014-era). After
-                import, click any story&apos;s &quot;Import &amp; Read&quot; button in search and FicHub will
-                fetch the full text on-demand.
+                The best free seed source for FFnet, which (unlike AO3) is Cloudflare-blocked
+                for direct server scraping regardless of your IP. Covers FFnet story IDs 1 to
+                ~10.9M (roughly 2014-era). After import, click any story&apos;s &quot;Import &amp; Read&quot;
+                button in search and FicHub will fetch the full text on-demand.
               </p>
               <pre className="bulk-importer__cmd">{`# One command — downloads ~2GB via huggingface_hub and imports HP subset.
 # Skip --fandom and --limit to ingest all 6.6M rows (~30 min, all fandoms).

@@ -84,10 +84,49 @@ export default function ChapterPage() {
 
   useEffect(() => {
     if (!storyId || !num) return
+    let cancelled = false
+
+    const fromOffline = async () => {
+      // Fall back to the offline copy saved in IndexedDB (works with no network).
+      const { getOfflineStory } = await import("@/lib/offline")
+      const saved = await getOfflineStory(storyId)
+      if (!saved || cancelled) return false
+      const ch = saved.chapters.find(c => c.number === Number(num))
+      if (!ch) return false
+      setStory({
+        id: saved.id, title: saved.title, author: saved.author,
+        chapter_count: saved.chapter_count,
+        chapters: saved.chapters.map(c => ({ number: c.number, title: c.title })),
+      } as any)
+      setChapter({
+        number: ch.number, title: ch.title, content: ch.content,
+        start_note: ch.start_note, end_note: ch.end_note, summary: ch.summary,
+      } as any)
+      return true
+    }
+
     Promise.all([
-      fetch(`${API_BASE}/api/stories/${storyId}`).then(r => r.json()),
-      fetch(`${API_BASE}/api/stories/${storyId}/chapters/${num}`).then(r => r.json()),
-    ]).then(([s, c]) => { setStory(s); setChapter(c) })
+      fetch(`${API_BASE}/api/stories/${storyId}`).then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json()
+      }),
+      fetch(`${API_BASE}/api/stories/${storyId}/chapters/${num}`).then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json()
+      }),
+    ])
+      .then(([s, c]) => { if (!cancelled) { setStory(s); setChapter(c) } })
+      .catch(async () => {
+        // Network failed (offline or backend unreachable) — try the saved copy.
+        const ok = await fromOffline()
+        if (!ok && !cancelled) {
+          setStory({ id: storyId, title: "Unavailable offline", author: "",
+            chapter_count: 1, chapters: [] } as any)
+          setChapter({ number: Number(num), title: "Unavailable offline",
+            content: "<p>You're offline and this story isn't saved on this device. " +
+                     "Open it while online, then tap “Save offline” on the story page to read it later.</p>" } as any)
+        }
+      })
+
+    return () => { cancelled = true }
   }, [storyId, num])
 
   // Save last-read progress (chapter number + scroll position + total chapters)
@@ -229,7 +268,7 @@ export default function ChapterPage() {
           onClick={() => router.push(`/story/${storyId}/chapter/${num + 1}`)}>Next →</button>
       </nav>
 
-      <p className="reader-hint">← → navigate · + − text size · ↕ line spacing · t theme · serif/sans &amp; width toggles above</p>
+      <p className="reader-hint">Keys: ← → chapters · + − text size · ↕ line spacing · t theme. Serif/sans &amp; column width toggle above.</p>
     </div>
   )
 }
