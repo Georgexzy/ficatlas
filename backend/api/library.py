@@ -38,17 +38,32 @@ async def crawl_status(db: Session = Depends(get_db)):
             })
     except Exception:
         pass
-    # Heuristic: if the most recent crawl failed with a 525/timeout, surface that.
-    blocked = any(
-        j["status"] == "failed" and ("525" in j["error"] or "timeout" in j["error"].lower())
-        for j in recent
-    )
+    # Distinguish a site being genuinely blocked from it just being slow. Failures
+    # are now tagged "[blocked]"/"[transient]" by the scheduler; fall back to the
+    # old keyword check for any legacy rows without a tag.
+    def _is_blocked(j):
+        if j["status"] != "failed":
+            return False
+        e = j["error"].lower()
+        if e.startswith("[blocked]"):
+            return True
+        if e.startswith("[transient]"):
+            return False
+        return "403" in e or "forbidden" in e or "fallbacks failed" in e
+    def _is_slow(j):
+        if j["status"] != "failed":
+            return False
+        e = j["error"].lower()
+        return e.startswith("[transient]") or "timeout" in e or "525" in e
+    blocked = any(_is_blocked(j) for j in recent)
+    slow_only = (not blocked) and any(_is_slow(j) for j in recent)
     # Circuit-breaker state per site (auto-disabled after repeated failures).
     auto_disabled = {
         "ao3":   str(get_setting(db, "crawl_disabled_ao3")).lower() == "true",
         "ffnet": str(get_setting(db, "crawl_disabled_ffnet")).lower() == "true",
     }
     return {"enabled": enabled, "blocked_recently": blocked,
+            "slow_recently": slow_only,
             "auto_disabled": auto_disabled, "recent_jobs": recent}
 
 

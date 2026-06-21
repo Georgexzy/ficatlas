@@ -48,6 +48,33 @@ async def _direct_crawl_enabled() -> bool:
     return os.getenv("ENABLE_DIRECT_CRAWL", "false").lower() == "true"
 
 
+def _classify_failure(err: str) -> str:
+    """Decide whether a crawl error means the site is genuinely BLOCKED (counts
+    toward the circuit breaker) or just TRANSIENT/slow (does not).
+
+    From observed behaviour:
+      - blocked   → 403 (Cloudflare wall, e.g. FF.net), 401, "all fallbacks
+                    failed", connection refused / name resolution errors.
+      - transient → ReadTimeout / ConnectTimeout (AO3 just slow), 502/503/504,
+                    and a 525 (Cloudflare-couldn't-reach-origin) which is usually
+                    a momentary blip that succeeds on retry.
+    Anything unrecognised is treated as transient, so we err on NOT disabling a
+    site that might still be reachable.
+    """
+    low = err.lower()
+    blocked_markers = ("403", "401 ", "forbidden", "all fallbacks failed",
+                       "connection refused", "name or service not known",
+                       "nodename nor servname", "ssl", "certificate")
+    transient_markers = ("readtimeout", "connecttimeout", "timeout", "timed out",
+                         "502", "503", "504", "525", "connectionreset",
+                         "remoteprotocolerror", "temporarily")
+    if any(m in low for m in blocked_markers):
+        return "blocked"
+    if any(m in low for m in transient_markers):
+        return "transient"
+    return "transient"
+
+
 def _site_crawl_disabled(db, site: str) -> bool:
     """Has the circuit breaker auto-disabled this site?"""
     try:
@@ -57,8 +84,10 @@ def _site_crawl_disabled(db, site: str) -> bool:
         return False
 
 
-def _recent_failure_count(db, site: str) -> int:
-    """Count this site's failed crawl jobs within the breaker window."""
+def _recent_blocked_count(db, site: str) -> int:
+    """Count this site's BLOCKED crawl failures within the breaker window.
+    Slow/transient failures (tagged "[transient]") are deliberately excluded so
+    AO3 being slow never trips the breaker."""
     from datetime import timedelta
     from models.story import CrawlJob, SiteEnum
     cutoff = datetime.now(timezone.utc) - timedelta(hours=CRAWL_FAIL_WINDOW_H)
@@ -66,6 +95,7 @@ def _recent_failure_count(db, site: str) -> int:
         return (db.query(CrawlJob)
                 .filter(CrawlJob.site == SiteEnum(site),
                         CrawlJob.status == "failed",
+                        CrawlJob.error.like("[blocked]%"),
                         CrawlJob.started_at >= cutoff)
                 .count())
     except Exception:
@@ -138,21 +168,28 @@ async def _run_crawl(site: str):
                 j.finished_at     = datetime.now(timezone.utc)
 
     except Exception as e:
-        logger.error(f"[scheduler] {site} crawl failed: {e}")
+        err = str(e)
+        kind = _classify_failure(err)
+        logger.error(f"[scheduler] {site} crawl failed ({kind}): {err}")
         with db_session() as db:
             from models.story import CrawlJob as CJ
             import uuid
             j = db.query(CJ).filter(CJ.id == uuid.UUID(job_id)).first()
             if j:
+                # Tag the failure kind in the status so the breaker can count only
+                # genuine blocks, not AO3 being slow. "failed" stays the umbrella
+                # so existing status checks keep working; the detail is in error.
                 j.status = "failed"
-                j.error  = str(e)
+                j.error  = f"[{kind}] {err}"
                 j.finished_at = datetime.now(timezone.utc)
             db.commit()
-            # After recording this failure, trip the breaker if the site has
-            # failed too many times in the window.
-            fails = _recent_failure_count(db, site)
-            if fails >= CRAWL_FAIL_THRESHOLD and not _site_crawl_disabled(db, site):
-                _trip_breaker(db, site, fails)
+            # Only BLOCKED failures count toward the breaker. Transient ones
+            # (ReadTimeout = AO3 just slow, 502/503/504, single retryable 525)
+            # must not disable a site that's actually reachable.
+            if kind == "blocked":
+                fails = _recent_blocked_count(db, site)
+                if fails >= CRAWL_FAIL_THRESHOLD and not _site_crawl_disabled(db, site):
+                    _trip_breaker(db, site, fails)
 
 
 def start_scheduler():
