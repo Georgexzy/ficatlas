@@ -647,7 +647,7 @@ kbd {
 }
 .search-input-wrap .search-input {
   width: 100%;
-  padding-right: 44px;   /* room for ? button */
+  padding-right: 70px;   /* room for clear (✕) + help (?) buttons */
 }
 .search-input-wrap .syntax-help {
   position: absolute;
@@ -655,6 +655,18 @@ kbd {
   top: 50%;
   transform: translateY(-50%);
 }
+.search-clear {
+  position: absolute;
+  right: 38px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--surface3); border: 1px solid var(--border2);
+  color: var(--text-faint); font-size: 10px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: all 0.12s; z-index: 2;
+}
+.search-clear:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ── Stats panel ──────────────────────────────────────────────────────────── */
 .index-status__backdrop {

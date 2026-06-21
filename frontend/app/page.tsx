@@ -420,7 +420,7 @@ function EmptyState({ onPick, onSurprise }: { onPick: (q: string) => void; onSur
   return (
     <div className="empty">
       <p className="empty__title">Search the fanfiction internet</p>
-      <p className="empty__sub">AO3 · FF.net · FicAlley · and more</p>
+      <p className="empty__sub">AO3 · FF.net · FicAlley · and more — fresh AO3 results pulled in as you search</p>
       <div className="empty__examples">
         <p className="empty__examples-label">Try:</p>
         {examples.map(ex => (
@@ -482,6 +482,9 @@ export default function SearchPage() {
   // Tracks which query we've already auto-deepened for, so a thin-result search
   // pulls fresh AO3 data once without looping on every re-render.
   const autoDeepenedRef = useRef<string>("")
+  // Auto-search-on-filter-change machinery (see effect below).
+  const hasSearchedRef = useRef(false)
+  const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Mobile filter drawer (sidebar becomes a slide-out panel on phones)
   const [filtersOpen,  setFiltersOpen]  = useState(false)
   // Prevent background scroll while the drawer is open
@@ -619,6 +622,7 @@ export default function SearchPage() {
   const doSearch = useCallback(async (resetPage = true, explicitPage?: number) => {
     // explicitPage lets pagination pass the target page directly, avoiding the
     // stale-closure bug where setPage(p=>p+1) hadn't flushed before doSearch ran.
+    hasSearchedRef.current = true   // enables debounced auto-search on filter changes
     const pg = explicitPage ?? (resetPage ? 1 : page)
     if (resetPage) setPage(1)
     else if (explicitPage) setPage(explicitPage)
@@ -668,6 +672,22 @@ export default function SearchPage() {
       setLoading(false)
     }
   }, [buildParams, page, pathname, router, query, sites, refreshing])
+
+  // Auto-run the search when a sidebar filter changes — but only once the user
+  // has already searched at least once (so we don't fire on the empty landing).
+  // Debounced so dragging through several checkboxes doesn't spam requests.
+  // The search *bar* text is intentionally excluded here: typing in the bar
+  // commits on Enter/Search, not on every keystroke. This gives the filter panel
+  // immediate feedback so it's obvious the filters are applying.
+  useEffect(() => {
+    if (!hasSearchedRef.current) return  // no auto-search before the first manual search
+    if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current)
+    filterDebounceRef.current = setTimeout(() => { doSearch() }, 350)
+    return () => { if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
+      incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
+      language, wordMin, wordMax, updatedAfter, explicit, sort])
 
   const removeToken = (raw: string) =>
     setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim())
@@ -940,6 +960,11 @@ export default function SearchPage() {
                   value={query}
                   onChange={e => setQuery(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && doSearch()} />
+                {query && (
+                  <button className="search-clear" aria-label="Clear search text"
+                    title="Clear the search box (keeps your filters)"
+                    onClick={() => { setQuery(""); setTimeout(() => doSearch(), 0) }}>✕</button>
+                )}
                 <SyntaxHelp />
               </div>
               <button className="search-btn" onClick={() => doSearch()} disabled={loading}>
