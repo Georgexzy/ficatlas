@@ -263,9 +263,12 @@ async def search(
     if status:
         s_vals = [StatusEnum(s.strip()) for s in status.split(",") if s.strip() in StatusEnum.__members__]
         if s_vals:
-            # Permissive: a story with NULL status (e.g. from HF FFN dump) still passes —
-            # we can't prove it doesn't match the user's filter, so don't exclude it.
-            filters.append(or_(Story.status.in_(s_vals), Story.status.is_(None)))
+            # Permissive: a story whose completion status is unknown (NULL, or the
+            # explicit "unknown" value used by bulk imports that lacked completion
+            # data) still passes — we can't prove it doesn't match, so don't exclude it.
+            filters.append(or_(Story.status.in_(s_vals),
+                               Story.status.is_(None),
+                               Story.status == StatusEnum.unknown))
 
     if language:
         filters.append(or_(Story.language.ilike(language), Story.language.is_(None)))

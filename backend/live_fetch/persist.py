@@ -94,7 +94,7 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
                 summary=d.get("summary"),
                 language=d.get("language") or "English",
                 rating=_RATING_MAP.get(d.get("rating") or "NR", RatingEnum.not_rated),
-                status=_STATUS_MAP.get(d.get("status") or "in_progress", StatusEnum.in_progress),
+                status=_STATUS_MAP.get(d.get("status") or "unknown", StatusEnum.unknown),
                 word_count=d.get("word_count") or 0,
                 chapter_count=d.get("chapter_count") or 1,
                 chapter_count_total=d.get("chapter_count_total"),
