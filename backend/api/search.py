@@ -167,7 +167,10 @@ async def search(
         filters.append(Story.site.in_(site_enums))
 
     if not explicit:
-        filters.append(Story.rating != RatingEnum.explicit)
+        # Hide only stories KNOWN to be explicit. `rating != 'E'` is NULL (not TRUE)
+        # for NULL-rating rows in SQL, which silently dropped the entire NULL-rating
+        # bulk import (HF FFN dump etc.) from every default search. Permit NULL.
+        filters.append(or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
 
     if q:
         terms = q.strip().split()
