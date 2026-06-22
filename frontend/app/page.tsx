@@ -2,6 +2,7 @@
 import { useState, useCallback, useTransition, useEffect, useRef } from "react"
 import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import Link from "next/link"
+import OfflineLink from "./OfflineLink"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS,
@@ -41,7 +42,7 @@ function UserMenu() {
             {syncing ? "⟳ Syncing your data…" : "Bookmarks, progress & settings sync to this account."}
           </p>
           <Link href="/account" className="user-menu__link" onClick={() => setOpen(false)}>Account &amp; sync</Link>
-          <Link href="/library" className="user-menu__link" onClick={() => setOpen(false)}>My library</Link>
+          <OfflineLink href="/library" className="user-menu__link" onClick={() => setOpen(false)}>My library</OfflineLink>
           <button onClick={async () => { await logout(); setOpen(false) }}>Sign out</button>
         </div>
       )}
@@ -675,7 +676,15 @@ export default function SearchPage() {
     }
 
     try {
-      const data = await searchStories({ ...p, live: true } as any)
+      let data
+      try {
+        data = await searchStories({ ...p, live: true } as any)
+      } catch (liveErr) {
+        // The live-AO3 augmentation can occasionally make the request fail
+        // (e.g. AO3 timing out hard upstream). Fall back to an index-only search
+        // so the user still gets indexed results instead of an error screen.
+        data = await searchStories({ ...p, live: false } as any)
+      }
       setResults(data)
       setLiveCount((data as any).live_count ?? 0)
       setParsedTokens((data as any).parsed_tokens ?? [])
@@ -697,23 +706,28 @@ export default function SearchPage() {
         refreshFromAO3()   // pulls 5 pages from AO3, persists, then re-searches
       }
     } catch (e: any) {
-      setError(e.message)
+      setError(e?.message ? `Search error: ${e.message}` : "Search failed — please try again.")
     } finally {
       setLoading(false)
     }
   }, [buildParams, page, pathname, router, query, sites, refreshing])
 
   // When a sidebar filter changes: mirror the full filter state into the search
-  // bar (so the bar is the single visible source of truth — "replace" model), then
-  // run the search. Gated behind hasSearchedRef so it doesn't fire on landing.
-  // Debounced so dragging through several checkboxes doesn't spam requests.
+  // bar (so the bar is the single visible source of truth — "replace" model).
+  // The bar text updates immediately on every change; the *search* only auto-runs
+  // once the user has already searched at least once (so we don't fire on the
+  // empty landing page). Debounced so dragging through checkboxes isn't spammy.
   useEffect(() => {
-    if (!hasSearchedRef.current) return
+    // Build the serialized query from current filter state.
+    const serialized = serializeFiltersToQuery()
+    // Only overwrite the bar when the panel actually contributes something, or
+    // when it has just been cleared back to matching the bar — avoids stomping
+    // free-text the user typed before touching any filter.
+    setQuery(prev => (prev === serialized ? prev : serialized))
+
+    if (!hasSearchedRef.current) return  // don't auto-search on the landing page
     if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current)
-    filterDebounceRef.current = setTimeout(() => {
-      setQuery(serializeFiltersToQuery())
-      doSearch()
-    }, 350)
+    filterDebounceRef.current = setTimeout(() => { doSearch() }, 350)
     return () => { if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
@@ -762,7 +776,7 @@ export default function SearchPage() {
       <header className="header">
         <span className="logo">Fic<em>Atlas</em></span>
         <div className="header__right">
-          <Link href="/library" className="header__link">Library</Link>
+          <OfflineLink href="/library" className="header__link">Library</OfflineLink>
           <Link href="/settings" className="header__link">Settings</Link>
           <UserMenu />
           <IndexStatus />

@@ -191,12 +191,20 @@ export default function ChapterPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapter?.number, story?.id])
 
+  // Navigate between chapters. Offline, Next's client router would try a network
+  // RSC fetch and fail, so use a hard navigation the service worker can serve.
+  const goChapter = (n: number) => {
+    const href = `/story/${storyId}/chapter/${n}`
+    if (typeof navigator !== "undefined" && !navigator.onLine) window.location.href = href
+    else router.push(href)
+  }
+
   // Keyboard navigation
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return
-      if (e.key === "ArrowLeft" && num > 1) router.push(`/story/${storyId}/chapter/${num - 1}`)
-      if (e.key === "ArrowRight" && story && num < story.chapter_count) router.push(`/story/${storyId}/chapter/${num + 1}`)
+      if (e.key === "ArrowLeft" && num > 1) goChapter(num - 1)
+      if (e.key === "ArrowRight" && story && num < story.chapter_count) goChapter(num + 1)
       if (e.key === "+" || e.key === "=") setFontSize(s => Math.min(s + 1, 24))
       if (e.key === "-") setFontSize(s => Math.max(s - 1, 13))
       if (e.key === "t") setTheme(t => t === "default" ? "sepia" : t === "sepia" ? "dark" : "default")
@@ -262,10 +270,10 @@ export default function ChapterPage() {
 
       <nav className="reader-nav">
         <button className="reader-nav__btn" disabled={!hasPrev}
-          onClick={() => router.push(`/story/${storyId}/chapter/${num - 1}`)}>← Previous</button>
+          onClick={() => goChapter(num - 1)}>← Previous</button>
         <Link href={`/story/${storyId}`} className="reader-nav__index">All chapters</Link>
         <button className="reader-nav__btn" disabled={!hasNext}
-          onClick={() => router.push(`/story/${storyId}/chapter/${num + 1}`)}>Next →</button>
+          onClick={() => goChapter(num + 1)}>Next →</button>
       </nav>
 
       <p className="reader-hint">Keys: ← → chapters · + − text size · t theme. Line spacing, serif/sans &amp; column width: buttons above.</p>

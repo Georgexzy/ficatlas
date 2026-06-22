@@ -1,6 +1,7 @@
 "use client"
 import { useEffect, useState, useRef } from "react"
 import Link from "next/link"
+import OfflineLink from "../OfflineLink"
 import { listOfflineStories, deleteOfflineStory } from "@/lib/offline"
 
 const API_BASE_C = ""
@@ -755,14 +756,14 @@ export default function LibraryPage() {
                   const href = p?.chapter ? `/story/${s.id}/chapter/${p.chapter}` : `/story/${s.id}/chapter/1`
                   return (
                   <div key={s.id} className="library-item offline-item">
-                    <Link href={href} className="offline-item__main">
+                    <OfflineLink href={href} className="offline-item__main">
                       <p className="library-item__title">{s.title}</p>
                       <p className="library-item__meta">
                         by {s.author} · {s.chapter_count} ch · {(s.word_count || 0).toLocaleString()} words ·
                         saved {new Date(s.savedAt).toLocaleDateString()}
                         {p?.chapter ? ` · resume ch ${p.chapter}` : ""}
                       </p>
-                    </Link>
+                    </OfflineLink>
                     <button className="offline-item__remove" title="Remove from this device"
                       onClick={() => removeOfflineStory(s.id)}>✕</button>
                   </div>

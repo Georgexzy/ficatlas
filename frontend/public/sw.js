@@ -11,7 +11,7 @@
 //   - API calls (/api/*): network-only. We never cache search/API responses —
 //     offline reading is served from IndexedDB inside the app, not here.
 
-const CACHE = "ficatlas-shell-v1"
+const CACHE = "ficatlas-shell-v2"
 const OFFLINE_URLS = ["/", "/library", "/offline"]
 
 self.addEventListener("install", (event) => {
@@ -69,16 +69,29 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((res) => {
+          // Cache a clean copy keyed by pathname (no query) so a later offline
+          // visit to the same route matches regardless of query string.
           const copy = res.clone()
-          caches.open(CACHE).then((c) => c.put(request, copy)).catch(() => {})
+          caches.open(CACHE).then((c) => {
+            c.put(request, copy.clone()).catch(() => {})
+            c.put(url.origin + url.pathname, copy).catch(() => {})
+          }).catch(() => {})
           return res
         })
         .catch(async () => {
-          const cached = await caches.match(request)
-          if (cached) return cached
-          // Fall back to the library shell so the user lands somewhere usable.
-          return (await caches.match("/library")) || (await caches.match("/")) ||
-            new Response("Offline", { status: 503, headers: { "Content-Type": "text/plain" } })
+          // Offline: try exact match, then pathname-only, then the known shells.
+          const cache = await caches.open(CACHE)
+          return (await cache.match(request)) ||
+            (await cache.match(url.origin + url.pathname)) ||
+            (await cache.match("/library")) ||
+            (await cache.match("/")) ||
+            new Response(
+              "<!doctype html><meta charset=utf-8><title>Offline</title>" +
+              "<body style='font-family:system-ui;background:#0e0e10;color:#eee;padding:2rem'>" +
+              "<h1>You're offline</h1><p>This page wasn't saved for offline use. " +
+              "Open it once while online, then it'll be available here.</p>" +
+              "<p><a style='color:#a5b4fc' href='/library'>Go to your library</a></p></body>",
+              { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } })
         }),
     )
   }
