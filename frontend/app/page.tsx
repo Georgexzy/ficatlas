@@ -329,9 +329,16 @@ function StoryCard({ story }: { story: StoryCard }) {
           </div>
         </div>
         <p className="card__byline">
-          {story.author_url
-            ? <a href={story.author_url} target="_blank" rel="noopener noreferrer">{story.author}</a>
-            : story.author}
+          {/* Clicking the author browses everything they wrote, ACROSS archives —
+              an AO3 or FF.net user page only ever shows what they posted there. */}
+          <Link href={`/?author=${encodeURIComponent(story.author)}`}
+            className="card__author-link" title={`All works by ${story.author}`}>
+            {story.author}
+          </Link>
+          {story.author_url && (
+            <a href={story.author_url} target="_blank" rel="noopener noreferrer"
+              className="card__author-ext" title="Author's page on the original site">↗</a>
+          )}
           {story.fandoms.length > 0 && (
             <> · <span className="card__fandom">
               {story.fandoms.slice(0, 2).map((f, i) => (
@@ -442,6 +449,8 @@ function SearchPageInner() {
   // a ship filter returns stories that actually have that ship; on, it widens the
   // net to include stories whose metadata we simply never captured.
   const [includeUnknown, setIncludeUnknown] = useState(get("include_unknown") === "true")
+  // Set by clicking an author's name: browse their whole catalogue across archives.
+  const [authorFilter, setAuthorFilter] = useState(get("author") ?? "")
 
   // Include filters
   const [incFandoms,  setIncFandoms]  = useState(csv(get("fandoms")))
@@ -637,13 +646,14 @@ function SearchPageInner() {
       word_count_max:        wordMax ?? pq.wordCountMax ?? undefined,
       updated_after:         updatedAfter || pq.updatedAfter || undefined,
       explicit,
+      author:                authorFilter || undefined,
       include_unknown:       includeUnknown || undefined,
       search_within:         searchWithin || undefined,
       sort,
       page:                  pg,
       per_page:              20,
     }
-  }, [query, sites, explicit, includeUnknown, incFandoms, incChars, incShips, incTags, incRatings,
+  }, [query, sites, explicit, includeUnknown, authorFilter, incFandoms, incChars, incShips, incTags, incRatings,
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
       status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort])
 
@@ -729,7 +739,7 @@ function SearchPageInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
       incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
-      language, wordMin, wordMax, updatedAfter, explicit, includeUnknown, sort])
+      language, wordMin, wordMax, updatedAfter, explicit, includeUnknown, authorFilter, sort])
 
   const removeToken = (raw: string) =>
     setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim())

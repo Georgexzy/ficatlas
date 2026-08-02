@@ -1808,3 +1808,14 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   transition: all 0.12s;
 }
 .offline-item__remove:hover { border-color: var(--red); color: var(--red); }
+
+/* Author name as a browse link. Clicking it lists everything that author wrote
+   across every archive in the index — AO3 and FF.net can each only show you what
+   was posted on their own site. The ↗ still goes to their page on the source. */
+.card__author-link { background: none; border: none; padding: 0; font: inherit;
+  color: inherit; cursor: pointer; text-decoration: underline;
+  text-decoration-color: var(--border); text-underline-offset: 2px; }
+.card__author-link:hover { color: var(--accent); text-decoration-color: var(--accent); }
+.card__author-ext { margin-left: 3px; font-size: 10px; color: var(--text-faint);
+  text-decoration: none; }
+.card__author-ext:hover { color: var(--accent); }

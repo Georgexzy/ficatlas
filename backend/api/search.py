@@ -194,6 +194,11 @@ async def search(
                     "(e.g. no relationships listed). Off by default so filters "
                     "actually filter.",
     ),
+    author:                Optional[str] = Query(
+        None,
+        description="Exact author match (case-insensitive). Unlike free text, this "
+                    "returns only that author's works — across every archive.",
+    ),
     search_within:         Optional[str] = Query(None),
     sort:                  str           = Query("relevance"),
     page:                  int           = Query(1, ge=1),
@@ -264,6 +269,17 @@ async def search(
         filters.append(
             _story_tsv().op("@@")(func.websearch_to_tsquery(_REGCONFIG, q))
         )
+
+    if author:
+        # Exact, case-insensitive. Free-text search matches the author field too,
+        # but also every summary that merely mentions the name ("TRADUCCIÓN del fic
+        # de SilentAuror"), so it can't answer "show me everything this person
+        # wrote". Backed by ix_stories_author_lower.
+        #
+        # This is something neither AO3 nor FF.net can do: an author's page on
+        # either site shows only the works they posted there, while this spans
+        # every archive in the index.
+        filters.append(func.lower(Story.author) == author.strip().lower())
 
     if search_within:
         filters.append(or_(

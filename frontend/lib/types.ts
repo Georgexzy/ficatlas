@@ -78,6 +78,8 @@ export interface SearchParams {
   updated_before?: string
   published_after?: string
   explicit?: boolean
+  /** Exact author match — every work by one person, across all archives. */
+  author?: string
   /** Also return stories that have no data at all for a filtered field. */
   include_unknown?: boolean
   search_within?: string
