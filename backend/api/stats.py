@@ -101,7 +101,12 @@ async def suggest(
     except Exception:
         pass
 
-    # Fallback: bounded live scan (only if facets table empty/unbuilt).
+    # Fallback, used only while the facets table is empty (never refreshed, or a
+    # rebuild is in flight). This is a SAMPLE, not a survey: the LIMIT applies to
+    # unnested values in physical heap order, so both the suggestions and their
+    # counts reflect an arbitrary slice of the table rather than the whole index.
+    # Good enough to keep autocomplete usable; POST /api/stats/refresh-facets for
+    # accurate values.
     col = _FACET_COLUMNS[kind]
     sql = text(
         f"SELECT v AS value, count(*) AS c FROM ("
@@ -178,21 +183,55 @@ async def suggest_canonical(
 
 
 @router.post("/refresh-facets")
-async def refresh_facets(db: Session = Depends(get_db)):
-    """Rebuild the facets table from current stories. Run this after big imports
-    so autocomplete reflects the latest data. Takes a while on millions of rows,
-    but it's a one-shot batch, not per-request."""
+async def refresh_facets(
+    min_count: int = Query(1, ge=1, description="Drop values rarer than this"),
+    db: Session = Depends(get_db),
+):
+    """Rebuild the facets table from current stories. Run this after big imports so
+    autocomplete reflects the latest data. It's a one-shot batch (four grouped
+    scans of the whole table), not a per-request cost.
+
+    Built into a staging table and swapped in at the end. The previous version
+    deleted each kind before repopulating it, so for the several minutes the
+    rebuild took, autocomplete saw an empty table and silently fell back to the
+    sampled live scan — and a failure part-way through left it that way.
+    """
     built = {}
-    for kind, col in _FACET_COLUMNS.items():
-        db.execute(text("DELETE FROM facets WHERE kind = :k"), {"k": kind})
+    db.execute(text("DROP TABLE IF EXISTS facets_rebuild"))
+    db.execute(text(
+        "CREATE TABLE facets_rebuild ("
+        "  kind VARCHAR(20) NOT NULL, value TEXT NOT NULL,"
+        "  count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (kind, value))"
+    ))
+    try:
+        for kind, col in _FACET_COLUMNS.items():
+            db.execute(text(
+                f"INSERT INTO facets_rebuild (kind, value, count) "
+                f"SELECT :k, v, count(*) AS c FROM ("
+                f"  SELECT unnest({col}) AS v FROM stories"
+                f") s WHERE v IS NOT NULL AND v <> '' "
+                f"GROUP BY v HAVING count(*) >= :min_count"
+            ), {"k": kind, "min_count": min_count})
+            built[kind] = db.execute(
+                text("SELECT count(*) FROM facets_rebuild WHERE kind = :k"), {"k": kind}
+            ).scalar()
+
+        # Swap. Readers see the old table right up until this commit.
+        db.execute(text("DROP TABLE IF EXISTS facets_old"))
+        db.execute(text("ALTER TABLE facets RENAME TO facets_old"))
+        db.execute(text("ALTER TABLE facets_rebuild RENAME TO facets"))
         db.execute(text(
-            f"INSERT INTO facets (kind, value, count) "
-            f"SELECT :k, v, count(*) FROM ("
-            f"  SELECT unnest({col}) AS v FROM stories"
-            f") s WHERE v IS NOT NULL AND v <> '' "
-            f"GROUP BY v"
-        ), {"k": kind})
-        n = db.execute(text("SELECT count(*) FROM facets WHERE kind = :k"), {"k": kind}).scalar()
-        built[kind] = n
-    db.commit()
+            "CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm "
+            "ON facets USING gin (value gin_trgm_ops)"
+        ))
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC)"
+        ))
+        db.execute(text("DROP TABLE IF EXISTS facets_old"))
+        db.commit()
+    except Exception:
+        db.rollback()
+        db.execute(text("DROP TABLE IF EXISTS facets_rebuild"))
+        db.commit()
+        raise
     return {"ok": True, "facets": built}
