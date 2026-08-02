@@ -2,7 +2,7 @@
 import asyncio
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy import and_, or_, func, literal_column, text as sql_text
 from typing import Optional, List
 from pydantic import BaseModel
 
@@ -11,6 +11,34 @@ from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 from query_parser import parse_query, parsed_to_search_params
 
 router = APIRouter()
+
+
+# ── Indexed matching helpers ─────────────────────────────────────────────────
+# These MUST stay byte-for-byte equivalent to the index expressions created in
+# init_db.py. Postgres only uses an expression index when the query expression
+# matches the indexed one, so changing either side without the other silently
+# drops search back to a full sequential scan over every row.
+
+# 'english'::regconfig as a literal, matching how Postgres stores it in the index
+_REGCONFIG = literal_column("'english'::regconfig")
+
+
+def _story_tsv():
+    """The indexed tsvector over title + summary + author + all facet arrays.
+    Backed by ix_stories_doc_fts."""
+    return func.to_tsvector(
+        _REGCONFIG,
+        func.fic_doc(
+            Story.title, Story.summary, Story.author,
+            Story.fandoms, Story.characters, Story.relationships, Story.tags,
+        ),
+    )
+
+
+def _arr_text(col):
+    """IMMUTABLE array->text used by the trigram indexes on the facet columns.
+    Backed by ix_stories_{fandoms,characters,relationships,tags}_trgm."""
+    return func.fic_arr(col)
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -173,17 +201,22 @@ async def search(
         filters.append(or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
 
     if q:
-        terms = q.strip().split()
-        for term in terms:
-            filters.append(or_(
-                Story.title.ilike(f"%{term}%"),
-                Story.summary.ilike(f"%{term}%"),
-                Story.author.ilike(f"%{term}%"),
-                func.array_to_string(Story.fandoms, ",").ilike(f"%{term}%"),
-                func.array_to_string(Story.characters, ",").ilike(f"%{term}%"),
-                func.array_to_string(Story.relationships, ",").ilike(f"%{term}%"),
-                func.array_to_string(Story.tags, ",").ilike(f"%{term}%"),
-            ))
+        # Free text goes through Postgres full-text search against the GIN index
+        # (ix_stories_doc_fts) covering title, summary, author and every facet array.
+        #
+        # This replaces a per-term OR of seven ILIKE '%term%' predicates. No index
+        # can serve a leading-wildcard ILIKE, so that form degraded to a full
+        # sequential scan of all ~2.3M rows on every keystroke — and it was slowest
+        # for RARE terms, because the count ceiling never filled up early enough to
+        # short-circuit the scan.
+        #
+        # websearch_to_tsquery ANDs the terms together, which preserves the previous
+        # "every term must appear somewhere" semantics, and it never raises on
+        # malformed input (unlike to_tsquery), so user text is safe to pass straight
+        # through. It also gives quoted phrases, OR and -negation for free.
+        filters.append(
+            _story_tsv().op("@@")(func.websearch_to_tsquery(_REGCONFIG, q))
+        )
 
     if search_within:
         filters.append(or_(
@@ -209,11 +242,11 @@ async def search(
         if permissive_empty:
             empty = or_(col.is_(None), func.cardinality(col) == 0)
             return and_(*[
-                or_(func.array_to_string(col, ",").ilike(f"%{v}%"), empty)
+                or_(_arr_text(col).ilike(f"%{v}%"), empty)
                 for v in vals
             ])
         return and_(*[
-            func.array_to_string(col, ",").ilike(f"%{v}%")
+            _arr_text(col).ilike(f"%{v}%")
             for v in vals
         ])
 
@@ -223,7 +256,7 @@ async def search(
         """
         if not csv_val: return None
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
-        return and_(*[~func.array_to_string(col, ",").ilike(f"%{v}%") for v in vals]) if vals else None
+        return and_(*[~_arr_text(col).ilike(f"%{v}%") for v in vals]) if vals else None
 
     # Fandom is the primary axis → strict. Everything else → permissive on empty.
     f = arr_inc(Story.fandoms, fandoms, permissive_empty=False)
@@ -368,15 +401,49 @@ async def random_stories(
     db: Session = Depends(get_db),
 ):
     """Surprise-me discovery: returns N random stories, optionally constrained by
-    fandom and a minimum word count (so you don't get art/drabbles). Uses
-    TABLESAMPLE-style random ordering. Biased toward stories with real metadata
-    (non-zero word count) so results are actually readable."""
-    q = db.query(Story).filter(Story.word_count > (min_words or 1000))
-    if fandom:
-        q = q.filter(func.array_to_string(Story.fandoms, ",").ilike(f"%{fandom.strip()}%"))
-    # ORDER BY random() is fine at this scale for a handful of rows.
-    rows = q.order_by(func.random()).limit(count).all()
-    return [_to_card(s) for s in rows]
+    fandom and a minimum word count (so you don't get art/drabbles). Biased toward
+    stories with real metadata (non-zero word count) so results are readable.
+
+    This runs on the landing page, so it has to be cheap. A plain
+    `ORDER BY random() LIMIT 3` makes Postgres assign a random value to every
+    candidate row and sort them all — a full sequential scan of ~1.7M rows for
+    three results (~3s measured).
+
+    Instead we sample a small slice of the table's pages with TABLESAMPLE SYSTEM and
+    pick randomly within that. Percentages escalate because a selective fandom
+    filter may match nothing in a small sample, and the last pass is the original
+    full scan so a rare fandom still returns results rather than an empty page.
+    """
+    min_w = min_words or 1000
+    fandom_pat = f"%{fandom.strip()}%" if fandom else None
+
+    where = ["word_count > :min_w"]
+    params: dict = {"min_w": min_w, "count": count}
+    if fandom_pat:
+        where.append("fic_arr(fandoms) ILIKE :fandom_pat")
+        params["fandom_pat"] = fandom_pat
+    where_sql = " AND ".join(where)
+
+    # Sample IDs only, then load through the ORM so serialisation stays in _to_card
+    # rather than being duplicated for raw rows. Both queries are trivially cheap.
+    for pct in (0.3, 3.0):
+        ids = list(db.execute(
+            sql_text(
+                f"SELECT id FROM stories TABLESAMPLE SYSTEM ({pct}) "
+                f"WHERE {where_sql} ORDER BY random() LIMIT :count"
+            ),
+            params,
+        ).scalars())
+        if len(ids) >= count:
+            rows = db.query(Story).filter(Story.id.in_(ids)).all()
+            return [_to_card(s) for s in rows]
+
+    # Fallback: whole-table scan. Only reached for filters too rare to show up in a
+    # 3% page sample, where correctness matters more than the latency.
+    q = db.query(Story).filter(Story.word_count > min_w)
+    if fandom_pat:
+        q = q.filter(_arr_text(Story.fandoms).ilike(fandom_pat))
+    return [_to_card(s) for s in q.order_by(func.random()).limit(count).all()]
 
 
 # ── Serialisers ───────────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 """FicAtlas Backend — FastAPI entry point"""
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,13 +22,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FicAtlas API", version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ── CORS ─────────────────────────────────────────────────────────────────────
+# The browser never talks to this port directly: the Next.js frontend declares a
+# rewrite for /api/* (see frontend/next.config.ts), so every request the browser
+# makes is same-origin against port 3000 and needs no CORS headers at all.
+#
+# The previous config (allow_origins=["*"] + allow_credentials=True) was actively
+# harmful. Starlette cannot send a literal "*" alongside credentials, so it echoes
+# the request's own Origin back instead — meaning ANY website the user happened to
+# be visiting could call this API with the session cookie attached and read the
+# response (reading history, bookmarks, session list, settings).
+#
+# Default to no cross-origin access. Set FICATLAS_CORS_ORIGINS to a comma-separated
+# list of exact origins only if you need to hit port 8000 from another origin.
+_origins = [o.strip() for o in os.getenv("FICATLAS_CORS_ORIGINS", "").split(",") if o.strip()]
+if _origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,      # exact origins only — never "*" with credentials
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(stories.router, prefix="/api/stories", tags=["stories"])

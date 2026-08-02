@@ -89,24 +89,67 @@ CREATE INDEX IF NOT EXISTS ix_stories_fandoms ON stories USING gin (fandoms);
 CREATE INDEX IF NOT EXISTS ix_stories_tags ON stories USING gin (tags);
 CREATE INDEX IF NOT EXISTS ix_stories_relationships ON stories USING gin (relationships);
 CREATE INDEX IF NOT EXISTS ix_stories_characters ON stories USING gin (characters);
-CREATE INDEX IF NOT EXISTS ix_stories_search_vector ON stories USING gin (
-    to_tsvector('english', coalesce(title,'') || ' ' || coalesce(summary,'') || ' ' || coalesce(author,''))
-);
 CREATE UNIQUE INDEX IF NOT EXISTS ix_chapters_story_number ON chapters (story_id, number);
 
 -- Idempotent schema additions for existing deployments
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS cross_post_urls TEXT[] DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS ix_stories_cross_post_urls ON stories USING gin (cross_post_urls);
 
--- Performance note: we previously tried a functional trigram index on
--- array_to_string(fandoms, ',') to speed up substring fandom matching, but
--- array_to_string is not IMMUTABLE so Postgres rejects it in an index expression.
--- The plain GIN index on the fandoms array (ix_stories_fandoms, created above)
--- already serves array containment/overlap, which is what most queries use.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ── Search indexes ──────────────────────────────────────────────────────────
+-- An earlier attempt at trigram indexes on array_to_string(fandoms, ',') was
+-- abandoned because array_to_string is only marked STABLE, so Postgres rejects it
+-- in an index expression. The fix is to wrap it: array_to_string over text[] IS
+-- genuinely deterministic (it is marked STABLE only because of the type output
+-- functions it may call for non-text element types), so an IMMUTABLE SQL wrapper
+-- restricted to text[] is sound and unlocks expression indexes.
+--
+-- Without these, free-text search and every fandom/ship/character/tag filter fell
+-- back to a full sequential scan of the whole stories table on each request.
+--
+-- api/search.py builds its predicates from exactly these expressions. If you edit
+-- one side you MUST edit the other, or the planner stops matching the index and
+-- search silently reverts to seq scans.
+
+CREATE OR REPLACE FUNCTION fic_arr(arr text[])
+RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE AS
+$FIC$ SELECT array_to_string(coalesce(arr, '{}'::text[]), ',') $FIC$;
+
+CREATE OR REPLACE FUNCTION fic_doc(
+    title text, summary text, author text,
+    fandoms text[], characters text[], relationships text[], tags text[]
+) RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE AS
+$FIC$ SELECT coalesce(title,'') || ' ' || coalesce(summary,'') || ' ' || coalesce(author,'')
+          || ' ' || fic_arr(fandoms) || ' ' || fic_arr(characters)
+          || ' ' || fic_arr(relationships) || ' ' || fic_arr(tags) $FIC$;
+
+-- Free-text search: one GIN tsvector over everything a user searches by.
+CREATE INDEX IF NOT EXISTS ix_stories_doc_fts ON stories USING gin (
+    to_tsvector('english', fic_doc(title, summary, author, fandoms, characters, relationships, tags))
+);
+
+-- Facet filters use substring (ILIKE '%value%') matching so that a search for
+-- "Harry Potter" also matches AO3's canonical "Harry Potter - J. K. Rowling".
+-- Only a trigram index can serve a leading-wildcard LIKE.
+CREATE INDEX IF NOT EXISTS ix_stories_fandoms_trgm       ON stories USING gin (fic_arr(fandoms) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_stories_relationships_trgm ON stories USING gin (fic_arr(relationships) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_stories_characters_trgm    ON stories USING gin (fic_arr(characters) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_stories_tags_trgm          ON stories USING gin (fic_arr(tags) gin_trgm_ops);
+
 -- Composite index for the most common access pattern: filter by word_count, sort by kudos.
 CREATE INDEX IF NOT EXISTS ix_stories_kudos_desc ON stories (kudos DESC);
-CREATE INDEX IF NOT EXISTS ix_stories_wc_kudos ON stories (word_count, kudos DESC);
+
+-- ── Dropped indexes ─────────────────────────────────────────────────────────
+-- ix_stories_search_vector: 355MB GIN over a search_vector column that was never
+--   populated (100% NULL) and never scanned. Superseded by ix_stories_doc_fts.
+-- ix_stories_url: exact duplicate of the stories_url_key UNIQUE constraint index
+--   (206MB each) — the constraint index is the one that must stay.
+-- ix_stories_wc_kudos: never scanned, and redundant with the plain
+--   ix_stories_word_count index (which is used) for the range-filter case.
+DROP INDEX IF EXISTS ix_stories_search_vector;
+DROP INDEX IF EXISTS ix_stories_url;
+DROP INDEX IF EXISTS ix_stories_wc_kudos;
 
 -- User accounts (added in user-accounts release)
 CREATE TABLE IF NOT EXISTS users (
@@ -150,12 +193,42 @@ CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm ON facets USING gin (value 
 CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC);
 """
 
+def _split_statements(sql: str) -> list[str]:
+    """Split a DDL script into individual statements.
+
+    Naively splitting on ";" breaks on two things that appear in this file:
+    a semicolon inside a `--` comment (which silently produces a garbage
+    fragment that then fails to execute), and a semicolon inside a
+    dollar-quoted function body. Strip comments first, then split only on
+    semicolons that sit outside a $tag$...$tag$ block.
+    """
+    import re
+
+    stripped = "\n".join(
+        line for line in sql.splitlines() if not line.lstrip().startswith("--")
+    )
+
+    statements, buf, dollar_tag = [], [], None
+    for chunk in re.split(r"(\$[A-Za-z_]*\$|;)", stripped):
+        if dollar_tag is None and re.fullmatch(r"\$[A-Za-z_]*\$", chunk or ""):
+            dollar_tag = chunk          # entering a dollar-quoted body
+        elif dollar_tag is not None and chunk == dollar_tag:
+            dollar_tag = None           # leaving it
+        elif chunk == ";" and dollar_tag is None:
+            statements.append("".join(buf))
+            buf = []
+            continue
+        buf.append(chunk or "")
+    statements.append("".join(buf))
+    return [s.strip() for s in statements if s.strip()]
+
+
 def init():
     """Run each DDL statement in its own transaction so a single failure (e.g. a
     bad index on an older Postgres) can't roll back the creation of every table
     after it. Failures are logged, not fatal — the app should still boot with
     whatever succeeded."""
-    statements = [s.strip() for s in SQL.split(";") if s.strip()]
+    statements = _split_statements(SQL)
     failed = []
     for stmt in statements:
         try:

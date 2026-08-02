@@ -91,22 +91,38 @@ def _set_session_cookie(response: Response, token: str) -> None:
     )
 
 
+# How stale last_used may get before we bother writing it back. This field only
+# drives the "active sessions" list, so minute-level precision is plenty.
+_LAST_USED_REFRESH = timedelta(minutes=15)
+
+
 def get_current_user(
     sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
     db: Session = Depends(get_db),
 ) -> Optional[User]:
     if not sat:
         return None
-    s = db.query(UserSession).filter(UserSession.token == sat).first()
-    if not s:
+    # One round trip instead of two: the session and its user together.
+    row = (
+        db.query(UserSession, User)
+        .join(User, User.id == UserSession.user_id)
+        .filter(UserSession.token == sat)
+        .first()
+    )
+    if not row:
         return None
-    if s.expires_at < datetime.utcnow():
+    s, user = row
+    now = datetime.utcnow()
+    if s.expires_at < now:
         db.delete(s); db.commit()
         return None
-    # Refresh last_used (cheap)
-    s.last_used = datetime.utcnow()
-    db.commit()
-    return db.query(User).filter(User.id == s.user_id).first()
+    # Only write last_used when it has actually gone stale. Refreshing it on every
+    # request turned each authenticated GET into an UPDATE + COMMIT, which meant a
+    # row write (and WAL) per page view for no user-visible benefit.
+    if s.last_used is None or (now - s.last_used) > _LAST_USED_REFRESH:
+        s.last_used = now
+        db.commit()
+    return user
 
 
 def require_user(user: Optional[User] = Depends(get_current_user)) -> User:

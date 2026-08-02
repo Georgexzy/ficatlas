@@ -86,7 +86,9 @@ FicAtlas runs everything in Docker on one host (single VPS or homelab box). The 
    └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
-Only **port 3000** needs to be reachable from clients. The frontend's `next.config.ts` declares a rewrite that forwards `/api/:path*` → `http://backend:8000/api/:path*`, so the browser only ever talks to one origin (no CORS, no port-8000 exposure, no env-var pinning). Tailscale, LAN, or a Cloudflare Tunnel pointed at port 3000 all work the same way.
+Only **port 3000** is reachable from clients. The frontend's `next.config.ts` declares a rewrite that forwards `/api/:path*` → `http://backend:8000/api/:path*`, so the browser only ever talks to one origin (no CORS, no port-8000 exposure, no env-var pinning). Tailscale, LAN, or a Cloudflare Tunnel pointed at port 3000 all work the same way.
+
+The backend (8000) and Postgres (5432) are bound to `127.0.0.1` in `docker-compose.yml`, so they are reachable from the host but not from the LAN or the tailnet. This is deliberate: Postgres uses a default password, and the `/api/library/*` endpoints (delete hosted story, trigger scrapes) have no authentication, so neither port should be exposed to a network. The app is unaffected — the frontend reaches the backend over the internal compose network.
 
 To access from your phone over Tailscale:
 1. Install Tailscale on both the host and the phone, both signed into the same tailnet
@@ -101,7 +103,16 @@ docker compose up --build
 docker compose exec backend python init_db.py
 ```
 
-Open <http://localhost:3000>. API docs at <http://localhost:8000/docs>.
+Open <http://localhost:3000>. API docs at <http://localhost:8000/docs> (from the host only).
+
+### Search performance
+
+Search is served by Postgres indexes that `init_db.py` creates:
+
+- **Free text** matches a GIN `tsvector` (`ix_stories_doc_fts`) covering title, summary, author, fandoms, characters, relationships and tags. Because it goes through `websearch_to_tsquery`, quoted `"phrases"`, `or`, and `-negation` work in the free-text portion of a query.
+- **Facet filters** (fandom/ship/character/tag) use substring matching so `fandom: Harry Potter` still matches AO3's canonical `Harry Potter - J. K. Rowling`. Only a trigram index can serve a leading-wildcard `LIKE`, so each of those columns has a `gin_trgm_ops` index over an `IMMUTABLE` array-to-text wrapper (`fic_arr`).
+
+`api/search.py` builds its predicates from exactly these expressions. **If you change one side, change the other** — Postgres only uses an expression index when the query expression matches it, and a mismatch silently reverts search to a full sequential scan of every row rather than failing loudly.
 
 ## Importing data
 
