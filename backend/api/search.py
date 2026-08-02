@@ -1,7 +1,7 @@
 """Search API — unified search across all indexed sites with hybrid live fetch"""
 import asyncio
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy import and_, or_, func, literal_column, cast, Text, text as sql_text
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from typing import Optional, List
@@ -25,14 +25,15 @@ router = APIRouter()
 _REGCONFIG = literal_column("'english'::regconfig")
 
 
-def _story_tsv():
+def _story_tsv(entity=Story):
     """The indexed tsvector over title + summary + author + all facet arrays.
-    Backed by ix_stories_doc_fts."""
+    Backed by ix_stories_doc_fts. `entity` may be an alias of Story so the same
+    expression can be re-applied over a materialised candidate subquery."""
     return func.to_tsvector(
         _REGCONFIG,
         func.fic_doc(
-            Story.title, Story.summary, Story.author,
-            Story.fandoms, Story.characters, Story.relationships, Story.tags,
+            entity.title, entity.summary, entity.author,
+            entity.fandoms, entity.characters, entity.relationships, entity.tags,
         ),
     )
 
@@ -98,18 +99,28 @@ class SearchResponse(BaseModel):
     parsed_tokens: List[ParsedToken] = []  # for UI filter highlighting
 
 
-SORT_MAP = {
+# (column name, descending). Stored as names rather than bound expressions so the
+# same sort can be applied either to Story or to an aliased subquery of it.
+SORT_MAP: dict[str, tuple[str, bool] | None] = {
     "relevance":       None,
-    "updated_desc":    Story.updated_at.desc(),
-    "updated_asc":     Story.updated_at.asc(),
-    "published_desc":  Story.published_at.desc(),
-    "kudos_desc":      Story.kudos.desc(),
-    "hits_desc":       Story.hits.desc(),
-    "word_count_desc": Story.word_count.desc(),
-    "word_count_asc":  Story.word_count.asc(),
-    "comments_desc":   Story.comments.desc(),
-    "bookmarks_desc":  Story.bookmarks.desc(),
+    "updated_desc":    ("updated_at", True),
+    "updated_asc":     ("updated_at", False),
+    "published_desc":  ("published_at", True),
+    "kudos_desc":      ("kudos", True),
+    "hits_desc":       ("hits", True),
+    "word_count_desc": ("word_count", True),
+    "word_count_asc":  ("word_count", False),
+    "comments_desc":   ("comments", True),
+    "bookmarks_desc":  ("bookmarks", True),
 }
+
+
+def _sort_expr(entity, sort: str):
+    spec = SORT_MAP.get(sort)
+    if spec is None:
+        return None
+    col = getattr(entity, spec[0])
+    return col.desc().nullslast() if spec[1] else col.asc().nullslast()
 
 
 # ── Live fetch trigger logic ──────────────────────────────────────────────────
@@ -384,28 +395,41 @@ async def search(
     total = db.query(func.count()).select_from(count_subq).scalar() or 0
     count_is_capped = total > COUNT_CEILING
 
-    sort_expr = SORT_MAP.get(sort)
+    # Order over a BOUNDED candidate set rather than the whole match set.
+    #
+    # Sorting all matches let the planner walk an ordering index and filter each
+    # row against the text/facet predicate. With a selective predicate that means
+    # reading a large fraction of a 3.8M-row index to fill a single page: a
+    # "dramione" search spent 2.0s discarding ~25k rows per worker from
+    # ix_stories_kudos_desc before it found 20 matches.
+    #
+    # Materialising up to COUNT_CEILING matches first forces the cheap bitmap scan
+    # over the GIN indexes, and sorting at most 5000 rows is trivial. It is also
+    # consistent with what we already promise: the count is only exact up to that
+    # same ceiling, so below it the ordering is exact and above it we order within
+    # the first 5000 matches — which is what "5000+" already implies.
+    candidates = db_query.order_by(None).limit(COUNT_CEILING).subquery()
+    S = aliased(Story, candidates)
+    ordered = db.query(S)
+
+    sort_expr = _sort_expr(S, sort)
     if sort_expr is not None:
-        db_query = db_query.order_by(sort_expr)
-    elif q and not count_is_capped:
-        # "Relevance" now means actual text relevance: how well the query matches
-        # the story's text, with kudos breaking ties among equally good matches.
-        #
-        # Only when the result set is small. ts_rank has to be evaluated for every
-        # matching row, which costs ~2.3s on a broad query like "harry potter"
-        # (25k+ matches) — that would undo the point of the index. The count
-        # ceiling has already told us whether we're under 5000 rows, where ranking
-        # measures in the tens of milliseconds. Above it, popularity is a
-        # reasonable proxy and stays fast.
-        db_query = db_query.order_by(
-            func.ts_rank(_story_tsv(), func.websearch_to_tsquery(_REGCONFIG, q)).desc(),
-            Story.kudos.desc(),
+        ordered = ordered.order_by(sort_expr)
+    elif q:
+        # "Relevance" now means actual text relevance. It previously meant kudos,
+        # which is meaningless on this data: 99.99% of indexed stories have kudos
+        # 0, because the bulk metadata dumps carry no engagement counts at all.
+        ordered = ordered.order_by(
+            func.ts_rank(_story_tsv(S), func.websearch_to_tsquery(_REGCONFIG, q)).desc(),
+            S.word_count.desc().nullslast(),
         )
     else:
-        db_query = db_query.order_by(Story.kudos.desc())
+        # Nothing to rank against. word_count is the only signal populated for
+        # essentially every row (99.9%), so it beats an all-ties kudos sort.
+        ordered = ordered.order_by(S.word_count.desc().nullslast())
 
     offset  = (page - 1) * per_page
-    indexed = db_query.offset(offset).limit(per_page).all()
+    indexed = ordered.offset(offset).limit(per_page).all()
     indexed_cards = [_to_card(s) for s in indexed]
 
     # ── Hybrid live fetch (page 1 only) ──────────────────────────────────────
