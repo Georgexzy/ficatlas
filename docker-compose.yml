@@ -17,10 +17,14 @@ services:
     #
     # Sized to leave room for the other containers on this host — raise
     # shared_buffers toward 25% of RAM if FicAtlas gets a box to itself.
+    # Sized for the index as it now stands (~18M works, table + indexes well over
+    # 10GB). shared_buffers was 512MB when the host only had ~2GB free during the
+    # bulk imports; with those done there is room to keep far more of the hot
+    # index pages resident, which is where fandom/tag browsing spends its time.
     command: >
       postgres
-      -c shared_buffers=512MB
-      -c effective_cache_size=3GB
+      -c shared_buffers=2GB
+      -c effective_cache_size=6GB
       -c work_mem=32MB
       -c maintenance_work_mem=512MB
       -c random_page_cost=1.1

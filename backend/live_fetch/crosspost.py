@@ -39,11 +39,32 @@ def norm_author(author: str) -> str:
     return a
 
 
+# Titles and authors that identify nothing. These are real values in the data, not
+# parse failures — AO3 has 58,688 distinct works titled "Unknown" by "Anonymous",
+# and hundreds each of "Untitled"/"Home"/"Nightmares" by "orphan_account" (the
+# pseudonym AO3 assigns when a user orphans their work). Keying on them would
+# merge tens of thousands of unrelated stories into one row.
+_PLACEHOLDER_TITLES = {
+    "unknown", "untitled", "no title", "none", "tbd", "test", "drabble",
+    "drabbles", "oneshot", "one shot", "prologue", "chapter 1", "story",
+}
+_PLACEHOLDER_AUTHORS = {
+    "anonymous", "orphanaccount", "orphan", "unknown", "anon", "guest", "admin",
+}
+
+# A work genuinely cross-posted to several archives has a handful of copies. Any
+# "group" bigger than this is a collision on a common title, not one work.
+MAX_PLAUSIBLE_COPIES = 6
+
+
 def match_key(title: str, author: str) -> str | None:
     """A conservative identity key for a work. Returns None when too little to
-    safely match on (no author, or trivially short title)."""
+    safely match on (no author, trivially short title, or a placeholder identity
+    that would match unrelated works)."""
     nt, na = norm_title(title), norm_author(author)
     if not na or len(nt) < 6:        # need a real author and a non-trivial title
+        return None
+    if nt in _PLACEHOLDER_TITLES or na in _PLACEHOLDER_AUTHORS:
         return None
     return f"{nt}::{na}"
 
@@ -67,19 +88,35 @@ def group_existing(db: Session, limit: int | None = None) -> list[list[Story]]:
     q = db.query(Story)
     if limit:
         q = q.limit(limit)
+
+    # Stream rather than materialise. `for s in db.query(Story)` loads every row
+    # into the session at once; at 18M works that is an out-of-memory kill, and it
+    # keeps each object referenced for the whole scan.
     buckets: dict[str, list[Story]] = defaultdict(list)
-    for s in q:
+    for s in q.yield_per(5000):
         k = match_key(s.title, s.author)
-        if k:
-            buckets[k].append(s)
-    # Only groups spanning more than one site are real cross-posts.
+        if not k:
+            continue
+        bucket = buckets[k]
+        # Stop accumulating once a bucket is already implausible — this is a
+        # common-title collision, and letting it grow to tens of thousands of rows
+        # wastes memory before we discard it below anyway.
+        if len(bucket) <= MAX_PLAUSIBLE_COPIES + 1:
+            bucket.append(s)
+
     groups = []
     for stories in buckets.values():
         if len(stories) < 2:
             continue
-        sites = {s.site for s in stories}
-        if len(sites) >= 2:
-            groups.append(stories)
+        # Only groups spanning more than one site are real cross-posts.
+        if len({s.site for s in stories}) < 2:
+            continue
+        # Refuse implausibly large groups outright. A real cross-post is 2-5
+        # copies; anything larger is many different works sharing a title, and
+        # merging them would delete them (merge_group deletes non-canonical rows).
+        if len(stories) > MAX_PLAUSIBLE_COPIES:
+            continue
+        groups.append(stories)
     return groups
 
 
