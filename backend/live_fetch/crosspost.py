@@ -15,6 +15,7 @@ suffixes so "Harry's Story" by "Jane_Doe" matches "Harry's Story" by "jane doe".
 import re
 from datetime import datetime
 from collections import defaultdict
+from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 from models.story import Story
 
@@ -85,36 +86,63 @@ def group_existing(db: Session, limit: int | None = None) -> list[list[Story]]:
     """Scan the DB and return groups of 2+ stories that look like the same work
     across different sites. Single-site duplicates are ignored (those are handled
     by the unique site+site_id constraint)."""
-    q = db.query(Story)
-    if limit:
-        q = q.limit(limit)
+    # Group in SQL, then fetch only the rows that are actually in a group.
+    #
+    # Doing this in Python meant walking every row and building a dict keyed by
+    # (title, author). At 19M works that dict alone is multiple GB, so the batch
+    # could only be run with a `limit` — and `limit` bounds the SCAN, not the
+    # output, so cross-posted pairs that straddled the cutoff were simply missed:
+    # a 400k-row scan found 12 groups where the whole table holds ~83k.
+    #
+    # Postgres can do the grouping without materialising anything on our side.
+    # The normalisation below must stay equivalent to norm_title/norm_author:
+    #   title  — lowercase, punctuation to spaces, whitespace collapsed
+    #   author — lowercase, everything but [a-z0-9] stripped
+    sql = sql_text("""
+        WITH normed AS (
+            SELECT id, site,
+                   btrim(regexp_replace(regexp_replace(lower(title), '[^\\w\\s]', ' ', 'g'),
+                                        '\\s+', ' ', 'g')) AS nt,
+                   regexp_replace(lower(author), '[^a-z0-9]', '', 'g')  AS na
+            FROM stories
+            WHERE title IS NOT NULL AND author IS NOT NULL
+        )
+        SELECT array_agg(id) AS ids
+        FROM normed
+        WHERE length(nt) >= 6
+          AND na <> ''
+          AND NOT (nt = ANY(:bad_titles))
+          AND NOT (na = ANY(:bad_authors))
+        GROUP BY nt, na
+        -- 2..max copies spanning at least two sites: a genuine cross-post.
+        HAVING count(*) BETWEEN 2 AND :max_copies
+           AND count(DISTINCT site) >= 2
+        LIMIT :lim
+    """)
+    id_groups = [row[0] for row in db.execute(sql, {
+        "bad_titles":  sorted(_PLACEHOLDER_TITLES),
+        "bad_authors": sorted(_PLACEHOLDER_AUTHORS),
+        "max_copies":  MAX_PLAUSIBLE_COPIES,
+        "lim":         limit or 100000,
+    }).fetchall()]
+    if not id_groups:
+        return []
 
-    # Stream rather than materialise. `for s in db.query(Story)` loads every row
-    # into the session at once; at 18M works that is an out-of-memory kill, and it
-    # keeps each object referenced for the whole scan.
-    buckets: dict[str, list[Story]] = defaultdict(list)
-    for s in q.yield_per(5000):
-        k = match_key(s.title, s.author)
-        if not k:
-            continue
-        bucket = buckets[k]
-        # Stop accumulating once a bucket is already implausible — this is a
-        # common-title collision, and letting it grow to tens of thousands of rows
-        # wastes memory before we discard it below anyway.
-        if len(bucket) <= MAX_PLAUSIBLE_COPIES + 1:
-            bucket.append(s)
+    # Load only the rows in a group — a few hundred thousand at most, not 19M.
+    all_ids = [i for g in id_groups for i in g]
+    by_id = {s.id: s for s in db.query(Story).filter(Story.id.in_(all_ids)).yield_per(2000)}
 
     groups = []
-    for stories in buckets.values():
-        if len(stories) < 2:
+    for ids in id_groups:
+        stories = [by_id[i] for i in ids if i in by_id]
+        if len(stories) < 2 or len(stories) > MAX_PLAUSIBLE_COPIES:
             continue
-        # Only groups spanning more than one site are real cross-posts.
         if len({s.site for s in stories}) < 2:
             continue
-        # Refuse implausibly large groups outright. A real cross-post is 2-5
-        # copies; anything larger is many different works sharing a title, and
-        # merging them would delete them (merge_group deletes non-canonical rows).
-        if len(stories) > MAX_PLAUSIBLE_COPIES:
+        # match_key stays the authority on identity: SQL narrows the candidates,
+        # this confirms them, so the two definitions cannot silently drift apart.
+        keys = {match_key(s.title, s.author) for s in stories}
+        if len(keys) != 1 or None in keys:
             continue
         groups.append(stories)
     return groups

@@ -1151,6 +1151,7 @@ async def discover_squidgeworld(
 
 @router.post("/dedup-crossposts")
 async def dedup_crossposts(limit: Optional[int] = Form(None),
+    dry_run: bool = Form(False),
     _admin=Depends(require_admin),
 ):
     """Scan existing stories and merge cross-posted copies (same title+author on
@@ -1169,6 +1170,29 @@ async def dedup_crossposts(limit: Optional[int] = Form(None),
             with db_session() as db:
                 groups = group_existing(db, limit=limit)
                 state["groups_found"] = len(groups)
+
+                # merge_group DELETES every non-canonical row in a group, so this
+                # batch is irreversible. dry_run reports exactly what would be
+                # merged — and a sample of it — without touching anything.
+                if dry_run:
+                    state["sample"] = [
+                        {
+                            "title": g[0].title,
+                            "author": g[0].author,
+                            "copies": len(g),
+                            "sites": sorted({s2.site.value for s2 in g}),
+                            "urls": [s2.url for s2 in g][:4],
+                        }
+                        for g in groups[:25]
+                    ]
+                    state["would_merge"] = sum(len(g) - 1 for g in groups)
+                    state["status"] = "done"
+                    state["progress"] = (
+                        f"Dry run — would merge {state['would_merge']} rows "
+                        f"across {len(groups)} works. Nothing changed."
+                    )
+                    return
+
                 merged = 0
                 for i, group in enumerate(groups):
                     try:
