@@ -4,6 +4,7 @@ import { useParams } from "next/navigation"
 import Link from "next/link"
 import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory } from "@/lib/offline"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
+import SiteHeader from "@/app/SiteHeader"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -124,12 +125,12 @@ export default function StoryPage() {
     } catch {}
   }
 
-  if (error) return <div className="reader-shell"><Link href="/" className="back-link">← Back to search</Link><div className="alert alert--error">{error}</div></div>
-  if (!story) return <div className="reader-shell"><Link href="/" className="back-link">← Back to search</Link><p className="loading">Loading…</p></div>
+  if (error) return <div className="reader-shell"><SiteHeader /><div className="alert alert--error">{error}</div></div>
+  if (!story) return <div className="reader-shell"><SiteHeader /><p className="loading">Loading…</p></div>
 
   return (
     <div className="reader-shell">
-      <Link href="/" className="back-link">← Back to search</Link>
+      <SiteHeader />
 
       <article className="story-detail">
         <header className="story-detail__header">

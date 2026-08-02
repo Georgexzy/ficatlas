@@ -1,6 +1,7 @@
 "use client"
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import SiteHeader from "../SiteHeader"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -88,7 +89,7 @@ export default function SettingsPage() {
 
   if (!settings) return (
     <div className="settings-shell">
-      <Link href="/" className="back-link">← Back to search</Link>
+      <SiteHeader current="settings" />
       <p className="loading">Loading…</p>
     </div>
   )
@@ -97,7 +98,7 @@ export default function SettingsPage() {
 
   return (
     <div className="settings-shell">
-      <Link href="/" className="back-link">← Back to search</Link>
+      
       <h1 className="settings-title">Settings</h1>
 
       <section className="settings-group">

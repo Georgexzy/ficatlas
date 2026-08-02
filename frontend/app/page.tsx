@@ -10,47 +10,9 @@ import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          DATE_PRESETS, AO3_WARNINGS, CATEGORIES } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
-import IndexStatus from "./IndexStatus"
 import SyntaxHelp from "./SyntaxHelp"
+import SiteHeader from "./SiteHeader"
 import { useAuth } from "@/lib/auth"
-
-// Header user menu - shows login/signup or username + logout
-function UserMenu() {
-  const { user, logout, loading, syncing } = useAuth()
-  const [open, setOpen] = useState(false)
-  useEffect(() => {
-    if (!open) return
-    const close = (e: MouseEvent) => {
-      const t = e.target as HTMLElement
-      if (!t.closest(".user-menu")) setOpen(false)
-    }
-    document.addEventListener("click", close)
-    return () => document.removeEventListener("click", close)
-  }, [open])
-  if (loading) return null
-  if (!user) return <Link href="/login" className="header__link">Sign in</Link>
-  return (
-    <div className="user-menu">
-      <button className="user-menu__btn" onClick={() => setOpen(o => !o)}>
-        <span className="user-menu__avatar">
-          {user.username.slice(0, 1).toUpperCase()}
-          {syncing && <span className="user-menu__sync-dot" title="Syncing…" />}
-        </span>
-        <span className="user-menu__name">{user.username}</span>
-      </button>
-      {open && (
-        <div className="user-menu__dropdown">
-          <p className="user-menu__hint">
-            {syncing ? "⟳ Syncing your data…" : "Bookmarks, progress & settings sync to this account."}
-          </p>
-          <Link href="/account" className="user-menu__link" onClick={() => setOpen(false)}>Account &amp; sync</Link>
-          <OfflineLink href="/library" className="user-menu__link" onClick={() => setOpen(false)}>My library</OfflineLink>
-          <button onClick={async () => { await logout(); setOpen(false) }}>Sign out</button>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function csv(s?: string): string[] {
@@ -780,20 +742,13 @@ function SearchPageInner() {
   return (
     <div className="shell">
       {/* ── Header ── */}
-      <header className="header">
-        <span className="logo">Fic<em>Atlas</em></span>
-        <div className="header__right">
-          <OfflineLink href="/library" className="header__link">Library</OfflineLink>
-          <Link href="/settings" className="header__link">Settings</Link>
-          <UserMenu />
-          <IndexStatus />
-          <label className="toggle-label">
-            <input type="checkbox" checked={explicit} onChange={e => setExplicit(e.target.checked)} className="sr-only" />
-            <span className="toggle-track"><span className="toggle-thumb" /></span>
-            <span>Explicit</span>
-          </label>
-        </div>
-      </header>
+      <SiteHeader current="search">
+        <label className="toggle-label">
+          <input type="checkbox" checked={explicit} onChange={e => setExplicit(e.target.checked)} className="sr-only" />
+          <span className="toggle-track"><span className="toggle-thumb" /></span>
+          <span>Explicit</span>
+        </label>
+      </SiteHeader>
 
       <div className="layout">
         {/* Mobile filter backdrop — tap to close the drawer */}

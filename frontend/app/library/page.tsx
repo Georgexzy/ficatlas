@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from "react"
 import Link from "next/link"
 import OfflineLink from "../OfflineLink"
 import { listOfflineStories, deleteOfflineStory } from "@/lib/offline"
+import SiteHeader from "../SiteHeader"
 
 const API_BASE_C = ""
 
@@ -654,7 +655,7 @@ export default function LibraryPage() {
 
   return (
     <div className="library-shell">
-      <Link href="/" className="back-link">← Back to search</Link>
+      <SiteHeader current="library" />
       <h1 className="library-title">My Library</h1>
 
       <div className="library-tabs">

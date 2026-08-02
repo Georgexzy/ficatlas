@@ -14,7 +14,9 @@
 //     then boots and reads that specific chapter from IndexedDB.
 //   - /api/*: never cached; offline data comes from IndexedDB in the app.
 
-const CACHE = "ficatlas-shell-v4"
+// Bump on any change to the precache set or fetch strategy: `activate` deletes
+// every cache whose name differs, which is what evicts the previous shell.
+const CACHE = "ficatlas-shell-v5"
 const PRECACHE = __PRECACHE_MANIFEST__
 
 self.addEventListener("install", (event) => {
@@ -37,17 +39,32 @@ self.addEventListener("activate", (event) => {
   )
 })
 
-// Find a cached reader-shell HTML to serve for any /story/.../chapter/... URL.
-async function cachedReaderShell(cache) {
+// Serve a cached story shell for any /story/... URL when offline.
+//
+// Both story routes are dynamic (one URL per story), so the exact page is only
+// in the cache if it happened to be visited online. The build precaches one
+// placeholder instance of each shell (/story/offline-shell[/chapter/1]); every
+// story renders the same shell and then loads its content from IndexedDB, so any
+// cached instance works for any story.
+//
+// `wantChapter` picks the reader shell vs the story-detail shell — they are
+// different pages and serving the wrong one would render the wrong screen.
+async function cachedStoryShell(cache, wantChapter) {
   const keys = await cache.keys()
+  let fallback = null
   for (const req of keys) {
     const p = new URL(req.url).pathname
-    if (p.startsWith("/story/") && p.includes("/chapter/")) {
-      const hit = await cache.match(req)
-      if (hit) return hit
+    if (!p.startsWith("/story/")) continue
+    const isChapter = p.includes("/chapter/")
+    if (isChapter !== wantChapter) continue
+    const hit = await cache.match(req)
+    if (hit) {
+      // Prefer the dedicated placeholder; fall back to any real visited story.
+      if (p.startsWith("/story/offline-shell")) return hit
+      if (!fallback) fallback = hit
     }
   }
-  return null
+  return fallback
 }
 
 self.addEventListener("fetch", (event) => {
@@ -105,9 +122,10 @@ self.addEventListener("fetch", (event) => {
           let hit = (await cache.match(request)) ||
                     (await cache.match(url.origin + url.pathname))
           if (hit) return hit
-          // Dynamic reader route: serve any cached reader shell.
-          if (url.pathname.startsWith("/story/") && url.pathname.includes("/chapter/")) {
-            hit = await cachedReaderShell(cache)
+          // Dynamic story routes: serve the matching cached shell, which then
+          // reads the story from IndexedDB.
+          if (url.pathname.startsWith("/story/")) {
+            hit = await cachedStoryShell(cache, url.pathname.includes("/chapter/"))
             if (hit) return hit
           }
           // Known shells, then a friendly fallback.

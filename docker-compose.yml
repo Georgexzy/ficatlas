@@ -34,6 +34,13 @@ services:
     # password "ficatlas" on every interface — reachable by anything on the LAN or
     # the tailnet. Nothing outside this host needs it: the backend connects over the
     # compose network, and `docker compose exec db psql` still works for admin.
+    # Docker gives a container 64MB of /dev/shm by default. Postgres allocates
+    # shared memory segments there for parallel query workers, and at 18M rows the
+    # parallel plans need more than that — real searches (tags=Fluff, page=3,
+    # sort=word_count_desc) were failing outright with
+    #   DiskFull: could not resize shared memory segment ... No space left on device
+    # which surfaces as a 500, not a slow query.
+    shm_size: "1gb"
     ports:
       - "127.0.0.1:5432:5432"
     volumes:

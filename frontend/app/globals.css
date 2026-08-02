@@ -1819,3 +1819,21 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 .card__author-ext { margin-left: 3px; font-size: 10px; color: var(--text-faint);
   text-decoration: none; }
 .card__author-ext:hover { color: var(--accent); }
+
+/* ── Shared site header ─────────────────────────────────────────────────────
+   Every page carries the same header now, so Search / Library / Settings /
+   account are one click from anywhere. Previously only the search page had
+   navigation and every other page offered a single "back to search" link,
+   which made every cross-page move a two-hop trip through the home page. */
+.logo--link { text-decoration: none; color: inherit; }
+.logo--link:hover em { filter: brightness(1.15); }
+
+/* The current page is shown but not linked, so you always know where you are. */
+.header__link--current { color: var(--accent); cursor: default; position: relative; }
+.header__link--current::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -3px;
+  height: 1px; background: var(--accent);
+}
+
+/* The reader deliberately has no site header — it's a reading surface, and its
+   own top bar links back to the story, which does carry the full header. */

@@ -33,8 +33,22 @@ function walk(dir, baseUrl) {
 }
 
 const assetUrls = walk(STATIC_DIR, "/_next/static")
-const pageUrls = ["/", "/library", "/login", "/settings"]
-const manifest = [...new Set([...pageUrls, ...assetUrls])]
+
+// Static page shells.
+const pageUrls = ["/", "/library", "/login", "/settings", "/account"]
+
+// The story and reader routes are dynamic — one URL per story — so no specific
+// instance can be precached. But every /story/<id> and /story/<id>/chapter/<n>
+// renders the SAME client shell, which then loads the story from IndexedDB. So
+// we precache one placeholder instance of each and the service worker serves it
+// for any story path when offline.
+//
+// Without this, saving a story for offline reading and then opening it with no
+// connection fell through to the generic "you're offline" page: the reader's JS
+// chunk was cached, but the HTML shell that loads it never was.
+const shellUrls = ["/story/offline-shell", "/story/offline-shell/chapter/1"]
+
+const manifest = [...new Set([...pageUrls, ...shellUrls, ...assetUrls])]
 
 if (!fs.existsSync(TEMPLATE)) {
   console.error(`gen-sw-precache: ${TEMPLATE} not found`); process.exit(1)
