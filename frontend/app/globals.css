@@ -244,6 +244,10 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 }
 .results-bar strong { color: var(--text); }
 .results-bar__live { color: var(--green); margin-left: 4px; }
+/* Reminder that the filters were deliberately widened, and a one-click undo. */
+.results-bar__loose { color: var(--text-faint); margin-left: 6px; background: none;
+  border: none; padding: 0; font: inherit; font-size: 11px; cursor: pointer; }
+.results-bar__loose:hover { color: var(--accent); }
 .results-bar__page { color: var(--text-faint); }
 
 /* ── Story cards ───────────────────────────────────────────────────────────── */

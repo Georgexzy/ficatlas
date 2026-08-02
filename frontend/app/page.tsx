@@ -1054,6 +1054,15 @@ function SearchPageInner() {
                   <strong>{results.total.toLocaleString()}{results.count_is_capped ? "+" : ""}</strong> stories
                   {results.sites_searched.length > 0 && ` · ${results.sites_searched.map(s => SITE_LABELS[s] ?? s).join(" + ")}`}
                   {liveCount > 0 && <span className="results-bar__live"> +{liveCount} live</span>}
+                  {/* Without this it looks like the filters are broken: results
+                      appear that have no value for the field being filtered. */}
+                  {includeUnknown && (
+                    <button className="results-bar__loose"
+                      onClick={() => setIncludeUnknown(false)}
+                      title="Results include stories with no data for the fields you filtered on. Click to show only confirmed matches.">
+                      · incl. missing info ✕
+                    </button>
+                  )}
                 </span>
                 <span className="results-bar__actions">
                   {sites.includes("ao3") && (
@@ -1070,9 +1079,28 @@ function SearchPageInner() {
                 {results.results.length === 0 ? (
                   <div className="no-results">
                     <p className="no-results__title">No stories matched</p>
-                    <p className="no-results__sub">
-                      Try removing a filter, broadening the word count, or checking a different site.
-                    </p>
+                    {/* Ship/character/tag data is missing for most bulk-imported
+                        stories, so a strict filter on those is the likeliest reason
+                        for an empty page. Say so, and offer the fix directly. */}
+                    {!includeUnknown && (incShips.length || incChars.length || incTags.length) ? (
+                      <>
+                        <p className="no-results__sub">
+                          No indexed story lists {incShips.length ? "that relationship"
+                            : incChars.length ? "that character" : "that tag"}.
+                          Most imported stories carry no {incShips.length ? "relationship"
+                            : incChars.length ? "character" : "tag"} data at all, so they are
+                          excluded from this filter.
+                        </p>
+                        <button className="btn btn--primary no-results__fetch"
+                          onClick={() => setIncludeUnknown(true)}>
+                          Include stories with missing info
+                        </button>
+                      </>
+                    ) : (
+                      <p className="no-results__sub">
+                        Try removing a filter, broadening the word count, or checking a different site.
+                      </p>
+                    )}
                     {sites.includes("ao3") && (
                       <button className="btn btn--primary no-results__fetch"
                         onClick={refreshFromAO3} disabled={refreshing}>

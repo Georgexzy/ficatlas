@@ -385,7 +385,24 @@ async def search(
     count_is_capped = total > COUNT_CEILING
 
     sort_expr = SORT_MAP.get(sort)
-    db_query  = db_query.order_by(sort_expr if sort_expr is not None else Story.kudos.desc())
+    if sort_expr is not None:
+        db_query = db_query.order_by(sort_expr)
+    elif q and not count_is_capped:
+        # "Relevance" now means actual text relevance: how well the query matches
+        # the story's text, with kudos breaking ties among equally good matches.
+        #
+        # Only when the result set is small. ts_rank has to be evaluated for every
+        # matching row, which costs ~2.3s on a broad query like "harry potter"
+        # (25k+ matches) — that would undo the point of the index. The count
+        # ceiling has already told us whether we're under 5000 rows, where ranking
+        # measures in the tens of milliseconds. Above it, popularity is a
+        # reasonable proxy and stays fast.
+        db_query = db_query.order_by(
+            func.ts_rank(_story_tsv(), func.websearch_to_tsquery(_REGCONFIG, q)).desc(),
+            Story.kudos.desc(),
+        )
+    else:
+        db_query = db_query.order_by(Story.kudos.desc())
 
     offset  = (page - 1) * per_page
     indexed = db_query.offset(offset).limit(per_page).all()
