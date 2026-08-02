@@ -95,8 +95,17 @@ def _set_session_cookie(response: Response, token: str) -> None:
 # drives the "active sessions" list, so minute-level precision is plenty.
 _LAST_USED_REFRESH = timedelta(minutes=15)
 
+# Sessions slide: once a session is within this much of expiring, using it pushes
+# the expiry back out to a full SESSION_DAYS and re-sends the cookie with a fresh
+# Max-Age. Without this, both the DB row and the browser cookie died a fixed 90
+# days after login no matter how actively the account was used, and you were
+# silently signed out. Refreshing only in the final third keeps this to roughly
+# one extra write per month per device rather than one per request.
+_SESSION_SLIDE_WHEN_UNDER = timedelta(days=SESSION_DAYS * 2 // 3)
+
 
 def get_current_user(
+    response: Response,
     sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
     db: Session = Depends(get_db),
 ) -> Optional[User]:
@@ -116,11 +125,23 @@ def get_current_user(
     if s.expires_at < now:
         db.delete(s); db.commit()
         return None
+
+    dirty = False
     # Only write last_used when it has actually gone stale. Refreshing it on every
     # request turned each authenticated GET into an UPDATE + COMMIT, which meant a
     # row write (and WAL) per page view for no user-visible benefit.
     if s.last_used is None or (now - s.last_used) > _LAST_USED_REFRESH:
         s.last_used = now
+        dirty = True
+
+    if (s.expires_at - now) < _SESSION_SLIDE_WHEN_UNDER:
+        s.expires_at = now + timedelta(days=SESSION_DAYS)
+        dirty = True
+        # The browser cookie carries its own Max-Age, so extending the DB row alone
+        # would not keep the client signed in. Re-issue it with the same token.
+        _set_session_cookie(response, sat)
+
+    if dirty:
         db.commit()
     return user
 
