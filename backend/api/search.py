@@ -1,6 +1,6 @@
 """Search API — unified search across all indexed sites with hybrid live fetch"""
-import asyncio
-from fastapi import APIRouter, Depends, Query
+import logging
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import and_, or_, func, literal_column, cast, Text, text as sql_text
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
@@ -13,6 +13,7 @@ from query_parser import parse_query, parsed_to_search_params
 from character_aliases import character_variants, relationship_variants
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 # ── Indexed matching helpers ─────────────────────────────────────────────────
@@ -125,6 +126,32 @@ def _sort_expr(entity, sort: str):
 
 # ── Live fetch trigger logic ──────────────────────────────────────────────────
 
+async def _fetch_and_persist_live(live_params: dict, want_ao3: bool) -> None:
+    """Pull fresh AO3 results and add them to the index. Runs after the response
+    has been sent, so its latency is invisible to the reader.
+
+    Opens its own DB session: the request-scoped one from Depends(get_db) is
+    already closed by the time a background task runs.
+    """
+    if not want_ao3:
+        return
+    try:
+        from live_fetch.ao3_live import fetch_live_ao3
+        from live_fetch.persist import persist_live_results
+        from db.session import db_session
+
+        results = await fetch_live_ao3(live_params, limit=60, pages=3)
+        if not results:
+            return
+        with db_session() as db:
+            persist_live_results(db, results)
+        log.info("live AO3: indexed %d results for q=%r", len(results), live_params.get("q"))
+    except Exception as e:
+        # Non-fatal by design, but log it — this path was silently broken for a
+        # long time precisely because failures were swallowed without a trace.
+        log.warning("live AO3 fetch/persist failed: %s: %s", type(e).__name__, e)
+
+
 def _should_fetch_live(sort: str, page: int, q: Optional[str]) -> bool:
     """Only fetch live on page 1 for recency-biased sorts or when text query present."""
     if page > 1:
@@ -172,6 +199,7 @@ async def search(
     page:                  int           = Query(1, ge=1),
     per_page:              int           = Query(20, ge=1, le=100),
     live:                  bool          = Query(True, description="Enable hybrid live fetch"),
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
 ):
     # ── Parse q for embedded operators ───────────────────────────────────────
@@ -432,44 +460,29 @@ async def search(
     indexed = ordered.offset(offset).limit(per_page).all()
     indexed_cards = [_to_card(s) for s in indexed]
 
-    # ── Hybrid live fetch (page 1 only) ──────────────────────────────────────
+    # ── Live AO3 fetch ───────────────────────────────────────────────────────
+    # This used to run inline and block the response. AO3's /works/search is a
+    # full-text search over millions of works and takes 18-21s for a single page,
+    # so three pages meant a ~30s search. It also never actually worked (see
+    # live_fetch/ao3_live.py), which is the only reason nobody noticed the cost.
+    #
+    # Now it runs AFTER the response is sent: the reader gets indexed results in
+    # milliseconds, and the fresh works land in the index for the next search.
+    # For freshness on demand there is the explicit "Refresh from AO3" button,
+    # which hits /api/library/refresh-ao3 and shows a spinner while it waits.
     live_cards: list[StoryCard] = []
-    if live and _should_fetch_live(sort, page, q):
-        live_params = {
-            "q": q, "fandoms": fandoms, "relationships": relationships,
-            "characters": characters, "tags": tags, "ratings": ratings,
-            "status": status, "word_count_min": word_count_min,
-            "word_count_max": word_count_max, "sort": sort,
-            "explicit": explicit,
-        }
-        try:
-            live_tasks = []
-            if "ao3" in active_sites:
-                from live_fetch.ao3_live import fetch_live_ao3
-                # Fetch 3 pages = up to ~60 fresh results per search
-                live_tasks.append(fetch_live_ao3(live_params, limit=60, pages=3))
-
-            if live_tasks:
-                raw_results = await asyncio.gather(*live_tasks, return_exceptions=True)
-                indexed_urls = {c.url for c in indexed_cards}
-                live_raw_for_persist: list[dict] = []
-                for batch in raw_results:
-                    if isinstance(batch, Exception):
-                        continue
-                    for item in batch:
-                        live_raw_for_persist.append(item)
-                        if item["url"] not in indexed_urls:
-                            live_cards.append(_dict_to_card(item))
-                            indexed_urls.add(item["url"])
-
-                # Persist live results into the DB so the index grows organically
-                try:
-                    from live_fetch.persist import persist_live_results
-                    persist_live_results(db, live_raw_for_persist)
-                except Exception:
-                    pass  # persistence failure shouldn't break search
-        except Exception:
-            pass  # live fetch failure is non-fatal
+    if live and background_tasks is not None and _should_fetch_live(sort, page, q):
+        background_tasks.add_task(
+            _fetch_and_persist_live,
+            {
+                "q": q, "fandoms": fandoms, "relationships": relationships,
+                "characters": characters, "tags": tags, "ratings": ratings,
+                "status": status, "word_count_min": word_count_min,
+                "word_count_max": word_count_max, "sort": sort,
+                "explicit": explicit,
+            },
+            "ao3" in active_sites,
+        )
 
     # Merge: live results (fresher) shown first on page 1, then the full indexed page.
     # We do NOT truncate indexed cards — that was dropping indexed results off page 1

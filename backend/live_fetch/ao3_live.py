@@ -1,13 +1,23 @@
 """Live AO3 search — fetches directly from AO3 search results page.
 Used for hybrid mode: merges with indexed results for freshness.
 """
+import asyncio
+import logging
 import re
 import httpx
 from bs4 import BeautifulSoup
 from typing import Optional
 from datetime import datetime
+from urllib.parse import urlencode
+
+log = logging.getLogger(__name__)
 
 BASE = "https://archiveofourown.org"
+
+# Patient read, quick connect: a dead host should fail fast, but a live AO3 that
+# is merely grinding through a search should be waited out.
+AO3_SEARCH_TIMEOUT = httpx.Timeout(connect=6.0, read=45.0, write=8.0, pool=6.0)
+
 HEADERS = {
     "User-Agent": "FicAtlas/0.1 (fanfiction discovery; contact: admin@ficatlas.app)",
 }
@@ -35,7 +45,11 @@ def _build_ao3_url(params: dict) -> str:
     if params.get("tags"):
         p["work_search[freeform_names]"] = params["tags"]
 
-    status = params.get("status", "")
+    # `.get(key, default)` does NOT apply the default when the key is present with
+    # a None value, and search.py always passes status through explicitly. So this
+    # raised TypeError on every single search, and search.py swallows live-fetch
+    # exceptions — which is why live results silently never appeared.
+    status = params.get("status") or ""
     if "complete" in status:
         p["work_search[complete]"] = "T"
     elif "in_progress" in status:
@@ -58,12 +72,27 @@ def _build_ao3_url(params: dict) -> str:
         "word_count_desc": "word_count", "comments_desc": "comments_count",
         "bookmarks_desc": "bookmarks_count",
     }
-    sort = params.get("sort", "relevance")
+    sort = params.get("sort") or "relevance"
     p["work_search[sort_column]"] = SORT_PARAM.get(sort, "revised_at")
     p["work_search[sort_direction]"] = "desc"
 
-    qs = "&".join(f"{k}={v}" for k, v in p.items())
-    return f"{BASE}/works?{qs}"
+    # The caller sets params["page"] to walk consecutive result pages, but this was
+    # never put into the URL — so a multi-page fetch requested the identical page N
+    # times, spent ~5s on each, and deduplicated it all back down to one page's
+    # worth of results.
+    page = params.get("page")
+    if page and int(page) > 1:
+        p["page"] = str(int(page))
+
+    # Must be percent-encoded: values carry spaces ("harry potter"), slashes
+    # ("Draco Malfoy/Hermione Granger") and ampersands, all of which would
+    # otherwise produce a malformed URL or silently truncate the query.
+    qs = urlencode(p)
+    # /works/search, not /works. /works is the tag-listing endpoint: it accepts the
+    # work_search params but ignores &page entirely, returning the identical first
+    # 20 works for every page number (verified: 20/20 overlap between pages 1-3).
+    # /works/search is the actual search endpoint and paginates properly.
+    return f"{BASE}/works/search?{qs}"
 
 
 def _parse_blurb(item) -> Optional[dict]:
@@ -153,33 +182,60 @@ def _parse_blurb(item) -> Optional[dict]:
         return None
 
 
+async def _fetch_page(client: httpx.AsyncClient, params: dict, page_num: int) -> list[dict]:
+    """One result page -> parsed blurbs. Never raises; returns [] on any failure."""
+    page_params = dict(params)
+    page_params["page"] = page_num
+    url = _build_ao3_url(page_params)
+    try:
+        resp = await client.get(url)
+    except Exception as e:
+        # This used to be silent, which is how a TypeError in the URL builder went
+        # unnoticed long enough for live fetch to be dead on every search while
+        # still appearing to "work".
+        log.warning("AO3 live page %s failed: %s: %s", page_num, type(e).__name__, e)
+        return []
+    if resp.status_code != 200:
+        # 525 is a Cloudflare-to-origin failure on AO3's side and is transient.
+        log.warning("AO3 live page %s returned HTTP %s", page_num, resp.status_code)
+        return []
+    soup = BeautifulSoup(resp.text, "lxml")
+    out = []
+    for item in soup.select("li.work.blurb"):
+        d = _parse_blurb(item)
+        if d:
+            out.append(d)
+    if not out:
+        log.info("AO3 live page %s had no work blurbs", page_num)
+    return out
+
+
 async def fetch_live_ao3(params: dict, limit: int = 20, pages: int = 1) -> list[dict]:
-    """Fetch live AO3 results. `pages` fetches N consecutive result pages and merges them."""
+    """Fetch live AO3 results, merging `pages` consecutive result pages.
+
+    Pages are fetched CONCURRENTLY. They were fetched one after another, and since
+    AO3's /works/search is a full-text search over millions of works taking 18-21s
+    per page, three pages cost ~31s serially versus roughly the slowest single page
+    in parallel. Same number of requests to AO3, just overlapped.
+    """
+    async with httpx.AsyncClient(headers=HEADERS, timeout=AO3_SEARCH_TIMEOUT,
+                                 follow_redirects=True) as client:
+        batches = await asyncio.gather(
+            *(_fetch_page(client, params, n) for n in range(1, pages + 1)),
+            return_exceptions=True,
+        )
+
     all_results: list[dict] = []
     seen_ids: set[str] = set()
-
-    from .ao3_feeds import AO3_LIVE_TIMEOUT
-    async with httpx.AsyncClient(headers=HEADERS, timeout=AO3_LIVE_TIMEOUT, follow_redirects=True) as client:
-        for page_num in range(1, pages + 1):
-            page_params = dict(params)
-            page_params["page"] = page_num
-            url = _build_ao3_url(page_params)
-            try:
-                resp = await client.get(url)
-                if resp.status_code != 200:
-                    break
-                soup = BeautifulSoup(resp.text, "lxml")
-                items = soup.select("li.work.blurb")
-                if not items:
-                    break
-                for item in items:
-                    d = _parse_blurb(item)
-                    if d and d["id"] not in seen_ids:
-                        seen_ids.add(d["id"])
-                        all_results.append(d)
-                        if len(all_results) >= limit:
-                            return all_results
-            except Exception:
-                break
-
+    for batch in batches:
+        if isinstance(batch, BaseException):
+            log.warning("AO3 live page raised: %s", batch)
+            continue
+        for d in batch:
+            if d["id"] in seen_ids:
+                continue
+            seen_ids.add(d["id"])
+            all_results.append(d)
+            if len(all_results) >= limit:
+                return all_results
     return all_results

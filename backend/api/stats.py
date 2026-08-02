@@ -1,5 +1,5 @@
 """Stats endpoint — per-site counts, totals, last-updated info"""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from db.session import get_db
@@ -16,8 +16,16 @@ _FACET_COLUMNS = {
 }
 
 
-@router.get("/sites")
-async def site_stats(db: Session = Depends(get_db)):
+# Same story as /totals: this feeds the index status widget on every page load,
+# but grouping and taking max(indexed_at) over the whole table can't be answered
+# from an index, so each call was a full scan (~1.8s at 4M rows). Cached for the
+# same reason — these are informational counts that move slowly.
+_SITES_TTL_SECONDS = 300
+_sites_cache: list | None = None
+_sites_cached_at: float = 0.0
+
+
+def _compute_sites(db: Session) -> list:
     rows = (db.query(Story.site, func.count(Story.id), func.max(Story.indexed_at))
             .group_by(Story.site).all())
     return [
@@ -28,6 +36,42 @@ async def site_stats(db: Session = Depends(get_db)):
         }
         for r in rows
     ]
+
+
+def _recompute_sites() -> None:
+    global _sites_cache, _sites_cached_at
+    import time
+    from db.session import db_session
+    try:
+        with db_session() as db:
+            _sites_cache = _compute_sites(db)
+        _sites_cached_at = time.monotonic()
+    except Exception:
+        pass  # keep serving the previous numbers
+
+
+@router.get("/sites")
+async def site_stats(
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
+    refresh: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    global _sites_cache, _sites_cached_at
+    import time
+    now = time.monotonic()
+    fresh = _sites_cache is not None and (now - _sites_cached_at) < _SITES_TTL_SECONDS
+    if not refresh and fresh:
+        return _sites_cache
+
+    # Same stale-while-revalidate as /totals: this grouping is a full scan (~9s at
+    # 18M rows), so never make a page load wait on it once we have numbers.
+    if not refresh and _sites_cache is not None and background_tasks is not None:
+        background_tasks.add_task(_recompute_sites)
+        return _sites_cache
+
+    _sites_cache = _compute_sites(db)
+    _sites_cached_at = now
+    return _sites_cache
 
 # The index status widget calls /totals on every page load, but these are
 # whole-table aggregates — count(*) and sum(word_count) can't be answered from an
@@ -41,6 +85,24 @@ _TOTALS_TTL_SECONDS = 300
 _totals_cache: dict | None = None
 _totals_cached_at: float = 0.0
 
+def _recompute_totals() -> None:
+    """Refresh the cached totals off the request path."""
+    global _totals_cache, _totals_cached_at
+    import time
+    from db.session import db_session
+    try:
+        with db_session() as db:
+            row = db.execute(_TOTALS_SQL).mappings().first()
+        _totals_cache = {
+            "stories": row["stories"], "hosted": row["hosted"],
+            "total_words": int(row["total_words"]), "dlp": row["dlp"],
+            "hpffa": row["hpffa"],
+        }
+        _totals_cached_at = time.monotonic()
+    except Exception:
+        pass  # keep serving the previous numbers
+
+
 _TOTALS_SQL = text("""
     SELECT count(*)                                                   AS stories,
            count(*) FILTER (WHERE is_hosted)                          AS hosted,
@@ -52,11 +114,23 @@ _TOTALS_SQL = text("""
 
 
 @router.get("/totals")
-async def total_stats(refresh: bool = Query(False), db: Session = Depends(get_db)):
+async def total_stats(
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
+    refresh: bool = Query(False),
+    db: Session = Depends(get_db),
+):
     global _totals_cache, _totals_cached_at
     import time
     now = time.monotonic()
-    if not refresh and _totals_cache and (now - _totals_cached_at) < _TOTALS_TTL_SECONDS:
+    fresh = _totals_cache is not None and (now - _totals_cached_at) < _TOTALS_TTL_SECONDS
+    if not refresh and fresh:
+        return _totals_cache
+
+    # Stale-while-revalidate. The scan is ~10s at 18M rows and grows with the
+    # index, so once we have any numbers at all we serve them immediately and
+    # recompute behind the response rather than making someone wait for a widget.
+    if not refresh and _totals_cache is not None and background_tasks is not None:
+        background_tasks.add_task(_recompute_totals)
         return _totals_cache
 
     row = db.execute(_TOTALS_SQL).mappings().first()

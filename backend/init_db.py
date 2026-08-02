@@ -97,6 +97,20 @@ CREATE INDEX IF NOT EXISTS ix_stories_cross_post_urls ON stories USING gin (cros
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+-- Keep planner statistics fresh on the one table that matters.
+--
+-- The default analyze scale factor is 10% of the table, which never converges
+-- under a long bulk import: a run that took stories from 2.2M to 18M rows left
+-- the planner still working from statistics gathered at 2.2M. Every plan it chose
+-- was wrong for the real table, and search went from 0.35s to 18.8s until an
+-- explicit ANALYZE was run. 2% plus a large floor keeps stats close to reality
+-- during imports without analyzing constantly on a quiet index.
+ALTER TABLE stories SET (
+    autovacuum_analyze_scale_factor = 0.02,
+    autovacuum_analyze_threshold = 50000,
+    autovacuum_vacuum_scale_factor = 0.05
+);
+
 -- ── Search indexes ──────────────────────────────────────────────────────────
 -- An earlier attempt at trigram indexes on array_to_string(fandoms, ',') was
 -- abandoned because array_to_string is only marked STABLE, so Postgres rejects it

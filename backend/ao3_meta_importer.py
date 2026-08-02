@@ -270,6 +270,23 @@ def run(path: str, limit: int | None, skip: int, batch_size: int, dry_run: bool)
         return
 
     log.info(f"DONE — inserted={inserted:,}  already_indexed={dup:,}  unparseable={bad:,}")
+    _analyze()
+
+
+def _analyze() -> None:
+    """Refresh planner statistics after a bulk load.
+
+    Not optional. A run that grew the table from 2.2M to 18M rows left the planner
+    working from the old statistics, and search degraded from 0.35s to 18.8s until
+    ANALYZE was run by hand. Takes ~3s.
+    """
+    from sqlalchemy import text
+    try:
+        with db_session() as db:
+            db.execute(text("ANALYZE stories"))
+        log.info("ANALYZE stories — planner statistics refreshed")
+    except Exception as e:
+        log.warning(f"ANALYZE failed ({e}); run it manually or search will be slow")
 
 
 def main():

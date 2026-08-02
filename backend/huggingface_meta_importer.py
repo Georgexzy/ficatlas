@@ -254,6 +254,17 @@ def main():
     log.info(f"DONE — inserted={inserted:,}  dup_skipped={skipped_dup:,}  "
              f"filtered_out={filtered_out:,}  missing_id={skipped_missing:,}  errors={errors:,}")
 
+    # Refresh planner statistics. Without this the planner keeps using the row
+    # counts from before the import and search slows down by orders of magnitude.
+    if not args.dry_run:
+        from sqlalchemy import text
+        try:
+            with db_session() as db:
+                db.execute(text("ANALYZE stories"))
+            log.info("ANALYZE stories — planner statistics refreshed")
+        except Exception as e:
+            log.warning(f"ANALYZE failed ({e}); run it manually or search will be slow")
+
 
 if __name__ == "__main__":
     main()
