@@ -15,9 +15,29 @@ async def lifespan(app: FastAPI):
         import logging
         logging.getLogger(__name__).warning(f"DB init at startup failed: {e}")
 
+    # Warm the index-status caches off the request path.
+    #
+    # /totals and /sites are whole-table aggregates (~10s at 19.7M rows, far more
+    # under load) and they run on every page load. They serve stale values while
+    # refreshing in the background, but that only helps once a value EXISTS — the
+    # cache is empty after every restart, so the first visitor paid the full scan.
+    # Measured 17-45s while the bulk jobs were running.
+    async def _warm_caches():
+        import asyncio
+        from api.stats import _recompute_totals, _recompute_sites
+        for fn in (_recompute_totals, _recompute_sites):
+            try:
+                await asyncio.to_thread(fn)
+            except Exception:
+                pass  # a cold cache is a slow page, not a broken one
+
+    import asyncio
+    warm_task = asyncio.create_task(_warm_caches())
+
     from scheduler import start_scheduler, stop_scheduler
     start_scheduler()
     yield
+    warm_task.cancel()
     stop_scheduler()
 
 app = FastAPI(title="FicAtlas API", version="0.1.0", lifespan=lifespan)
