@@ -1837,3 +1837,16 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 
 /* The reader deliberately has no site header — it's a reading surface, and its
    own top bar links back to the story, which does carry the full header. */
+
+/* Provenance line on the story page — where the record came from, shown apart
+   from content tags so an untagged story doesn't look tagged. */
+.story-detail__source { font-size: 11px; color: var(--text-faint);
+  font-family: var(--font-mono); margin-top: 10px; }
+.story-detail__source-note { font-style: italic; opacity: 0.85; }
+
+/* Signed-out notice on the Library page: says plainly which actions need an
+   account, instead of letting the import buttons fail with a bare 401. */
+.library-signin-note { font-size: 12px; color: var(--text-dim);
+  background: var(--accent-bg); border: 1px solid var(--accent-dim);
+  border-radius: 6px; padding: 9px 12px; margin: 0 0 14px; }
+.library-signin-note__link { color: var(--accent); font-weight: 600; }

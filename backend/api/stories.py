@@ -11,6 +11,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from db.session import get_db
 from models.story import Story, Chapter
+from provenance import content_tags, source_labels
 
 router = APIRouter()
 
@@ -65,6 +66,7 @@ class StoryDetail(BaseModel):
     is_hosted: bool
     wayback_url: Optional[str]
     cross_post_urls: List[str] = []
+    sources: List[str] = []
     chapters: List[ChapterMeta]
 
 
@@ -106,7 +108,8 @@ async def get_story(story_id: str, db: Session = Depends(get_db)):
         fandoms=story.fandoms or [],
         relationships=story.relationships or [],
         characters=story.characters or [],
-        tags=story.tags or [],
+        tags=content_tags(story.tags),
+        sources=source_labels(story.tags),
         warnings=story.warnings or [],
         categories=story.categories or [],
         genres=story.genres or [],

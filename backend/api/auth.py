@@ -152,6 +152,36 @@ def require_user(user: Optional[User] = Depends(get_current_user)) -> User:
     return user
 
 
+def require_admin(
+    user: Optional[User] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """Guard for endpoints that modify the library: uploads, URL imports, bulk
+    scrapes, deleting hosted stories, dedup and cleanup batches.
+
+    Every one of those was completely unauthenticated, including
+    DELETE /api/library/hosted/{id} — which deletes hosted full text. Some of that
+    text is irreplaceable (the ~30k FicAlley stories come from a dead archive).
+    The only thing protecting them was binding the API to loopback, which meant
+    the app could never be put behind a tunnel or reverse proxy.
+
+    Accounts are optional in this app, so demanding one unconditionally would
+    break a fresh install before you could even sign up — you would not be able to
+    import anything. Instead: if the instance has no accounts at all, these stay
+    open; the moment an account exists, they require it. So a solo setup keeps
+    working, and creating an account locks the instance down.
+    """
+    if user is not None:
+        return user
+    if db.query(User.id).first() is None:
+        return None          # no accounts yet — nothing to protect
+    raise HTTPException(
+        401,
+        "Sign in to modify the library. (These endpoints are unprotected only "
+        "until the first account is created.)",
+    )
+
+
 # ── endpoints ───────────────────────────────────────────────────────────────
 
 @router.post("/signup")

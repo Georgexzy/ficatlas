@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from db.session import get_db
 from models.story import Story
+from provenance import PROVENANCE_TAGS
 
 router = APIRouter()
 
@@ -157,19 +158,23 @@ async def suggest(
         kind = "fandom"
     ql = q.strip().lower()
 
-    # Try the precomputed facet table first.
+    # Try the precomputed facet table first. Provenance is filtered at read time as
+    # well as at rebuild time, so a facets table built before this rule existed
+    # still won't suggest import tags.
+    prov = sorted(PROVENANCE_TAGS)
     try:
         if ql:
             rows = db.execute(text(
                 "SELECT value, count FROM facets "
-                "WHERE kind = :kind AND value ILIKE :pat "
+                "WHERE kind = :kind AND value ILIKE :pat AND NOT (value = ANY(:provenance)) "
                 "ORDER BY count DESC LIMIT :lim"
-            ), {"kind": kind, "pat": f"%{ql}%", "lim": limit}).fetchall()
+            ), {"kind": kind, "pat": f"%{ql}%", "lim": limit, "provenance": prov}).fetchall()
         else:
             rows = db.execute(text(
-                "SELECT value, count FROM facets WHERE kind = :kind "
+                "SELECT value, count FROM facets "
+                "WHERE kind = :kind AND NOT (value = ANY(:provenance)) "
                 "ORDER BY count DESC LIMIT :lim"
-            ), {"kind": kind, "lim": limit}).fetchall()
+            ), {"kind": kind, "lim": limit, "provenance": prov}).fetchall()
         if rows:
             return [{"value": r[0], "count": r[1]} for r in rows]
     except Exception:
@@ -185,9 +190,11 @@ async def suggest(
     sql = text(
         f"SELECT v AS value, count(*) AS c FROM ("
         f"  SELECT unnest({col}) AS v FROM stories LIMIT 200000"
-        f") s WHERE (:q = '' OR v ILIKE :pat) GROUP BY v ORDER BY c DESC LIMIT :lim"
+        f") s WHERE (:q = '' OR v ILIKE :pat) AND NOT (v = ANY(:provenance)) "
+        f"GROUP BY v ORDER BY c DESC LIMIT :lim"
     )
-    rows = db.execute(sql, {"q": ql, "pat": f"%{ql}%", "lim": limit}).fetchall()
+    rows = db.execute(sql, {"q": ql, "pat": f"%{ql}%", "lim": limit,
+                            "provenance": sorted(PROVENANCE_TAGS)}).fetchall()
     return [{"value": r[0], "count": r[1]} for r in rows]
 
 
@@ -279,13 +286,20 @@ async def refresh_facets(
     ))
     try:
         for kind, col in _FACET_COLUMNS.items():
+            # Provenance tags ("ffnet_dump", "ao3_meta_dump", …) live in the same
+            # array as content tags but describe which import a row came from, not
+            # what it is about. With millions of uses each they dominated tag
+            # autocomplete — typing "dump" suggested ffnet_dump (3.4M) ahead of the
+            # real tag "Infodumping" (9). Keep them filterable, but never suggest
+            # them as content tags.
             db.execute(text(
                 f"INSERT INTO facets_rebuild (kind, value, count) "
                 f"SELECT :k, v, count(*) AS c FROM ("
                 f"  SELECT unnest({col}) AS v FROM stories"
-                f") s WHERE v IS NOT NULL AND v <> '' "
+                f") s WHERE v IS NOT NULL AND v <> '' AND NOT (v = ANY(:provenance)) "
                 f"GROUP BY v HAVING count(*) >= :min_count"
-            ), {"k": kind, "min_count": min_count})
+            ), {"k": kind, "min_count": min_count,
+                "provenance": sorted(PROVENANCE_TAGS)})
             built[kind] = db.execute(
                 text("SELECT count(*) FROM facets_rebuild WHERE kind = :k"), {"k": kind}
             ).scalar()

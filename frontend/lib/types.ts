@@ -36,6 +36,8 @@ export interface StoryCard {
   is_live?: boolean
   is_hosted?: boolean
   cross_post_urls?: string[]
+  /** Which bulk import this row came from (not a content tag). */
+  sources?: string[]
 }
 
 export interface SearchResponse {

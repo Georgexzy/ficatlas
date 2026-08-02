@@ -4,6 +4,7 @@ import Link from "next/link"
 import OfflineLink from "../OfflineLink"
 import { listOfflineStories, deleteOfflineStory } from "@/lib/offline"
 import SiteHeader from "../SiteHeader"
+import { useAuth } from "@/lib/auth"
 
 const API_BASE_C = ""
 
@@ -92,6 +93,7 @@ interface HostedStory { id: string; title: string; author: string; site: string;
 type Tab = "hosted" | "bookmarks" | "reading" | "searches" | "offline" | "import"
 
 export default function LibraryPage() {
+  const { user, loading: authLoading } = useAuth()
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [progress, setProgress] = useState<Record<string, ProgressEntry>>({})
   const [recents, setRecents] = useState<string[]>([])
@@ -657,6 +659,18 @@ export default function LibraryPage() {
     <div className="library-shell">
       <SiteHeader current="library" />
       <h1 className="library-title">My Library</h1>
+
+      {/* Importing, uploading and the bulk scrapes modify the shared index, so
+          they now require an account — they were completely unauthenticated
+          before, including deleting hosted stories whose text is irreplaceable.
+          Reading, bookmarks and offline copies stay available signed out. */}
+      {!authLoading && !user && (
+        <p className="library-signin-note">
+          Browsing and offline reading work as normal.{" "}
+          <Link href="/login" className="library-signin-note__link">Sign in</Link>{" "}
+          to import stories, upload EPUBs, or run an archive scrape.
+        </p>
+      )}
 
       <div className="library-tabs">
         <button className={`library-tab ${tab === "hosted" ? "library-tab--on" : ""}`} onClick={() => setTab("hosted")}>

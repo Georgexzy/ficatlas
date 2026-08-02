@@ -309,6 +309,19 @@ export default function StoryPage() {
             )}</div>
           </section>
         )}
+        {/* Where this record came from. Kept out of the tag list above: these are
+            provenance, not content, and 61% of the index has nothing but these —
+            rendering them as tags made untagged stories look tagged. */}
+        {(story as any).sources?.length > 0 && (
+          <p className="story-detail__source">
+            Indexed from {(story as any).sources.join(" · ")}
+            {story.tags.length === 0 && (
+              <span className="story-detail__source-note">
+                {" "}— this source provides no content tags
+              </span>
+            )}
+          </p>
+        )}
         {story.warnings?.filter(w => w !== "No Archive Warnings Apply").length > 0 && (
           <section className="story-detail__taggroup">
             <h4>Warnings</h4>

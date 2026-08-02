@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from db.session import get_db
+from api.auth import require_admin
 from models.story import Story, Chapter, SiteEnum, RatingEnum, StatusEnum
 
 log = logging.getLogger(__name__)
@@ -68,7 +69,9 @@ async def crawl_status(db: Session = Depends(get_db)):
 
 
 @router.post("/crawl-reset-breaker")
-async def crawl_reset_breaker(site: str = Form(...), db: Session = Depends(get_db)):
+async def crawl_reset_breaker(site: str = Form(...), db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Re-enable a site that the circuit breaker auto-disabled after repeated
     crawl failures. Clears the crawl_disabled_<site> flag."""
     from api.settings import put_setting
@@ -316,7 +319,9 @@ def _ingest_epub_bytes(data: bytes, db: Session) -> dict:
 
 
 @router.post("/upload-epub")
-async def upload_epub(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_epub(file: UploadFile = File(...), db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Upload a single EPUB into the library as a hosted story."""
     if not file.filename or not file.filename.lower().endswith(".epub"):
         raise HTTPException(400, "Must be an .epub file")
@@ -331,7 +336,9 @@ async def upload_epub(file: UploadFile = File(...), db: Session = Depends(get_db
 
 
 @router.post("/upload-epubs")
-async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
+async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """
     Bulk upload up to 100 EPUBs at once. Each file processed independently;
     failures don't roll back the batch. Returns per-file results.
@@ -371,7 +378,9 @@ async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depend
 
 
 @router.post("/import-url")
-async def import_url(url: str = Form(...), db: Session = Depends(get_db)):
+async def import_url(url: str = Form(...), db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Fetch a story from AO3/FFnet via FicHub and import it as a hosted story."""
     # Metadata-only seed rows carry a synthetic seed:// URL with no page behind it.
     # The UI hides the import button for these, but reject them here too so a stale
@@ -456,6 +465,7 @@ async def refresh_ao3(
     fandom: Optional[str] = Form(None),
     pages: int = Form(5),
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
     """Force a wider live AO3 fetch for the given query/fandom.
     Useful when the user wants to refresh results beyond what a normal search returns."""
@@ -521,6 +531,7 @@ async def poll_feed(
     max_words: Optional[int] = Form(None),
     complete_only: bool = Form(False),
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
     """
     Resolve a fandom name to its AO3 canonical tag feed, poll it, and index new works.
@@ -563,7 +574,9 @@ async def poll_feed(
 _last_autopoll = {"at": None}
 
 @router.post("/autopoll")
-async def autopoll(db: Session = Depends(get_db)):
+async def autopoll(db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """
     Called by the frontend on page load. Polls the tracked fandom's AO3 feed,
     but debounced server-side to at most once every 10 minutes so refreshing
@@ -617,7 +630,9 @@ async def autopoll(db: Session = Depends(get_db)):
 # ── Delete hosted stories ────────────────────────────────────────────────────
 
 @router.delete("/hosted/{story_id}")
-async def delete_hosted(story_id: str, db: Session = Depends(get_db)):
+async def delete_hosted(story_id: str, db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Delete a hosted story and its chapters from the library."""
     story = db.query(Story).filter(Story.id == story_id).first()
     if not story:
@@ -641,6 +656,7 @@ async def discover_ffnet(
     limit: int = Form(50),
     auto_import: bool = Form(False),
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
     """
     Discover FFN story URLs via the Wayback Machine CDX index (no Cloudflare).
@@ -722,6 +738,7 @@ async def discover_dlp(
     auto_import: bool = Form(False),
     prefer: str = Form("ao3"),           # which URL to import: "ao3" or "ffn"
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
     """
     Scrape the DLP library list. Returns parsed entries with FFN/AO3/etc URLs.
@@ -839,7 +856,8 @@ async def discover_ao3(
     direction: str = Form("desc"),
     ratings: Optional[str] = Form(None),       # comma-separated, e.g. "T,M,E"
     excluded_tags: Optional[str] = Form(None), # comma-separated
-    max_pages: int = Form(5),                  # 5 pages = ~100 works
+    max_pages: int = Form(5),                  # 5 pages = ~100 works,
+    _admin=Depends(require_admin),
 ):
     """
     Kick off a deep AO3 discovery as an ASYNC JOB. Returns immediately with a
@@ -924,6 +942,7 @@ async def discover_hpffa(
     complete_only: bool = Form(False),
     sort: str = Form("revised_at"),
     max_pages: int = Form(5),
+    _admin=Depends(require_admin),
 ):
     """
     Pulls stories from the HPFFA Open Doors collection on AO3 as an async job.
@@ -998,6 +1017,7 @@ async def discover_hexfiles(
     complete_only: bool = Form(False),
     sort: str = Form("revised_at"),
     max_pages: int = Form(5),
+    _admin=Depends(require_admin),
 ):
     """Pull stories from the Harry Potter FanFic Archive ("the HexFiles") Open
     Doors collection on AO3. This is a SEPARATE ~18k-member archive from HPFFA —
@@ -1071,6 +1091,7 @@ async def discover_squidgeworld(
     complete_only: bool = Form(False),
     sort: str = Form("revised_at"),
     max_pages: int = Form(5),
+    _admin=Depends(require_admin),
 ):
     """Scrape SquidgeWorld Archive (squidgeworld.org). It runs the same OTW
     'Otwarchive' software as AO3, so its /works listing shares AO3's HTML
@@ -1129,7 +1150,9 @@ async def discover_squidgeworld(
 # ── Cross-post dedup (one-shot batch over existing data) ─────────────────────
 
 @router.post("/dedup-crossposts")
-async def dedup_crossposts(limit: Optional[int] = Form(None)):
+async def dedup_crossposts(limit: Optional[int] = Form(None),
+    _admin=Depends(require_admin),
+):
     """Scan existing stories and merge cross-posted copies (same title+author on
     different sites) into single canonical rows, recording the alternates in
     cross_post_urls and keeping the most-recently-updated copy's hosted text.
@@ -1200,7 +1223,9 @@ async def ao3_status():
 
 
 @router.post("/admin/clear-ao3-cooldown")
-async def clear_ao3_cooldown_endpoint():
+async def clear_ao3_cooldown_endpoint(
+    _admin=Depends(require_admin),
+):
     """Force-clear the AO3 cooldown so the next scrape will retry immediately.
     Useful when you know AO3 has come back (e.g. you tested with curl from the
     server and got a 200), but our cooldown timer hasn't expired yet."""
@@ -1212,7 +1237,9 @@ async def clear_ao3_cooldown_endpoint():
 # ── Admin: remove orphaned example/seed stories ──────────────────────────────
 
 @router.delete("/admin/cleanup-seeds")
-async def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db)):
+async def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Remove the fabricated demo stories written by seed_data.py.
 
     Those rows are invented works ("realistic test stories for UI development")
@@ -1269,7 +1296,9 @@ async def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db)):
 
 
 @router.post("/cleanup-preface-chapters")
-async def cleanup_preface_chapters(dry_run: bool = Form(False), db: Session = Depends(get_db)):
+async def cleanup_preface_chapters(dry_run: bool = Form(False), db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Fix already-imported stories whose first 'chapter' is actually FicHub/AO3
     front matter (the metadata sheet + author's preliminary notes) rather than a
     real chapter — the bug this addresses surfaced those as Chapter 1.

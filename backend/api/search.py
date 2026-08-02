@@ -11,6 +11,7 @@ from db.session import get_db
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 from query_parser import parse_query, parsed_to_search_params
 from character_aliases import character_variants, relationship_variants
+from provenance import content_tags, source_labels
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class StoryCard(BaseModel):
     is_live: bool = False          # true = came from live fetch, not index
     is_hosted: bool = False        # true = full text stored locally, one-click reader
     cross_post_urls: List[str] = []  # same work on other sites (deduped result)
+    sources: List[str] = []          # which import(s) this row came from
 
     class Config:
         from_attributes = True
@@ -585,7 +587,11 @@ def _to_card(s: Story) -> StoryCard:
         kudos=s.kudos or 0, hits=s.hits or 0,
         bookmarks=s.bookmarks or 0, comments=s.comments or 0,
         fandoms=s.fandoms or [], relationships=s.relationships or [],
-        characters=s.characters or [], tags=s.tags or [],
+        characters=s.characters or [],
+        # Content tags only. Provenance ('ffnet_dump') is which import a row
+        # came from, not what it's about, and showed up as a tag chip on 61%
+        # of stories that had no real tags at all.
+        tags=content_tags(s.tags), sources=source_labels(s.tags),
         warnings=s.warnings or [], categories=s.categories or [],
         genres=s.genres or [],
         published_at=s.published_at.isoformat() if s.published_at else None,
@@ -608,7 +614,8 @@ def _dict_to_card(d: dict) -> StoryCard:
         kudos=d.get("kudos", 0), hits=d.get("hits", 0),
         bookmarks=d.get("bookmarks", 0), comments=d.get("comments", 0),
         fandoms=d.get("fandoms", []), relationships=d.get("relationships", []),
-        characters=d.get("characters", []), tags=d.get("tags", []),
+        characters=d.get("characters", []),
+        tags=content_tags(d.get("tags")), sources=source_labels(d.get("tags")),
         warnings=d.get("warnings", []), categories=d.get("categories", []),
         genres=d.get("genres", []),
         published_at=d.get("published_at"), updated_at=d.get("updated_at"),
