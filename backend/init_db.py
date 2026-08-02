@@ -157,6 +157,12 @@ CREATE INDEX IF NOT EXISTS ix_stories_tags_trgm          ON stories USING gin (f
 -- sequential scan — 9,995ms versus 6.4ms here, once per incoming story.
 CREATE INDEX IF NOT EXISTS ix_stories_author_lower ON stories (lower(author));
 
+-- Date filtering and the "recently updated" sort both use
+-- coalesce(updated_at, published_at): updated_at alone is set for 0.17% of rows,
+-- so filtering or sorting on it returned essentially nothing.
+CREATE INDEX IF NOT EXISTS ix_stories_last_activity
+    ON stories (coalesce(updated_at, published_at) DESC NULLS LAST);
+
 -- Composite index for the most common access pattern: filter by word_count, sort by kudos.
 CREATE INDEX IF NOT EXISTS ix_stories_kudos_desc ON stories (kudos DESC);
 

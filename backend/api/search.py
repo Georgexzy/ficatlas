@@ -1,6 +1,6 @@
 """Search API — unified search across all indexed sites with hybrid live fetch"""
 import logging
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import and_, or_, func, literal_column, cast, Text, text as sql_text
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
@@ -122,11 +122,61 @@ def _sort_expr(entity, sort: str):
     spec = SORT_MAP.get(sort)
     if spec is None:
         return None
-    col = getattr(entity, spec[0])
+    if spec[0] == "updated_at":
+        # Sorting by updated_at alone is meaningless here: it is NULL for 99.83%
+        # of rows, so "recently updated" was really "the 0.17% we have a date for,
+        # then everything else in arbitrary order".
+        col = func.coalesce(entity.updated_at, entity.published_at)
+    else:
+        col = getattr(entity, spec[0])
     return col.desc().nullslast() if spec[1] else col.asc().nullslast()
 
 
 # ── Live fetch trigger logic ──────────────────────────────────────────────────
+
+# Live-fetch throttle.
+#
+# Every text search schedules a 3-page AO3 fetch, and AO3's search takes 18-21s
+# per page. Without a guard, reloading a page or retyping a query would fire that
+# again and again for the same search, and a handful of tabs could have a dozen
+# fetches running at once — hammering AO3 for results we just indexed.
+#
+# So: the same query is only re-fetched once per window, and only a few fetches
+# run concurrently. In-memory is right for this app's single-process scale.
+_LIVE_REFETCH_WINDOW = 6 * 3600     # seconds before the same query is worth redoing
+_LIVE_MAX_CONCURRENT = 3
+_live_last_run: dict[str, float] = {}
+_live_in_flight: set[str] = set()
+
+
+def _claim_live_fetch(params: dict) -> bool:
+    """Reserve a live fetch for these params, or decline if it's redundant."""
+    import time
+    key = repr(sorted((k, v) for k, v in params.items() if v not in (None, "", False)))
+    now = time.time()
+
+    if key in _live_in_flight:
+        return False
+    if len(_live_in_flight) >= _LIVE_MAX_CONCURRENT:
+        return False
+    if now - _live_last_run.get(key, 0.0) < _LIVE_REFETCH_WINDOW:
+        return False
+
+    # Bound the memory: drop entries that are past the window anyway.
+    if len(_live_last_run) > 2000:
+        for k, t in list(_live_last_run.items()):
+            if now - t > _LIVE_REFETCH_WINDOW:
+                _live_last_run.pop(k, None)
+
+    _live_last_run[key] = now
+    _live_in_flight.add(key)
+    return True
+
+
+def _release_live_fetch(params: dict) -> None:
+    key = repr(sorted((k, v) for k, v in params.items() if v not in (None, "", False)))
+    _live_in_flight.discard(key)
+
 
 async def _fetch_and_persist_live(live_params: dict, want_ao3: bool) -> None:
     """Pull fresh AO3 results and add them to the index. Runs after the response
@@ -152,6 +202,8 @@ async def _fetch_and_persist_live(live_params: dict, want_ao3: bool) -> None:
         # Non-fatal by design, but log it — this path was silently broken for a
         # long time precisely because failures were swallowed without a trace.
         log.warning("live AO3 fetch/persist failed: %s: %s", type(e).__name__, e)
+    finally:
+        _release_live_fetch(live_params)
 
 
 def _should_fetch_live(sort: str, page: int, q: Optional[str]) -> bool:
@@ -206,7 +258,6 @@ async def search(
     page:                  int           = Query(1, ge=1),
     per_page:              int           = Query(20, ge=1, le=100),
     live:                  bool          = Query(True, description="Enable hybrid live fetch"),
-    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
 ):
     # ── Parse q for embedded operators ───────────────────────────────────────
@@ -423,10 +474,21 @@ async def search(
         filters.append(_or_unknown(Story.word_count >= word_count_min, Story.word_count.is_(None)))
     if word_count_max:
         filters.append(_or_unknown(Story.word_count <= word_count_max, Story.word_count.is_(None)))
+    # Date filters compare against updated_at OR, where we never captured one,
+    # published_at.
+    #
+    # updated_at is set for 0.17% of the index (33,169 of 19.7M): the bulk dumps
+    # record when a work was published but not when it was last touched. Filtering
+    # "updated in the past year" strictly against that column returned almost
+    # nothing — a Harry Potter / complete / >100k search went from 2,915 results to
+    # 3. published_at covers 46%, so the coalesce makes the filter ~275x more
+    # useful, and for a completed work the publication date is a fair proxy for
+    # its last activity anyway.
+    _last_activity = func.coalesce(Story.updated_at, Story.published_at)
     if updated_after:
-        filters.append(_or_unknown(Story.updated_at >= updated_after, Story.updated_at.is_(None)))
+        filters.append(_or_unknown(_last_activity >= updated_after, _last_activity.is_(None)))
     if updated_before:
-        filters.append(_or_unknown(Story.updated_at <= updated_before, Story.updated_at.is_(None)))
+        filters.append(_or_unknown(_last_activity <= updated_before, _last_activity.is_(None)))
     if published_after:
         filters.append(_or_unknown(Story.published_at >= published_after, Story.published_at.is_(None)))
 
@@ -488,19 +550,22 @@ async def search(
     # milliseconds, and the fresh works land in the index for the next search.
     # For freshness on demand there is the explicit "Refresh from AO3" button,
     # which hits /api/library/refresh-ao3 and shows a spinner while it waits.
+    # Scheduled on the event loop rather than via FastAPI's BackgroundTasks: the
+    # injected `background_tasks` arrived as None here, so the task was never
+    # queued and nothing was ever indexed from a live search. run_in_background
+    # keeps a strong reference, so the task cannot be garbage collected mid-run.
     live_cards: list[StoryCard] = []
-    if live and background_tasks is not None and _should_fetch_live(sort, page, q):
-        background_tasks.add_task(
-            _fetch_and_persist_live,
-            {
-                "q": q, "fandoms": fandoms, "relationships": relationships,
-                "characters": characters, "tags": tags, "ratings": ratings,
-                "status": status, "word_count_min": word_count_min,
-                "word_count_max": word_count_max, "sort": sort,
-                "explicit": explicit,
-            },
-            "ao3" in active_sites,
-        )
+    if live and _should_fetch_live(sort, page, q) and "ao3" in active_sites:
+        params = {
+            "q": q, "fandoms": fandoms, "relationships": relationships,
+            "characters": characters, "tags": tags, "ratings": ratings,
+            "status": status, "word_count_min": word_count_min,
+            "word_count_max": word_count_max, "sort": sort,
+            "explicit": explicit,
+        }
+        if _claim_live_fetch(params):
+            from live_fetch.jobs import run_in_background
+            run_in_background(lambda: _fetch_and_persist_live(params, True))
 
     # Merge: live results (fresher) shown first on page 1, then the full indexed page.
     # We do NOT truncate indexed cards — that was dropping indexed results off page 1

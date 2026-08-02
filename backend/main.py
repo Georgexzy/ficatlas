@@ -34,11 +34,21 @@ async def lifespan(app: FastAPI):
     import asyncio
     warm_task = asyncio.create_task(_warm_caches())
 
-    from scheduler import start_scheduler, stop_scheduler
-    start_scheduler()
+    # Recurring background work lives in the worker container, not here: running
+    # it on the API's event loop meant feed polls and crawls competed with request
+    # handling. Set RUN_SCHEDULER=true to run it in-process instead (single-
+    # container deployments), but never in both, or every feed gets polled twice.
+    run_scheduler = os.getenv("RUN_SCHEDULER", "false").strip().lower() in ("1", "true", "yes")
+    stop_scheduler = None
+    if run_scheduler:
+        from scheduler import start_scheduler, stop_scheduler
+        start_scheduler()
+
     yield
+
     warm_task.cancel()
-    stop_scheduler()
+    if stop_scheduler is not None:
+        stop_scheduler()
 
 app = FastAPI(title="FicAtlas API", version="0.1.0", lifespan=lifespan)
 

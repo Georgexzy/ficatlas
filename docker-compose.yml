@@ -1,6 +1,11 @@
 services:
   db:
     image: postgres:16-alpine
+    # No service had a restart policy, which is why the whole stack sat dead for
+    # four weeks after a reboot. Docker itself is enabled at boot, so this alone
+    # makes FicAtlas come back on its own. "unless-stopped" (not "always") so an
+    # explicit `docker compose stop` stays stopped.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ficatlas
       POSTGRES_PASSWORD: ficatlas
@@ -53,6 +58,13 @@ services:
 
   backend:
     build: ./backend
+    # Named so the worker can reuse this exact image instead of compose building
+    # a second identical 2.7GB copy under its own service name.
+    image: ficatlas-backend
+    restart: unless-stopped
+    # --reload is a development convenience: it restarts the API on any file
+    # change, which also kills anything running inside the container. Drop it for
+    # an unattended box.
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     # Loopback only, matching the architecture in the README: clients reach the API
     # through the frontend's /api/* rewrite on port 3000, so 8000 never needs to be
@@ -72,10 +84,34 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     ports:
       - "3000:3000"
     depends_on:
       - backend
+
+  # ── Background worker ──────────────────────────────────────────────────────
+  # Scheduled feed polls, crawls and long backfills used to run inside the API
+  # process. Two problems with that: heavy work competed with request handling on
+  # the same event loop, and anything started with `docker compose exec backend`
+  # died whenever the API restarted — which killed the dedup and enrichment runs
+  # twice during this work.
+  #
+  # The worker owns all recurring background work. Only it runs the scheduler
+  # (RUN_SCHEDULER), so the API never double-polls, and its restarts are
+  # independent of the API's.
+  worker:
+    image: ficatlas-backend    # same image as the API; built by the backend service
+    restart: unless-stopped
+    command: python worker.py
+    environment:
+      DATABASE_URL: postgresql://ficatlas:ficatlas@db:5432/ficatlas
+      RUN_SCHEDULER: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
 
 volumes:
   pgdata:
