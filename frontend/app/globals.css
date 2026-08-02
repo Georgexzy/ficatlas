@@ -1850,3 +1850,88 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   background: var(--accent-bg); border: 1px solid var(--accent-dim);
   border-radius: 6px; padding: 9px 12px; margin: 0 0 14px; }
 .library-signin-note__link { color: var(--accent); font-weight: 600; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE
+   The phone layout was a shrunken desktop page: six header items overflowed a
+   375px screen, book titles were clipped to one line by `white-space: nowrap`
+   so most were unreadable in the 2-column grid, and tap targets were mouse-sized.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Bottom tab bar — hidden on desktop, primary navigation on phones. */
+.tabbar { display: none; }
+
+@media (max-width: 700px) {
+  /* Header keeps only identity + account; navigation moves to the tab bar. */
+  .header__nav-links { display: none; }
+  .header {
+    padding: 10px 14px;
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+  .header__right { gap: 10px; }
+
+  .tabbar {
+    display: flex;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 180;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    backdrop-filter: saturate(180%) blur(12px);
+    border-top: 1px solid var(--border);
+    /* Clear the home indicator on notched phones. */
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tabbar__item {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 2px;
+    min-height: 52px; padding: 6px 4px;
+    color: var(--text-faint); text-decoration: none;
+    font-size: 10px; letter-spacing: 0.04em;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tabbar__item--current { color: var(--accent); }
+  .tabbar__icon { font-size: 19px; line-height: 1; }
+  .tabbar__label { font-weight: 600; }
+
+  /* Room for the bar so the last row isn't trapped underneath it.
+     Scoped with :has() because the chapter reader uses .reader-shell too but
+     renders no tab bar — a blanket rule left dead space at the end of a chapter.
+     !important because the existing phone rules for these shells already use it. */
+  body:has(.tabbar) .main,
+  body:has(.tabbar) .library-shell,
+  body:has(.tabbar) .settings-shell,
+  body:has(.tabbar) .reader-shell,
+  body:has(.tabbar) .account-shell {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
+  }
+
+  /* Float the reader's exit button above the bar rather than under it. */
+  body:has(.tabbar) .reader-fab {
+    bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+
+  /* ── Titles must wrap, not be cut off ──────────────────────────────────
+     These were single-line with an ellipsis. In a 2-column grid each card is
+     roughly 160px wide, so nearly every real title was truncated to a few
+     characters. Two lines is readable and keeps the grid even. */
+  .book__title, .book__author {
+    white-space: normal;
+    display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .book__title  { -webkit-line-clamp: 2; font-size: 13px; line-height: 1.28; }
+  .book__author { -webkit-line-clamp: 1; }
+
+  /* Long titles, URLs and tag names must never widen the page. */
+  .card__title, .story-detail__title, .book__title { overflow-wrap: anywhere; }
+
+  /* Comfortable, thumb-sized controls. */
+  .btn, .page-btn, .library-tab, .reader-ctrl { min-height: 44px; }
+  .tag { padding: 5px 9px; }
+
+  /* 16px inputs stop iOS Safari zooming the viewport on focus. */
+  input, select, textarea { font-size: 16px; }
+}
+
+/* Nothing may scroll the page sideways — the single most common way a mobile
+   layout feels broken. Wide content scrolls inside its own container instead. */
+html, body { overflow-x: hidden; max-width: 100%; }
+.card, .book, .story-detail, .settings-group { min-width: 0; }

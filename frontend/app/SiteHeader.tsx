@@ -65,22 +65,53 @@ export default function SiteHeader(
       : <Link href={href} className={cls}>{label}</Link>
   }
 
+  // Phone navigation is a bottom tab bar rather than more items in the header.
+  // Six header items at 16px gaps overflowed a 375px screen, and putting the
+  // primary destinations within thumb reach is what makes this read as an app
+  // rather than a shrunken desktop page. Same routes, different placement — CSS
+  // shows one or the other, so there is no duplicated navigation on any screen.
+  const tab = (key: NavKey, href: string, label: string, icon: string, offline = false) => {
+    const cls = `tabbar__item ${current === key ? "tabbar__item--current" : ""}`
+    const inner = (
+      <>
+        <span className="tabbar__icon" aria-hidden="true">{icon}</span>
+        <span className="tabbar__label">{label}</span>
+      </>
+    )
+    if (current === key) {
+      return <span className={cls} aria-current="page">{inner}</span>
+    }
+    return offline
+      ? <OfflineLink href={href} className={cls}>{inner}</OfflineLink>
+      : <Link href={href} className={cls}>{inner}</Link>
+  }
+
   return (
-    <header className="header">
-      {/* The wordmark is the way home from everywhere — the convention people
-          already expect, and it was previously not a link at all. */}
-      <Link href="/" className="logo logo--link" aria-label="FicAtlas home">
-        Fic<em>Atlas</em>
-      </Link>
-      <nav className="header__right">
-        {link("search", "/", "Search")}
-        {link("library", "/library", "Library", true)}
-        {link("settings", "/settings", "Settings")}
-        <UserMenu />
-        <IndexStatus />
-        {/* Page-specific controls (e.g. the Explicit toggle on search). */}
-        {children}
+    <>
+      <header className="header">
+        {/* The wordmark is the way home from everywhere — the convention people
+            already expect, and it was previously not a link at all. */}
+        <Link href="/" className="logo logo--link" aria-label="FicAtlas home">
+          Fic<em>Atlas</em>
+        </Link>
+        <nav className="header__right">
+          <span className="header__nav-links">
+            {link("search", "/", "Search")}
+            {link("library", "/library", "Library", true)}
+            {link("settings", "/settings", "Settings")}
+          </span>
+          <UserMenu />
+          <IndexStatus />
+          {/* Page-specific controls (e.g. the Explicit toggle on search). */}
+          {children}
+        </nav>
+      </header>
+
+      <nav className="tabbar" aria-label="Primary">
+        {tab("search", "/", "Search", "⌕")}
+        {tab("library", "/library", "Library", "▤", true)}
+        {tab("settings", "/settings", "Settings", "⚙")}
       </nav>
-    </header>
+    </>
   )
 }
