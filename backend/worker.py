@@ -24,6 +24,9 @@ days, not to saturate the database or hammer archive.org:
   ENRICH_INTERVAL_MIN=30     minutes between passes
   DEDUP_CROSSPOSTS=true      merge newly-imported cross-posted duplicates
   DEDUP_INTERVAL_MIN=180
+  RECENT_WORKS=true          index AO3 works newer than the bulk dump (default on)
+  RECENT_INTERVAL_MIN=20
+  RECENT_PAGES=3
 """
 
 import asyncio
@@ -105,6 +108,53 @@ async def _dedup_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _recent_works_loop() -> None:
+    """Walk AO3 tag pages for the tracked fandoms and index what's there.
+
+    This is the ONLY way to get works published after the bulk dump. That dump
+    tops out at AO3 work id 63,178,258 with zero entries above 70M, while AO3 is
+    now issuing ids around 89.7M — so everything from roughly mid-2024 onward is
+    missing and no amount of re-importing will produce it.
+
+    It accumulates rather than backfills in bulk: ~20 works per page at a few
+    seconds each. Over days that is a real dent in the recent end; it will never
+    be millions, and pretending otherwise would just mean hammering AO3.
+
+    Uses the tag endpoint deliberately — measured 2/2 successful at 4-5s, versus
+    /works/search at 1/2 and 29s when it worked.
+    """
+    interval = _num("RECENT_INTERVAL_MIN", 20) * 60
+    pages = int(_num("RECENT_PAGES", 3))
+    from db.session import db_session
+    from api.settings import get_setting
+    from live_fetch.ao3_live import fetch_live_ao3
+    from live_fetch.persist import persist_live_results
+
+    while True:
+        try:
+            with db_session() as db:
+                tracked = get_setting(db, "tracked_fandom") or ""
+            fandoms = [f.strip() for f in tracked.split(",") if f.strip()]
+            for fandom in fandoms:
+                try:
+                    results = await fetch_live_ao3(
+                        {"fandoms": fandom, "status": None, "sort": "updated_desc"},
+                        limit=pages * 20, pages=pages,
+                    )
+                    if results:
+                        def _save():
+                            with db_session() as db:
+                                return persist_live_results(db, results)
+                        new = await asyncio.to_thread(_save)
+                        log.info(f"recent works: {fandom} — {len(results)} fetched, {new} new")
+                except Exception as e:
+                    log.warning(f"recent works failed for {fandom}: {type(e).__name__}: {e}")
+                await asyncio.sleep(10)   # be polite between fandoms
+        except Exception as e:
+            log.warning(f"recent-works pass failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def main() -> None:
     # Schema/indexes may not exist yet on a first boot; the API does this too and
     # it is idempotent, so whichever wins the race is fine.
@@ -128,6 +178,10 @@ async def main() -> None:
     if _flag("DEDUP_CROSSPOSTS"):
         tasks.append(asyncio.create_task(_dedup_loop()))
         log.info("cross-post dedup enabled")
+
+    if _flag("RECENT_WORKS", "true"):
+        tasks.append(asyncio.create_task(_recent_works_loop()))
+        log.info("recent-works indexing enabled (post-dump AO3 coverage)")
 
     log.info("worker ready")
     # Idle forever; the scheduler runs on its own timers.

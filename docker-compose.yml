@@ -107,6 +107,12 @@ services:
     environment:
       DATABASE_URL: postgresql://ficatlas:ficatlas@db:5432/ficatlas
       RUN_SCHEDULER: "true"
+      # The bulk AO3 dump stops at work id 63,178,258 (~mid-2024) while AO3 is
+      # now issuing ~89.7M, so everything recent can only come from crawling.
+      RECENT_WORKS: "true"
+      # Backfills are off by default — turn them on to fill gaps over days.
+      # ENRICH_FFNET: "true"       # FF.net genres/characters/favs via Wayback
+      # DEDUP_CROSSPOSTS: "true"   # merge newly-imported duplicates
     depends_on:
       db:
         condition: service_healthy

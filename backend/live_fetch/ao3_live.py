@@ -8,7 +8,7 @@ import httpx
 from bs4 import BeautifulSoup
 from typing import Optional
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 log = logging.getLogger(__name__)
 
@@ -34,9 +34,18 @@ AO3_RATING_MAP = {
 def _build_ao3_url(params: dict) -> str:
     p = {}
 
+    # A fandom-scoped search goes to the TAG endpoint, not /works/search.
+    #
+    # Measured against AO3, twice each: the tag works page succeeded 2/2 at
+    # 4-5s; /works/search succeeded 1/2, taking 29s when it worked and
+    # returning 525 when it didn't. /works/search is a full-text search over
+    # millions of works and is the least reliable thing AO3 exposes, so it is
+    # now only used when there is free text and no fandom to scope by — the one
+    # case the tag endpoint cannot serve.
+    fandom = (params.get("fandoms") or "").split(",")[0].strip()
     if params.get("q"):
         p["work_search[query]"] = params["q"]
-    if params.get("fandoms"):
+    if params.get("fandoms") and not fandom:
         p["work_search[fandom_names]"] = params["fandoms"]
     if params.get("relationships"):
         p["work_search[relationship_names]"] = params["relationships"]
@@ -88,10 +97,18 @@ def _build_ao3_url(params: dict) -> str:
     # ("Draco Malfoy/Hermione Granger") and ampersands, all of which would
     # otherwise produce a malformed URL or silently truncate the query.
     qs = urlencode(p)
-    # /works/search, not /works. /works is the tag-listing endpoint: it accepts the
-    # work_search params but ignores &page entirely, returning the identical first
-    # 20 works for every page number (verified: 20/20 overlap between pages 1-3).
-    # /works/search is the actual search endpoint and paginates properly.
+    if fandom:
+        # AO3 escapes the punctuation in canonical tag names: "." -> "*d*",
+        # "/" -> "*s*", "&" -> "*a*". Without this, "Harry Potter - J. K.
+        # Rowling" 404s.
+        tag = (fandom.replace("*", "*a*").replace(".", "*d*")
+                     .replace("/", "*s*").replace("&", "*a*"))
+        return f"{BASE}/tags/{quote(tag)}/works?{qs}"
+
+    # No fandom to scope by: /works/search is the only endpoint that can do a
+    # free-text query. Note it is /works/search and NOT /works — the latter is
+    # the tag listing, which accepts work_search params but ignores &page
+    # entirely (verified: 20/20 overlap between "pages" 1-3).
     return f"{BASE}/works/search?{qs}"
 
 
