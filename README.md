@@ -134,25 +134,33 @@ docker compose exec -e PGPASSWORD=ficatlas db bash -c '
 docker compose exec backend python fictionalley_importer.py
 ```
 
-### AO3 (2021 official dump, metadata for ~5M works)
+### AO3 metadata dump (~14M works) — the richest source
+
+`trentmkelly/archiveofourown-meta` on HuggingFace: a 7.4GB ungated JSONL dump of
+AO3 work metadata. This is the most valuable seed in the project, because it is
+the only bulk source that carries **characters, relationships and freeform tags**.
+Without it, 99.7% of indexed stories had no relationship data and 98.8% no
+character data, which is what made those filters useless. Work IDs give real,
+clickable AO3 URLs.
+
+The download is resumable and the import is idempotent (`ON CONFLICT DO NOTHING`),
+so it is safe to interrupt and re-run.
 
 ```bash
-docker compose exec backend python ao3_dump_importer.py --fandom "Harry Potter" --limit 50000
-# or full import:
-docker compose exec backend python ao3_dump_importer.py
-```
-
-### FanFiction.net (2015 Archive.org SQLite dump)
-
-```bash
-docker compose exec backend python ffnet_sqlite_importer.py --download
+# preview first:
+docker compose exec backend python ao3_meta_importer.py --download --limit 20 --dry-run
+# full import (downloads once to data/ao3_meta/, then streams):
+docker compose exec backend python ao3_meta_importer.py --download
+# resume mid-file if you stopped it:
+docker compose exec backend python ao3_meta_importer.py --skip 4000000
 ```
 
 ### Harry Potter metadata seed (janelleshane, 112k works)
 
 A broad titles/authors/summaries seed scraped with permission from AO3. Metadata
-only (no full text), useful as a discovery layer. Rows are matched against any
-existing copies so it won't create duplicates of stories already indexed.
+only — no full text, and no source URL, so these rows link out to an AO3 search
+for the title and author rather than to a work page. Useful as a discovery layer.
+Rows are matched against any existing copies so it won't duplicate indexed stories.
 
 ```bash
 docker compose exec backend python janelleshane_importer.py --download
@@ -196,6 +204,33 @@ For newer stories not in the dumps, two paths:
 | `-tag:fluff` | Exclude (prefix any operator with `-`) |
 | `complete` `wip` `mature` | Standalone status/rating words |
 | `https://archiveofourown.org/works/12345` | Paste a URL to import the story |
+
+Free text runs through Postgres `websearch_to_tsquery`, so `"exact phrase"`, `or`,
+and `-word` work in the non-operator part of a query too.
+
+### How filters treat missing metadata
+
+Filters are **strict**: a story matches only if it actually carries the value. This
+matters because the bulk sources are uneven — the FFN dump has fandom, rating and
+word count but no characters or ships. Previously a story with no data for a field
+matched *any* filter on it, so filtering by a ship returned millions of stories
+with no ship at all.
+
+Tick **"Include stories with missing info"** in the sidebar (or pass
+`include_unknown=true`) to widen a search back to rows whose metadata was never
+captured.
+
+### Character and ship aliases
+
+Archives name the same people differently: FictionAlley writes `D/Hr`, AO3 writes
+`Hermione Granger/Draco Malfoy`, and a reader types `Draco/Hermione`.
+`backend/character_aliases.py` maps between them, so all three find the same
+stories. Aliases are matched as whole tag values, never substrings — several codes
+are a single letter (`H`, `D`, `R`) that would otherwise match almost every row.
+
+Romantic (`/`) and platonic (`&`) pairings stay distinct: `Draco/Hermione` does not
+return works tagged `Draco & Hermione`. Names outside the alias table fall back to
+substring matching, so other fandoms behave as before.
 
 ## Architecture
 
