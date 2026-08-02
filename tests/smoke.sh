@@ -74,6 +74,30 @@ prov={"ffnet_dump","hf_meta_2024","ao3_meta_dump","janelleshane_seed"}
 v={r["value"] for r in json.load(sys.stdin)}
 print("clean" if not (v & prov) else "leaked")')" "clean"
 
+head_ "Search syntax — operators must actually parse"
+# `fandom: Harry Potter` is the README's headline example and did not parse at
+# all: the value pattern required no space after the colon and stopped at the
+# first whitespace, so the filter was silently dropped into free text.
+syntax_check() { # label  raw-query  expected-key  expected-value
+  got=$(curl -s --max-time 60 "$B/api/search?q=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$2")&live=false" \
+        | python3 -c "
+import sys,json
+toks=json.load(sys.stdin)['parsed_tokens']
+print(next((t['value'] for t in toks if t['key']=='$3'), 'MISSING'))")
+  chk "$1" "$got" "$4"
+}
+syntax_check "fandom: spaced multi-word"  "fandom: Harry Potter"          fandoms       "Harry Potter"
+syntax_check "fandom: unspaced multi-word" "fandom:Harry Potter"          fandoms       "Harry Potter"
+syntax_check "char: spaced multi-word"    "char: Hermione Granger"        characters    "Hermione Granger"
+syntax_check "tag: spaced multi-word"     "tag: slow burn"                tags          "slow burn"
+syntax_check "quoted value"               'fandom:"Harry Potter"'         fandoms       "Harry Potter"
+syntax_check "ship operator"              "ship:Draco/Hermione"           relationships "Draco/Hermione"
+# Trailing shorthand must stay a shorthand, not get eaten by the fandom value.
+syntax_check "shorthand after value"      "fandom: Harry Potter complete" fandoms       "Harry Potter"
+syntax_check "status from shorthand"      "fandom: Harry Potter complete" status        "complete"
+# A value that IS a shorthand word must survive.
+syntax_check "status:complete"            "status:complete"               status        "complete"
+
 head_ "Stats"
 for e in "stats/totals" "stats/sites" "stats/suggest?kind=fandom&q=harry" \
          "stats/suggest?kind=relationship&q=draco" "stats/suggest?kind=character&q=her"; do
