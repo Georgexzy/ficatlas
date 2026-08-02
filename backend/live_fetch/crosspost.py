@@ -15,7 +15,7 @@ suffixes so "Harry's Story" by "Jane_Doe" matches "Harry's Story" by "jane doe".
 import re
 from datetime import datetime
 from collections import defaultdict
-from sqlalchemy import text as sql_text
+from sqlalchemy import func, text as sql_text
 from sqlalchemy.orm import Session
 from models.story import Story
 
@@ -210,10 +210,16 @@ def find_crosspost_for(db: Session, title: str, author: str, exclude_url: str | 
     if not k:
         return None
     nt, na = k.split("::", 1)
-    # Cheap candidate fetch by exact author match, then verify normalized title.
+    # Candidate fetch by exact author match, then verify the normalized title.
+    #
+    # This MUST be lower(author) = ..., not author ILIKE ... . Postgres cannot use
+    # the functional index ix_stories_author_lower for an ILIKE, even one with no
+    # wildcards, so that form was a full sequential scan: 9,995ms per call versus
+    # 6.4ms here. This is called once per incoming story, so a single live fetch
+    # of 60 results spent ten minutes scanning the table.
     candidates = (
         db.query(Story)
-        .filter(Story.author.ilike(author.strip()))
+        .filter(func.lower(Story.author) == author.strip().lower())
         .limit(50)
         .all()
     )

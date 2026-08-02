@@ -151,6 +151,12 @@ CREATE INDEX IF NOT EXISTS ix_stories_relationships_trgm ON stories USING gin (f
 CREATE INDEX IF NOT EXISTS ix_stories_characters_trgm    ON stories USING gin (fic_arr(characters) gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_stories_tags_trgm          ON stories USING gin (fic_arr(tags) gin_trgm_ops);
 
+-- Exact author lookup, for "everything by this person" and for the cross-post
+-- matcher. It MUST be queried as lower(author) = ... : Postgres cannot use a
+-- functional index for an ILIKE even with no wildcards, and that form was a full
+-- sequential scan — 9,995ms versus 6.4ms here, once per incoming story.
+CREATE INDEX IF NOT EXISTS ix_stories_author_lower ON stories (lower(author));
+
 -- Composite index for the most common access pattern: filter by word_count, sort by kudos.
 CREATE INDEX IF NOT EXISTS ix_stories_kudos_desc ON stories (kudos DESC);
 
