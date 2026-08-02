@@ -151,6 +151,7 @@ async def _run_crawl(site: str):
         db.flush()
         job_id = str(job_record.id)
 
+    crawler = None
     try:
         crawler = CRAWLERS[site]()
         stats = await crawler.run(job_type="incremental")
@@ -190,6 +191,18 @@ async def _run_crawl(site: str):
                 fails = _recent_blocked_count(db, site)
                 if fails >= CRAWL_FAIL_THRESHOLD and not _site_crawl_disabled(db, site):
                     _trip_breaker(db, site, fails)
+
+    finally:
+        # Both crawlers close their HTTP client at the END of run(), so a crawl
+        # that raises never closes it — and these crawlers fail routinely (FF.net
+        # is permanently 403, AO3 returns 525s). Every failed scheduled crawl
+        # leaked an httpx.AsyncClient and its connection pool, every few hours,
+        # for as long as the process lived.
+        if crawler is not None:
+            try:
+                await crawler.close()
+            except Exception:
+                pass
 
 
 def start_scheduler():
