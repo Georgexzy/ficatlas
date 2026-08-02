@@ -2,13 +2,15 @@
 import asyncio
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func, literal_column, text as sql_text
+from sqlalchemy import and_, or_, func, literal_column, cast, Text, text as sql_text
+from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from typing import Optional, List
 from pydantic import BaseModel
 
 from db.session import get_db
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 from query_parser import parse_query, parsed_to_search_params
+from character_aliases import character_variants, relationship_variants
 
 router = APIRouter()
 
@@ -148,6 +150,12 @@ async def search(
     updated_before:        Optional[str] = Query(None),
     published_after:       Optional[str] = Query(None),
     explicit:              bool          = Query(False),
+    include_unknown:       bool          = Query(
+        False,
+        description="Also return stories that have NO data for a filtered field "
+                    "(e.g. no relationships listed). Off by default so filters "
+                    "actually filter.",
+    ),
     search_within:         Optional[str] = Query(None),
     sort:                  str           = Query("relevance"),
     page:                  int           = Query(1, ge=1),
@@ -224,17 +232,20 @@ async def search(
             Story.summary.ilike(f"%{search_within}%"),
         ))
 
-    def arr_inc(col, csv_val, permissive_empty=True):
-        """Array-includes filter.
+    def arr_inc(col, csv_val, permissive_empty=False):
+        """Array-includes filter: a story matches when the column contains ALL of
+        the requested values.
 
-        permissive_empty=True (default, for secondary facets like characters/ships/
-        tags): a story matches if it contains ALL requested values OR has no data for
-        that field. Missing secondary metadata shouldn't exclude a story.
+        permissive_empty=True additionally lets through stories that have NO data
+        for the column at all. That used to be the default for every secondary
+        facet, on the reasoning that missing metadata shouldn't exclude a story.
+        In practice it made those filters do nothing: 99.7% of indexed rows have no
+        relationships and 98.8% have no characters, so filtering by a ship returned
+        millions of stories that had no ship at all — swamping the handful that
+        genuinely matched.
 
-        permissive_empty=False (for the FANDOM axis): empty arrays do NOT match. A
-        story with no fandom listed should never surface under a specific-fandom
-        search, otherwise the millions of empty-fandom dump rows leak into every
-        fandom query and wildly inflate the count.
+        Filters are now strict by default, and the caller opts into the permissive
+        behaviour with include_unknown.
         """
         if not csv_val: return None
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
@@ -250,6 +261,33 @@ async def search(
             for v in vals
         ])
 
+    def arr_inc_aliased(col, csv_val, expand, permissive_empty=False):
+        """Array-includes filter with alias expansion.
+
+        For each requested value we look up every spelling the archives actually
+        store. Those are matched as WHOLE array elements via the && (overlap)
+        operator — critical because aliases like "H" and "D" are single letters
+        that a substring match would find inside almost every row. Overlap also
+        lets Postgres use the plain GIN array indexes.
+
+        Names we have no aliases for fall back to the substring behaviour, so
+        fandoms outside the alias table keep working exactly as before.
+        """
+        if not csv_val: return None
+        vals = [v.strip() for v in csv_val.split(",") if v.strip()]
+        if not vals: return None
+
+        empty = or_(col.is_(None), func.cardinality(col) == 0)
+        clauses = []
+        for v in vals:
+            variants = expand(v)
+            if variants:
+                match = col.op("&&")(cast(variants, PG_ARRAY(Text)))
+            else:
+                match = _arr_text(col).ilike(f"%{v.lower()}%")
+            clauses.append(or_(match, empty) if permissive_empty else match)
+        return and_(*clauses)
+
     def arr_exc(col, csv_val):
         """Strict exclude: only kick out stories that DEFINITELY have the unwanted
         value. Empty arrays pass — we can't confirm presence of what we're excluding.
@@ -258,16 +296,28 @@ async def search(
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
         return and_(*[~_arr_text(col).ilike(f"%{v}%") for v in vals]) if vals else None
 
-    # Fandom is the primary axis → strict. Everything else → permissive on empty.
+    # Fandom is always strict — a story with no fandom listed must never surface
+    # under a specific-fandom search, or the millions of empty-fandom dump rows
+    # leak into every fandom query.
     f = arr_inc(Story.fandoms, fandoms, permissive_empty=False)
     if f is not None: filters.append(f)
 
+    # Characters and relationships get alias expansion so a filter written the
+    # natural way ("Draco/Hermione") also matches how each archive actually stores
+    # it ("D/Hr", "Hermione Granger/Draco Malfoy"). See character_aliases.py.
+    f = arr_inc_aliased(Story.characters, characters, character_variants,
+                        permissive_empty=include_unknown)
+    if f is not None: filters.append(f)
+
+    f = arr_inc_aliased(Story.relationships, relationships, relationship_variants,
+                        permissive_empty=include_unknown)
+    if f is not None: filters.append(f)
+
     for col, val in [
-        (Story.characters, characters),
-        (Story.relationships, relationships), (Story.tags, tags),
+        (Story.tags, tags),
         (Story.warnings, warnings), (Story.categories, categories),
     ]:
-        f = arr_inc(col, val)
+        f = arr_inc(col, val, permissive_empty=include_unknown)
         if f is not None: filters.append(f)
 
     for col, val in [
@@ -278,11 +328,17 @@ async def search(
         f = arr_exc(col, val)
         if f is not None: filters.append(f)
 
+    # Scalar filters follow the same rule as the facet filters: a story only matches
+    # if it actually carries the value. `include_unknown` re-admits rows where the
+    # field is NULL (metadata we never captured), rather than that being the default.
+    def _or_unknown(cond, *unknown_conds):
+        return or_(cond, *unknown_conds) if include_unknown else cond
+
     if ratings:
         r_vals = [r.strip().upper() for r in ratings.split(",")]
         valid  = [RatingEnum(r) for r in r_vals if r in RatingEnum._value2member_map_]
-        # Permissive: stories with NULL rating still pass (HF FFN dump rows etc)
-        if valid: filters.append(or_(Story.rating.in_(valid), Story.rating.is_(None)))
+        if valid:
+            filters.append(_or_unknown(Story.rating.in_(valid), Story.rating.is_(None)))
 
     if exclude_ratings:
         r_vals = [r.strip().upper() for r in exclude_ratings.split(",")]
@@ -296,27 +352,26 @@ async def search(
     if status:
         s_vals = [StatusEnum(s.strip()) for s in status.split(",") if s.strip() in StatusEnum.__members__]
         if s_vals:
-            # Permissive: a story whose completion status is unknown (NULL, or the
-            # explicit "unknown" value used by bulk imports that lacked completion
-            # data) still passes — we can't prove it doesn't match, so don't exclude it.
-            filters.append(or_(Story.status.in_(s_vals),
-                               Story.status.is_(None),
-                               Story.status == StatusEnum.unknown))
+            # "unknown" is a real stored value for bulk imports that carried no
+            # completion data, so it counts as unknown here alongside NULL.
+            filters.append(_or_unknown(Story.status.in_(s_vals),
+                                       Story.status.is_(None),
+                                       Story.status == StatusEnum.unknown))
 
     if language:
-        filters.append(or_(Story.language.ilike(language), Story.language.is_(None)))
+        filters.append(_or_unknown(Story.language.ilike(language), Story.language.is_(None)))
     if word_count_min:
-        # Permissive on NULL (unknown metadata) but NOT on 0 — a literal 0-word
-        # story is fanart/art/placeholder and must be excluded by a min-words filter.
-        filters.append(or_(Story.word_count >= word_count_min, Story.word_count.is_(None)))
+        # NULL is unknown metadata, but a literal 0-word story is art/placeholder
+        # and must always be excluded by a min-words filter.
+        filters.append(_or_unknown(Story.word_count >= word_count_min, Story.word_count.is_(None)))
     if word_count_max:
-        filters.append(or_(Story.word_count <= word_count_max, Story.word_count.is_(None)))
+        filters.append(_or_unknown(Story.word_count <= word_count_max, Story.word_count.is_(None)))
     if updated_after:
-        filters.append(or_(Story.updated_at >= updated_after, Story.updated_at.is_(None)))
+        filters.append(_or_unknown(Story.updated_at >= updated_after, Story.updated_at.is_(None)))
     if updated_before:
-        filters.append(or_(Story.updated_at <= updated_before, Story.updated_at.is_(None)))
+        filters.append(_or_unknown(Story.updated_at <= updated_before, Story.updated_at.is_(None)))
     if published_after:
-        filters.append(or_(Story.published_at >= published_after, Story.published_at.is_(None)))
+        filters.append(_or_unknown(Story.published_at >= published_after, Story.published_at.is_(None)))
 
     if filters:
         db_query = db_query.filter(and_(*filters))

@@ -1,6 +1,6 @@
 // Types mirroring the FastAPI response models
 
-export type Site = "ao3" | "ffnet" | "wattpad" | "royalroad" | "spacebattles"
+export type Site = "ao3" | "ffnet" | "fictionalley" | "wattpad" | "royalroad" | "spacebattles"
 export type Rating = "G" | "T" | "M" | "E" | "NR"
 export type Status = "complete" | "in_progress" | "abandoned" | "unknown"
 export type Category = "F/F" | "F/M" | "M/M" | "Gen" | "Other" | "Multi"
@@ -78,6 +78,8 @@ export interface SearchParams {
   updated_before?: string
   published_after?: string
   explicit?: boolean
+  /** Also return stories that have no data at all for a filtered field. */
+  include_unknown?: boolean
   search_within?: string
   // Pagination
   sort?: string

@@ -152,5 +152,25 @@ export async function downloadStoryForOffline(
     chapters,
     savedAt: new Date().toISOString(),
   })
+  // Cache the reader shell so this story opens offline with no prior online
+  // visit. The service worker serves one cached reader shell for ANY
+  // /story/.../chapter/... URL, so fetching one chapter page is enough — but we
+  // do it on every save so it's always present. We're online here (the fetches
+  // above just succeeded), so this fetch will hit the network and the SW caches
+  // it. Find the current shell cache dynamically so this never goes stale when
+  // the SW cache version is bumped.
+  try {
+    if (typeof caches !== "undefined") {
+      const keys = await caches.keys()
+      const shell = keys.find(k => k.startsWith("ficatlas-shell-"))
+      if (shell) {
+        const cache = await caches.open(shell)
+        const readerUrl = `/story/${storyId}/chapter/1`
+        const res = await fetch(readerUrl)
+        if (res.ok) await cache.put(readerUrl, res.clone())
+      }
+    }
+  } catch {}
+
   return chapters.length
 }

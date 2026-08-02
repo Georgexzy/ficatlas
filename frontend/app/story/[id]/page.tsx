@@ -3,6 +3,7 @@ import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory } from "@/lib/offline"
+import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -169,27 +170,25 @@ export default function StoryPage() {
               </Link>
             )
           })()}
-          {!story.is_hosted && (story.site === "ao3" || story.site === "ffnet") && (
+          {/* Seed rows are excluded: there is no real page for FicHub to fetch. */}
+          {!story.is_hosted && !isSeedUrl(story.url)
+            && (story.site === "ao3" || story.site === "ffnet") && (
             <button className="btn btn--primary" onClick={importAndRead} disabled={importing}>
               {importing ? "Importing…" : "Import & Read here"}
             </button>
           )}
-          {!story.is_hosted && story.site !== "ao3" && story.site !== "ffnet" && (() => {
-            // FicAlley snapshots were crawled with explicit :80 port — inject if missing
-            let target = story.url
-            if (story.site === "fictionalley") {
-              let u = story.url
-              if (u.includes("fictionalley.org") && !u.includes("fictionalley.org:")) {
-                u = u.replace("fictionalley.org/", "fictionalley.org:80/")
-              }
-              target = `https://web.archive.org/web/2010/${u}`
-            }
-            return (
-              <a href={target} target="_blank" rel="noopener noreferrer" className="btn btn--primary">
-                Read on {story.site === "fictionalley" ? "Wayback" : (SITE_LABELS[story.site] ?? story.site)} ↗
-              </a>
-            )
-          })()}
+          {/* Metadata-only seed rows have no page of their own, so they need this
+              link even though they are filed under AO3. */}
+          {!story.is_hosted
+            && (isSeedUrl(story.url) || (story.site !== "ao3" && story.site !== "ffnet"))
+            && (() => {
+              const { href, label } = storyLink(story, SITE_LABELS)
+              return (
+                <a href={href} target="_blank" rel="noopener noreferrer" className="btn btn--primary">
+                  {label}
+                </a>
+              )
+            })()}
           <button className={`btn ${bookmarked ? "btn--on" : ""}`} onClick={toggleBookmark}>
             {bookmarked ? "★ Bookmarked" : "☆ Bookmark"}
           </button>

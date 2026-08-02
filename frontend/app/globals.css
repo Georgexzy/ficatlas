@@ -96,6 +96,12 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .sidebar__group { padding: 0 14px 10px; }
 .sidebar__label { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; display: block; margin-bottom: 6px; }
 .sidebar__rule { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+/* Checkbox + label row inside the filter sidebar. 18px touch target and a
+   wrapping label so the text stays readable in the mobile drawer. */
+.checkbox-row { display: flex; align-items: flex-start; gap: 8px; font-size: 12px;
+  color: var(--text-dim); user-select: none; cursor: pointer; line-height: 1.35; }
+.checkbox-row input { width: 16px; height: 16px; margin: 1px 0 0; flex: 0 0 auto; cursor: pointer; accent-color: var(--accent); }
+.checkbox-row:hover { color: var(--text); }
 .sidebar__section-head { font-size: 10px; color: var(--text-faint); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.12em; padding: 6px 14px 2px; }
 
 /* ── Filter sections ───────────────────────────────────────────────────────── */

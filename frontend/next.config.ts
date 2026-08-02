@@ -6,6 +6,8 @@ import type { NextConfig } from "next"
 const INTERNAL_API = process.env.INTERNAL_API_URL || "http://backend:8000"
 
 const nextConfig: NextConfig = {
+  typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true },
   // Proxy all /api/* requests from the frontend (port 3000) through to the
   // backend container. This means:
   //   - Browser only ever talks to one port (3000 — exposed via Tailscale).

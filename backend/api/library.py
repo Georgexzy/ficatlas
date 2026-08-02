@@ -373,6 +373,16 @@ async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depend
 @router.post("/import-url")
 async def import_url(url: str = Form(...), db: Session = Depends(get_db)):
     """Fetch a story from AO3/FFnet via FicHub and import it as a hosted story."""
+    # Metadata-only seed rows carry a synthetic seed:// URL with no page behind it.
+    # The UI hides the import button for these, but reject them here too so a stale
+    # client can't send FicHub a URL it will only fail on.
+    if url.startswith("seed://"):
+        raise HTTPException(
+            400,
+            "This is a metadata-only entry with no source page. "
+            "Use the AO3 search link on the story to find the work itself.",
+        )
+
     # Check exact URL match first
     existing = db.query(Story).filter(Story.url == url).first()
     # ...then check if any existing story knows this URL as a cross-post
@@ -1202,26 +1212,60 @@ async def clear_ao3_cooldown_endpoint():
 # ── Admin: remove orphaned example/seed stories ──────────────────────────────
 
 @router.delete("/admin/cleanup-seeds")
-async def cleanup_seeds(db: Session = Depends(get_db)):
-    """Best-effort removal of seed/example/test stories left over from earlier runs.
-    Matches by site_id pattern and obvious placeholder authors.
+async def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db)):
+    """Remove the fabricated demo stories written by seed_data.py.
+
+    Those rows are invented works ("realistic test stories for UI development")
+    carrying invented kudos counts in the tens of thousands — higher than anything
+    else in the AO3 set — so they sorted to the top of real searches, and their
+    URLs point at unrelated genuine AO3 works.
+
+    The previous matcher looked for site_id LIKE 'seed%'/'example%'/'test%'/'demo%'
+    and placeholder author names. seed_data.py uses neither: its rows have numeric
+    site_ids (1234001-1234008) and real-looking author names, so the cleanup never
+    matched the very data it exists to remove. Worse, `seed%` DID match the
+    synthetic site_ids of the janelleshane metadata seed, so running this endpoint
+    would have deleted that entire legitimate import.
+
+    Match the demo rows by their actual signature instead, and never touch a row
+    carrying a provenance tag from a real importer.
     """
-    from sqlalchemy import or_
-    candidates = db.query(Story).filter(or_(
-        Story.site_id.like("seed%"),
+    from sqlalchemy import or_, and_, not_
+
+    # Provenance tags applied by genuine bulk importers. Rows carrying one of these
+    # are real index data regardless of what their site_id looks like.
+    PROVENANCE_TAGS = [
+        "janelleshane_seed", "hpffa_archive", "hexfiles_archive",
+        "squidgeworld_archive", "dlp_library",
+    ]
+
+    looks_like_demo = or_(
+        # seed_data.py: AO3 rows with site_id 1234001-1234008
+        and_(Story.site == SiteEnum.ao3, Story.site_id.op("~")(r"^123400[0-9]$")),
         Story.site_id.like("example%"),
         Story.site_id.like("test%"),
         Story.site_id.like("demo%"),
         Story.author.in_(["Example Author", "Test Author", "Demo Author", "Seed Author"]),
         Story.tags.any("example"),
-        Story.tags.any("seed"),
-    )).all()
-    removed = []
-    for s in candidates:
-        removed.append({"id": str(s.id), "title": s.title, "site_id": s.site_id})
-        db.delete(s)
-    db.commit()
-    return {"ok": True, "removed_count": len(removed), "removed": removed}
+    )
+
+    candidates = db.query(Story).filter(
+        looks_like_demo,
+        # Story.tags is a generic ARRAY column, so it has no .overlap(); .any() is
+        # the comparator this file uses elsewhere.
+        not_(or_(*[Story.tags.any(t) for t in PROVENANCE_TAGS])),
+        Story.is_hosted == False,  # noqa: E712 — never delete full text we hold
+    ).all()
+
+    removed = [{"id": str(s.id), "title": s.title, "site_id": s.site_id,
+                "site": s.site.value if s.site else None, "kudos": s.kudos}
+               for s in candidates]
+    if not dry_run:
+        for s in candidates:
+            db.delete(s)
+        db.commit()
+    return {"ok": True, "dry_run": dry_run,
+            "removed_count": len(removed), "removed": removed}
 
 
 @router.post("/cleanup-preface-chapters")

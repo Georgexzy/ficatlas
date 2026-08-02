@@ -29,19 +29,44 @@ async def site_stats(db: Session = Depends(get_db)):
         for r in rows
     ]
 
+# The index status widget calls /totals on every page load, but these are
+# whole-table aggregates — count(*) and sum(word_count) can't be answered from an
+# index, so each call scanned every row. Five separate queries meant several
+# passes over the table (~2.3s at 2.3M rows, and growing with every import).
+#
+# One pass now computes all five figures, and the result is cached briefly. These
+# numbers move slowly and are purely informational, so a slightly stale count is
+# fine; the page load no longer waits on a table scan.
+_TOTALS_TTL_SECONDS = 300
+_totals_cache: dict | None = None
+_totals_cached_at: float = 0.0
+
+_TOTALS_SQL = text("""
+    SELECT count(*)                                                   AS stories,
+           count(*) FILTER (WHERE is_hosted)                          AS hosted,
+           coalesce(sum(word_count), 0)                               AS total_words,
+           count(*) FILTER (WHERE tags @> ARRAY['dlp_library'])       AS dlp,
+           count(*) FILTER (WHERE tags @> ARRAY['hpffa_archive'])     AS hpffa
+    FROM stories
+""")
+
+
 @router.get("/totals")
-async def total_stats(db: Session = Depends(get_db)):
-    stories = db.query(func.count(Story.id)).scalar() or 0
-    hosted  = db.query(func.count(Story.id)).filter(Story.is_hosted == True).scalar() or 0
-    total_words = db.query(func.sum(Story.word_count)).scalar() or 0
-    dlp = db.query(func.count(Story.id)).filter(
-        Story.tags.any("dlp_library")  # type: ignore[arg-type]
-    ).scalar() or 0
-    hpffa = db.query(func.count(Story.id)).filter(
-        Story.tags.any("hpffa_archive")  # type: ignore[arg-type]
-    ).scalar() or 0
-    return {"stories": stories, "hosted": hosted, "total_words": int(total_words),
-            "dlp": dlp, "hpffa": hpffa}
+async def total_stats(refresh: bool = Query(False), db: Session = Depends(get_db)):
+    global _totals_cache, _totals_cached_at
+    import time
+    now = time.monotonic()
+    if not refresh and _totals_cache and (now - _totals_cached_at) < _TOTALS_TTL_SECONDS:
+        return _totals_cache
+
+    row = db.execute(_TOTALS_SQL).mappings().first()
+    _totals_cache = {
+        "stories": row["stories"], "hosted": row["hosted"],
+        "total_words": int(row["total_words"]), "dlp": row["dlp"],
+        "hpffa": row["hpffa"],
+    }
+    _totals_cached_at = now
+    return _totals_cache
 
 
 @router.get("/suggest")

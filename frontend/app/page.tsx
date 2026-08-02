@@ -1,5 +1,6 @@
 "use client"
-import { useState, useCallback, useTransition, useEffect, useRef } from "react"
+export const dynamic = "force-dynamic"
+import { useState, useCallback, useTransition, useEffect, useRef, Suspense } from "react"
 import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import Link from "next/link"
 import OfflineLink from "./OfflineLink"
@@ -8,6 +9,7 @@ import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS,
          DATE_PRESETS, AO3_WARNINGS, CATEGORIES } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
+import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import IndexStatus from "./IndexStatus"
 import SyntaxHelp from "./SyntaxHelp"
 import { useAuth } from "@/lib/auth"
@@ -284,7 +286,7 @@ function StoryCard({ story }: { story: StoryCard }) {
     setImporting(true)
     try {
       const fd = new FormData(); fd.append("url", story.url)
-      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const r = await fetch(`/api/library/import-url`, { method: "POST", body: fd })
       const data = await r.json()
       if (data.id) {
         setImportedId(data.id)
@@ -300,22 +302,12 @@ function StoryCard({ story }: { story: StoryCard }) {
     }
   }
 
-  // External link: FicAlley is defunct, link to Wayback. Snapshots were crawled with
-  // the explicit :80 port in the URL, so we need to inject it for Wayback to match.
-  const externalUrl = (() => {
-    if (story.site !== "fictionalley") return story.url
-    let u = story.url
-    if (u.includes("fictionalley.org") && !u.includes("fictionalley.org:")) {
-      u = u.replace("fictionalley.org/", "fictionalley.org:80/")
-    }
-    return `https://web.archive.org/web/2010/${u}`
-  })()
-  const externalLabel = story.site === "fictionalley"
-    ? "Open on Wayback ↗"
-    : `Open on ${SITE_LABELS[story.site] ?? story.site} ↗`
+  const { href: externalUrl, label: externalLabel } = storyLink(story, SITE_LABELS)
 
-  // Can we one-click import? Only sites FicHub handles, and not already hosted.
-  const canImport = !story.is_hosted && (story.site === "ao3" || story.site === "ffnet")
+  // Can we one-click import? Only sites FicHub handles, not already hosted, and
+  // not a metadata-only seed row — there is no real page for FicHub to fetch.
+  const canImport = !story.is_hosted && !isSeedUrl(story.url)
+    && (story.site === "ao3" || story.site === "ffnet")
 
   return (
     <article className={`card ${story.is_live ? "card--live" : ""}`}>
@@ -434,7 +426,7 @@ function EmptyState({ onPick, onSurprise }: { onPick: (q: string) => void; onSur
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-export default function SearchPage() {
+function SearchPageInner() {
   const router     = useRouter()
   const pathname   = usePathname()
   const rawParams  = useSearchParams()
@@ -446,6 +438,10 @@ export default function SearchPage() {
   const [query,   setQuery]   = useState(get("q") ?? "")
   const [sites,   setSites]   = useState<string[]>(csv(get("sites") ?? "ao3,ffnet,fictionalley"))
   const [explicit, setExplicit] = useState(get("explicit") === "true")
+  // Most bulk-imported rows carry no ship/character data at all. Off by default so
+  // a ship filter returns stories that actually have that ship; on, it widens the
+  // net to include stories whose metadata we simply never captured.
+  const [includeUnknown, setIncludeUnknown] = useState(get("include_unknown") === "true")
 
   // Include filters
   const [incFandoms,  setIncFandoms]  = useState(csv(get("fandoms")))
@@ -641,12 +637,13 @@ export default function SearchPage() {
       word_count_max:        wordMax ?? pq.wordCountMax ?? undefined,
       updated_after:         updatedAfter || pq.updatedAfter || undefined,
       explicit,
+      include_unknown:       includeUnknown || undefined,
       search_within:         searchWithin || undefined,
       sort,
       page:                  pg,
       per_page:              20,
     }
-  }, [query, sites, explicit, incFandoms, incChars, incShips, incTags, incRatings,
+  }, [query, sites, explicit, includeUnknown, incFandoms, incChars, incShips, incTags, incRatings,
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
       status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort])
 
@@ -732,7 +729,7 @@ export default function SearchPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
       incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
-      language, wordMin, wordMax, updatedAfter, explicit, sort])
+      language, wordMin, wordMax, updatedAfter, explicit, includeUnknown, sort])
 
   const removeToken = (raw: string) =>
     setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim())
@@ -810,6 +807,14 @@ export default function SearchPage() {
             <Pills options={SITE_OPTIONS} selected={sites}
               onToggle={id => tog(sites, setSites, id)}
               highlighted={fromSearch("sites")} />
+          </div>
+
+          <div className="sidebar__group">
+            <label className="checkbox-row" title="Most bulk-imported stories have no ship or character tags. By default they are excluded from those filters, so a filter returns only stories that genuinely match.">
+              <input type="checkbox" checked={includeUnknown}
+                onChange={e => setIncludeUnknown(e.target.checked)} />
+              <span>Include stories with missing info</span>
+            </label>
           </div>
 
           <hr className="sidebar__rule" />
@@ -1104,5 +1109,13 @@ export default function SearchPage() {
         </main>
       </div>
     </div>
+  )
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={null}>
+      <SearchPageInner />
+    </Suspense>
   )
 }
