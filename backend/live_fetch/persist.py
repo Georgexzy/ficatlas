@@ -1,6 +1,6 @@
 """Persist live-fetched results into the DB so the index grows over time."""
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
@@ -150,11 +150,25 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
 
 
 def _enrich_existing(db: Session, url: str, d: dict) -> bool:
-    """Fill gaps on an already-indexed story from a freshly fetched blurb.
+    """Refresh an already-indexed story from a freshly fetched blurb.
 
-    Returns True if anything was written. Deliberately conservative: a field is
-    only set when the stored row has nothing, so a blurb can never downgrade
-    better data that came from a full import.
+    Two jobs, and the second one is why this exists at all.
+
+    Filling gaps: AO3's metadata dump carries no summary field, so 13M rows have
+    none while every listing blurb has one. Missing facets and engagement counts
+    are filled the same way, and never overwritten — a blurb must not downgrade
+    richer data from a full import.
+
+    Tracking updates: a work is otherwise frozen at the moment it was imported.
+    A work-in-progress that has since gained ten chapters kept its original
+    word_count, chapter_count and status forever, because the previous code
+    skipped any URL it already had. Fanfiction is mutable — that is the whole
+    point of a WIP — so mutable fields move forward when the blurb shows the work
+    has progressed.
+
+    "Forward" only: chapters and words may grow, a WIP may become complete, and
+    engagement counts only rise. A blurb reporting *less* is treated as a partial
+    or stale render and ignored, rather than deleting data we already hold.
     """
     try:
         story = db.query(Story).filter(Story.url == url).first()
@@ -163,11 +177,11 @@ def _enrich_existing(db: Session, url: str, d: dict) -> bool:
 
         changed = False
 
+        # ── Fill gaps: only where we hold nothing ──────────────────────────
         if not (story.summary or "").strip() and (d.get("summary") or "").strip():
             story.summary = d["summary"]
             changed = True
 
-        # Facet arrays: fill only when we hold nothing for that facet.
         for attr, key in (("tags", "tags"), ("characters", "characters"),
                           ("relationships", "relationships"), ("fandoms", "fandoms"),
                           ("warnings", "warnings"), ("categories", "categories")):
@@ -175,23 +189,46 @@ def _enrich_existing(db: Session, url: str, d: dict) -> bool:
                 setattr(story, attr, d[key])
                 changed = True
 
-        # Engagement counts: the bulk dumps carry none, so any real number is an
-        # improvement over the 0 they were imported with.
-        for attr, key in (("kudos", "kudos"), ("hits", "hits"),
+        # ── Track updates: mutable fields move forward ─────────────────────
+        for attr, key in (("chapter_count", "chapter_count"),
+                          ("word_count", "word_count"),
+                          ("kudos", "kudos"), ("hits", "hits"),
                           ("bookmarks", "bookmarks"), ("comments", "comments")):
-            if not (getattr(story, attr) or 0) and (d.get(key) or 0):
-                setattr(story, attr, d[key])
+            new_val = d.get(key) or 0
+            if new_val > (getattr(story, attr) or 0):
+                setattr(story, attr, new_val)
                 changed = True
 
-        if not (story.word_count or 0) and (d.get("word_count") or 0):
-            story.word_count = d["word_count"]
+        # A WIP becoming complete is real news; the reverse is not, since AO3
+        # only ever moves a work in that direction.
+        if d.get("status") == "complete" and story.status != StatusEnum.complete:
+            story.status = StatusEnum.complete
             changed = True
 
-        if changed:
-            db.commit()
-            return True
-        return False
+        # The work's own last-updated date, when the blurb reports a newer one.
+        blurb_updated = None
+        if d.get("updated_at"):
+            try:
+                blurb_updated = datetime.fromisoformat(d["updated_at"])
+            except Exception:
+                blurb_updated = None
+        if blurb_updated is not None:
+            current = story.updated_at
+            if current is None or (
+                current.replace(tzinfo=None) < blurb_updated.replace(tzinfo=None)
+            ):
+                story.updated_at = blurb_updated
+                changed = True
+
+        # crawled_at means "when did we last SEE this work". It was set once at
+        # insert and never touched again, so there was no way to tell a row
+        # verified minutes ago from one imported months ago — and therefore no
+        # way to prioritise what to re-check.
+        story.crawled_at = datetime.now(timezone.utc)
+
+        db.commit()
+        return changed
     except Exception as e:
         db.rollback()
-        log.warning(f"enrich existing {url} failed: {e}")
+        log.warning(f"refresh existing {url} failed: {e}")
         return False

@@ -116,6 +116,10 @@ services:
       ENRICH_FFNET: "true"
       # New imports and live fetches keep introducing cross-posted duplicates.
       DEDUP_CROSSPOSTS: "true"
+      # Works were frozen at import time. Tracked fandoms refresh for free via
+      # the recent-works loop; this re-checks hosted works-in-progress, which are
+      # the ones actually being read.
+      REFRESH_STALE: "true"
     depends_on:
       db:
         condition: service_healthy

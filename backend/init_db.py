@@ -163,6 +163,14 @@ CREATE INDEX IF NOT EXISTS ix_stories_author_lower ON stories (lower(author));
 CREATE INDEX IF NOT EXISTS ix_stories_last_activity
     ON stories (coalesce(updated_at, published_at) DESC NULLS LAST);
 
+-- crawled_at is "when did we last verify this work". It is now advanced every
+-- time a live blurb re-confirms a row, which makes it a real staleness signal —
+-- it was previously set once at insert and never touched, so a row verified
+-- minutes ago looked identical to one imported months earlier. Indexed for
+-- "refresh the stalest works-in-progress first".
+CREATE INDEX IF NOT EXISTS ix_stories_stale_wip
+    ON stories (crawled_at ASC) WHERE status = 'in_progress';
+
 -- Composite index for the most common access pattern: filter by word_count, sort by kudos.
 CREATE INDEX IF NOT EXISTS ix_stories_kudos_desc ON stories (kudos DESC);
 

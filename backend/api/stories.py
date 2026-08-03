@@ -67,6 +67,7 @@ class StoryDetail(BaseModel):
     wayback_url: Optional[str]
     cross_post_urls: List[str] = []
     sources: List[str] = []
+    last_checked: Optional[str] = None   # when we last re-verified this record
     chapters: List[ChapterMeta]
 
 
@@ -110,6 +111,7 @@ async def get_story(story_id: str, db: Session = Depends(get_db)):
         characters=story.characters or [],
         tags=content_tags(story.tags),
         sources=source_labels(story.tags),
+        last_checked=story.crawled_at.isoformat() if story.crawled_at else None,
         warnings=story.warnings or [],
         categories=story.categories or [],
         genres=story.genres or [],
