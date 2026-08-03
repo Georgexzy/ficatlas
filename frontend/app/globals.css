@@ -2347,3 +2347,6 @@ body.is-resizing * { cursor: col-resize !important; }
 .filter-note {
   font-size: 11px; color: var(--text-faint); line-height: 1.5; margin-bottom: 7px;
 }
+
+/* Live-ish counter in the index panel — the index grows while you use it. */
+.index-status__live { color: var(--accent); }
