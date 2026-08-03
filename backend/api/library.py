@@ -1291,8 +1291,16 @@ async def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db),
     ]
 
     looks_like_demo = or_(
-        # seed_data.py: AO3 rows with site_id 1234001-1234008
-        and_(Story.site == SiteEnum.ao3, Story.site_id.op("~")(r"^123400[0-9]$")),
+        # The tag seed_data.py now stamps on every fixture — matching by
+        # provenance rather than guessing at a site_id pattern, which is what
+        # made this endpoint miss the very rows it exists to remove.
+        Story.tags.any("ui_fixture"),
+        # Older fixtures predating that tag. Matched by EXACT id, not a range:
+        # `^123400[0-9]$` also caught site_id 1234000, which is a genuine AO3
+        # work ("Fortune Teller" by Margo_Kim) — this endpoint would have
+        # deleted it.
+        and_(Story.site == SiteEnum.ao3,
+             Story.site_id.in_([f"123400{n}" for n in range(1, 9)])),
         Story.site_id.like("example%"),
         Story.site_id.like("test%"),
         Story.site_id.like("demo%"),
