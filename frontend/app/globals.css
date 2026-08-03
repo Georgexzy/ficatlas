@@ -199,7 +199,7 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .main { flex: 1; min-width: 0; padding: 20px 24px 40px; }
 
 /* ── Search ────────────────────────────────────────────────────────────────── */
-.search-wrap { margin-bottom: 16px; }
+.search-wrap { margin-bottom: 16px; position: relative; }
 .search-bar { display: flex; gap: 8px; align-items: center; position: relative; }
 .search-input {
   flex: 1; background: var(--surface2); border: 1px solid var(--border2);
@@ -352,41 +352,71 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 }
 .syntax-help__btn:hover { border-color: var(--accent); color: var(--accent); }
 /* Clickable: a dimmed overlay that ignores clicks reads as broken. */
-.syntax-help__backdrop { position: fixed; inset: 0; z-index: 150; background: rgba(0,0,0,0.5); }
-.syntax-help__panel {
-  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  width: min(660px, 92vw); max-height: 80vh; overflow-y: auto;
+/* Panel drops UNDER the search bar and is anchored to .search-wrap, which is
+   the positioning context — not a modal, so no backdrop, focus trap or scroll
+   lock is involved. */
+.syntax-panel {
+  position: absolute; z-index: 120;
+  top: calc(100% + 6px); left: 0; right: 0;
   background: var(--surface2); border: 1px solid var(--border2);
-  border-radius: 8px; padding: 22px 24px; z-index: 200;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  border-radius: 8px; box-shadow: 0 14px 40px rgba(0,0,0,0.55);
+  max-height: min(60vh, 460px); display: flex; flex-direction: column;
+  overflow: hidden;
 }
-.syntax-help__header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.syntax-help__title { font-family: var(--font-serif); font-size: 20px; font-weight: 600; }
-.syntax-help__close { background: none; border: none; color: var(--text-faint); font-size: 18px; }
-.syntax-help__close:hover { color: var(--text); }
-.syntax-help__intro { font-size: 13px; color: var(--text-dim); margin-bottom: 18px; line-height: 1.5; }
-.syntax-help__group { margin-bottom: 18px; }
-.syntax-help__group-label { font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 7px; }
-/* The code column used to be `white-space: nowrap; flex-shrink: 0`, so the
-   "Combined example" — one long line — pushed the row wider than the panel and
-   was clipped at the edge. Let it wrap instead; the description drops beneath
-   it once the row can no longer sit side by side. */
-.syntax-help__row {
-  display: flex; gap: 8px 16px; align-items: baseline;
-  padding: 3px 0; flex-wrap: wrap;
+.syntax-panel__head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  padding: 12px 14px 8px; border-bottom: 1px solid var(--border);
 }
-.syntax-help__code {
+.syntax-panel__title { font-family: var(--font-serif); font-size: 15px; font-weight: 600; }
+.syntax-panel__hint { font-size: 11.5px; color: var(--text-faint); margin-top: 2px; }
+.syntax-panel__close {
+  background: none; border: 0; color: var(--text-faint);
+  font-size: 14px; line-height: 1; cursor: pointer;
+  width: 28px; height: 28px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius);
+}
+.syntax-panel__close:hover { color: var(--accent); background: var(--surface3); }
+.syntax-panel__close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* The list scrolls inside the panel rather than the panel growing off-screen. */
+.syntax-panel__body { overflow-y: auto; padding: 10px 14px 4px; }
+.syntax-panel__group { margin-bottom: 12px; }
+.syntax-panel__group-label {
+  font-size: 10px; font-family: var(--font-mono); text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 6px;
+}
+.syntax-panel__rows { display: grid; gap: 3px; }
+
+/* Each example is a button, because clicking it inserts the syntax. */
+.syntax-panel__row {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  width: 100%; text-align: left; padding: 5px 7px;
+  background: none; border: 1px solid transparent; border-radius: var(--radius);
+  cursor: pointer;
+}
+.syntax-panel__row:hover { background: var(--surface3); border-color: var(--border2); }
+.syntax-panel__row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.syntax-panel__code {
   font-family: var(--font-mono); font-size: 12px; color: var(--accent);
   background: var(--accent-bg); padding: 2px 7px; border-radius: 3px;
-  white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%;
+  white-space: pre-wrap; overflow-wrap: anywhere; flex-shrink: 0;
 }
-.syntax-help__desc { font-size: 12px; color: var(--text-dim); flex: 1 1 200px; min-width: 0; }
+.syntax-panel__desc { font-size: 12px; color: var(--text-dim); flex: 1 1 140px; min-width: 0; }
+.syntax-panel__foot {
+  font-size: 11.5px; color: var(--text-faint); line-height: 1.5;
+  padding: 9px 14px; border-top: 1px solid var(--border);
+}
+.syntax-panel__foot kbd {
+  font-family: var(--font-mono); font-size: 10.5px;
+  border: 1px solid var(--border2); border-radius: 3px; padding: 1px 4px;
+}
 
-/* On a phone the two columns never fit, so stop pretending and stack them. */
+/* On a phone the two columns never fit side by side, so stack them. */
 @media (max-width: 560px) {
-  .syntax-help__row { flex-direction: column; gap: 3px; }
-  .syntax-help__desc { flex: none; }
-  .syntax-help__panel { padding: 16px 14px; max-height: 85vh; }
+  .syntax-panel { max-height: 70vh; }
+  .syntax-panel__row { flex-direction: column; gap: 2px; }
+  .syntax-panel__desc { flex: none; }
 }
 
 /* ── Index status ──────────────────────────────────────────────────────────── */

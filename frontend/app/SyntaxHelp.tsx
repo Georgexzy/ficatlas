@@ -1,139 +1,131 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
 
-const EXAMPLES = [
-  { group: "Basic", rows: [
-    { syntax: "harry potter slow burn", desc: "Free text — searches title, summary, author, fandoms, tags" },
-    { syntax: "dramione >100k complete", desc: "Shorthand word count + status" },
-    { syntax: "wip mature", desc: "Standalone rating + status words" },
+// Search syntax help, as a panel that DROPS UNDER THE SEARCH BAR and whose
+// examples are clickable.
+//
+// It used to be a full-screen modal listing the same reference table. Two
+// problems with that shape, beyond it being heavy for "what can I type here":
+//
+//   * it covered the search box, so you read the syntax, dismissed the dialog,
+//     and then had to remember and retype it;
+//   * being modal it needed a backdrop, a focus trap and a scroll lock to
+//     behave, and every one of those was somewhere it could go wrong.
+//
+// Anchored under the bar instead, the box you are about to type in stays
+// visible, and clicking an example INSERTS it — so the panel builds the query
+// rather than describing it. Nothing is modal, so there is nothing to trap.
+type Row = { syntax: string; desc: string; insert?: string }
+
+const GROUPS: { group: string; rows: Row[] }[] = [
+  { group: "Narrow it down", rows: [
+    { syntax: "fandom:", desc: "A fandom — quotes optional", insert: "fandom:" },
+    { syntax: "ship:", desc: "A pairing, e.g. Draco/Hermione", insert: "ship:" },
+    { syntax: "char:", desc: "A character", insert: "char:" },
+    { syntax: "tag:", desc: "Any additional tag", insert: "tag:" },
+    { syntax: "author:", desc: "Everything by one author", insert: "author:" },
   ]},
-  { group: "Operators (quoted OR unquoted multi-word)", rows: [
-    { syntax: "fandom: Harry Potter", desc: "Unquoted — reads until next operator" },
-    { syntax: 'fandom:"My Hero Academia"', desc: "Quoted — same result" },
-    { syntax: "ship:Draco/Hermione", desc: "Relationship (also: pairing: rel:)" },
-    { syntax: "char: Hermione Granger", desc: "Character (also: character:)" },
-    { syntax: 'tag: slow burn', desc: "Additional tag (also: t:)" },
-    { syntax: "rating:M", desc: "G, T, M, E, NR or general/teen/mature/explicit" },
-    { syntax: "status:complete", desc: "complete / wip / completed / ongoing" },
-    { syntax: "lang:French", desc: "Language" },
-    { syntax: "site:ao3", desc: "Specific site only (ao3 / ffnet / fictionalley)" },
+  { group: "Length & status", rows: [
+    { syntax: ">100k", desc: "Over 100,000 words", insert: ">100k" },
+    { syntax: "<50k", desc: "Under 50,000 words", insert: "<50k" },
+    { syntax: "words:100k-200k", desc: "Between two sizes", insert: "words:100k-200k" },
+    { syntax: "complete", desc: "Finished works", insert: "complete" },
+    { syntax: "wip", desc: "Still updating", insert: "wip" },
   ]},
-  { group: "Word Count", rows: [
-    { syntax: ">100k", desc: "Over 100,000 words" },
-    { syntax: "<50k", desc: "Under 50,000 words" },
-    { syntax: "words:100k-200k", desc: "Between 100k and 200k" },
-    { syntax: "wc:>200k", desc: "Operator prefix (also: word: w:)" },
+  { group: "Rating, language, site", rows: [
+    { syntax: "rating:M", desc: "G / T / M / E / NR", insert: "rating:M" },
+    { syntax: "lang:French", desc: "Any language name", insert: "lang:" },
+    { syntax: "site:ao3", desc: "ao3 / ffnet / fictionalley", insert: "site:ao3" },
   ]},
-  { group: "Date", rows: [
-    { syntax: "updated:1y", desc: "Updated within the last year" },
-    { syntax: "updated:6m", desc: "Updated within 6 months" },
-    { syntax: "since:2024", desc: "Since Jan 2024" },
+  { group: "When it was updated", rows: [
+    { syntax: "updated:1y", desc: "Within the last year", insert: "updated:1y" },
+    { syntax: "updated:6m", desc: "Within six months", insert: "updated:6m" },
+    { syntax: "since:2024", desc: "Since a given year", insert: "since:2024" },
   ]},
-  { group: "Exclude (prefix with -)", rows: [
-    { syntax: "-tag:fluff", desc: "Exclude tag" },
-    { syntax: "-fandom: twilight", desc: "Exclude fandom" },
-    { syntax: "-ship:Harry/Ginny", desc: "Exclude pairing" },
-  ]},
-  { group: "Combined example", rows: [
-    { syntax: 'fandom: Harry Potter ship:Draco/Hermione >100k complete updated:2y -tag:fluff',
-      desc: "Everything at once — operators in any order" },
+  { group: "Leave things out", rows: [
+    { syntax: "-tag:fluff", desc: "Exclude — prefix any operator with a minus", insert: "-tag:" },
+    { syntax: "-ship:Harry/Ginny", desc: "Exclude a pairing", insert: "-ship:" },
   ]},
 ]
 
-export default function SyntaxHelp() {
+export default function SyntaxHelp({ onInsert }: { onInsert?: (text: string) => void }) {
   const [open, setOpen] = useState(false)
   const panelRef = useRef<HTMLDivElement | null>(null)
-  const btnRef   = useRef<HTMLButtonElement | null>(null)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
 
-  // Close on Escape or outside-click, trap focus, and stop the page scrolling
-  // underneath.
-  //
-  // It declares role="dialog" aria-modal="true" but did none of those things:
-  // focus stayed on the page behind, so Tab walked through the filters you
-  // could not see while a modal covered them, and Escape was the only way back
-  // to where you were. That is what made it feel wrong to use rather than
-  // merely plain.
   useEffect(() => {
     if (!open) return
-    const panel = panelRef.current
-    const previouslyFocused = document.activeElement as HTMLElement | null
-
-    const focusables = () => Array.from(
-      panel?.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      ) ?? [],
-    ).filter(el => el.offsetParent !== null)
-
-    // Move focus in, so a keyboard user is actually inside the thing that just
-    // opened rather than still behind it.
-    focusables()[0]?.focus()
-
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setOpen(false); return }
-      if (e.key !== "Tab") return
-      const items = focusables()
-      if (!items.length) return
-      const first = items[0], last = items[items.length - 1]
-      // Wrap at both ends instead of letting Tab escape to the page behind.
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+      if (e.key === "Escape") { setOpen(false); btnRef.current?.focus() }
     }
     const onClick = (e: MouseEvent) => {
       const t = e.target as Node
-      if (panelRef.current?.contains(t)) return         // click inside panel
-      if (btnRef.current?.contains(t)) return           // click on the trigger toggles
+      if (panelRef.current?.contains(t)) return
+      if (btnRef.current?.contains(t)) return   // the trigger toggles itself
       setOpen(false)
     }
-
-    // A modal that lets the page scroll behind it drifts away from whatever
-    // you were looking at when you opened it.
-    const prevOverflow = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-
     window.addEventListener("keydown", onKey)
-    // capture phase so we close even if a child stops propagation
+    // capture phase so we still close if a child stops propagation
     document.addEventListener("click", onClick, true)
     return () => {
       window.removeEventListener("keydown", onKey)
       document.removeEventListener("click", onClick, true)
-      document.body.style.overflow = prevOverflow
-      previouslyFocused?.focus?.()      // return the caret where it came from
     }
   }, [open])
 
   return (
-    <div className="syntax-help">
-      <button ref={btnRef} className="syntax-help__btn" onClick={() => setOpen(o => !o)}
-              title="Search syntax help" aria-label="Search syntax help">?</button>
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className="syntax-help__btn"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        aria-label="Search syntax help"
+        title="Search syntax help"
+      >?</button>
 
       {open && (
-        <>
-          <div className="syntax-help__backdrop" aria-hidden="true"
-            onClick={() => setOpen(false)} />
-          <div ref={panelRef} className="syntax-help__panel" role="dialog"
-            aria-modal="true" aria-label="Search syntax help">
-            <div className="syntax-help__header">
-              <p className="syntax-help__title">Search Syntax</p>
-              <button className="syntax-help__close" onClick={() => setOpen(false)} aria-label="Close">✕</button>
+        <div ref={panelRef} className="syntax-panel" role="dialog"
+          aria-label="Search syntax help">
+          <div className="syntax-panel__head">
+            <div>
+              <p className="syntax-panel__title">What you can type</p>
+              <p className="syntax-panel__hint">Click any example to add it to your search</p>
             </div>
-            <p className="syntax-help__intro">
-              Operators work in any order. Quotes optional for multi-word values — unquoted values
-              read until the next operator. Click outside or press <kbd>Esc</kbd> to close.
-            </p>
-            {EXAMPLES.map(group => (
-              <div key={group.group} className="syntax-help__group">
-                <p className="syntax-help__group-label">{group.group}</p>
-                {group.rows.map(row => (
-                  <div key={row.syntax} className="syntax-help__row">
-                    <code className="syntax-help__code">{row.syntax}</code>
-                    <span className="syntax-help__desc">{row.desc}</span>
-                  </div>
-                ))}
+            <button className="syntax-panel__close"
+              onClick={() => { setOpen(false); btnRef.current?.focus() }}
+              aria-label="Close syntax help">✕</button>
+          </div>
+
+          <div className="syntax-panel__body">
+            {GROUPS.map(g => (
+              <div key={g.group} className="syntax-panel__group">
+                <p className="syntax-panel__group-label">{g.group}</p>
+                <div className="syntax-panel__rows">
+                  {g.rows.map(r => (
+                    <button
+                      key={r.syntax}
+                      type="button"
+                      className="syntax-panel__row"
+                      onClick={() => onInsert?.(r.insert ?? r.syntax)}
+                      title={`Add "${r.insert ?? r.syntax}" to your search`}
+                    >
+                      <code className="syntax-panel__code">{r.syntax}</code>
+                      <span className="syntax-panel__desc">{r.desc}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
-        </>
+
+          <p className="syntax-panel__foot">
+            Operators work in any order, and quotes are optional — an unquoted
+            value reads until the next operator. <kbd>Esc</kbd> closes.
+          </p>
+        </div>
       )}
-    </div>
+    </>
   )
 }

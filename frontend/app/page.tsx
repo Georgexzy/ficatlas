@@ -825,6 +825,22 @@ function SearchPageInner() {
       language, wordMin, wordMax, updatedAfter, explicit, includeUnknown, authorFilter,
       matchMode, sort])
 
+  // Append a syntax fragment from the help panel and put the caret after it, so
+  // an operator like "fandom:" is ready to be typed into rather than merely
+  // shown. The panel stays open — picking two or three in a row is the normal
+  // way to build a query.
+  const insertSyntax = useCallback((fragment: string) => {
+    setQuery(prev => {
+      const base = prev.trimEnd()
+      return base ? `${base} ${fragment}` : fragment
+    })
+    // Focus after the state flush so the caret lands at the end.
+    setTimeout(() => {
+      const input = document.querySelector<HTMLInputElement>(".search-input")
+      if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length) }
+    }, 0)
+  }, [])
+
   const removeToken = (raw: string) =>
     setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim())
 
@@ -1178,7 +1194,7 @@ function SearchPageInner() {
                     title="Clear the search box (keeps your filters)"
                     onClick={() => { setQuery(""); setTimeout(() => doSearch(), 0) }}>✕</button>
                 )}
-                <SyntaxHelp />
+                <SyntaxHelp onInsert={insertSyntax} />
               </div>
               <button className="search-btn" onClick={() => doSearch()} disabled={loading}>
                 {loading ? <span className="search-btn__spinner" /> : "Search"}
