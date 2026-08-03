@@ -731,6 +731,38 @@ def _ingest_epub_from_url(db: Session, url: str, epub_bytes: bytes, site: SiteEn
 
 # ── DLP (DarkLordPotter) library discovery ───────────────────────────────────
 
+
+def _story_key_from_url(url: str) -> tuple[str, str] | None:
+    """(site, site_id) for an FFN/AO3 story URL, ignoring scheme and host form.
+
+    DLP publishes "http://www.fanfiction.net/s/3639659/1/" while the importers
+    normalised the same story to "https://www.fanfiction.net/s/3639659/1/", so
+    matching on the URL string found nothing — 484 of DLP's 630 curated stories
+    were already indexed and only 20 carried the tag.
+    """
+    m = re.search(r"fanfiction\.net/s/(\d+)", url or "")
+    if m:
+        return ("ffnet", m.group(1))
+    m = re.search(r"archiveofourown\.org/works/(\d+)", url or "")
+    if m:
+        return ("ao3", m.group(1))
+    return None
+
+
+def _find_indexed_story(db: Session, urls: list[str]):
+    """Find an already-indexed story for any of these URLs, by site + id."""
+    for u in urls:
+        key = _story_key_from_url(u)
+        if not key:
+            continue
+        hit = (db.query(Story)
+               .filter(Story.site == SiteEnum(key[0]), Story.site_id == key[1])
+               .first())
+        if hit:
+            return hit
+    return None
+
+
 @router.post("/discover-dlp")
 async def discover_dlp(
     corpus: str = Form("hp"),            # "hp" or "other"
@@ -752,8 +784,32 @@ async def discover_dlp(
     if not entries:
         return {"ok": False, "error": "Couldn't fetch the DLP library list. Try again later."}
 
+    # Tag the stories we ALREADY have, before considering any download.
+    #
+    # 484 of DLP's 630 curated works are already in the index from the bulk
+    # dumps; they simply weren't tagged, because the old matcher compared full
+    # URL strings and DLP's are http:// while ours are https://. Merging the
+    # curation onto existing rows costs a few hundred indexed lookups and needs
+    # no FicHub fetch at all — which is what made this feature look broken, with
+    # only 20 of them tagged.
+    tagged = 0
+    for e in entries:
+        cand = [v for k, v in (e.get("urls") or {}).items() if k in ("ffn", "ao3")]
+        if not cand:
+            continue
+        hit = _find_indexed_story(db, cand)
+        if hit is not None:
+            before = set(hit.tags or [])
+            _merge_dlp_tags(hit, e.get("dlp_tags") or [])
+            _record_cross_posts(hit, cand)
+            if set(hit.tags or []) != before:
+                tagged += 1
+    if tagged:
+        db.commit()
+
     if not auto_import:
-        return {"ok": True, "found": len(entries), "entries": entries, "imported": 0}
+        return {"ok": True, "found": len(entries), "tagged_existing": tagged,
+                "entries": entries, "imported": 0}
 
     # Auto-import flow: per entry, pick a URL and import it via FicHub
     fallbacks = [prefer, "ao3", "ffn", "patronuscharm", "ficwad", "hpfanficarchive"]
@@ -777,7 +833,11 @@ async def discover_dlp(
 
             # Is this story (or any of its siblings) already in our index?
             candidates = [chosen_url] + sibling_urls
-            existing = db.query(Story).filter(Story.url.in_(candidates)).first()
+            # Match on site + story id, not the raw URL: DLP's links are http://
+            # and ours are https://, so a string comparison never matched.
+            existing = _find_indexed_story(db, candidates)
+            if not existing:
+                existing = db.query(Story).filter(Story.url.in_(candidates)).first()
             if not existing:
                 # Also check cross_post_urls of existing stories
                 for u in candidates:
