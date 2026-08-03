@@ -160,8 +160,16 @@ def require_admin(
     scrapes, deleting hosted stories, dedup and cleanup batches.
 
     Every one of those was completely unauthenticated, including
-    DELETE /api/library/hosted/{id} — which deletes hosted full text. Some of that
-    text is irreplaceable (the ~30k FicAlley stories come from a dead archive).
+    DELETE /api/library/hosted/{id} — which deletes hosted full text.
+
+    (An earlier version of this comment called the ~30k FicAlley works
+    "irreplaceable, from a dead archive". That is wrong and worth correcting
+    here because it was being used to justify decisions: FictionAlley moved its
+    archive to AO3 through the OTW's Open Doors programme in 2018, and the
+    works live at archiveofourown.org/collections/fictionalley. They are not
+    lost, and Open Doors is the process through which their authors were given
+    a say — so our copies are a duplicate of a consented migration, not a
+    rescue.)
     The only thing protecting them was binding the API to loopback, which meant
     the app could never be put behind a tunnel or reverse proxy.
 
