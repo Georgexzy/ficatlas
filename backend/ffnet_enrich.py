@@ -246,22 +246,39 @@ def parse_ffn_meta(page_text: str) -> dict | None:
 
 
 def fetch_meta(client: httpx.Client, site_id: str) -> dict | None:
-    """Find an archived copy of a story page and parse its metadata line."""
+    """Find an archived copy of a story page and parse its metadata line.
+
+    Paced by wayback_harvest.BUDGET rather than by this module's own --delay.
+    Two loops now talk to archive.org — this one and the AO3 snapshot harvest —
+    and each was pacing itself in isolation. That does not compose: individually
+    polite, together they drew a steady stream of dropped connections. It is the
+    same failure ao3_budget was written for, so it gets the same fix, including
+    carrying 429/503 responses back so a refusal to EITHER loop slows both.
+    """
+    from wayback_harvest import BUDGET, note_response
+
+    BUDGET.wait()
     try:
-        rows = client.get(CDX, params={
+        resp = client.get(CDX, params={
             "url": f"fanfiction.net/s/{site_id}/1/*",
             "output": "json", "limit": "1", "filter": "statuscode:200",
-        }, timeout=40).json()
+        }, timeout=40)
+        note_response(resp.status_code)
+        rows = resp.json()
     except Exception:
+        BUDGET.network_error()
         return None
     if not rows or len(rows) < 2:
         return None
     ts, original = rows[1][1], rows[1][2]
+    BUDGET.wait()
     try:
         page = client.get(f"https://web.archive.org/web/{ts}/{original}",
                           timeout=60, follow_redirects=True)
     except Exception:
+        BUDGET.network_error()
         return None
+    note_response(page.status_code)
     if page.status_code != 200:
         return None
     return parse_ffn_meta(page.text)
@@ -337,7 +354,13 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int) -> None:
                 pending.clear()
                 log.info(f"  {n}/{len(rows)} — {updated} enriched, {missing} no snapshot")
 
-            time.sleep(delay)
+            # Pacing lives in the shared archive.org budget now (see
+            # fetch_meta), which already blocked for the right interval before
+            # each request. Sleeping again here would stack a second delay on
+            # top of it and slow the run for no additional politeness. Kept
+            # honoured only if a caller asks for extra spacing explicitly.
+            if delay:
+                time.sleep(delay)
 
     if dry_run:
         log.info(f"Dry run — {len(pending)} would be enriched, {missing} had no snapshot.")

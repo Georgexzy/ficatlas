@@ -78,7 +78,9 @@ async def _enrich_loop() -> None:
     while True:
         try:
             log.info(f"FF.net enrichment pass ({batch} stories)")
-            await asyncio.to_thread(enrich_run, batch, False, 0.5, 25)
+            # delay=0: the shared archive.org budget in fetch_meta does the
+            # pacing now, and 0.5s on top of it would just be additive.
+            await asyncio.to_thread(enrich_run, batch, False, 0.0, 25)
         except Exception as e:
             log.warning(f"enrichment pass failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
