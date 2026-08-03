@@ -120,12 +120,32 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
         if existing_work is not None:
             try:
                 alts = set(existing_work.cross_post_urls or [])
+                changed_here = False
                 if url not in alts and url != existing_work.url:
                     alts.add(url)
                     existing_work.cross_post_urls = sorted(alts)
                     existing_work.is_crossover = existing_work.is_crossover or False
-                    db.commit()
+                    changed_here = True
                     merged_crosspost += 1
+
+                # Carry provenance across the merge.
+                #
+                # Recognising a cross-post and NOT creating a duplicate is the
+                # right call, but it silently dropped the incoming source tags,
+                # which is the entire point of some of those fetches. A DLP
+                # curated work already indexed from the AO3 dump was correctly
+                # merged and then left untagged, so "recommended by DLP" could
+                # not be answered for it — the list looked imported while
+                # marking almost nothing.
+                incoming_prov = [t for t in (d.get("tags") or []) if t in PROVENANCE_TAGS]
+                if incoming_prov:
+                    have = list(existing_work.tags or [])
+                    added = [t for t in incoming_prov if t not in have]
+                    if added:
+                        existing_work.tags = have + added
+                        changed_here = True
+                if changed_here:
+                    db.commit()
                 existing_urls.add(url)
                 continue
             except Exception:
