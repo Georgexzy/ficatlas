@@ -65,6 +65,9 @@ MAX_INTERVAL = 60.0
 BACKOFF = 2.0
 RECOVER = 0.9
 RECOVER_AFTER = 20
+# Consecutive transport failures before the shared interval widens. See
+# _Budget.network_error for why a single one must not.
+NET_ERRORS_BEFORE_BACKOFF = int(os.getenv("WAYBACK_NET_ERRORS", "4"))
 
 HEADERS = {
     "User-Agent": "FicAtlas/0.1 (fanfiction search index; contact: admin@ficatlas.app)",
@@ -80,6 +83,7 @@ class _Budget:
         self._lock = threading.Lock()
         self._next = 0.0
         self._clean = 0
+        self._net_errors = 0
         self.throttled = 0
         self.granted = 0
 
@@ -103,9 +107,30 @@ class _Budget:
         if self.interval != before:
             log.info(f"wayback budget: throttled -> {before:.1f}s to {self.interval:.1f}s")
 
+    def network_error(self) -> None:
+        """A connection failed. Only treat a RUN of them as backpressure.
+
+        archive.org drops connections fairly often without being overloaded, and
+        widening the shared interval on every single blip is a ratchet: one
+        ConnectError doubles it, and recovery needs RECOVER_AFTER consecutive
+        clean requests, which cannot accumulate faster than the next blip
+        arrives. The fetch loop pinned itself at 57.6s that way — a batch of 20
+        taking nineteen minutes — while archive.org was in fact serving fine.
+
+        A 429/503/504 is the server explicitly asking for less and still
+        penalises immediately; this is for the transport simply failing.
+        """
+        with self._lock:
+            self._net_errors += 1
+            if self._net_errors < NET_ERRORS_BEFORE_BACKOFF:
+                return
+            self._net_errors = 0
+        self.penalise()
+
     def reward(self) -> None:
         with self._lock:
             self._clean += 1
+            self._net_errors = 0      # a success means the transport is healthy
             if self._clean >= RECOVER_AFTER and self.interval > BASE_INTERVAL:
                 self._clean = 0
                 self.interval = max(self.interval * RECOVER, BASE_INTERVAL)
@@ -182,7 +207,7 @@ def cdx_page(resume: str | None = None,
             r = httpx.get(CDX_URL, params=params, headers=HEADERS, timeout=timeout)
         except httpx.RequestError as e:
             log.info(f"wayback cdx: {type(e).__name__}, attempt {attempt + 1}/{CDX_RETRIES}")
-            BUDGET.penalise()
+            BUDGET.network_error()
             continue
         note_response(r.status_code, r.headers.get("Retry-After"))
         if r.status_code not in BACKPRESSURE:
@@ -379,7 +404,7 @@ def fetch_snapshot(work_id: int, ts: str, timeout: float = 90.0) -> dict | None:
         r = httpx.get(SNAPSHOT.format(ts=ts, wid=work_id), headers=HEADERS,
                       timeout=timeout, follow_redirects=True)
     except httpx.RequestError as e:
-        BUDGET.penalise()
+        BUDGET.network_error()
         raise Transient(type(e).__name__) from e
     note_response(r.status_code, r.headers.get("Retry-After"))
     if r.status_code in BACKPRESSURE:

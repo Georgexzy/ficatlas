@@ -707,6 +707,10 @@ async def _wayback_fetch_loop() -> None:
 
     batch = int(_num("WAYBACK_BATCH", 20))
     interval = _num("WAYBACK_INTERVAL_SEC", 15)
+    # Consecutive unreachable works before giving up on this batch. Isolated
+    # connection drops from archive.org are normal; a run of them means it is
+    # genuinely unavailable and grinding through the rest is pointless.
+    STALL_TOLERANCE = int(_num("WAYBACK_STALL_TOLERANCE", 3))
 
     while True:
         try:
@@ -717,18 +721,22 @@ async def _wayback_fetch_loop() -> None:
                 continue
 
             entries, results = [], []
-            stalled = 0
+            stalled = run = 0
             for work_id, ts in pending:
                 try:
                     entry = await asyncio.to_thread(fetch_snapshot, work_id, ts)
                 except Transient as e:
-                    # Leave it queued — the work is fine, archive.org is busy.
-                    # Abandon the rest of the batch too rather than grinding
-                    # through 20 more failures while it recovers; the budget has
-                    # already widened the interval.
+                    # Leave it queued — the work is fine, archive.org is not
+                    # answering. Isolated drops are routine there, so skip this
+                    # one and carry on; abandoning the batch on the first blip
+                    # capped a pass at one or two works.
                     stalled += 1
-                    log.info(f"wayback: backing off ({e})")
-                    break
+                    run += 1
+                    if run >= STALL_TOLERANCE:
+                        log.info(f"wayback: {run} failures in a row ({e}), ending batch")
+                        break
+                    continue
+                run = 0
                 results.append((work_id, entry is not None))
                 if entry:
                     entries.append(entry)
