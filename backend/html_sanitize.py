@@ -182,6 +182,31 @@ def _norm_title(v: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (v or "").lower())
 
 
+
+# Labels and trailers authors put around a chapter title. Seen in real data:
+#   "Title: The Beginning of the End, (9/?)"   -> "The Beginning of the End"
+#   "Chapter 1(1/?)"                           -> "Chapter 1" -> generic, reject
+#   "But One Excuse by The Eighth Weasley"     -> "But One Excuse"
+_TITLE_LABEL_RE = re.compile(r"^\s*(?:title|chapter\s*title|name)\s*[:\-–]\s*", re.I)
+_PROGRESS_RE = re.compile(r"\s*[\(\[]\s*\d+\s*/\s*[\d?]+\s*[\)\]]\s*$")
+_BYLINE_RE = re.compile(r"\s+by\s+[^,;]{2,40}$", re.I)
+
+
+def clean_extracted_title(value: str | None) -> str | None:
+    """Tidy a title lifted out of a chapter body, or None if nothing is left."""
+    t = (value or "").strip()
+    if not t:
+        return None
+    t = _TITLE_LABEL_RE.sub("", t)
+    t = _PROGRESS_RE.sub("", t)
+    t = _BYLINE_RE.sub("", t)
+    t = t.strip().strip("-–—:,;").strip()
+    # Re-test AFTER cleaning: "Chapter 1(1/?)" only looks specific because of
+    # the progress marker, and reduces to something the breadcrumb already says.
+    if not t or is_generic_title(t) or not re.search(r"[A-Za-z]", t):
+        return None
+    return t
+
 def strip_chapter_heading(html_text: str, stored_title: str | None,
                           story_title: str | None = None) -> tuple[str, str | None]:
     """Drop a leading chapter heading from the body.
@@ -252,7 +277,8 @@ def strip_chapter_heading(html_text: str, stored_title: str | None,
     out = (root.text or "")
     for child in root:
         out += etree.tostring(child, encoding="unicode", method="html")
-    return out.strip(), (better if better and is_generic_title(stored_title) else None)
+    cleaned = clean_extracted_title(better)
+    return out.strip(), (cleaned if cleaned and is_generic_title(stored_title) else None)
 
 
 # ── Formatting tidy ──────────────────────────────────────────────────────────
