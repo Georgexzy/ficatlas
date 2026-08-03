@@ -11,7 +11,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Operator syntax** in any order: `fandom: Harry Potter ship:Draco/Hermione >100k complete updated:2y -tag:fluff`
 - **Tag autocomplete** — fandom, relationship, character and tag filter inputs suggest real values from the index as you type (with story counts), backed by a precomputed facets table so it's instant even on millions of rows
 - **Search-first discovery** — you don't need the Import tab to get fics: when a search returns few or no indexed results and AO3 is selected, the app auto-pulls a deeper live batch (and the no-results screen has a one-click "Search AO3 directly" button). The Import tab remains the full power-user control panel for bulk scrapes
-- **Canonical-tag autocomplete in Import** — the Import tab's fandom fields autocomplete index-first then fall back to AO3's canonical tag list (`/api/stats/suggest-canonical`), so you can discover and correctly spell new fandoms to scrape, avoiding malformed-tag errors
+- **Canonical-tag autocomplete in Import** — the Import tab's fandom fields autocomplete index-first, then fall back to AO3's canonical fandom names (`/api/stats/suggest-canonical`) so you can discover and correctly spell new fandoms to scrape, avoiding malformed-tag errors. That vocabulary is synced into our own facets table by `ao3_canonical_fandoms.py` — 73,732 canonical names in 12 requests against AO3's public `/media/<category>/fandoms` listings, refreshed occasionally. It is deliberately **not** AO3's `/autocomplete/` endpoint, which their robots.txt disallows and which this box would otherwise have called on every keystroke
 - **Click-to-search tags** — every fandom, ship, character, freeform tag and warning is a link that pre-fills the corresponding filter
 - **"Surprise me"** — random discovery on the landing page (real stories only, no drabbles/art), optionally scoped to your active fandom filter
 - **Cross-site filter correctness** — fandom is matched strictly while secondary facets (character/ship/tag) and missing metadata (word count, status, rating, language) are matched permissively, so dump rows with sparse metadata surface correctly without flooding fandom searches
@@ -30,7 +30,9 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 
 ### Reading & library
 - **One-click "Import & Read"** — every search result for AO3/FFN with `is_hosted=false` shows an "Import & Read" button that fetches the full EPUB via FicHub and drops you into the reader
-- **In-app reader** — Charter/Georgia serif (conventional italics), serif↔sans toggle, narrow↔wide column, A+/A−, **adjustable line spacing**, **light / sepia / dark themes**, scroll progress bar, ← → chapter navigation. Keyboard: `←/→` chapters, `+/−` text size, `↕` line spacing, `t` cycle theme
+- **In-app reader** — Charter/Georgia serif (conventional italics), serif↔sans toggle, narrow↔wide column, A+/A−, **adjustable line spacing**, **light / sepia / dark themes**, **optional justified text with automatic hyphenation**, **estimated read time**, scroll progress bar, ← → chapter navigation. Keyboard: `←/→` chapters, `+/−` text size, `↕` line spacing, `t` cycle theme, `j` justify
+- **Reader accessibility** — text size is set in `rem`, so it scales with the reader's own browser font-size setting (a `px` size ignores it, which is the setting people with low vision rely on); `lang` and `dir` are set from the story's language, so screen readers stop applying English pronunciation to the large non-English share of the index and RTL scripts render correctly; a skip link jumps past the toolbar to the prose; the progress bar is a real `progressbar` role; toggles carry `aria-pressed` and labels describing the action rather than the current value; focus stays visible and `prefers-reduced-motion` is honoured
+- **Sanitised chapter HTML** — chapter bodies come from four scrapers and from user-supplied EPUBs, and the reader injects them as HTML. Everything is filtered through an allowlist on the way out (`backend/html_sanitize.py`): scripts, event handlers, `javascript:`/`data:` URLs and inline styles are dropped, outbound links get `rel="noopener"`. It doubles as a readability fix — scrapers captured page navigation and ad text as if it were prose, and unwrapping layout tags keeps the words while dropping the scaffolding
 - **EPUB export / offline reading** — any hosted story has a `↓ EPUB` button that builds a valid EPUB 2 file on the fly (stdlib only, no dependencies) for reading offline in any e-reader app
 - **In-app offline reading** — tap `⤓ Save offline` on any readable story to download its chapters into the browser's IndexedDB. The reader falls back to that saved copy when the network is unreachable (e.g. away from your Tailscale connection), an **Offline** tab in the library lists everything saved on the device, and a service worker caches the app shell so it boots with no connection. Pre-save on wifi, read anywhere
 - **Similar stories** — every story detail page shows an "If you like this, try…" section, recommending reads by shared fandoms/ships/tags with overlap scoring (ships weighted highest, then fandom, then freeform tags, with a small popularity tiebreaker)
@@ -50,7 +52,8 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Works signed-out too** — bookmarks, recents and progress still work locally in localStorage with no account
 
 ### Data seeds
-- **HuggingFace FFN metadata dump** — 6.6M FFnet rows (IDs 1–10.9M, 2014-era). The single biggest free seed. Auto-downloads via `huggingface_hub` from inside the backend container. Uses Postgres `ON CONFLICT DO NOTHING` for idempotent batched inserts
+- **HuggingFace FFN metadata dump** — 6.6M FFnet rows (IDs 1–10.9M, 2014-era). The single biggest free seed. Auto-downloads via `huggingface_hub` from inside the backend container. Uses Postgres `ON CONFLICT DO NOTHING` for idempotent batched inserts. It carries **no completion status and no dates**, so rows import as `status=unknown` rather than being asserted unfinished — a `complete` search treats unknown permissively, so they stay findable
+- **Background enrichment worker** — a separate `worker` container owns all recurring work, so heavy backfills never compete with request handling and never die with an API restart. It runs the AO3 work-page harvest, FF.net Wayback enrichment, cross-post dedup, recent-works indexing and stale-work refresh, each behind its own env flag
 - **Live AO3** filling the gap from 2021 onward
 - **FicAlley** for offline HP archive with full text
 - **FicHub** for any fresh per-URL fetch
@@ -61,7 +64,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Index status widget** — per-site counts, total stories, total words, DLP and HPFFA counts
 - **Fully responsive** — proper mobile viewport; on phones the filter sidebar becomes a slide-out drawer with a backdrop, an active-filter badge, and an Apply button (instead of being hidden). Tablet/phone/small-phone breakpoints, 40–44px touch targets, horizontally scrolling library tabs, 2-column book grid, full-width stacked actions. Works from any host over Tailscale/LAN
 - **Loading skeletons** while results load, smooth scroll-to-top on page change
-- **Keyboard shortcuts** — `/` focus search, `Esc` close help, `← →` navigate chapters, `+ −` resize reader, `↕` line spacing, `t` reader theme
+- **Keyboard shortcuts** — `/` focus search, `Esc` close help, `← →` navigate chapters, `+ −` resize reader, `↕` line spacing, `t` reader theme, `j` justify text. Reader shortcuts are suppressed inside any editable field, so typing never pages the chapter
 
 ## Stack
 
@@ -168,6 +171,40 @@ docker compose exec backend python janelleshane_importer.py --download
 docker compose exec backend python janelleshane_importer.py --download --limit 500 --dry-run
 ```
 
+### Enrichment: filling what the dumps left empty
+
+The bulk dumps are wide but shallow. The AO3 metadata dump carries no summaries
+at all, no update dates, and truncates long titles mid-phrase; the FFN dump
+carries no characters, ships, dates or engagement counts. There is **no bulk
+source that fixes this** — see Known limitations — so it is recovered from the
+sites themselves, in the background, at a deliberately modest rate.
+
+- **`ao3_title_repair.py`** — walks AO3 works whose dump title was truncated
+  (identifiable because no real title ends on a dangling "and/of/the/with") and
+  re-reads the work page. Since the page is being fetched anyway, it harvests
+  everything on it: summary, published and updated dates, word count, chapter
+  counts, language, kudos, hits, comments and bookmarks. Gap-filling only — the
+  dumps stay authoritative for anything they supplied, except the title, which
+  may be *extended*, and the engagement counters, which only rise.
+
+  The queue is ordered most-read-first so the fics people actually open are
+  fixed before the long tail, with the day a row was last checked as the primary
+  key so unreachable works cannot camp at the head of the queue forever.
+
+- **`ffnet_enrich.py`** — recovers FF.net genres, characters, ships, dates,
+  completion status and favourite counts from archive.org snapshots, since FFN
+  itself is Cloudflare-walled.
+
+- **`ao3_canonical_fandoms.py`** — syncs AO3's canonical fandom vocabulary for
+  Import autocomplete (see above).
+
+Rate limiting is adaptive. AO3's robots.txt sets no `Crawl-delay` for `*`, but
+AO3 enforces a limit it does not publish: 8 connections at ~0.9 req/s drew 76
+HTTP 429s in a single 300-work pass. The limiter widens multiplicatively on a
+429 (honouring `Retry-After` across the whole pool) and recovers slowly on
+sustained success, converging just under the real limit without anyone having
+to know what it is.
+
 ### HP archives (in-app, no CLI)
 
 The Library page has one-click buttons for several Harry Potter archives that run
@@ -240,17 +277,21 @@ substring matching, so other fandoms behave as before.
 │  Search · Reader · Library          │
 └──────────────┬──────────────────────┘
                │ /api
-┌──────────────▼──────────────────────┐
-│  FastAPI backend (port 8000)        │
-│  search · stories · library · stats │
-│  + crawl scheduler (APScheduler)    │
-└──────────────┬──────────────────────┘
-               │
-┌──────────────▼──────────────────────┐
-│  PostgreSQL 16                      │
-│  stories · chapters · crawl_jobs    │
-└─────────────────────────────────────┘
+┌──────────────▼──────────────────────┐      ┌────────────────────────────┐
+│  FastAPI backend (port 8000)        │      │  worker (same image)       │
+│  search · stories · library · stats │      │  scheduler · AO3 harvest   │
+│                                     │      │  FFN enrich · dedup        │
+└──────────────┬──────────────────────┘      └─────────────┬──────────────┘
+               │                                           │
+┌──────────────▼───────────────────────────────────────────▼──────────────┐
+│  PostgreSQL 16                                                          │
+│  stories · chapters · crawl_jobs · facets · users                       │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
+
+The worker runs the scheduler (`RUN_SCHEDULER`) so the API never double-polls,
+and owns every long backfill. Anything started with `docker compose exec backend`
+instead would die on the next API restart.
 
 Bulk indexing is one-time per source via the importers. Day-to-day, the live-fetch module hits AO3's search pages on demand for freshness and persists results into the DB. FicHub bridges Cloudflare for AO3/FFnet imports.
 
@@ -283,6 +324,23 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 
 ## Known limitations
 
+- **No bulk source for AO3 summaries.** All 13M AO3 rows arrived without one, and
+  there is no dataset that fixes it. Checked directly rather than from
+  descriptions: the four `archiveofourown-meta` mirrors on HuggingFace are the
+  same 7.36 GB `combined_metadata.jsonl` re-uploaded, whose records carry twelve
+  metadata keys and no summary field;
+  `nyuuzyou/archiveofourown` (the only full-text set) has been **permanently
+  disabled**; the Webis Trigger Warning Corpus *has* a `summary` field but ships
+  "dehydrated" with it blank in every sampled record; the Kaggle dumps are 45–95 MB.
+  AO3 publishes no bulk API. The same dump also truncates titles at source —
+  verified by locating a known-bad work inside the file — so the work-page
+  harvest is not a fallback, it is the only route. At ~0.3 req/s it covers the
+  ~396k identifiable rows rather than all 13M.
+- **AO3 rate-limits harder than its robots.txt implies.** No `Crawl-delay` is
+  published for `*`, but sustained ~0.9 req/s draws HTTP 429s. Two endpoints are
+  disallowed outright and are no longer used by anything automated:
+  `/works/search?` (the free-text live-fetch path — fandom-scoped searches use
+  the permitted `/tags/<tag>/works` instead) and `/autocomplete/`.
 - **FF.net live search and bulk crawling from cloud IPs** — FanFiction.net runs an aggressive interactive Cloudflare challenge that blocks server-side scraping from datacenter IPs entirely. URL-based import works through FicHub (which solves the challenge on its end). For bulk freshness you'd need a residential-proxy browser API.
 - **AO3 latency, not blocking** — from a normal residential connection AO3 is reachable, but its filtered-works and atom-feed endpoints are slow to generate (≈7s typical, spiking to 15–20s under load) and intermittently return Cloudflare 525s when their origin is overloaded. The app handles this with generous granular timeouts, same-host 525 retries with backoff, and a brief self-cooldown only after many consecutive failures (not a single slow response). On a datacenter IP AO3 may block outright (525/timeouts on everything) — a Tailscale exit node or WARP routes around that. The HuggingFace dump, FicHub per-URL import, DLP, and FicAlley remain the fastest bulk paths.
 
@@ -292,6 +350,7 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 - **FicHub** — for the cross-archive download API that bypasses Cloudflare cleanly
 - **Internet Archive** — for preserving FanFiction.net
 - The unofficial **FicAlley archive maintainers** — for keeping the dead site alive in pg_dump form
+- **Webis / Zenodo** — for publishing fanfiction research corpora openly, even where they were not the right fit here
 
 ## Status
 
