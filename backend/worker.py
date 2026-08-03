@@ -199,15 +199,53 @@ async def _refresh_stale_loop() -> None:
     from ao3_title_repair import RateLimiter, THROTTLED, fetch_work, apply_work, UA
     import httpx
 
+    # Which WIP is worth a request right now?
+    #
+    # Ranking by popularity alone keeps re-reading the same well-read fic that
+    # was abandoned in 2019, and never looks at the one that gained a chapter
+    # last week. Three independent factors, multiplied:
+    #
+    #   activity  exp(-days_since_update / 365)
+    #             A fic updated recently is very likely to update again; one
+    #             untouched for years probably never will. Decays to 0.37 at a
+    #             year and 0.05 at three, so a three-year-dormant work needs
+    #             ~20x the readership to earn the same slot — it still gets
+    #             checked eventually, just far less often. Falls back to
+    #             published_at, and an unknown date is treated as a year old
+    #             rather than as dead or as fresh.
+    #
+    #   reach     ln(1 + kudos + hits)
+    #             Logarithmic on purpose: a 100k-hit fic matters more than a
+    #             100-hit one, but not a thousand times more, or the head of
+    #             the index would be all that ever got checked.
+    #
+    #   overdue   ln(2 + days_since_we_looked)
+    #             Grows slowly and without bound, so nothing can be starved
+    #             forever by works that merely score higher.
+    #
+    # And a nudge for works AO3 says are unfinished: chapter_count_total IS
+    # NULL is the "12/?" form, an explicit statement that more is coming.
     STALE_SQL = sql_text("""
-        SELECT id, site_id FROM stories
-        WHERE site = 'ao3'
-          AND site_id ~ '^[0-9]+$'
-          AND status = 'in_progress'
-          AND (crawled_at IS NULL OR crawled_at < now() - (:min_age || ' days')::interval)
-        ORDER BY (COALESCE(kudos,0) + COALESCE(hits,0)) DESC,
-                 COALESCE(word_count,0) DESC,
-                 crawled_at ASC NULLS FIRST
+        WITH scored AS (
+            SELECT id, site_id,
+                   exp(-LEAST(
+                       EXTRACT(EPOCH FROM (now() - COALESCE(updated_at, published_at,
+                                                            now() - interval '365 days')))
+                       / 86400.0, 3650) / 365.0)
+                   * ln(1 + COALESCE(kudos,0) + COALESCE(hits,0))
+                   * ln(2 + COALESCE(
+                         EXTRACT(EPOCH FROM (now() - crawled_at)) / 86400.0, 3650))
+                   * CASE WHEN chapter_count_total IS NULL THEN 1.3 ELSE 1.0 END
+                   AS refresh_score
+            FROM stories
+            WHERE site = 'ao3'
+              AND site_id ~ '^[0-9]+$'
+              AND status = 'in_progress'
+              AND (crawled_at IS NULL
+                   OR crawled_at < now() - (:min_age || ' days')::interval)
+        )
+        SELECT id, site_id FROM scored
+        ORDER BY refresh_score DESC NULLS LAST
         LIMIT :lim
     """)
 
