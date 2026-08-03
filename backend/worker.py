@@ -37,6 +37,7 @@ days, not to saturate the database or hammer archive.org:
 """
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import os
 import sys
@@ -163,60 +164,94 @@ async def _recent_works_loop() -> None:
 
 
 async def _refresh_stale_loop() -> None:
-    """Re-check works we already hold, stalest first, so the index isn't a
+    """Re-check works that may have gained chapters, so the index is not a
     permanent snapshot of import day.
 
-    Fanfiction is mutable — a WIP gains chapters, changes word count, and
-    eventually completes — but a row was frozen at the moment it was imported.
-    Re-encounters now refresh (see persist._enrich_existing), and for the tracked
-    fandoms that happens for free: the recent-works loop walks tag pages sorted
-    by revised_at, which IS AO3's update feed, so anything that updates surfaces
-    within the interval.
+    Fanfiction is mutable: a WIP gains chapters, its word count grows, and it
+    eventually completes. Three things already catch some of that —
 
-    This covers what that cannot: works outside the tracked fandoms. Refreshing
-    all 10.7M in_progress rows individually is not feasible and would be rude to
-    AO3, so it targets HOSTED works — the ones actually being read, ~30k rather
-    than millions — oldest crawled_at first.
+      * _recent_works_loop walks tag pages sorted by revised_at, which IS AO3's
+        update ordering, so anything updating in a TRACKED fandom surfaces on
+        its own;
+      * persist._enrich_existing applies updates forward-only whenever a work
+        is re-encountered by any path;
+      * the work-page harvest reads updated_at directly.
+
+    — but none of them covers a work outside the tracked fandoms that nothing
+    happens to re-encounter, and that is 5.48M in_progress AO3 rows.
+
+    This used to target `is_hosted AND status='in_progress' AND site='ao3'`,
+    which matches ZERO rows (only two AO3 works are hosted and both are
+    complete), and to fetch through AO3 free-text search, which is
+    robots-disallowed and returns nothing for an automated caller. It was a
+    no-op on both counts.
+
+    Now it re-reads the work page — permitted, authoritative, and the same
+    request shape the harvest already makes — and picks WIPs by readership so
+    the works someone will actually open are the ones kept current.
     """
-    interval = _num("REFRESH_INTERVAL_MIN", 60) * 60
+    interval = _num("REFRESH_INTERVAL_MIN", 30) * 60
     batch = int(_num("REFRESH_BATCH", 40))
+    delay = _num("REFRESH_DELAY", 2.0)
     from sqlalchemy import text as sql_text
     from db.session import db_session
-    from live_fetch.ao3_live import fetch_live_ao3
-    from live_fetch.persist import persist_live_results
+    from models.story import Story
+    from ao3_title_repair import RateLimiter, THROTTLED, fetch_work, apply_work, UA
+    import httpx
+
+    STALE_SQL = sql_text("""
+        SELECT id, site_id FROM stories
+        WHERE site = 'ao3'
+          AND site_id ~ '^[0-9]+$'
+          AND status = 'in_progress'
+          AND (crawled_at IS NULL OR crawled_at < now() - (:min_age || ' days')::interval)
+        ORDER BY (COALESCE(kudos,0) + COALESCE(hits,0)) DESC,
+                 COALESCE(word_count,0) DESC,
+                 crawled_at ASC NULLS FIRST
+        LIMIT :lim
+    """)
 
     while True:
         try:
             def _stalest():
                 with db_session() as db:
-                    return db.execute(sql_text("""
-                        SELECT title, author FROM stories
-                        WHERE is_hosted AND status = 'in_progress'
-                          AND site = 'ao3' AND title IS NOT NULL
-                        ORDER BY crawled_at ASC NULLS FIRST
-                        LIMIT :lim
-                    """), {"lim": batch}).fetchall()
+                    return db.execute(STALE_SQL, {
+                        "lim": batch, "min_age": int(_num("REFRESH_MIN_AGE_DAYS", 7)),
+                    }).fetchall()
 
             rows = await asyncio.to_thread(_stalest)
-            refreshed = 0
-            for title, author in rows:
-                try:
-                    results = await fetch_live_ao3(
-                        {"q": f"{title} {author or ''}".strip(), "status": None,
-                         "sort": "relevance"}, limit=20, pages=1, automated=True)
-                    if results:
-                        def _save():
-                            with db_session() as db:
-                                return persist_live_results(db, results)
-                        await asyncio.to_thread(_save)
-                        refreshed += 1
-                except Exception:
-                    pass
-                await asyncio.sleep(5)      # polite spacing between works
-            if refreshed:
-                log.info(f"refreshed {refreshed} stale hosted works")
+            if not rows:
+                await asyncio.sleep(interval)
+                continue
+
+            limiter = RateLimiter(delay)
+            stats: dict[str, int] = {}
+            checked = 0
+
+            def _run() -> int:
+                nonlocal checked
+                with httpx.Client(headers=UA) as client:
+                    for sid, work_id in rows:
+                        limiter.wait()
+                        data = fetch_work(client, work_id, limiter)
+                        if data is THROTTLED or not data:
+                            continue
+                        checked += 1
+                        with db_session() as db:
+                            story = db.query(Story).filter(Story.id == sid).first()
+                            if not story:
+                                continue
+                            for field in apply_work(story, data):
+                                stats[field] = stats.get(field, 0) + 1
+                            story.crawled_at = datetime.now(timezone.utc)
+                            db.commit()
+                return checked
+
+            await asyncio.to_thread(_run)
+            changed = " ".join(f"{k}={v}" for k, v in sorted(stats.items(), key=lambda kv: -kv[1]))
+            log.info(f"stale refresh: {checked}/{len(rows)} re-read — {changed or 'no changes'}")
         except Exception as e:
-            log.warning(f"refresh pass failed: {type(e).__name__}: {e}")
+            log.warning(f"stale refresh failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
 
 
