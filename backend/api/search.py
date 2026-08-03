@@ -286,6 +286,12 @@ async def search(
         description="Exact author match (case-insensitive). Unlike free text, this "
                     "returns only that author's works — across every archive.",
     ),
+    dlp_min_rating:        Optional[float] = Query(
+        None, ge=0, le=5,
+        description="Minimum DarkLordPotter community star rating. DLP's list is "
+                    "already curated, so this separates the best of it from the "
+                    "merely-included.",
+    ),
     search_within:         Optional[str] = Query(None),
     sort:                  str           = Query("relevance"),
     page:                  int           = Query(1, ge=1),
@@ -355,6 +361,22 @@ async def search(
         filters.append(
             _story_tsv().op("@@")(func.websearch_to_tsquery(_REGCONFIG, q))
         )
+
+    if dlp_min_rating is not None:
+        # The rating lives in a `dlp_stars:4.67` tag rather than a column, so it
+        # has to be pulled out and compared numerically. That is a per-row
+        # subquery, which would be unusable across 19.6M rows — but the tag only
+        # exists on DLP works, and requiring `dlp_library` first narrows the scan
+        # to a few hundred through the GIN index before this ever runs.
+        filters.append(Story.tags.op("@>")(cast(["dlp_library"], PG_ARRAY(Text))))
+        filters.append(sql_text(
+            "EXISTS (SELECT 1 FROM unnest(stories.tags) AS t "
+            "WHERE t LIKE 'dlp_stars:%' "
+            # split_part, not substring(t FROM n) — the prefix is 10 characters
+            # so the number starts at 11, and an off-by-one read '.67' as 0.67,
+            # which quietly matched nothing at any threshold above zero.
+            "AND split_part(t, ':', 2)::float >= :dlp_min)"
+        ).bindparams(dlp_min=float(dlp_min_rating)))
 
     if author:
         # Exact, case-insensitive. Free-text search matches the author field too,

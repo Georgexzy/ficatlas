@@ -2320,3 +2320,30 @@ body.is-resizing * { cursor: col-resize !important; }
   border: 1px solid var(--border2); border-radius: 3px; padding: 1px 5px;
   color: var(--text-dim);
 }
+
+/* ── DLP community star rating ─────────────────────────────────────────────── */
+/* Drawn as DLP draws it: five stars with the number beside them. Half stars
+   matter — the ratings cluster between 3.5 and 5, so whole-star rounding would
+   make nearly every curated work look identical. */
+.dlp-stars { display: inline-flex; align-items: center; gap: 4px; }
+.dlp-stars__row { display: inline-flex; letter-spacing: -0.5px; }
+.dlp-stars__star { font-size: 11px; line-height: 1; }
+.dlp-stars__star--full  { color: var(--accent); }
+.dlp-stars__star--empty { color: var(--border2); }
+/* A half star is the filled glyph clipped down the middle, over an empty one,
+   so it reads as half rather than as a different symbol. */
+.dlp-stars__star--half {
+  color: var(--border2); position: relative;
+}
+.dlp-stars__star--half::before {
+  content: "★"; position: absolute; left: 0; top: 0;
+  width: 50%; overflow: hidden; color: var(--accent);
+}
+.dlp-stars__value {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
+}
+
+.pill__star { color: var(--accent); margin-right: 3px; font-size: 10px; }
+.filter-note {
+  font-size: 11px; color: var(--text-faint); line-height: 1.5; margin-bottom: 7px;
+}

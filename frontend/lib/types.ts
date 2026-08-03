@@ -86,6 +86,8 @@ export interface SearchParams {
   match_mode?: "all" | "any"
   /** Also return stories that have no data at all for a filtered field. */
   include_unknown?: boolean
+  /** Minimum DarkLordPotter community star rating (0-5). */
+  dlp_min_rating?: number
   search_within?: string
   // Pagination
   sort?: string

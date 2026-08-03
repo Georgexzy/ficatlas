@@ -13,6 +13,7 @@ import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryP
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
 import WordCountSlider from "./WordCountSlider"
+import DlpStars, { dlpRating } from "./DlpStars"
 import SiteHeader from "./SiteHeader"
 import { useAuth } from "@/lib/auth"
 
@@ -331,6 +332,7 @@ function StoryCard({ story }: { story: StoryCard }) {
             {story.rating && <span className={`badge badge--rating badge--${story.rating.toLowerCase()}`}>{RATING_LABELS[story.rating] ?? story.rating}</span>}
             {story.status === "complete" && <span className="badge badge--complete">Complete</span>}
             {story.tags?.includes("dlp_library") && <span className="badge badge--dlp" title="Curated by DarkLordPotter">DLP</span>}
+            {dlpRating(story.tags) != null && <DlpStars value={dlpRating(story.tags)!} />}
             {story.is_live && <span className="badge badge--live">Live</span>}
           </div>
         </div>
@@ -381,7 +383,11 @@ function StoryCard({ story }: { story: StoryCard }) {
           ))}
         </div>
       )}
-      {story.tags.length > 0 && <TagList tags={story.tags} className="card__tags" />}
+      {/* dlp_stars is rendered as stars in the badge row above, so it must not
+          also appear here as a literal "dlp_stars:4.67" chip. */}
+      {story.tags.filter(t => !t.startsWith("dlp_stars:")).length > 0 && (
+        <TagList tags={story.tags.filter(t => !t.startsWith("dlp_stars:"))} className="card__tags" />
+      )}
       {story.warnings.filter(w => w !== "No Archive Warnings Apply").length > 0 && (
         <div className="card__warnings">
           {story.warnings.filter(w => w !== "No Archive Warnings Apply").map(w =>
@@ -550,6 +556,8 @@ function SearchPageInner() {
   const [status,       setStatus]       = useState<string[]>(csv(get("status")))
   const [crossovers,   setCrossovers]   = useState(get("crossovers") ?? "include")
   const [language,     setLanguage]     = useState(get("language") ?? "")
+  const [dlpMinRating, setDlpMinRating] = useState<number | undefined>(
+    get("dlp_min_rating") ? Number(get("dlp_min_rating")) : undefined)
   const [wordMin,      setWordMin]      = useState<number | undefined>(get("word_count_min") ? Number(get("word_count_min")) : undefined)
   const [wordMax,      setWordMax]      = useState<number | undefined>(get("word_count_max") ? Number(get("word_count_max")) : undefined)
   const [updatedAfter, setUpdatedAfter] = useState(get("updated_after") ?? "")
@@ -721,6 +729,7 @@ function SearchPageInner() {
       exclude_tags:          joinCsv([...excTags, ...pq.excTags]),
       status:                status.length ? joinCsv(status) : (pq.status ?? undefined),
       language:              language || pq.language || undefined,
+      dlp_min_rating:        dlpMinRating ?? undefined,
       word_count_min:        wordMin ?? pq.wordCountMin ?? undefined,
       word_count_max:        wordMax ?? pq.wordCountMax ?? undefined,
       updated_after:         updatedAfter || pq.updatedAfter || undefined,
@@ -735,7 +744,8 @@ function SearchPageInner() {
     }
   }, [query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
-      status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort])
+      status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort,
+      dlpMinRating])
 
   const doSearch = useCallback(async (resetPage = true, explicitPage?: number) => {
     // explicitPage lets pagination pass the target page directly, avoiding the
@@ -820,7 +830,7 @@ function SearchPageInner() {
   }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
       incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
       language, wordMin, wordMax, updatedAfter, explicit, includeUnknown, authorFilter,
-      matchMode, sort])
+      matchMode, sort, dlpMinRating])
 
   // Append a syntax fragment from the help panel and put the caret after it, so
   // an operator like "fandom:" is ready to be typed into rather than merely
@@ -871,6 +881,7 @@ function SearchPageInner() {
     incFandoms.length + incChars.length + incShips.length + incTags.length +
     excFandoms.length + excChars.length + excShips.length + excTags.length +
     (wordMin != null ? 1 : 0) + (wordMax != null ? 1 : 0) +
+    (dlpMinRating != null ? 1 : 0) +
     incRatings.length + status.length +
     (searchWithin ? 1 : 0)
 
@@ -1120,6 +1131,28 @@ function SearchPageInner() {
             </div>
             <input type="date" value={updatedAfter || parsedLive.updatedAfter || ""}
               className="input-sm w-full" onChange={e => setUpdatedAfter(e.target.value)} />
+          </FilterSection>
+
+          <FilterSection label="DLP rating" highlighted={dlpMinRating != null}>
+            <p className="filter-note">
+              DarkLordPotter&rsquo;s curated list, rated by its readers. Picking a
+              minimum also restricts results to that list.
+            </p>
+            <div className="pills">
+              {[
+                { label: "Any", value: undefined },
+                { label: "3+", value: 3 },
+                { label: "3.5+", value: 3.5 },
+                { label: "4+", value: 4 },
+                { label: "4.5+", value: 4.5 },
+              ].map(o => (
+                <button key={o.label}
+                  onClick={() => setDlpMinRating(o.value)}
+                  className={`pill ${dlpMinRating === o.value ? "pill--on" : ""}`}>
+                  {o.label !== "Any" && <span className="pill__star">★</span>}{o.label}
+                </button>
+              ))}
+            </div>
           </FilterSection>
 
           <FilterSection label="Language" highlighted={!!parsedLive.language}>
