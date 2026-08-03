@@ -13,7 +13,7 @@ Normalization lower-cases, strips punctuation/whitespace and common author
 suffixes so "Harry's Story" by "Jane_Doe" matches "Harry's Story" by "jane doe".
 """
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import defaultdict
 from sqlalchemy import func, text as sql_text
 from sqlalchemy.orm import Session
@@ -223,9 +223,32 @@ def find_crosspost_for(db: Session, title: str, author: str, exclude_url: str | 
         .limit(50)
         .all()
     )
-    for c in candidates:
-        if exclude_url and c.url == exclude_url:
-            continue
-        if match_key(c.title, c.author) == k:
-            return c
-    return None
+    matches = [
+        c for c in candidates
+        if not (exclude_url and c.url == exclude_url) and match_key(c.title, c.author) == k
+    ]
+    if not matches:
+        return None
+
+    # Prefer the FRESHEST copy as the canonical row.
+    #
+    # This used to return whichever candidate the query happened to yield
+    # first, so a work cross-posted to two sites could be canonicalised onto
+    # the abandoned copy — the reader then landed on a version three years
+    # behind the one still updating, with the live copy demoted to an
+    # "also on" link.
+    #
+    # Ordered by last activity, then by how much of the story is actually
+    # there: chapter count breaks ties between copies with no dates at all,
+    # which is most of the FFN dump, and the longer copy is the more complete
+    # one by definition.
+    def freshness(c):
+        when = c.updated_at or c.published_at
+        return (
+            when is not None,
+            when or datetime.min.replace(tzinfo=timezone.utc),
+            c.chapter_count or 0,
+            c.word_count or 0,
+        )
+
+    return max(matches, key=freshness)

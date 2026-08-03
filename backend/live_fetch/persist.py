@@ -144,6 +144,38 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
                     if added:
                         existing_work.tags = have + added
                         changed_here = True
+
+                # Take the FRESHER copy's content forward.
+                #
+                # The merge previously recorded the other site's URL and nothing
+                # else, so if the copy we already held was the abandoned one, it
+                # stayed abandoned in the index while the still-updating version
+                # was demoted to an "also on" link. A reader following the main
+                # link got a story three years behind.
+                #
+                # Forward-only, as everywhere else: dates advance, chapter counts
+                # and engagement rise, status may reach complete. Nothing here can
+                # make a row staler than it already is.
+                inc_when = _as_datetime(d.get("updated_at"))
+                if inc_when and (existing_work.updated_at is None
+                                 or inc_when > existing_work.updated_at):
+                    existing_work.updated_at = inc_when
+                    changed_here = True
+                for attr, key in (("chapter_count", "chapter_count"),
+                                  ("word_count", "word_count"),
+                                  ("kudos", "kudos"), ("hits", "hits"),
+                                  ("comments", "comments"), ("bookmarks", "bookmarks")):
+                    val = d.get(key)
+                    if isinstance(val, int) and val > (getattr(existing_work, attr) or 0):
+                        setattr(existing_work, attr, val)
+                        changed_here = True
+                if d.get("status") == "complete" and existing_work.status != StatusEnum.complete:
+                    existing_work.status = StatusEnum.complete
+                    changed_here = True
+                if d.get("summary") and not (existing_work.summary or "").strip():
+                    existing_work.summary = d["summary"]
+                    changed_here = True
+
                 if changed_here:
                     db.commit()
                 existing_urls.add(url)
