@@ -16,7 +16,7 @@
 
 // Bump on any change to the precache set or fetch strategy: `activate` deletes
 // every cache whose name differs, which is what evicts the previous shell.
-const CACHE = "ficatlas-shell-v5"
+const CACHE = "ficatlas-shell-v6"
 const PRECACHE = __PRECACHE_MANIFEST__
 
 self.addEventListener("install", (event) => {
