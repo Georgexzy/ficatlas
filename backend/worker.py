@@ -33,7 +33,7 @@ days, not to saturate the database or hammer archive.org:
   TITLE_REPAIR=true          repair AO3 titles the dump truncated (default on)
   TITLE_REPAIR_INTERVAL_MIN=1
   TITLE_REPAIR_BATCH=300
-  TITLE_REPAIR_DELAY=1.0     seconds between AO3 requests — keep >= 1
+  TITLE_REPAIR_DELAY=2.0     target seconds between AO3 requests (widens on 429)
 """
 
 import asyncio
@@ -240,9 +240,16 @@ async def _title_repair_loop() -> None:
     # which would have taken about four months to work through the 398,817
     # identifiable rows. At 1/s it is roughly five days.
     #
-    # Deliberately not faster than that. Going wider would finish sooner and is
-    # exactly the kind of thing that gets a scraper blocked for everyone.
-    delay = _num("TITLE_REPAIR_DELAY", 1.0)
+    # Then measurement moved it back. Running 8 connections at ~0.87 req/s drew
+    # 76 HTTP 429s in one 300-work pass, against zero for the serial version —
+    # AO3 enforces a limit it does not publish anywhere. So the target is now
+    # ~0.5 req/s over 4 connections, and the limiter widens itself further if
+    # AO3 still objects. That is roughly nine days for the backlog, and about
+    # 3x the original serial pace rather than the 6x that got us throttled.
+    #
+    # Deliberately not faster. Going wider would finish sooner and is exactly
+    # the kind of thing that gets a scraper blocked for everyone.
+    delay = _num("TITLE_REPAIR_DELAY", 2.0)
     interval = _num("TITLE_REPAIR_INTERVAL_MIN", 1) * 60
     batch = int(_num("TITLE_REPAIR_BATCH", 300))
     from ao3_title_repair import run as repair_run
