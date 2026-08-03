@@ -211,8 +211,34 @@ async def _run_crawl(site: str):
                 pass
 
 
+def _reap_orphaned_jobs() -> None:
+    """Mark crawl jobs left as "running" by a previous process as failed.
+
+    A crawl job only lives in the process that started it, so any row still
+    marked running at startup belongs to a process that is gone — killed by a
+    restart or a crash. They otherwise sit as "running" forever, showing a crawl
+    in progress that is not, and skewing the recent-jobs list in the UI.
+    """
+    from datetime import timedelta
+    from db.session import db_session
+    from models.story import CrawlJob
+    try:
+        with db_session() as db:
+            stale = (db.query(CrawlJob)
+                     .filter(CrawlJob.status == "running")
+                     .update({"status": "failed",
+                              "error": "[transient] interrupted — process restarted",
+                              "finished_at": datetime.now(timezone.utc)},
+                             synchronize_session=False))
+            if stale:
+                logger.info(f"[scheduler] reaped {stale} interrupted crawl job(s)")
+    except Exception as e:
+        logger.warning(f"[scheduler] could not reap orphaned jobs: {e}")
+
+
 def start_scheduler():
     """Register jobs and start the scheduler. Call once at app startup."""
+    _reap_orphaned_jobs()
 
     # Feed polling is the reliable fresh-AO3 path. Runs on a schedule.
     FEED_INTERVAL_HOURS = float(os.getenv("FEED_INTERVAL_HOURS", "6"))
