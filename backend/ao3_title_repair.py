@@ -44,6 +44,8 @@ sys.path.insert(0, "/app")
 os.environ.setdefault("DATABASE_URL", "postgresql://ficatlas:ficatlas@db:5432/ficatlas")
 
 import httpx
+
+import ao3_budget
 from sqlalchemy import text as sql_text
 
 from db.session import db_session
@@ -305,6 +307,9 @@ THROTTLED = object()
 
 
 def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
+    # The process-wide budget comes first; the pass-local limiter still applies
+    # on top so a single pass cannot monopolise the shared allowance.
+    ao3_budget.wait()
     try:
         # view_adult skips the "this work could have adult content" interstitial
         # that would otherwise be parsed as a work page with no title.
@@ -312,6 +317,7 @@ def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
                        timeout=45, follow_redirects=True)
     except Exception:
         return None
+    ao3_budget.note_response(r.status_code, r.headers.get("retry-after"))
     if r.status_code == 429:
         try:
             retry_after = float(r.headers.get("retry-after", "") or 0) or None

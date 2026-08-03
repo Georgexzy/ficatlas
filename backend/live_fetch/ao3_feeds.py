@@ -27,6 +27,8 @@ from datetime import datetime
 import os
 import httpx
 
+import ao3_budget
+
 log = logging.getLogger(__name__)
 
 PRIMARY = "https://archiveofourown.org"
@@ -195,8 +197,17 @@ async def _get_with_fallback(
                 # spiking higher under load. A tight timeout turns "slow" into "failed"
                 # and drops us to the mirror, which 404s on tag URLs. Use a granular
                 # timeout: quick to connect, but patient on read.
+                # One budget for the whole process. Five loops talk to AO3 and
+                # each used to pace itself alone, which is not a limit on
+                # anything: together they drew 429s that no individual loop was
+                # responsible for. See ao3_budget.
+                if is_ao3:
+                    await ao3_budget.await_slot()
                 r = await client.get(f"{base}{path}", timeout=AO3_TIMEOUT)
                 last_status = r.status_code
+                if is_ao3:
+                    ao3_budget.note_response(
+                        r.status_code, r.headers.get("retry-after"))
                 if r.status_code == 200:
                     if is_ao3: _record_success()
                     return r
