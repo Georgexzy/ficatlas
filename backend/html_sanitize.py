@@ -32,6 +32,11 @@ DROP_ENTIRELY = {
     "script", "style", "iframe", "object", "embed", "applet", "form", "input",
     "button", "select", "textarea", "noscript", "svg", "math", "link", "meta",
     "base", "frame", "frameset", "audio", "video", "canvas", "map", "area",
+    # EPUB navigation documents get imported as chapters by some sources — a
+    # <nav epub:type="toc"> full of links to the other chapters. It is the
+    # book's furniture, not a chapter, and rendering it hands the reader a list
+    # of links where the prose should be.
+    "nav",
 }
 
 # Kept as-is. Everything a fic legitimately uses to format prose.
@@ -154,6 +159,10 @@ _HEADING_RE = re.compile(
 # e.g. "Chapter one of his life had closed, and he was not sorry to see it go."
 _MAX_HEADING_CHARS = 90
 
+# How many leading blocks may be furniture. Enough for
+# title / rule / chapter-title / rule, not enough to eat a short opening scene.
+_MAX_LEADING_BLOCKS = 5
+
 _GENERIC_TITLE_RE = re.compile(
     rf"^\s*(?:{_CH_WORD}\b\.?\s*(?:{_ORDINAL})?|\d{{1,3}})\s*$", re.IGNORECASE)
 
@@ -163,7 +172,18 @@ def is_generic_title(title: str | None) -> bool:
     return not (title or "").strip() or bool(_GENERIC_TITLE_RE.match(title or ""))
 
 
-def strip_chapter_heading(html_text: str, stored_title: str | None) -> tuple[str, str | None]:
+# A lone "*" or "~" used as a decorative rule. Distinct from a scene break,
+# which needs two or more marks — a single one is nearly always part of an EPUB
+# header block rather than a break between scenes.
+_LONE_MARK_RE = re.compile(r"^[\s ]*[*~\-=_·•—–+#][\s ]*$")
+
+
+def _norm_title(v: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (v or "").lower())
+
+
+def strip_chapter_heading(html_text: str, stored_title: str | None,
+                          story_title: str | None = None) -> tuple[str, str | None]:
     """Drop a leading chapter heading from the body.
 
     Returns (content, better_title). `better_title` is set only when the heading
@@ -176,24 +196,63 @@ def strip_chapter_heading(html_text: str, stored_title: str | None) -> tuple[str
     except Exception:
         return html_text, None
 
-    for el in list(root):
+    # EPUBs routinely open a chapter with a header BLOCK, not a single line:
+    #
+    #     Darkness Falling      <- the STORY title, repeated
+    #     *                     <- decorative rule
+    #     Feel the Love         <- the actual chapter title
+    #     *
+    #     "Severus," the blond man replied quietly...
+    #
+    # Four lines of furniture above the prose, while the heading above it all
+    # says "Chapter 02". So walk the leading blocks rather than testing one:
+    # drop the story title, drop lone marks, drop "Chapter N" headings, and keep
+    # the best candidate for a real chapter title along the way.
+    story_key = _norm_title(story_title or "")
+    better: str | None = None
+    removed: list = []
+
+    for el in list(root)[:_MAX_LEADING_BLOCKS]:
         text = re.sub(r"\s+", " ", "".join(el.itertext())).strip()
         if not text:
-            # Leading spacers and empty <p>s sit above the heading; skip them
-            # rather than giving up at the first one.
+            removed.append(el)          # empty spacer above the header
             continue
         if len(text) > _MAX_HEADING_CHARS:
-            return html_text, None
+            break                       # prose — stop
+        if _LONE_MARK_RE.match(text):
+            removed.append(el)
+            continue
+        if story_key and _norm_title(text) == story_key:
+            removed.append(el)          # the story's own title, repeated
+            continue
         m = _HEADING_RE.match(text)
-        if not m:
-            return html_text, None
-        better = (m.group("title") or "").strip() or None
-        el.getparent().remove(el)
-        out = (root.text or "")
-        for child in root:
-            out += etree.tostring(child, encoding="unicode", method="html")
-        return out.strip(), (better if better and is_generic_title(stored_title) else None)
-    return html_text, None
+        if m:
+            better = better or ((m.group("title") or "").strip() or None)
+            removed.append(el)
+            continue
+        # A short line that is not prose, not a mark and not the story title is
+        # the chapter's real name. Require no sentence-ending punctuation and no
+        # opening quote so dialogue and one-line paragraphs are left alone.
+        if (not better and len(text) <= 70
+                and re.search(r"[A-Za-z0-9]", text)      # never a row of marks
+                and not text[0] in "\"'“‘«-–—"
+                and not text.rstrip().endswith((".", "!", "?", ",", ";", ":"))):
+            better = text
+            removed.append(el)
+            continue
+        break
+
+    if not removed:
+        return html_text, None
+    for el in removed:
+        parent = el.getparent()
+        if parent is not None:
+            parent.remove(el)
+
+    out = (root.text or "")
+    for child in root:
+        out += etree.tostring(child, encoding="unicode", method="html")
+    return out.strip(), (better if better and is_generic_title(stored_title) else None)
 
 
 # ── Formatting tidy ──────────────────────────────────────────────────────────
@@ -244,7 +303,11 @@ def tidy_chapter_html(html_text: str) -> str:
         # A typed scene break becomes a real <hr>, which the reader already
         # styles as "* * *" — so every fic separates scenes the same way
         # regardless of which punctuation its author reached for.
-        if el.tag in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6"):
+        # <center> is what EPUB and old FFN HTML actually use for a centred
+        # rule; leaving it out meant "<center>* * * * *</center>" survived tidy
+        # and was then promoted into the chapter TITLE.
+        if el.tag in ("p", "div", "center", "blockquote",
+                      "h1", "h2", "h3", "h4", "h5", "h6"):
             text = "".join(el.itertext()).strip()
             if text and _SCENE_BREAK_RE.match(text):
                 el.clear()
