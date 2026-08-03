@@ -47,7 +47,12 @@ from models.story import Story
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
 
-UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
+# Identify honestly. This walks a lot of work pages, and a contactable UA means
+# AO3 can throttle or mail us rather than having to guess what an anonymous
+# browser-shaped client is doing. Work pages (/works/12345) are not disallowed by
+# their robots.txt — only /works? and /works/search? are — and no global
+# Crawl-delay is set, so the pacing here is courtesy, not a stated limit.
+UA = {"User-Agent": "FicAtlas/1.0 (personal fanfiction index; +https://github.com/Georgexzy/ficatlas)"}
 TITLE_RE = re.compile(r'<h2 class="title heading">(.*?)</h2>', re.S)
 
 # Only endings that genuinely cannot finish a title.

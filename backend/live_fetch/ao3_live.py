@@ -18,9 +18,25 @@ BASE = "https://archiveofourown.org"
 # is merely grinding through a search should be waited out.
 AO3_SEARCH_TIMEOUT = httpx.Timeout(connect=6.0, read=45.0, write=8.0, pool=6.0)
 
+# AO3 asks automated clients to identify themselves. A contactable UA also means
+# they can ask us to stop rather than just blocking an anonymous scraper.
 HEADERS = {
-    "User-Agent": "FicAtlas/0.1 (fanfiction discovery; contact: admin@ficatlas.app)",
+    "User-Agent": "FicAtlas/1.0 (personal fanfiction index; +https://github.com/Georgexzy/ficatlas)",
 }
+
+# AO3's robots.txt disallows /works/search? outright:
+#
+#     Disallow: /works?        # cruel but efficient
+#     Disallow: /works/search?
+#
+# Tag listings (/tags/<tag>/works) and individual work pages (/works/12345) are
+# NOT disallowed, and both are what this module now prefers anyway — the tag
+# endpoint measured 2/2 successful at 4-5s versus /works/search at 1/2 and 29s.
+#
+# So free-text search against AO3 is only ever run for a request a person is
+# actually waiting on, never from a background loop. `automated=True` makes the
+# caller skip rather than fall back to a disallowed endpoint.
+ROBOTS_DISALLOWED_SEARCH = True
 
 AO3_RATING_MAP = {
     "Not Rated": "NR",
@@ -227,7 +243,8 @@ async def _fetch_page(client: httpx.AsyncClient, params: dict, page_num: int) ->
     return out
 
 
-async def fetch_live_ao3(params: dict, limit: int = 20, pages: int = 1) -> list[dict]:
+async def fetch_live_ao3(params: dict, limit: int = 20, pages: int = 1,
+                         automated: bool = False) -> list[dict]:
     """Fetch live AO3 results, merging `pages` consecutive result pages.
 
     Pages are fetched CONCURRENTLY. They were fetched one after another, and since
@@ -235,6 +252,12 @@ async def fetch_live_ao3(params: dict, limit: int = 20, pages: int = 1) -> list[
     per page, three pages cost ~31s serially versus roughly the slowest single page
     in parallel. Same number of requests to AO3, just overlapped.
     """
+    # A background loop must not touch /works/search — see ROBOTS_DISALLOWED_SEARCH.
+    # Without a fandom there is no allowed endpoint, so it simply does nothing.
+    if automated and not (params.get("fandoms") or "").strip():
+        log.info("skipping automated AO3 free-text fetch: /works/search is robots-disallowed")
+        return []
+
     async with httpx.AsyncClient(headers=HEADERS, timeout=AO3_SEARCH_TIMEOUT,
                                  follow_redirects=True) as client:
         batches = await asyncio.gather(

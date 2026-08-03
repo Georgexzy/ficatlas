@@ -31,8 +31,9 @@ days, not to saturate the database or hammer archive.org:
   REFRESH_INTERVAL_MIN=60
   REFRESH_BATCH=40
   TITLE_REPAIR=true          repair AO3 titles the dump truncated (default on)
-  TITLE_REPAIR_INTERVAL_MIN=45
-  TITLE_REPAIR_BATCH=100
+  TITLE_REPAIR_INTERVAL_MIN=1
+  TITLE_REPAIR_BATCH=300
+  TITLE_REPAIR_DELAY=1.0     seconds between AO3 requests — keep >= 1
 """
 
 import asyncio
@@ -145,7 +146,7 @@ async def _recent_works_loop() -> None:
                 try:
                     results = await fetch_live_ao3(
                         {"fandoms": fandom, "status": None, "sort": "updated_desc"},
-                        limit=pages * 20, pages=pages,
+                        limit=pages * 20, pages=pages, automated=True,
                     )
                     if results:
                         def _save():
@@ -202,7 +203,7 @@ async def _refresh_stale_loop() -> None:
                 try:
                     results = await fetch_live_ao3(
                         {"q": f"{title} {author or ''}".strip(), "status": None,
-                         "sort": "relevance"}, limit=20, pages=1)
+                         "sort": "relevance"}, limit=20, pages=1, automated=True)
                     if results:
                         def _save():
                             with db_session() as db:
@@ -231,14 +232,25 @@ async def _title_repair_loop() -> None:
 
     One request per work, so this is paced to grind slowly rather than finish.
     """
-    interval = _num("TITLE_REPAIR_INTERVAL_MIN", 45) * 60
-    batch = int(_num("TITLE_REPAIR_BATCH", 100))
+    # Pacing. AO3's robots.txt sets no global Crawl-delay (only Slurp gets one,
+    # at 30s) and does not disallow individual work pages, so the limit here is
+    # courtesy rather than a stated rule. One request per second sustained is a
+    # rate their infrastructure will not notice from a single reader, and it is
+    # 27x the previous pace: the old 100 works per 45 minutes was 0.04 req/s,
+    # which would have taken about four months to work through the 398,817
+    # identifiable rows. At 1/s it is roughly five days.
+    #
+    # Deliberately not faster than that. Going wider would finish sooner and is
+    # exactly the kind of thing that gets a scraper blocked for everyone.
+    delay = _num("TITLE_REPAIR_DELAY", 1.0)
+    interval = _num("TITLE_REPAIR_INTERVAL_MIN", 1) * 60
+    batch = int(_num("TITLE_REPAIR_BATCH", 300))
     from ao3_title_repair import run as repair_run
 
     while True:
         try:
-            log.info(f"AO3 title repair pass ({batch} works)")
-            await asyncio.to_thread(repair_run, batch, False, 1.0)
+            log.info(f"AO3 title repair pass ({batch} works @ {delay}s)")
+            await asyncio.to_thread(repair_run, batch, False, delay)
         except Exception as e:
             log.warning(f"title repair pass failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
