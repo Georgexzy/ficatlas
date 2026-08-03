@@ -541,12 +541,32 @@ function RecentSearches(
   )
 }
 
+
+// Shared with the index-status widget: 19,650,992 -> "19.7M".
+function fmtCount(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`
+  return String(n)
+}
+
 // ── Empty / loading states ────────────────────────────────────────────────────
 // The example queries that used to sit here now live in the syntax panel under
 // the search bar, where they are clickable and next to the box they fill in.
 // On the landing page they were three lines of operator soup competing with the
 // one thing to do — type something.
 function EmptyState({ onSurprise }: { onSurprise: () => void }) {
+  const [total, setTotal] = useState<number | null>(null)
+
+  useEffect(() => {
+    // Same cached endpoint the header widget uses (5-minute TTL server-side),
+    // so this is a cheap read rather than a second scan of 19M rows.
+    fetch("/api/stats/totals")
+      .then(r => r.json())
+      .then(d => { if (typeof d?.stories === "number") setTotal(d.stories) })
+      .catch(() => {})
+  }, [])
+
   return (
     <div className="empty">
       <p className="empty__title">Search the fanfiction internet</p>
@@ -554,9 +574,14 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
           sent — indexed results come back in milliseconds and the fresh works
           land in the index for next time — so "pulled in as you search" was
           promising something the reader never sees in that search. */}
+      {/* The count is read from the index, not written into the copy. It was
+          hardcoded at "19.6M" and had already drifted — the header was showing
+          19.7M on the same screen — and it only ever grows, so any literal here
+          starts going stale the moment the workers add a row. */}
       <p className="empty__sub">
-        19.6M works across AO3, FanFiction.net and FicAlley, in one index —
-        searched locally, so results come back instantly
+        {total ? `${fmtCount(total)} works` : "Millions of works"} across AO3,
+        FanFiction.net and FicAlley, in one index — searched locally, so results
+        come back instantly
       </p>
       <p className="empty__nudge">
         Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
