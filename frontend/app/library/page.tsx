@@ -1288,7 +1288,12 @@ function BookCover({ story, onDelete, progress }: {
   progress?: { chapter: number; totalChapters?: number; scrollPct?: number }
 }) {
   const [g1, g2] = COVER_GRADIENTS[hashCode(story.title) % COVER_GRADIENTS.length]
-  const fontSize = story.title.length > 30 ? 13 : story.title.length > 18 ? 15 : 17
+  // Long titles get a smaller step; the actual size is resolved in CSS relative
+  // to the cover's own width (container units), because a fixed pixel size
+  // chosen here was sized for the desktop cover and overflowed the clamp on a
+  // 2-column phone grid, where each cover is ~166px wide.
+  const titleLen = story.title.length > 44 ? "xl" : story.title.length > 30 ? "l"
+                 : story.title.length > 18 ? "m" : "s"
 
   // Compute % through story: (completed chapters + partial scroll) / total
   let pct: number | null = null
@@ -1312,7 +1317,7 @@ function BookCover({ story, onDelete, progress }: {
         <div className="book__cover" style={{ background: `linear-gradient(160deg, ${g1}, ${g2})` }}>
           <div className="book__cover-spine" />
           <div className="book__cover-content">
-            <p className="book__cover-title" style={{ fontSize }}>{story.title}</p>
+            <p className="book__cover-title" data-len={titleLen}>{story.title}</p>
             <p className="book__cover-author">{story.author}</p>
           </div>
           <div className="book__cover-shine" />

@@ -1935,3 +1935,64 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
    layout feels broken. Wide content scrolls inside its own container instead. */
 html, body { overflow-x: hidden; max-width: 100%; }
 .card, .book, .story-detail, .settings-group { min-width: 0; }
+
+/* ── Book cover titles scale with the cover ─────────────────────────────────
+   The title size used to be a fixed pixel value picked in JS from the title's
+   length, chosen for the desktop cover. On the 2-column phone grid each cover is
+   about 166px wide — 134px of text once padding is removed — so longer titles
+   overflowed the 4-line clamp and were visibly cut off.
+
+   Sizing in container-query units ties the text to the cover's actual width, so
+   it holds at any number of grid columns. The data-len steps keep a long title
+   proportionally smaller than a short one, which is what the JS was for. */
+.book__cover { container-type: inline-size; }
+
+.book__cover-title {
+  overflow-wrap: anywhere;               /* never let one long word overflow */
+  -webkit-line-clamp: 5;
+}
+.book__cover-title[data-len="s"]  { font-size: clamp(13px, 11cqw, 19px); }
+.book__cover-title[data-len="m"]  { font-size: clamp(12px, 9.5cqw, 17px); }
+.book__cover-title[data-len="l"]  { font-size: clamp(11px, 8cqw, 15px); -webkit-line-clamp: 6; }
+.book__cover-title[data-len="xl"] { font-size: clamp(10px, 7cqw, 13px); -webkit-line-clamp: 7; }
+
+@media (max-width: 700px) {
+  /* Reclaim width for the text — 32px of side padding out of a 166px cover was
+     nearly a fifth of it. */
+  .book__cover-content { padding: 12px 9px 10px 12px; }
+  .book__cover-author { font-size: 8px; letter-spacing: 0.1em; overflow-wrap: anywhere; }
+}
+
+/* The reader's back link carries the story title ("← Some Long Title"). It was
+   truncated to one ellipsised line at 60vw, so on a phone you often could not
+   read which story you were in. Two lines, and the width it actually has. */
+@media (max-width: 700px) {
+  .reader-topbar .back-link {
+    max-width: none; white-space: normal; overflow: visible; text-overflow: clip;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow-wrap: anywhere; line-height: 1.25;
+  }
+  /* Recommendation cards and the story heading wrap rather than clip too. */
+  .similar-card__title, .similar-card__author { overflow-wrap: anywhere; }
+  .story-detail__title { overflow-wrap: anywhere; hyphens: auto; }
+}
+
+/* ── Expandable summaries in search listings ────────────────────────────────
+   The clamp stays as the default so a results page keeps its rhythm; the
+   expander only appears when the text is genuinely cut off (measured in JS
+   against the clamped height), so short summaries get no pointless button. */
+.card__summary-wrap { margin-bottom: 10px; }
+.card__summary-wrap .card__summary { margin-bottom: 0; }
+.card__summary--open {
+  -webkit-line-clamp: unset; display: block; overflow: visible;
+}
+.card__summary-toggle {
+  background: none; border: none; padding: 2px 0 0; margin-top: 2px;
+  font: inherit; font-size: 12px; color: var(--accent);
+  cursor: pointer; letter-spacing: 0.01em;
+}
+.card__summary-toggle:hover { text-decoration: underline; }
+@media (max-width: 700px) {
+  /* Bigger tap target on a phone without adding visual weight. */
+  .card__summary-toggle { padding: 8px 0 4px; }
+}

@@ -41,6 +41,48 @@ const RATING_OPTIONS = [
   { id: "NR", label: "Not Rated" },
 ]
 
+
+// ── Expandable summary ────────────────────────────────────────────────────────
+// Summaries were clamped to three lines with no way to read the rest, so a
+// listing showed a sentence that stopped mid-thought. This adds an expander —
+// but only when the text is ACTUALLY being cut off, measured after layout.
+// Offering "more" on a two-line summary that already fits is just noise.
+function Summary({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const [overflows, setOverflows] = useState(false)
+  const ref = useRef<HTMLParagraphElement | null>(null)
+
+  useEffect(() => {
+    const measure = () => {
+      const el = ref.current
+      if (!el) return
+      // Compare against the clamped height, so this must run while collapsed.
+      if (!expanded) setOverflows(el.scrollHeight > el.clientHeight + 1)
+    }
+    measure()
+    // Rotating a phone or resizing changes how many lines fit.
+    window.addEventListener("resize", measure)
+    return () => window.removeEventListener("resize", measure)
+  }, [text, expanded])
+
+  return (
+    <div className="card__summary-wrap">
+      <p ref={ref} className={`card__summary ${expanded ? "card__summary--open" : ""}`}>
+        {text}
+      </p>
+      {(overflows || expanded) && (
+        <button
+          className="card__summary-toggle"
+          aria-expanded={expanded}
+          onClick={e => { e.preventDefault(); e.stopPropagation(); setExpanded(v => !v) }}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ── Tag list with expand/collapse ─────────────────────────────────────────────
 function TagList({ tags, className, kind = "tags" }: {
   tags: string[]; className?: string; kind?: "tags" | "fandoms" | "relationships" | "characters"
@@ -315,7 +357,7 @@ function StoryCard({ story }: { story: StoryCard }) {
         </p>
       </div>
 
-      {story.summary && <p className="card__summary">{story.summary}</p>}
+      {story.summary && <Summary text={story.summary} />}
 
       <div className="card__meta">
         {story.word_count > 0
