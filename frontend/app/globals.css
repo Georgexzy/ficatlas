@@ -2130,3 +2130,59 @@ html, body { overflow-x: hidden; max-width: 100%; }
    content — that alone can push a long title out of its card. */
 .card__title-row, .library-item, .library-item__main, .similar-card { min-width: 0; }
 .card__title-row > * { min-width: 0; max-width: 100%; }
+
+/* ── Help tips ("?" hover/tap hints) ───────────────────────────────────────── */
+.helptip { position: relative; display: inline-flex; vertical-align: middle; margin-left: 5px; }
+.helptip__btn {
+  width: 16px; height: 16px; min-width: 16px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--border2);
+  background: var(--surface2); color: var(--text-faint);
+  font-size: 10px; line-height: 1; font-family: var(--font-mono);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: help; position: relative;
+}
+.helptip__btn:hover, .helptip__btn[aria-expanded="true"] {
+  color: var(--accent); border-color: var(--accent);
+}
+.helptip__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.helptip__bubble {
+  position: absolute; z-index: 60; left: 50%; bottom: calc(100% + 7px);
+  transform: translateX(-50%);
+  width: max-content; max-width: min(280px, 70vw);
+  background: var(--surface2); color: var(--text);
+  border: 1px solid var(--border2); border-radius: var(--radius);
+  padding: 8px 10px; font-size: 12px; line-height: 1.5;
+  font-family: var(--font-sans); font-weight: 400; text-transform: none;
+  letter-spacing: normal; white-space: normal; text-align: left;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+}
+.helptip__bubble::after {
+  content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px;
+  border: 5px solid transparent; border-top-color: var(--border2);
+}
+
+/* On a phone the bubble is wider than the control it hangs off, so anchoring
+   it to the tip's centre pushes it off-screen near either edge. Pin it across
+   the viewport instead. */
+@media (max-width: 560px) {
+  .helptip__bubble {
+    position: fixed; left: 12px; right: 12px; top: auto;
+    transform: none; max-width: none; width: auto;
+    /* Sit ABOVE the bottom tab bar, not behind it. The bar is fixed to the
+       bottom on phones, so a bubble pinned to bottom:12px is simply hidden. */
+    bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+  .helptip__bubble::after { display: none; }
+}
+
+/* The reader has no tab bar, so the bubble can sit lower there. */
+@media (max-width: 560px) {
+  body:not(:has(.tabbar)) .helptip__bubble { bottom: 16px; }
+}
+
+/* A 16px circle is fine for a mouse and far too small for a thumb, so grow the
+   hit area on touch without changing how it looks. */
+@media (pointer: coarse) {
+  .helptip__btn::before { content: ""; position: absolute; inset: -11px; }
+}

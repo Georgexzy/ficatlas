@@ -4,6 +4,7 @@ import { useState, useCallback, useTransition, useEffect, useRef, Suspense } fro
 import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import Link from "next/link"
 import OfflineLink from "./OfflineLink"
+import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS,
@@ -810,21 +811,46 @@ function SearchPageInner() {
             <button className="sidebar__close" onClick={() => setFiltersOpen(false)} aria-label="Close filters">✕</button>
           </div>
           <div className="sidebar__top">
-            <label className="sidebar__label">Sort</label>
+            <label className="sidebar__label">
+              Sort
+              <HelpTip label="About sorting">
+                <strong>Relevance</strong> ranks by how well a story matches
+                your words. The date sorts fall back to the published date when
+                a work has no update date recorded, which is common in the bulk
+                imports.
+              </HelpTip>
+            </label>
             <select value={sort} onChange={e => setSort(e.target.value)} className="select">
               {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
 
           <div className="sidebar__group">
-            <label className="sidebar__label">Sites</label>
+            <label className="sidebar__label">
+              Sites
+              <HelpTip label="About the archives">
+                Which archives to search. Works cross-posted to more than one
+                site are collapsed into a single result, so unticking a site
+                hides copies rather than losing the story.
+              </HelpTip>
+            </label>
             <Pills options={SITE_OPTIONS} selected={sites}
               onToggle={id => tog(sites, setSites, id)}
               highlighted={fromSearch("sites")} />
           </div>
 
           <div className="sidebar__group">
-            <label className="sidebar__label">Match multiple values</label>
+            <label className="sidebar__label">
+              Match multiple values
+              <HelpTip label="About matching multiple values">
+                When you pick two or more fandoms, ships or tags:
+                <strong> All of them</strong> needs a story to carry every one —
+                that is how you find crossovers.
+                <strong> Any of them</strong> needs just one, which reunites a
+                fandom split across spellings, like the three separate
+                &ldquo;Harry Potter&rdquo; tags.
+              </HelpTip>
+            </label>
             <div className="match-mode">
               <button className={`match-mode__btn ${matchMode === "all" ? "match-mode__btn--on" : ""}`}
                 onClick={() => setMatchMode("all")}
@@ -845,11 +871,18 @@ function SearchPageInner() {
           </div>
 
           <div className="sidebar__group">
-            <label className="checkbox-row" title="Most bulk-imported stories have no ship or character tags. By default they are excluded from those filters, so a filter returns only stories that genuinely match.">
+            <label className="checkbox-row">
               <input type="checkbox" checked={includeUnknown}
                 onChange={e => setIncludeUnknown(e.target.checked)} />
               <span>Include stories with missing info</span>
             </label>
+            <HelpTip label="About stories with missing info">
+              Most bulk-imported stories carry no ship or character tags at all.
+              They are normally left out of those filters, so a ship filter
+              returns only stories that genuinely match it. Tick this to widen
+              the search back to rows whose metadata was never captured — more
+              results, less certainty.
+            </HelpTip>
           </div>
 
           <hr className="sidebar__rule" />
