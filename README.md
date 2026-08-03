@@ -113,7 +113,17 @@ FicAtlas runs everything in Docker on one host (single VPS or homelab box). The 
 
 Only **port 3000** is reachable from clients. The frontend's `next.config.ts` declares a rewrite that forwards `/api/:path*` → `http://backend:8000/api/:path*`, so the browser only ever talks to one origin (no CORS, no port-8000 exposure, no env-var pinning). Tailscale, LAN, or a Cloudflare Tunnel pointed at port 3000 all work the same way.
 
-The backend (8000) and Postgres (5432) are bound to `127.0.0.1` in `docker-compose.yml`, so they are reachable from the host but not from the LAN or the tailnet. This is deliberate: Postgres uses a default password, and the `/api/library/*` endpoints (delete hosted story, trigger scrapes) have no authentication, so neither port should be exposed to a network. The app is unaffected — the frontend reaches the backend over the internal compose network.
+The backend (8000) and Postgres (5432) are bound to `127.0.0.1` in `docker-compose.yml`, so they are reachable from the host but not from the LAN or the tailnet. This is deliberate: Postgres uses a default password in development, so neither port should be exposed to a network. The app is unaffected — the frontend reaches the backend over the internal compose network.
+
+`/api/library/*` mutations are no longer unauthenticated — every destructive endpoint requires `admin`, and roles are enforced server-side (see **Accounts & sync**). That is a change from an earlier version of this file, which described them as open.
+
+**Putting this on the internet is a different configuration.** `docker-compose.prod.yml` unpublishes every port but a loopback frontend, drops `--reload` and the bind mount, takes the DB password from `.env`, marks session cookies `Secure`, and adds a Cloudflare Tunnel so nothing has to be forwarded and the home IP never appears in DNS:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full walkthrough, the recommended Cloudflare settings, and the pre-launch checks.
 
 To access from your phone over Tailscale:
 1. Install Tailscale on both the host and the phone, both signed into the same tailnet
@@ -209,6 +219,17 @@ sites themselves, in the background, at a deliberately modest rate.
   Deep pagination is not capped; page 5000 of a large fandom still returns 20
   works. Walks the canonical fandoms largest-first, so it can be stopped at any
   point with most of the value already banked.
+
+- **`wayback_harvest.py`** — the one route that costs AO3 nothing. archive.org
+  has snapshotted AO3 work pages for years, and a snapshot is a complete copy:
+  summary, tags, dates, stats. Measured against the CDX index on a 57,158-work
+  sample, **81.2%** of the AO3 works Wayback holds are ones we already have but
+  cannot summarise — the coverage is weighted toward exactly the popular works
+  the gap is made of — and another 18.2% are works we do not hold at all. This
+  is also the collection route the OTW names as acceptable, alongside search
+  indexing. Two loops: a CDX walk that discovers ~9,000 work IDs per request
+  into a queue, and a fetcher that drains it. Paced by its own budget, not the
+  AO3 one — throttling it against AO3 would discard the entire point.
 
 - **`ao3_title_repair.py`** — walks AO3 works whose dump title was truncated
   (identifiable because no real title ends on a dangling "and/of/the/with") and
