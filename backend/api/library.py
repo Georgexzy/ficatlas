@@ -3,6 +3,7 @@ import os, re, uuid, zipfile, io, logging
 import httpx
 from typing import Optional
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from datetime import datetime
 
@@ -508,13 +509,20 @@ async def can_import(url: str):
 
 @router.get("/hosted")
 async def list_hosted(limit: int = 100, offset: int = 0, db: Session = Depends(get_db)):
-    """List all stories hosted on FicAtlas (EPUB uploads + URL imports), newest first."""
+    """Stories hosted on FicAtlas (EPUB uploads + URL imports), newest first.
+
+    Returns the TOTAL alongside the page. The endpoint always supported offset,
+    but returned a bare list, so the library showed the first 100 of 29,977 and
+    labelled its tab "100" — the page size presented as the whole shelf, with
+    the other 29,877 unreachable.
+    """
+    total = db.query(func.count(Story.id)).filter(Story.is_hosted == True).scalar() or 0
     q = (db.query(Story)
          .filter(Story.is_hosted == True)
          .order_by(Story.indexed_at.desc())
          .offset(offset).limit(min(limit, 200)))
     rows = q.all()
-    return [
+    items = [
         {
             "id": str(s.id),
             "title": s.title,
@@ -528,6 +536,7 @@ async def list_hosted(limit: int = 100, offset: int = 0, db: Session = Depends(g
         }
         for s in rows
     ]
+    return {"total": total, "offset": offset, "limit": len(items), "items": items}
 
 
 # ── AO3 Atom feed discovery (the reliable fresh-data path) ───────────────────

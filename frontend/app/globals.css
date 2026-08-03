@@ -2509,3 +2509,5 @@ body.is-resizing * { cursor: col-resize !important; }
   /* The header is not sticky on phones, so the tabs sit at the top instead. */
   .library-tabs { top: 0; }
 }
+
+.library-more { display: flex; justify-content: center; padding: 24px 0 8px; }

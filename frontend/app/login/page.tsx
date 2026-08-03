@@ -70,7 +70,8 @@ function LoginPageInner() {
           {mode === "login"
             ? "Stays signed in for 90 days on this device."
             : "Your username can be anything 3–30 chars. No email needed."}
-          {" "}Local bookmarks/progress sync to your account automatically.
+          {" "}Your bookmarks, reading progress, recent searches and reader
+          settings sync automatically and merge across devices.
         </p>
       </form>
     </div>
