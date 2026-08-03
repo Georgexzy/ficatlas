@@ -1135,14 +1135,15 @@ kbd {
 .book__meta {
   margin-top: 12px; padding: 0 2px;
 }
+/* Truncation removed at source rather than overridden further down: relying on
+   cascade order for this is what let a stale nowrap keep clipping titles while
+   the override looked correct in the file. */
 .book__title {
   font-size: 13px; color: var(--text); font-weight: 500;
   line-height: 1.3; margin-bottom: 2px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .book__author {
   font-size: 12px; color: var(--text-dim);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .book__stats {
   font-size: 11px; color: var(--text-faint); font-family: var(--font-mono);
@@ -1964,7 +1965,7 @@ html, body { overflow-x: hidden; max-width: 100%; }
 @media (max-width: 700px) {
   .reader-topbar .back-link {
     max-width: none; white-space: normal; overflow: visible; text-overflow: clip;
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    display: block; -webkit-line-clamp: unset;
     overflow-wrap: anywhere; line-height: 1.25;
   }
   /* Recommendation cards and the story heading wrap rather than clip too. */
@@ -2064,3 +2065,34 @@ html, body { overflow-x: hidden; max-width: 100%; }
   margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border);
   font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
 }
+
+/* ── No title is ever truncated ─────────────────────────────────────────────
+   AO3 titles run to 255 characters where FF.net's stop at 103, and 62,938 AO3
+   titles are over 60 — so they are the ones that hit any clamp first, which is
+   why truncation showed up as "an AO3 problem". Rather than chase each surface
+   one at a time, every title element is stated here explicitly.
+
+   The single exception is .book__cover-title, the title painted ON the cover
+   artwork: it must fit inside a fixed-aspect box, and the complete title always
+   sits directly beneath it. */
+.card__title,
+.story-detail__title,
+.book__title,
+.library-item__title,
+.similar-card__title,
+.chapter-list__title,
+.dlp-entry__title,
+.reader__title,
+.reader-topbar .back-link {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  -webkit-line-clamp: unset;
+  display: block;
+  overflow-wrap: anywhere;
+  min-width: 0;          /* so a flex parent can't force max-content width */
+}
+/* A flex item defaults to min-width:auto, which refuses to shrink below its
+   content — that alone can push a long title out of its card. */
+.card__title-row, .library-item, .library-item__main, .similar-card { min-width: 0; }
+.card__title-row > * { min-width: 0; max-width: 100%; }
