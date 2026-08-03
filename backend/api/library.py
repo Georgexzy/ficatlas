@@ -424,11 +424,19 @@ async def import_url(url: str = Form(...), db: Session = Depends(get_db),
         db.query(Chapter).filter(Chapter.story_id == story.id).delete()
     else:
         site = SiteEnum.ao3 if "archiveofourown.org" in url else SiteEnum.ffnet
-        site_id = meta.get("id") or url.rstrip("/").split("/")[-1]
+        # The archive's own id, not the URL's trailing slug. Taking the last
+        # path segment turned ".../s/12792189/1/A-Beautiful-Lie" into
+        # "import_A-Beautiful-Lie", which no id-based lookup can ever match —
+        # so those rows were invisible to DLP tagging, cross-post detection and
+        # dedup, and excluded from every enrichment queue (they all require a
+        # numeric site_id). Only fall back to the slug when the URL carries no
+        # id at all, e.g. a bare EPUB upload.
+        key = _story_key_from_url(url)
+        site_id = key[1] if key else (meta.get("id") or url.rstrip("/").split("/")[-1])
         story = Story(
             id=uuid.uuid4(),
             site=site,
-            site_id=f"import_{site_id}",
+            site_id=site_id,
             url=url,
             title=parsed["title"] or meta.get("title") or "Imported",
             author=parsed["author"] or meta.get("author") or "Unknown",
@@ -705,9 +713,11 @@ def _ingest_epub_from_url(db: Session, url: str, epub_bytes: bytes, site: SiteEn
         db.query(Chapter).filter(Chapter.story_id == existing.id).delete()
         story = existing
     else:
-        site_id = url.rstrip("/").split("/")[-1]
+        # Same as above: prefer the archive's id so the row can be matched.
+        key = _story_key_from_url(url)
+        site_id = key[1] if key else f"import_{url.rstrip('/').split('/')[-1]}"
         story = Story(
-            id=uuid.uuid4(), site=site, site_id=f"import_{site_id}", url=url,
+            id=uuid.uuid4(), site=site, site_id=site_id, url=url,
             title=parsed["title"] or "Imported", author=parsed["author"] or "Unknown",
             summary=parsed["summary"], language=parsed["language"],
             rating=RatingEnum.not_rated, status=StatusEnum.complete,

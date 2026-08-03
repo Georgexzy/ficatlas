@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
 
@@ -56,6 +56,7 @@ export default function ChapterPage() {
   const [theme, setTheme] = useState<"default" | "sepia" | "dark">("default")
   const [justify, setJustify] = useState(false)
   const [scrollPct, setScrollPct] = useState(0)
+  const headingRef = useRef<HTMLHeadingElement | null>(null)
 
   useEffect(() => {
     const savedSize = localStorage.getItem("ficatlas:reader-fontsize")
@@ -166,9 +167,20 @@ export default function ChapterPage() {
     if (!story || !chapter) return
     try {
       const progress = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
+      const prev = progress[story.id] || {}
+      // scrollPct belongs to the chapter it was measured in, so it must NOT be
+      // carried over by the spread when the chapter changes.
+      //
+      // Clicking "Next" happens at the bottom of a chapter, where scrollPct is
+      // ~1. The spread kept that value while overwriting `chapter` with the new
+      // number, so the restore effect below then matched — same story, same
+      // chapter number, a saved position of ~1 — and dropped the reader at the
+      // BOTTOM of the chapter they had just opened.
+      const sameChapter = prev.chapter === chapter.number
       progress[story.id] = {
-        ...(progress[story.id] || {}),
+        ...prev,
         chapter: chapter.number,
+        scrollPct: sameChapter ? prev.scrollPct : 0,
         totalChapters: story.chapter_count,
         title: story.title,
         author: story.author,
@@ -211,14 +223,24 @@ export default function ChapterPage() {
     try {
       const progress = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
       const saved = progress[story.id]
-      if (saved && saved.chapter === chapter.number && saved.scrollPct) {
-        // Wait one paint so the content has laid out
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          const h = document.documentElement
-          const target = (h.scrollHeight - h.clientHeight) * saved.scrollPct
-          window.scrollTo({ top: target, behavior: "auto" })
-        }))
-      }
+      const resume = saved && saved.chapter === chapter.number && saved.scrollPct > 0.01
+      // Wait one paint so the content has laid out before moving the viewport.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const h = document.documentElement
+        if (resume) {
+          window.scrollTo({ top: (h.scrollHeight - h.clientHeight) * saved.scrollPct,
+                            behavior: "auto" })
+        } else {
+          // Explicitly go to the top. Client-side routing keeps the document
+          // alive between chapters, so without this the viewport stays wherever
+          // the previous chapter was left — which is the bottom, because that
+          // is where the "Next" button is.
+          window.scrollTo({ top: 0, behavior: "auto" })
+        }
+        // Focus the heading so a keyboard or screen-reader user is moved to the
+        // new chapter too, rather than being left on the old page's Next button.
+        headingRef.current?.focus?.()
+      }))
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapter?.number, story?.id])
@@ -322,7 +344,7 @@ export default function ChapterPage() {
             <span className="dot"> · </span>
             <span>{minutes} min read</span>
           </p>
-          <h1 className="reader__title" tabIndex={-1}>{chapter.title || `Chapter ${num}`}</h1>
+          <h1 className="reader__title" tabIndex={-1} ref={headingRef}>{chapter.title || `Chapter ${num}`}</h1>
           {chapter.summary && <p className="reader__summary">{chapter.summary}</p>}
         </header>
 

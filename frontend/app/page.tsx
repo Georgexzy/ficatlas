@@ -4,13 +4,16 @@ import { useState, useCallback, useTransition, useEffect, useRef, Suspense } fro
 import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import Link from "next/link"
 import OfflineLink from "./OfflineLink"
+import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
-         SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS,
-         DATE_PRESETS, AO3_WARNINGS, CATEGORIES } from "@/lib/api"
+         SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
+         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
+import WordCountSlider from "./WordCountSlider"
+import DlpStars, { dlpRating } from "./DlpStars"
 import SiteHeader from "./SiteHeader"
 import { useAuth } from "@/lib/auth"
 
@@ -329,6 +332,7 @@ function StoryCard({ story }: { story: StoryCard }) {
             {story.rating && <span className={`badge badge--rating badge--${story.rating.toLowerCase()}`}>{RATING_LABELS[story.rating] ?? story.rating}</span>}
             {story.status === "complete" && <span className="badge badge--complete">Complete</span>}
             {story.tags?.includes("dlp_library") && <span className="badge badge--dlp" title="Curated by DarkLordPotter">DLP</span>}
+            {dlpRating(story.tags) != null && <DlpStars value={dlpRating(story.tags)!} />}
             {story.is_live && <span className="badge badge--live">Live</span>}
           </div>
         </div>
@@ -368,8 +372,36 @@ function StoryCard({ story }: { story: StoryCard }) {
         {story.kudos > 0 && <><span className="dot">·</span><span title="Kudos">♥ {formatNumber(story.kudos)}</span></>}
         {story.hits > 0 && <><span className="dot">·</span><span title="Hits">👁 {formatNumber(story.hits)}</span></>}
         {story.comments > 0 && <><span className="dot">·</span><span title="Comments">💬 {formatNumber(story.comments)}</span></>}
+        {story.bookmarks > 0 && <><span className="dot">·</span><span title="Bookmarks">🔖 {formatNumber(story.bookmarks)}</span></>}
         {story.language && story.language !== "English" && <><span className="dot">·</span><span>{story.language}</span></>}
-        {story.updated_at && <><span className="dot">·</span><span title="Last updated">{story.updated_at.split("T")[0]}</span></>}
+
+        {/* Say WHICH date it is. A bare "2026-01-11" does not distinguish when a
+            story appeared from when it last changed, and those mean very
+            different things when deciding whether to start a WIP. Fall back to
+            the published date so a work we have a date for never shows none. */}
+        {story.updated_at ? (
+          <><span className="dot">·</span>
+            <span title={`Last updated ${story.updated_at.split("T")[0]}`}>
+              Updated {formatStoryDate(story.updated_at)}
+            </span></>
+        ) : story.published_at ? (
+          <><span className="dot">·</span>
+            <span title={`Published ${story.published_at.split("T")[0]}`}>
+              Published {formatStoryDate(story.published_at)}
+            </span></>
+        ) : null}
+
+        {/* Both dates are worth showing when a work has actually been revised —
+            "published 2015, updated last month" is the shape of a long-running
+            WIP and is invisible if you only ever see one of them. */}
+        {story.updated_at && story.published_at
+          && story.published_at.split("T")[0] !== story.updated_at.split("T")[0] && (
+          <><span className="dot">·</span>
+            <span className="card__meta-muted"
+              title={`First published ${story.published_at.split("T")[0]}`}>
+              pub. {new Date(story.published_at).getFullYear()}
+            </span></>
+        )}
       </div>
 
       {story.relationships.length > 0 && (
@@ -379,7 +411,11 @@ function StoryCard({ story }: { story: StoryCard }) {
           ))}
         </div>
       )}
-      {story.tags.length > 0 && <TagList tags={story.tags} className="card__tags" />}
+      {/* dlp_stars is rendered as stars in the badge row above, so it must not
+          also appear here as a literal "dlp_stars:4.67" chip. */}
+      {story.tags.filter(t => !t.startsWith("dlp_stars:")).length > 0 && (
+        <TagList tags={story.tags.filter(t => !t.startsWith("dlp_stars:"))} className="card__tags" />
+      )}
       {story.warnings.filter(w => w !== "No Archive Warnings Apply").length > 0 && (
         <div className="card__warnings">
           {story.warnings.filter(w => w !== "No Archive Warnings Apply").map(w =>
@@ -415,33 +451,101 @@ function StoryCard({ story }: { story: StoryCard }) {
 }
 
 // ── Empty / loading states ────────────────────────────────────────────────────
-function EmptyState({ onPick, onSurprise }: { onPick: (q: string) => void; onSurprise: () => void }) {
-  const examples = [
-    "ship:Draco/Hermione >100k complete",
-    "fandom: Harry Potter marauders wip updated:2y",
-    "fandom: Harry Potter -tag:fluff rating:M complete words:>50k",
-  ]
+// The example queries that used to sit here now live in the syntax panel under
+// the search bar, where they are clickable and next to the box they fill in.
+// On the landing page they were three lines of operator soup competing with the
+// one thing to do — type something.
+function EmptyState({ onSurprise }: { onSurprise: () => void }) {
   return (
     <div className="empty">
       <p className="empty__title">Search the fanfiction internet</p>
       <p className="empty__sub">AO3 · FF.net · FicAlley · and more — fresh AO3 results pulled in as you search</p>
-      <div className="empty__examples">
-        <p className="empty__examples-label">Try:</p>
-        {examples.map(ex => (
-          <button key={ex} className="empty__ex" onClick={() => onPick(ex)}>{ex}</button>
-        ))}
-      </div>
+      <p className="empty__nudge">
+        Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
+      </p>
       <button className="empty__surprise" onClick={onSurprise}>🎲 Surprise me</button>
     </div>
   )
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
+
+// Drag-to-resize for the filter panel (desktop only).
+//
+// The panel was a fixed 220px, which is too narrow for long fandom names —
+// "Harry Potter and the Cursed Child - Thorne & Rowling" wrapped to three
+// lines — and too wide for anyone who mostly wants the results. The width is
+// remembered, so it is set once rather than every visit.
+//
+// Not offered on touch: there the panel is a full-height drawer, where a drag
+// handle would fight the swipe-to-close gesture and the width is the screen.
+const SIDEBAR_MIN = 180
+const SIDEBAR_MAX = 460
+const SIDEBAR_DEFAULT = 220
+
+function useSidebarResize() {
+  const [sidebarWidth, setSidebarWidth] = useState<number | null>(null)
+  const dragging = useRef(false)
+
+  useEffect(() => {
+    const saved = Number(localStorage.getItem("ficatlas:sidebar_w"))
+    if (saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) setSidebarWidth(saved)
+  }, [])
+
+  const commit = useCallback((w: number) => {
+    const clamped = Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w)))
+    setSidebarWidth(clamped)
+    try { localStorage.setItem("ficatlas:sidebar_w", String(clamped)) } catch {}
+  }, [])
+
+  const startResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // Pointer capture keeps the drag alive when the cursor outruns the handle,
+    // which it will — a 6px target and a fast mouse part company immediately.
+    if (window.matchMedia("(pointer: coarse)").matches) return
+    e.preventDefault()
+    dragging.current = true
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    const startX = e.clientX
+    const startW = sidebarWidth ?? SIDEBAR_DEFAULT
+    document.body.classList.add("is-resizing")
+
+    const move = (ev: PointerEvent) => {
+      if (dragging.current) commit(startW + (ev.clientX - startX))
+    }
+    const up = (ev: PointerEvent) => {
+      dragging.current = false
+      document.body.classList.remove("is-resizing")
+      try { el.releasePointerCapture(ev.pointerId) } catch {}
+      el.removeEventListener("pointermove", move)
+      el.removeEventListener("pointerup", up)
+      el.removeEventListener("pointercancel", up)
+    }
+    el.addEventListener("pointermove", move)
+    el.addEventListener("pointerup", up)
+    el.addEventListener("pointercancel", up)
+  }, [sidebarWidth, commit])
+
+  // A drag handle that only responds to dragging is unusable without a mouse.
+  const onResizeKey = useCallback((e: React.KeyboardEvent) => {
+    const w = sidebarWidth ?? SIDEBAR_DEFAULT
+    if (e.key === "ArrowLeft") { e.preventDefault(); commit(w - 16) }
+    if (e.key === "ArrowRight") { e.preventDefault(); commit(w + 16) }
+    if (e.key === "Home") { e.preventDefault(); commit(SIDEBAR_DEFAULT) }
+  }, [sidebarWidth, commit])
+
+  const resetWidth = useCallback(() => commit(SIDEBAR_DEFAULT), [commit])
+
+  return { sidebarWidth, startResize, onResizeKey, resetWidth }
+}
+
+
 function SearchPageInner() {
   const router     = useRouter()
   const pathname   = usePathname()
   const rawParams  = useSearchParams()
   const [, startTransition] = useTransition()
+  const { sidebarWidth, startResize, onResizeKey, resetWidth } = useSidebarResize()
 
   const get = (k: string) => rawParams.get(k) ?? undefined
 
@@ -480,6 +584,8 @@ function SearchPageInner() {
   const [status,       setStatus]       = useState<string[]>(csv(get("status")))
   const [crossovers,   setCrossovers]   = useState(get("crossovers") ?? "include")
   const [language,     setLanguage]     = useState(get("language") ?? "")
+  const [dlpMinRating, setDlpMinRating] = useState<number | undefined>(
+    get("dlp_min_rating") ? Number(get("dlp_min_rating")) : undefined)
   const [wordMin,      setWordMin]      = useState<number | undefined>(get("word_count_min") ? Number(get("word_count_min")) : undefined)
   const [wordMax,      setWordMax]      = useState<number | undefined>(get("word_count_max") ? Number(get("word_count_max")) : undefined)
   const [updatedAfter, setUpdatedAfter] = useState(get("updated_after") ?? "")
@@ -651,6 +757,7 @@ function SearchPageInner() {
       exclude_tags:          joinCsv([...excTags, ...pq.excTags]),
       status:                status.length ? joinCsv(status) : (pq.status ?? undefined),
       language:              language || pq.language || undefined,
+      dlp_min_rating:        dlpMinRating ?? undefined,
       word_count_min:        wordMin ?? pq.wordCountMin ?? undefined,
       word_count_max:        wordMax ?? pq.wordCountMax ?? undefined,
       updated_after:         updatedAfter || pq.updatedAfter || undefined,
@@ -665,7 +772,8 @@ function SearchPageInner() {
     }
   }, [query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
-      status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort])
+      status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort,
+      dlpMinRating])
 
   const doSearch = useCallback(async (resetPage = true, explicitPage?: number) => {
     // explicitPage lets pagination pass the target page directly, avoiding the
@@ -750,7 +858,23 @@ function SearchPageInner() {
   }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
       incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
       language, wordMin, wordMax, updatedAfter, explicit, includeUnknown, authorFilter,
-      matchMode, sort])
+      matchMode, sort, dlpMinRating])
+
+  // Append a syntax fragment from the help panel and put the caret after it, so
+  // an operator like "fandom:" is ready to be typed into rather than merely
+  // shown. The panel stays open — picking two or three in a row is the normal
+  // way to build a query.
+  const insertSyntax = useCallback((fragment: string) => {
+    setQuery(prev => {
+      const base = prev.trimEnd()
+      return base ? `${base} ${fragment}` : fragment
+    })
+    // Focus after the state flush so the caret lands at the end.
+    setTimeout(() => {
+      const input = document.querySelector<HTMLInputElement>(".search-input")
+      if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length) }
+    }, 0)
+  }, [])
 
   const removeToken = (raw: string) =>
     setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim())
@@ -785,6 +909,7 @@ function SearchPageInner() {
     incFandoms.length + incChars.length + incShips.length + incTags.length +
     excFandoms.length + excChars.length + excShips.length + excTags.length +
     (wordMin != null ? 1 : 0) + (wordMax != null ? 1 : 0) +
+    (dlpMinRating != null ? 1 : 0) +
     incRatings.length + status.length +
     (searchWithin ? 1 : 0)
 
@@ -804,27 +929,54 @@ function SearchPageInner() {
         {filtersOpen && <div className="sidebar-backdrop" onClick={() => setFiltersOpen(false)} />}
 
         {/* ── Sidebar (slide-out drawer on mobile) ── */}
-        <aside className={`sidebar ${filtersOpen ? "sidebar--open" : ""}`}>
+        <aside className={`sidebar ${filtersOpen ? "sidebar--open" : ""}`}
+          style={sidebarWidth ? ({ ["--sidebar-w" as any]: `${sidebarWidth}px` }) : undefined}>
+
           <div className="sidebar__mobile-head">
             <span>Filters</span>
             <button className="sidebar__close" onClick={() => setFiltersOpen(false)} aria-label="Close filters">✕</button>
           </div>
           <div className="sidebar__top">
-            <label className="sidebar__label">Sort</label>
+            <label className="sidebar__label">
+              Sort
+              <HelpTip label="About sorting">
+                <strong>Relevance</strong> ranks by how well a story matches
+                your words. The date sorts fall back to the published date when
+                a work has no update date recorded, which is common in the bulk
+                imports.
+              </HelpTip>
+            </label>
             <select value={sort} onChange={e => setSort(e.target.value)} className="select">
               {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
 
           <div className="sidebar__group">
-            <label className="sidebar__label">Sites</label>
+            <label className="sidebar__label">
+              Sites
+              <HelpTip label="About the archives">
+                Which archives to search. Works cross-posted to more than one
+                site are collapsed into a single result, so unticking a site
+                hides copies rather than losing the story.
+              </HelpTip>
+            </label>
             <Pills options={SITE_OPTIONS} selected={sites}
               onToggle={id => tog(sites, setSites, id)}
               highlighted={fromSearch("sites")} />
           </div>
 
           <div className="sidebar__group">
-            <label className="sidebar__label">Match multiple values</label>
+            <label className="sidebar__label">
+              Match multiple values
+              <HelpTip label="About matching multiple values">
+                When you pick two or more fandoms, ships or tags:
+                <strong> All of them</strong> needs a story to carry every one —
+                that is how you find crossovers.
+                <strong> Any of them</strong> needs just one, which reunites a
+                fandom split across spellings, like the three separate
+                &ldquo;Harry Potter&rdquo; tags.
+              </HelpTip>
+            </label>
             <div className="match-mode">
               <button className={`match-mode__btn ${matchMode === "all" ? "match-mode__btn--on" : ""}`}
                 onClick={() => setMatchMode("all")}
@@ -845,11 +997,18 @@ function SearchPageInner() {
           </div>
 
           <div className="sidebar__group">
-            <label className="checkbox-row" title="Most bulk-imported stories have no ship or character tags. By default they are excluded from those filters, so a filter returns only stories that genuinely match.">
+            <label className="checkbox-row">
               <input type="checkbox" checked={includeUnknown}
                 onChange={e => setIncludeUnknown(e.target.checked)} />
               <span>Include stories with missing info</span>
             </label>
+            <HelpTip label="About stories with missing info">
+              Most bulk-imported stories carry no ship or character tags at all.
+              They are normally left out of those filters, so a ship filter
+              returns only stories that genuinely match it. Tick this to widen
+              the search back to rows whose metadata was never captured — more
+              results, less certainty.
+            </HelpTip>
           </div>
 
           <hr className="sidebar__rule" />
@@ -975,6 +1134,10 @@ function SearchPageInner() {
                 </button>
               ))}
             </div>
+            <WordCountSlider
+              min={wordMin ?? parsedLive.wordCountMin ?? undefined}
+              max={wordMax ?? parsedLive.wordCountMax ?? undefined}
+              onChange={(lo, hi) => { setWordMin(lo); setWordMax(hi) }} />
             <div className="input-pair">
               <input type="number" placeholder="Min" value={wordMin ?? parsedLive.wordCountMin ?? ""}
                 className="input-sm" onChange={e => setWordMin(e.target.value ? Number(e.target.value) : undefined)} />
@@ -998,10 +1161,43 @@ function SearchPageInner() {
               className="input-sm w-full" onChange={e => setUpdatedAfter(e.target.value)} />
           </FilterSection>
 
+          <FilterSection label="DLP rating" highlighted={dlpMinRating != null}>
+            <p className="filter-note">
+              DarkLordPotter&rsquo;s curated list, rated by its readers. Picking a
+              minimum also restricts results to that list.
+            </p>
+            <div className="pills">
+              {[
+                { label: "Any", value: undefined },
+                { label: "3+", value: 3 },
+                { label: "3.5+", value: 3.5 },
+                { label: "4+", value: 4 },
+                { label: "4.5+", value: 4.5 },
+              ].map(o => (
+                <button key={o.label}
+                  onClick={() => setDlpMinRating(o.value)}
+                  className={`pill ${dlpMinRating === o.value ? "pill--on" : ""}`}>
+                  {o.label !== "Any" && <span className="pill__star">★</span>}{o.label}
+                </button>
+              ))}
+            </div>
+          </FilterSection>
+
           <FilterSection label="Language" highlighted={!!parsedLive.language}>
-            <input type="text" placeholder="e.g. English, Français…"
+            {/* A dropdown, not free text. Stored values are a mix of English and
+                native names ("Chinese" and "中文-普通话 國語" both occur), so a
+                typed name only ever matched one spelling. Picking a canonical
+                name lets the backend expand it across every spelling. */}
+            <select className="select w-full"
               value={language || parsedLive.language || ""}
-              onChange={e => setLanguage(e.target.value)} className="input-sm w-full" />
+              onChange={e => setLanguage(e.target.value)}>
+              <option value="">Any language</option>
+              {LANGUAGE_OPTIONS.map(l => (
+                <option key={l.value} value={l.value}>
+                  {l.label} ({formatNumber(l.count)})
+                </option>
+              ))}
+            </select>
           </FilterSection>
 
           <hr className="sidebar__rule" />
@@ -1020,6 +1216,27 @@ function SearchPageInner() {
             </button>
           </div>
         </aside>
+
+        {/* Drag handle. A SIBLING of the sidebar, not a child: the sidebar is a
+            scroll container (overflow-y: auto), which clips an absolutely
+            positioned child sitting at its edge and scrolls it away with the
+            content — so the handle existed but could not be seen or grabbed.
+            As a flex item between the panel and the results it is simply
+            always there. Desktop only; hidden by CSS on touch. */}
+        <div
+          className="sidebar__resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize filter panel"
+          aria-valuenow={sidebarWidth ?? 220}
+          aria-valuemin={180}
+          aria-valuemax={460}
+          tabIndex={0}
+          onPointerDown={startResize}
+          onDoubleClick={resetWidth}
+          onKeyDown={onResizeKey}
+          title="Drag to resize · double-click to reset · ← → to nudge"
+        />
 
         {/* ── Main ── */}
         <main className="main">
@@ -1050,7 +1267,7 @@ function SearchPageInner() {
                     title="Clear the search box (keeps your filters)"
                     onClick={() => { setQuery(""); setTimeout(() => doSearch(), 0) }}>✕</button>
                 )}
-                <SyntaxHelp />
+                <SyntaxHelp onInsert={insertSyntax} />
               </div>
               <button className="search-btn" onClick={() => doSearch()} disabled={loading}>
                 {loading ? <span className="search-btn__spinner" /> : "Search"}
@@ -1183,9 +1400,7 @@ function SearchPageInner() {
             </>
           )}
 
-          {!results && !loading && <EmptyState
-            onPick={(q) => { setQuery(q); setTimeout(() => doSearch(), 0) }}
-            onSurprise={surpriseMe} />}
+          {!results && !loading && <EmptyState onSurprise={surpriseMe} />}
         </main>
       </div>
     </div>

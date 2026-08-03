@@ -118,8 +118,15 @@ def _parse_work_blurb(blurb_html: str, host: str = "https://archiveofourown.org"
     work_id = id_m.group(1)
 
     # Title + author
+    # The work link is NOT always /works/<id>. Inside a collection listing —
+    # which is exactly how HPFFA, HexFiles and the other Open Doors imports are
+    # scraped — Otwarchive emits /collections/<name>/works/<id>. Requiring the
+    # bare form meant every work in every collection parsed as "Untitled" by
+    # "Anonymous" with no metadata at all, which is why the HPFFA rows already
+    # in the index are 100% empty.
     h_m = re.search(
-        r'<h4 class="heading">\s*<a href="/works/\d+">(.*?)</a>\s*(?:by\s*(?:<!--.*?-->)?\s*<a [^>]*rel="author"[^>]*>(.*?)</a>)?',
+        r'<h4 class="heading">\s*<a href="(?:/collections/[^/"]+)?/works/\d+[^"]*">(.*?)</a>'
+        r'\s*(?:by\s*(?:<!--.*?-->)?\s*<a [^>]*rel="author"[^>]*>(.*?)</a>)?',
         blurb_html, re.DOTALL,
     )
     title  = _html.unescape(re.sub(r"<[^>]+>", "", h_m.group(1))).strip() if h_m else "Untitled"
@@ -155,10 +162,14 @@ def _parse_work_blurb(blurb_html: str, host: str = "https://archiveofourown.org"
     # Tags section: relationships / characters / freeforms
     def collect_class(cls: str) -> list[str]:
         out = []
-        for m in re.finditer(
-            rf'<li class="{cls}"><a[^>]+class="tag"[^>]*>(.*?)</a></li>',
-            blurb_html, re.DOTALL,
-        ):
+        # Otwarchive emits class='characters' with SINGLE quotes here, and
+        # wraps warning tags in <strong>. The double-quoted, unwrapped
+        # pattern this used to require matched nothing at all.
+        pattern = (
+            r'<li[^>]*class=[\"\']' + cls + r'[\"\'][^>]*>\s*(?:<strong>\s*)?'
+            r'<a[^>]+class=\"tag\"[^>]*>(.*?)</a>'
+        )
+        for m in re.finditer(pattern, blurb_html, re.DOTALL):
             out.append(_html.unescape(re.sub(r"<[^>]+>", "", m.group(1))).strip())
         return out
 
@@ -189,7 +200,7 @@ def _parse_work_blurb(blurb_html: str, host: str = "https://archiveofourown.org"
     comments  = stat_int("comments")
 
     language = "English"
-    lm = re.search(r'<dd class="language">([^<]+)</dd>', blurb_html)
+    lm = re.search(r'<dd class="language"[^>]*>([^<]+)</dd>', blurb_html)
     if lm: language = lm.group(1).strip()
 
     # Summary blockquote
@@ -236,16 +247,38 @@ def _parse_work_blurb(blurb_html: str, host: str = "https://archiveofourown.org"
     }
 
 
-def parse_works_page(html_text: str, host: str = "https://archiveofourown.org") -> tuple[list[dict], bool]:
+def parse_works_page(html_text: str, host: str = "https://archiveofourown.org",
+                     page: int | None = None) -> tuple[list[dict], bool]:
     """Parse a tag-works HTML page. Returns (entries, has_next_page)."""
-    blurbs = re.findall(
-        r'(<li[^>]+id="work_\d+"[^>]+class="[^"]*work blurb[^"]*"[^>]*>.*?</li>)',
-        html_text, re.DOTALL,
-    )
+    # Slice between work <li> starts rather than matching to the first </li>.
+    #
+    # A work blurb CONTAINS nested <li>s — the rating/warning/category/status
+    # icons live in <ul class="required-tags">. A non-greedy ".*?</li>" therefore
+    # ended each blurb a few hundred bytes in, right after the first icon, and
+    # threw away the tags, summary and the entire <dl class="stats"> block.
+    # Everything after that point parsed as empty, which is why imported
+    # collection works had no characters, ships, word counts, dates or summaries.
+    starts = [m.start() for m in re.finditer(
+        r'<li[^>]*id="work_\d+"[^>]*class="[^"]*work blurb', html_text)]
+    bounds = starts + [len(html_text)]
+    blurbs = [html_text[bounds[i]:bounds[i + 1]] for i in range(len(starts))]
     entries = [e for e in (_parse_work_blurb(b, host) for b in blurbs) if e]
 
-    # "next page" link presence
-    has_next = bool(re.search(r'<a[^>]+rel="next"', html_text))
+    # "next page" link presence.
+    #
+    # Otwarchive does NOT emit rel="next" — verified against a live listing that
+    # has 42 pages. The old check therefore returned False on page 1 every time,
+    # so every scrape stopped after 20 works no matter what max_pages said. That
+    # is the real reason these archives never grew: the Library button's
+    # "20 pages" was never more than one.
+    #
+    # The marker is <li class="next"> holding a link; on the last page the same
+    # <li> holds a disabled <span> instead, so requiring the <a> is what makes
+    # it terminate. The page+1 link is a second, independent signal in case the
+    # markup shifts again.
+    has_next = bool(re.search(r'<li class="next">\s*<a\b', html_text))
+    if not has_next and page:
+        has_next = bool(re.search(rf'page={page + 1}(?![0-9])', html_text))
 
     return entries, has_next
 
@@ -260,6 +293,7 @@ async def scrape_tag_works(
     excluded_tags: list[str] | None = None,
     ratings: list[str] | None = None,
     max_pages: int = 5,
+    start_page: int = 1,
     collection: str | None = None,
     base_url: str | None = None,        # non-AO3 Otwarchive host, e.g. https://squidgeworld.org
     on_progress: callable = None,    # optional: invoked with a dict {page, pages_ok, pages_failed, found}
@@ -276,6 +310,12 @@ async def scrape_tag_works(
         }
     If `on_progress` is supplied, it's called after each page attempt with a
     snapshot of progress so a background runner can stream updates to the UI.
+
+    `start_page` lets a caller resume where a previous run stopped. Without it
+    every run began at page 1, which is fine for a 5-page interactive job but
+    makes a full archive import impossible: re-reading the first N pages every
+    time means the tail is never reached. The returned "next_page"/"exhausted"
+    let the caller persist a cursor.
     """
     all_entries: list[dict] = []
     seen_ids: set[str] = set()
@@ -286,7 +326,9 @@ async def scrape_tag_works(
     async with httpx.AsyncClient(
         headers=HEADERS, timeout=AO3_TIMEOUT, follow_redirects=True,
     ) as client:
-        for page in range(1, max_pages + 1):
+        last_page = start_page - 1
+        exhausted = False
+        for page in range(start_page, start_page + max_pages):
             path = build_works_url(
                 tag, min_words=min_words, max_words=max_words,
                 complete_only=complete_only, sort=sort, direction=direction,
@@ -308,7 +350,8 @@ async def scrape_tag_works(
                 break
 
             pages_ok += 1
-            entries, has_next = parse_works_page(r.text, host=base_url or "https://archiveofourown.org")
+            entries, has_next = parse_works_page(
+                r.text, host=base_url or "https://archiveofourown.org", page=page)
             new = [e for e in entries if e["site_id"] not in seen_ids]
             for e in new: seen_ids.add(e["site_id"])
             all_entries.extend(new)
@@ -318,7 +361,9 @@ async def scrape_tag_works(
                              "found": len(all_entries),
                              "msg": f"Page {page}: {len(entries)} works ({len(all_entries)} total)"})
 
+            last_page = page
             if not has_next or len(entries) == 0:
+                exhausted = True
                 break
             if page < max_pages:
                 await asyncio.sleep(REQUEST_DELAY)
@@ -328,4 +373,9 @@ async def scrape_tag_works(
         "pages_ok":     pages_ok,
         "pages_failed": pages_failed,
         "tried_url":    first_url,
+        # Where a resumable caller should continue, and whether there is any
+        # point. `exhausted` means AO3 stopped offering a "next" link, i.e. the
+        # archive has been walked end to end.
+        "next_page":    last_page + 1,
+        "exhausted":    exhausted,
     }

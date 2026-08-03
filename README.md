@@ -30,6 +30,10 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 
 ### Reading & library
 - **One-click "Import & Read"** — every search result for AO3/FFN with `is_hosted=false` shows an "Import & Read" button that fetches the full EPUB via FicHub and drops you into the reader
+- **Result cards** — labelled dates (`Updated 3 days ago`, falling back to
+  `Published`, and showing both when a work has been revised since posting),
+  word count, chapters, kudos, hits, comments, bookmarks, language, cross-post
+  count, and DarkLordPotter's community star rating where we have it
 - **In-app reader** — Charter/Georgia serif (conventional italics), serif↔sans toggle, narrow↔wide column, A+/A−, **adjustable line spacing**, **light / sepia / dark themes**, **optional justified text with automatic hyphenation**, **estimated read time**, scroll progress bar, ← → chapter navigation. Keyboard: `←/→` chapters, `+/−` text size, `↕` line spacing, `t` cycle theme, `j` justify
 - **Reader accessibility** — text size is set in `rem`, so it scales with the reader's own browser font-size setting (a `px` size ignores it, which is the setting people with low vision rely on); `lang` and `dir` are set from the story's language, so screen readers stop applying English pronunciation to the large non-English share of the index and RTL scripts render correctly; a skip link jumps past the toolbar to the prose; the progress bar is a real `progressbar` role; toggles carry `aria-pressed` and labels describing the action rather than the current value; focus stays visible and `prefers-reduced-motion` is honoured
 - **Sanitised chapter HTML** — chapter bodies come from four scrapers and from user-supplied EPUBs, and the reader injects them as HTML. Everything is filtered through an allowlist on the way out (`backend/html_sanitize.py`): scripts, event handlers, `javascript:`/`data:` URLs and inline styles are dropped, outbound links get `rel="noopener"`. It doubles as a readability fix — scrapers captured page navigation and ad text as if it were prose, and unwrapping layout tags keeps the words while dropping the scaffolding
@@ -41,6 +45,11 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Continue Reading** — story detail page replaces "Read Chapter 1" with "Continue Chapter N · Start over" when progress exists
 - **EPUB upload (single or bulk)** — drag/drop up to 100 .epub files; mobile-friendly file picker
 - **Bulk URL import** — paste a list of AO3/FFN links (one per line) and import them all sequentially with a live progress bar and per-URL success/fail results
+- **DLP star ratings** — DarkLordPotter runs a community rating on every library
+  thread; those are collected and shown as stars with the value beside them,
+  filterable by minimum (`dlp_min_rating`, or the sidebar's 3+/3.5+/4+/4.5+).
+  DLP's list is already curated, so the rating separates the best of it from the
+  merely-included
 - **DLP badge & cross-post links** — DLP-curated stories show a purple "DLP" badge; cross-posted works show a "+N copies" badge in results and "Also on AO3 / FF.net / SquidgeWorld" links on the detail page
 
 ### Accounts & sync
@@ -53,7 +62,20 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 
 ### Data seeds
 - **HuggingFace FFN metadata dump** — 6.6M FFnet rows (IDs 1–10.9M, 2014-era). The single biggest free seed. Auto-downloads via `huggingface_hub` from inside the backend container. Uses Postgres `ON CONFLICT DO NOTHING` for idempotent batched inserts. It carries **no completion status and no dates**, so rows import as `status=unknown` rather than being asserted unfinished — a `complete` search treats unknown permissively, so they stay findable
-- **Background enrichment worker** — a separate `worker` container owns all recurring work, so heavy backfills never compete with request handling and never die with an API restart. It runs the AO3 work-page harvest, FF.net Wayback enrichment, cross-post dedup, recent-works indexing and stale-work refresh, each behind its own env flag
+- **Background enrichment worker** — a separate `worker` container owns all recurring work, so heavy backfills never compete with request handling and never die with an API restart. Each loop is behind its own env flag:
+
+  | loop | every | per run |
+  |---|---|---|
+  | AO3 title repair + work-page harvest | 1 min | 300 works |
+  | AO3 listing harvest (20 works/request) | 3 min | 5 pages of one fandom |
+  | Alt archives (HPFFA/HexFiles) + DLP | 12 min | 4 pages; 25 imports; 12 ratings |
+  | Recent works (tracked fandoms) | 20 min | 3 pages |
+  | FF.net enrichment (Wayback → FicHub) | 30 min | 200 works |
+  | Stale refresh (update checks) | 30 min | 40 works |
+  | Cross-post dedup | 3 h | — |
+  | AO3 atom feeds | 6 h | — |
+
+- **Update tracking** — the index is not a snapshot of import day. Tag pages sorted by `revised_at` are AO3's own update ordering, so tracked fandoms surface changes on their own; any re-encounter applies updates forward-only; and a stale-refresh loop re-reads works most likely to have changed. That last one is weighted rather than naive: `exp(-days_since_update/365) × ln(1+kudos+hits) × ln(2+days_since_checked)`, so a fic updated last week is checked far sooner than one dormant three years, however popular. A measured pass found 22 of 26 re-read works had gained chapters
 - **Live AO3** filling the gap from 2021 onward
 - **FicAlley** for offline HP archive with full text
 - **FicHub** for any fresh per-URL fetch
@@ -178,6 +200,15 @@ at all, no update dates, and truncates long titles mid-phrase; the FFN dump
 carries no characters, ships, dates or engagement counts. There is **no bulk
 source that fixes this** — see Known limitations — so it is recovered from the
 sites themselves, in the background, at a deliberately modest rate.
+
+- **`ao3_listing_harvest.py`** — the bulk route. A tag-works listing carries
+  full metadata for **twenty works per request** (measured: 19/20 with a
+  summary, 20/20 with word count and updated date), so the same coverage costs
+  ~650,000 requests instead of 13,000,000 — and 20x less load on AO3 for
+  identical data, which makes it the polite option as well as the fast one.
+  Deep pagination is not capped; page 5000 of a large fandom still returns 20
+  works. Walks the canonical fandoms largest-first, so it can be stopped at any
+  point with most of the value already banked.
 
 - **`ao3_title_repair.py`** — walks AO3 works whose dump title was truncated
   (identifiable because no real title ends on a dangling "and/of/the/with") and
@@ -324,8 +355,12 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 
 ## Known limitations
 
-- **No bulk source for AO3 summaries.** All 13M AO3 rows arrived without one, and
-  there is no dataset that fixes it. Checked directly rather than from
+- **No bulk DATASET for AO3 summaries** — though this is no longer the ceiling it
+  once looked like. All 13M AO3 rows arrived without a summary, and no published
+  dataset fixes that (see below). What does fix it is reading AO3's own listing
+  pages, twenty works at a time, which is ~15 days of polite crawling rather than
+  the ~300 days a one-work-per-request harvest implied. The gap was never really
+  about volume; it was about request shape. Checked directly rather than from
   descriptions: the four `archiveofourown-meta` mirrors on HuggingFace are the
   same 7.36 GB `combined_metadata.jsonl` re-uploaded, whose records carry twelve
   metadata keys and no summary field;

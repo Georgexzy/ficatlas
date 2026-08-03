@@ -4,7 +4,12 @@ import { useEffect, useState } from "react"
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
 interface SiteStat { site: string; count: number; last_indexed: string | null }
-interface Totals   { stories: number; hosted: number; total_words: number; dlp?: number; hpffa?: number }
+interface Totals   {
+  stories: number; hosted: number; total_words: number; dlp?: number; hpffa?: number
+  /** Rows added by the background workers. As fresh as the 5-minute stats cache. */
+  indexed_last_hour?: number
+  indexed_last_day?: number
+}
 
 const SITE_LABELS: Record<string, string> = {
   ao3: "AO3", ffnet: "FF.net", fictionalley: "FicAlley",
@@ -82,6 +87,20 @@ export default function IndexStatus() {
                 <div><dt>Stories</dt><dd>{totals.stories.toLocaleString()}</dd></div>
                 <div><dt>Readable here</dt><dd>{totals.hosted.toLocaleString()}</dd></div>
                 <div><dt>Words</dt><dd>{fmt(totals.total_words)}</dd></div>
+                {/* What the background workers have actually added. The index
+                    is not a static dump, and without this there is no sign of
+                    that from the outside. */}
+                {totals.indexed_last_hour != null && (
+                  <div>
+                    <dt>Added past hour</dt>
+                    <dd className="index-status__live">
+                      +{totals.indexed_last_hour.toLocaleString()}
+                    </dd>
+                  </div>
+                )}
+                {totals.indexed_last_day != null && totals.indexed_last_day > 0 && (
+                  <div><dt>Added past 24h</dt><dd>+{fmt(totals.indexed_last_day)}</dd></div>
+                )}
                 {totals.dlp != null && totals.dlp > 0 && (
                   <div><dt>DLP curated</dt><dd>{totals.dlp.toLocaleString()}</dd></div>
                 )}

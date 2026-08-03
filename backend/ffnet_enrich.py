@@ -122,6 +122,42 @@ def _classify_genres(part: str) -> list[str]:
     return out
 
 
+# Off by default is wrong here — the misses are pure waste — but keep the switch
+# so it can be turned off if FicHub ever asks.
+_FICHUB_FALLBACK = os.getenv("FFNET_FICHUB_FALLBACK", "true").lower() in ("1", "true", "yes")
+_fichub_client = None
+
+
+def _fichub_fallback(site_id: str) -> dict | None:
+    """Ask FicHub for a work archive.org never captured, in ffnet_enrich's shape."""
+    global _fichub_client
+    try:
+        import httpx
+        from fichub_meta import fetch_meta as fh_meta, HEADERS as FH_HEADERS
+        if _fichub_client is None:
+            _fichub_client = httpx.Client(headers=FH_HEADERS, follow_redirects=True)
+        d = fh_meta(_fichub_client, f"https://www.fanfiction.net/s/{site_id}/1/")
+    except Exception:
+        return None
+    if not d:
+        return None
+    # Translate to the keys _write_batch already understands.
+    return {
+        "genres": d.get("genres") or [],
+        "characters": d.get("characters") or [],
+        "relationships": [],
+        "favs": d.get("kudos"),
+        "follows": d.get("bookmarks"),
+        "reviews": d.get("comments"),
+        "words": d.get("word_count"),
+        "chapters": d.get("chapter_count"),
+        "language": d.get("language"),
+        "published_at": d.get("published_at"),
+        "updated_at": d.get("updated_at"),
+        "complete": d.get("status") == "complete",
+    }
+
+
 def parse_ffn_meta(page_text: str) -> dict | None:
     """Pull the metadata line out of an archived FF.net story page.
 
@@ -241,22 +277,24 @@ def _pick_targets(limit: int | None) -> list:
     EXISTS` waited behind it on every API start, the lifespan never completed, and
     the whole app returned 500 until the transaction was killed.
 
-    Longest first: those are the stories people actually read.
+    Targets are chosen by how much is missing AND how likely the work is to be
+    seen, via gap_filler — not just "longest first" as before. Length is a crude
+    stand-in for readership and says nothing about how much a row actually
+    lacks, so a 200k-word story missing only its language outranked a widely-read
+    one with no summary, characters or dates at all.
+
+    Rows already checked and still empty fall to the back through the
+    crawled_at tiebreak, so the queue keeps advancing.
     """
+    from gap_filler import find_gaps
     with db_session() as db:
-        return db.execute(sql_text("""
-            SELECT id, site_id, word_count
-            FROM stories
-            WHERE site = 'ffnet'
-              AND (characters IS NULL OR cardinality(characters) = 0)
-              AND site_id ~ '^[0-9]+$'
-            ORDER BY word_count DESC NULLS LAST
-            LIMIT :lim
-        """), {"lim": limit or 1000}).fetchall()
+        rows = find_gaps(db, "ffnet", limit=limit or 1000)
+    # Shape kept as (id, site_id, word_count) for the caller.
+    return [(r["id"], r["site_id"], r["gap_score"]) for r in rows]
 
 
 def run(limit: int | None, dry_run: bool, delay: float, batch: int) -> None:
-    updated = missing = failed = 0
+    updated = missing = failed = from_fichub = 0
     rows = _pick_targets(limit)
     log.info(f"{len(rows)} FF.net stories to enrich")
     pending: list[tuple] = []          # (story_id, parsed metadata) awaiting a write
@@ -264,6 +302,21 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int) -> None:
     with httpx.Client(headers=UA) as client:
         for n, (sid, site_id, wc) in enumerate(rows, 1):
             meta = fetch_meta(client, site_id)
+            if not meta and _FICHUB_FALLBACK:
+                # ~31% of works have no usable Wayback capture (no_snapshot=62
+                # of 200 in a measured pass), and those requests were simply
+                # spent for nothing. FicHub resolves FFN URLs directly — it does
+                # the Cloudflare work we cannot — so it recovers exactly the
+                # ones archive.org never captured.
+                #
+                # A fallback rather than the primary source on purpose: bulk
+                # sweeps of millions of rows belong on the Internet Archive,
+                # which is built for that, not on one volunteer's server. This
+                # only fires where Wayback has already failed.
+                fh = _fichub_fallback(site_id)
+                if fh:
+                    meta = fh
+                    from_fichub += 1
             if not meta:
                 missing += 1
             elif any(meta.get(k) for k in
@@ -292,7 +345,8 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int) -> None:
 
     if pending:
         updated += _write_batch(pending)
-    log.info(f"DONE — enriched={updated} no_snapshot={missing} unparseable={failed}")
+    log.info(f"DONE — enriched={updated} no_snapshot={missing} "
+             f"via_fichub={from_fichub} unparseable={failed}")
 
 
 def _write_batch(items: list[tuple]) -> int:

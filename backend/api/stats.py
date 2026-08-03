@@ -99,6 +99,8 @@ def _recompute_totals() -> None:
             "stories": row["stories"], "hosted": row["hosted"],
             "total_words": int(row["total_words"]), "dlp": row["dlp"],
             "hpffa": row["hpffa"],
+            "indexed_last_hour": row["indexed_last_hour"],
+            "indexed_last_day": row["indexed_last_day"],
         }
         _totals_cached_at = time.monotonic()
     except Exception:
@@ -110,7 +112,13 @@ _TOTALS_SQL = text("""
            count(*) FILTER (WHERE is_hosted)                          AS hosted,
            coalesce(sum(word_count), 0)                               AS total_words,
            count(*) FILTER (WHERE tags @> ARRAY['dlp_library'])       AS dlp,
-           count(*) FILTER (WHERE tags @> ARRAY['hpffa_archive'])     AS hpffa
+           count(*) FILTER (WHERE tags @> ARRAY['hpffa_archive'])     AS hpffa,
+           -- Folded into this scan rather than queried separately: there is no
+           -- index on indexed_at, so on its own it would be another full pass
+           -- over 19.6M rows. Here it costs nothing, at the price of being as
+           -- fresh as the 5-minute cache — fine for "in the last hour".
+           count(*) FILTER (WHERE indexed_at > now() - interval '1 hour')  AS indexed_last_hour,
+           count(*) FILTER (WHERE indexed_at > now() - interval '24 hours') AS indexed_last_day
     FROM stories
 """)
 
@@ -140,6 +148,8 @@ async def total_stats(
         "stories": row["stories"], "hosted": row["hosted"],
         "total_words": int(row["total_words"]), "dlp": row["dlp"],
         "hpffa": row["hpffa"],
+        "indexed_last_hour": row["indexed_last_hour"],
+        "indexed_last_day": row["indexed_last_day"],
     }
     _totals_cached_at = now
     return _totals_cache

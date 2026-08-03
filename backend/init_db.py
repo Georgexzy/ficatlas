@@ -192,6 +192,12 @@ CREATE INDEX IF NOT EXISTS ix_stories_repair_queue ON stories (
     AND title ~* ' (and|of|the|with)$';
 
 -- ── Dropped indexes ─────────────────────────────────────────────────────────
+-- ix_stories_non_explicit: DROPPED. Defined as
+--     btree (updated_at DESC) WHERE (rating)::text <> 'E'
+--   but ratings are stored as 'explicit'/'teen'/'general'/'mature'/'not_rated'
+--   and never as 'E', so the predicate was true for all 19.4M rows. It was not
+--   a partial index at all — it was a full duplicate of ix_stories_updated_at,
+--   182MB and a write on every insert, with 0 scans in the database's lifetime.
 -- ix_stories_search_vector: 355MB GIN over a search_vector column that was never
 --   populated (100% NULL) and never scanned. Superseded by ix_stories_doc_fts.
 -- ix_stories_url: exact duplicate of the stories_url_key UNIQUE constraint index
