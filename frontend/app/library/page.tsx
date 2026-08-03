@@ -5,6 +5,7 @@ import OfflineLink from "../OfflineLink"
 import { listOfflineStories, deleteOfflineStory } from "@/lib/offline"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
+import { pollJob } from "@/lib/pollJob"
 
 const API_BASE_C = ""
 
@@ -94,6 +95,13 @@ type Tab = "hosted" | "bookmarks" | "reading" | "searches" | "offline" | "import
 
 export default function LibraryPage() {
   const { user, loading: authLoading } = useAuth()
+  // Aborts any in-flight job poll when the page unmounts, so a scrape left
+  // running server-side stops driving setState on a component that is gone.
+  const pollAbort = useRef<AbortController | null>(null)
+  useEffect(() => {
+    pollAbort.current = new AbortController()
+    return () => pollAbort.current?.abort()
+  }, [])
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [progress, setProgress] = useState<Record<string, ProgressEntry>>({})
   const [recents, setRecents] = useState<string[]>([])
@@ -474,32 +482,14 @@ export default function LibraryPage() {
       console.log("[ficatlas] job started", jobId)
 
       // 2) Poll for progress every 1.5s
-      const pollUrl = `${API_BASE}/api/library/jobs/${jobId}`
-      let lastProgress = ""
-      while (true) {
-        await new Promise(r => setTimeout(r, 1500))
-        const pr = await fetch(pollUrl)
-        if (!pr.ok) {
-          setA3Msg(`❌ Lost track of job ${jobId} (HTTP ${pr.status}).`)
-          return
-        }
-        const j = await pr.json()
-        if (j.progress && j.progress !== lastProgress) {
-          lastProgress = j.progress
-          setA3Msg(`🔄 ${j.progress} (pages: ${j.pages_ok || 0} ok / ${j.pages_failed || 0} failed, ${j.found || 0} works)`)
-        }
-        if (j.status === "done") {
-          const dt = ((Date.now() - t0) / 1000).toFixed(1)
-          if (j.found === 0) {
-            setA3Msg(`✓ Done in ${dt}s — 0 works matched (${j.pages_ok} pages OK${j.pages_failed ? `, ${j.pages_failed} failed` : ""}). Try a broader filter or the canonical AO3 tag.`)
-          } else {
-            setA3Msg(`✓ Done in ${dt}s — ${j.found} works, ${j.newly_indexed} new to the index.`)
-          }
-          console.log(`[ficatlas] job ${jobId} done in ${dt}s`, j)
-          return
-        }
+      try {
+        const j = await pollJob(jobId, {
+          signal: pollAbort.current?.signal,
+          onProgress: st => setA3Msg(
+            `🔄 ${st.progress} (pages: ${st.pages_ok || 0} ok / ${st.pages_failed || 0} failed, ${st.found || 0} works)`),
+        })
+        const dt = ((Date.now() - t0) / 1000).toFixed(1)
         if (j.status === "error") {
-          const dt = ((Date.now() - t0) / 1000).toFixed(1)
           const msg = j.error || "unknown error"
           // Special-case the throttle/block path so the user knows it's not a bug.
           if (msg.includes("timeout") || msg.includes("throttl") || msg.includes("525")) {
@@ -507,10 +497,15 @@ export default function LibraryPage() {
           } else {
             setA3Msg(`❌ Job failed after ${dt}s: ${msg}`)
           }
-          console.error(`[ficatlas] job ${jobId} failed`, j)
-          return
+        } else if (j.found === 0) {
+          setA3Msg(`✓ Done in ${dt}s — 0 works matched (${j.pages_ok} pages OK${j.pages_failed ? `, ${j.pages_failed} failed` : ""}). Try a broader filter or the canonical AO3 tag.`)
+        } else {
+          setA3Msg(`✓ Done in ${dt}s — ${j.found} works, ${j.newly_indexed} new to the index.`)
         }
+      } catch (e: any) {
+        if (e?.kind !== "aborted") setA3Msg(`❌ ${e.message || e}`)
       }
+      return
     } catch (e: any) {
       const dt = ((Date.now() - t0) / 1000).toFixed(1)
       console.error("[ficatlas] Deep AO3 scrape failed", e)
@@ -537,26 +532,17 @@ export default function LibraryPage() {
         return
       }
       const jobId = startData.job_id
-      let lastProgress = ""
-      while (true) {
-        await new Promise(r => setTimeout(r, 1500))
-        const pr = await fetch(`${API_BASE}/api/library/jobs/${jobId}`)
-        if (!pr.ok) { setHpMsg(`❌ Lost track of job ${jobId} (HTTP ${pr.status})`); return }
-        const j = await pr.json()
-        if (j.progress && j.progress !== lastProgress) {
-          lastProgress = j.progress
-          setHpMsg(`🔄 ${j.progress} (pages: ${j.pages_ok || 0} ok / ${j.pages_failed || 0} failed, ${j.found || 0} works)`)
-        }
-        if (j.status === "done") {
-          const dt = ((Date.now() - t0) / 1000).toFixed(1)
-          setHpMsg(`✓ Done in ${dt}s — pulled ${j.found} stories from HPFFA, added ${j.newly_indexed} new to the index.`)
-          return
-        }
-        if (j.status === "error") {
-          const dt = ((Date.now() - t0) / 1000).toFixed(1)
-          setHpMsg(`❌ Job failed after ${dt}s: ${j.error || "unknown error"}`)
-          return
-        }
+      try {
+        const jb = await pollJob(jobId, {
+          signal: pollAbort.current?.signal,
+          onProgress: st => setHpMsg(
+            `🔄 ${st.progress} (pages: ${st.pages_ok || 0} ok / ${st.pages_failed || 0} failed, ${st.found || 0} works)`),
+        })
+        const dt = ((Date.now() - t0) / 1000).toFixed(1)
+        if (jb.status === "error") setHpMsg(`❌ Job failed after ${dt}s: ${jb.error || "unknown error"}`)
+        else setHpMsg(`✓ Done in ${dt}s — pulled ${jb.found} stories from HPFFA, added ${jb.newly_indexed} new to the index.`)
+      } catch (e: any) {
+        if (e?.kind !== "aborted") setHpMsg(`❌ ${e.message || e}`)
       }
     } catch (e: any) {
       setHpMsg(`❌ Network error: ${e.message || e}`)
@@ -582,30 +568,24 @@ export default function LibraryPage() {
         return
       }
       const jobId = startData.job_id
-      let last = ""
-      while (true) {
-        await new Promise(r => setTimeout(r, 1500))
-        const pr = await fetch(`${API_BASE}/api/library/jobs/${jobId}`)
-        if (!pr.ok) { setArchMsg(`❌ Lost track of job (HTTP ${pr.status})`); return }
-        const j = await pr.json()
-        if (j.progress && j.progress !== last) {
-          last = j.progress
-          setArchMsg(`🔄 ${j.progress}`)
-        }
-        if (j.status === "done") {
-          const dt = ((Date.now() - t0) / 1000).toFixed(1)
-          const extra = j.newly_indexed != null
-            ? ` — ${j.found ?? 0} found, ${j.newly_indexed} new`
-            : j.duplicates_merged != null
-              ? ` — merged ${j.duplicates_merged} duplicate rows across ${j.groups_found ?? 0} works`
+      try {
+        const jb = await pollJob(jobId, {
+          signal: pollAbort.current?.signal,
+          onProgress: st => setArchMsg(`🔄 ${st.progress}`),
+        })
+        const dt = ((Date.now() - t0) / 1000).toFixed(1)
+        if (jb.status === "error") {
+          setArchMsg(`❌ ${label} failed: ${jb.error || "unknown error"}`)
+        } else {
+          const extra = jb.newly_indexed != null
+            ? ` — ${jb.found ?? 0} found, ${jb.newly_indexed} new`
+            : (jb as any).duplicates_merged != null
+              ? ` — merged ${(jb as any).duplicates_merged} duplicate rows across ${(jb as any).groups_found ?? 0} works`
               : ""
           setArchMsg(`✓ ${label} done in ${dt}s${extra}.`)
-          return
         }
-        if (j.status === "error") {
-          setArchMsg(`❌ ${label} failed: ${j.error || "unknown error"}`)
-          return
-        }
+      } catch (e: any) {
+        if (e?.kind !== "aborted") setArchMsg(`❌ ${e.message || e}`)
       }
     } catch (e: any) {
       setArchMsg(`❌ Network error: ${e.message || e}`)
