@@ -879,18 +879,7 @@ function SearchPageInner() {
         {/* ── Sidebar (slide-out drawer on mobile) ── */}
         <aside className={`sidebar ${filtersOpen ? "sidebar--open" : ""}`}
           style={sidebarWidth ? ({ ["--sidebar-w" as any]: `${sidebarWidth}px` }) : undefined}>
-          {/* Drag to resize, desktop only — see useSidebarResize. */}
-          <div
-            className="sidebar__resizer"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize filter panel"
-            tabIndex={0}
-            onPointerDown={startResize}
-            onDoubleClick={resetWidth}
-            onKeyDown={onResizeKey}
-            title="Drag to resize · double-click to reset · arrow keys also work"
-          />
+
           <div className="sidebar__mobile-head">
             <span>Filters</span>
             <button className="sidebar__close" onClick={() => setFiltersOpen(false)} aria-label="Close filters">✕</button>
@@ -1138,6 +1127,27 @@ function SearchPageInner() {
             </button>
           </div>
         </aside>
+
+        {/* Drag handle. A SIBLING of the sidebar, not a child: the sidebar is a
+            scroll container (overflow-y: auto), which clips an absolutely
+            positioned child sitting at its edge and scrolls it away with the
+            content — so the handle existed but could not be seen or grabbed.
+            As a flex item between the panel and the results it is simply
+            always there. Desktop only; hidden by CSS on touch. */}
+        <div
+          className="sidebar__resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize filter panel"
+          aria-valuenow={sidebarWidth ?? 220}
+          aria-valuemin={180}
+          aria-valuemax={460}
+          tabIndex={0}
+          onPointerDown={startResize}
+          onDoubleClick={resetWidth}
+          onKeyDown={onResizeKey}
+          title="Drag to resize · double-click to reset · ← → to nudge"
+        />
 
         {/* ── Main ── */}
         <main className="main">
