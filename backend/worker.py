@@ -220,6 +220,178 @@ async def _refresh_stale_loop() -> None:
         await asyncio.sleep(interval)
 
 
+# ── Alternative archives: full, resumable import ─────────────────────────────
+#
+# The Open Doors archives were only ever reachable through the Library page's
+# one-click buttons, which cap at 20 pages and always restart from page 1. The
+# index held 21 HPFFA works, 0 HexFiles and 0 SquidgeWorld, so "search every
+# archive at once" was true only for AO3, FFN and FicAlley.
+#
+# Those 21 rows were also 100% empty of metadata, because the works-listing
+# parser silently dropped every field inside a collection listing — fixed
+# separately in ao3_works_scraper.py. Re-walking them repairs them, since
+# persist_live_results enriches rows it already has.
+#
+# This walks each of them end to end in the background instead. State is a page
+# cursor in app_settings, so a restart resumes rather than re-reading page 1
+# forever, and an archive that reports no "next" link is marked done and
+# skipped from then on.
+#
+# The metadata is the good kind: an Otwarchive works listing carries summary,
+# characters, relationships, freeform tags, warnings, word and chapter counts,
+# language, kudos, comments, bookmarks, hits and the updated date — richer per
+# work than any of the bulk dumps.
+ARCHIVES: list[dict] = [
+    {"name": "hpffa",        "tag": "hpffa_archive",
+     "kwargs": {"tag": "", "collection": "hpfanfiction_hpff"}},
+    {"name": "hexfiles",     "tag": "hexfiles_archive",
+     "kwargs": {"tag": "", "collection": "harrypotterfanficarchive"}},
+]
+
+# SquidgeWorld is deliberately absent. It now sits behind an interactive bot
+# challenge ("Making sure you're not a bot!") that returns a JS gate instead of
+# a works listing, so a server-side scrape gets 0 works no matter how it is
+# paged — which is why the index holds none of it. Retrying that on a timer
+# would be pointless load on someone else's box. The Library page button
+# remains for a human to try from a browser.
+#
+# Sizes are also far smaller than the archives they came from. Open Doors
+# imports only carry the works whose authors opted in, and AO3 reports:
+#     hpfanfiction_hpff        37 works  (HarryPotterFanfiction.com, ~85k live)
+#     harrypotterfanficarchive 834 works (Harry Potter FanFic Archive, ~18k live)
+# So a complete walk of both is ~871 works, not the tens of thousands the
+# original sites held.
+
+
+def _cursor_get(name: str) -> tuple[int, bool]:
+    from api.settings import get_setting
+    from db.session import db_session
+    with db_session() as db:
+        page = get_setting(db, f"archive_page:{name}")
+        done = get_setting(db, f"archive_done:{name}")
+    try:
+        page_n = max(1, int(page))
+    except (TypeError, ValueError):
+        page_n = 1
+    return page_n, str(done).lower() in ("1", "true", "yes")
+
+
+def _cursor_put(name: str, page: int, done: bool) -> None:
+    from api.settings import put_setting
+    from db.session import db_session
+    with db_session() as db:
+        put_setting(db, f"archive_page:{name}", str(page))
+        if done:
+            put_setting(db, f"archive_done:{name}", "true")
+
+
+async def _dlp_pass() -> None:
+    """Merge DLP's curation onto stories already in the index, both corpora.
+
+    DLP publishes two lists — HP (729 entries) and everything else (376) — and
+    only 432 rows carried the tag, because the Library button defaults to the HP
+    list with a limit and was evidently never run for the other one.
+
+    This is the cheap half of the DLP flow deliberately: matching a curated
+    entry to a story we already hold costs one indexed lookup and no network
+    fetch per work, and it is what makes `dlp_library` usable as a quality
+    filter. Pulling in the works we do NOT hold means a FicHub fetch each, which
+    stays on the Library page's explicit button rather than running unattended.
+    """
+    from db.session import db_session
+    from api.library import _find_indexed_story, _merge_dlp_tags, _record_cross_posts
+    from live_fetch.dlp_scraper import fetch_dlp_library
+
+    for corpus in ("hp", "other"):
+        try:
+            entries = await fetch_dlp_library(corpus=corpus, limit=None)
+        except Exception as e:
+            log.warning(f"dlp {corpus}: fetch failed: {type(e).__name__}: {e}")
+            continue
+        if not entries:
+            continue
+        tagged = 0
+        with db_session() as db:
+            for e in entries:
+                cand = [v for k, v in (e.get("urls") or {}).items() if k in ("ffn", "ao3")]
+                if not cand:
+                    continue
+                hit = _find_indexed_story(db, cand)
+                if hit is None:
+                    continue
+                before = set(hit.tags or [])
+                _merge_dlp_tags(hit, e.get("dlp_tags") or [])
+                _record_cross_posts(hit, cand)
+                if set(hit.tags or []) != before:
+                    tagged += 1
+            db.commit()
+        log.info(f"dlp {corpus}: {len(entries)} curated, {tagged} newly tagged")
+        await asyncio.sleep(5)
+
+
+async def _archives_loop() -> None:
+    """Walk each alternative archive to completion, a few pages at a time."""
+    from db.session import db_session
+    from live_fetch.ao3_works_scraper import scrape_tag_works
+    from live_fetch.persist import persist_live_results
+
+    # Pages per pass is small and the gap between passes long, because these are
+    # the same Otwarchive endpoints the title repair already competes for and
+    # AO3 rate-limits harder than its robots.txt implies (see ao3_title_repair).
+    pages = int(_num("ARCHIVES_PAGES", 4))
+    interval = _num("ARCHIVES_INTERVAL_MIN", 12) * 60
+
+    while True:
+        for arch in ARCHIVES:
+            name, provenance = arch["name"], arch["tag"]
+            try:
+                start, done = _cursor_get(name)
+                if done:
+                    continue
+                log.info(f"archive {name}: pages {start}-{start + pages - 1}")
+                result = await scrape_tag_works(
+                    max_pages=pages, start_page=start,
+                    sort="revised_at", **arch["kwargs"],
+                )
+                entries = result.get("entries") or []
+
+                # All pages failing is a transport problem, not the end of the
+                # archive — leave the cursor alone so the next pass retries the
+                # same range instead of skipping past it.
+                if result.get("pages_ok", 0) == 0 and result.get("pages_failed", 0) > 0:
+                    log.warning(f"archive {name}: all pages failed, cursor held at {start}")
+                    continue
+
+                for e in entries:
+                    e.setdefault("tags", [])
+                    if provenance not in e["tags"]:
+                        e["tags"].append(provenance)
+
+                saved = 0
+                if entries:
+                    with db_session() as db:
+                        saved = persist_live_results(db, entries)
+
+                exhausted = bool(result.get("exhausted"))
+                _cursor_put(name, int(result.get("next_page", start + pages)), exhausted)
+                log.info(f"archive {name}: {len(entries)} works, {saved} saved, "
+                         f"next page {result.get('next_page')}"
+                         + (" — COMPLETE" if exhausted else ""))
+            except Exception as e:
+                log.warning(f"archive {name} pass failed: {type(e).__name__}: {e}")
+            await asyncio.sleep(20)
+
+        # DLP is a flat curated list rather than a paginated archive, so it gets
+        # a full re-check each cycle instead of a page cursor. It is two HTTP
+        # requests and the tagging is idempotent.
+        try:
+            await _dlp_pass()
+        except Exception as e:
+            log.warning(f"dlp pass failed: {type(e).__name__}: {e}")
+
+        await asyncio.sleep(interval)
+
+
 async def _title_repair_loop() -> None:
     """Repair AO3 titles the bulk dump truncated mid-phrase.
 
@@ -304,6 +476,10 @@ async def main() -> None:
     if _flag("REFRESH_STALE"):
         tasks.append(asyncio.create_task(_refresh_stale_loop()))
         log.info("stale-work refresh enabled")
+
+    if _flag("ARCHIVES_IMPORT", "true"):
+        tasks.append(asyncio.create_task(_archives_loop()))
+        log.info("alternative-archive full import enabled (HPFFA + HexFiles)")
 
     if _flag("TITLE_REPAIR", "true"):
         tasks.append(asyncio.create_task(_title_repair_loop()))

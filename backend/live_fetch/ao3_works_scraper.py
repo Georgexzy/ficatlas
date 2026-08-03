@@ -247,7 +247,8 @@ def _parse_work_blurb(blurb_html: str, host: str = "https://archiveofourown.org"
     }
 
 
-def parse_works_page(html_text: str, host: str = "https://archiveofourown.org") -> tuple[list[dict], bool]:
+def parse_works_page(html_text: str, host: str = "https://archiveofourown.org",
+                     page: int | None = None) -> tuple[list[dict], bool]:
     """Parse a tag-works HTML page. Returns (entries, has_next_page)."""
     # Slice between work <li> starts rather than matching to the first </li>.
     #
@@ -263,8 +264,21 @@ def parse_works_page(html_text: str, host: str = "https://archiveofourown.org") 
     blurbs = [html_text[bounds[i]:bounds[i + 1]] for i in range(len(starts))]
     entries = [e for e in (_parse_work_blurb(b, host) for b in blurbs) if e]
 
-    # "next page" link presence
-    has_next = bool(re.search(r'<a[^>]+rel="next"', html_text))
+    # "next page" link presence.
+    #
+    # Otwarchive does NOT emit rel="next" — verified against a live listing that
+    # has 42 pages. The old check therefore returned False on page 1 every time,
+    # so every scrape stopped after 20 works no matter what max_pages said. That
+    # is the real reason these archives never grew: the Library button's
+    # "20 pages" was never more than one.
+    #
+    # The marker is <li class="next"> holding a link; on the last page the same
+    # <li> holds a disabled <span> instead, so requiring the <a> is what makes
+    # it terminate. The page+1 link is a second, independent signal in case the
+    # markup shifts again.
+    has_next = bool(re.search(r'<li class="next">\s*<a\b', html_text))
+    if not has_next and page:
+        has_next = bool(re.search(rf'page={page + 1}(?![0-9])', html_text))
 
     return entries, has_next
 
@@ -336,7 +350,8 @@ async def scrape_tag_works(
                 break
 
             pages_ok += 1
-            entries, has_next = parse_works_page(r.text, host=base_url or "https://archiveofourown.org")
+            entries, has_next = parse_works_page(
+                r.text, host=base_url or "https://archiveofourown.org", page=page)
             new = [e for e in entries if e["site_id"] not in seen_ids]
             for e in new: seen_ids.add(e["site_id"])
             all_entries.extend(new)
