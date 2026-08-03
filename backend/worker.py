@@ -30,6 +30,9 @@ days, not to saturate the database or hammer archive.org:
   REFRESH_STALE=true         re-check hosted WIPs so they don't stay frozen
   REFRESH_INTERVAL_MIN=60
   REFRESH_BATCH=40
+  TITLE_REPAIR=true          repair AO3 titles the dump truncated (default on)
+  TITLE_REPAIR_INTERVAL_MIN=45
+  TITLE_REPAIR_BATCH=100
 """
 
 import asyncio
@@ -216,6 +219,31 @@ async def _refresh_stale_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _title_repair_loop() -> None:
+    """Repair AO3 titles the bulk dump truncated mid-phrase.
+
+    The dump ships cut titles — "Harry Potter and" for a work actually called
+    "Harry Potter and Homosexual Rights Feat. Severus Snape". 398,817 AO3 rows
+    end on a dangling and/of/the/with, which cannot end a real title, so those
+    are identifiable with confidence. Cuts landing on a content word are
+    indistinguishable from a short title and get fixed only if a live fetch
+    happens to re-encounter the work.
+
+    One request per work, so this is paced to grind slowly rather than finish.
+    """
+    interval = _num("TITLE_REPAIR_INTERVAL_MIN", 45) * 60
+    batch = int(_num("TITLE_REPAIR_BATCH", 100))
+    from ao3_title_repair import run as repair_run
+
+    while True:
+        try:
+            log.info(f"AO3 title repair pass ({batch} works)")
+            await asyncio.to_thread(repair_run, batch, False, 1.0)
+        except Exception as e:
+            log.warning(f"title repair pass failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def main() -> None:
     # Schema/indexes may not exist yet on a first boot; the API does this too and
     # it is idempotent, so whichever wins the race is fine.
@@ -247,6 +275,10 @@ async def main() -> None:
     if _flag("REFRESH_STALE"):
         tasks.append(asyncio.create_task(_refresh_stale_loop()))
         log.info("stale-work refresh enabled")
+
+    if _flag("TITLE_REPAIR", "true"):
+        tasks.append(asyncio.create_task(_title_repair_loop()))
+        log.info("AO3 title repair enabled")
 
     log.info("worker ready")
     # Idle forever; the scheduler runs on its own timers.

@@ -177,6 +177,25 @@ def _enrich_existing(db: Session, url: str, d: dict) -> bool:
 
         changed = False
 
+        # ── Repair truncated titles ────────────────────────────────────────
+        # The AO3 metadata dump ships titles cut off mid-phrase. Verified
+        # against AO3 itself:
+        #   dump "Harry Potter and"  -> "Harry Potter and Homosexual Rights
+        #                                Feat. Severus Snape"
+        #   dump "The Masochism of"  -> "The Masochism of Self-Defence"
+        # 654,523 AO3 rows end on a dangling "and/of/the/with", and those are
+        # only the ones detectable by inspection.
+        #
+        # A blurb title is taken only when it EXTENDS what we hold — the stored
+        # value must be a prefix of it — so a differently-punctuated or unrelated
+        # title can never overwrite a good one.
+        new_title = (d.get("title") or "").strip()
+        old_title = (story.title or "").strip()
+        if (new_title and len(new_title) > len(old_title)
+                and new_title.lower().startswith(old_title.lower())):
+            story.title = new_title[:500]
+            changed = True
+
         # ── Fill gaps: only where we hold nothing ──────────────────────────
         if not (story.summary or "").strip() and (d.get("summary") or "").strip():
             story.summary = d["summary"]

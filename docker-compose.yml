@@ -120,6 +120,9 @@ services:
       # the recent-works loop; this re-checks hosted works-in-progress, which are
       # the ones actually being read.
       REFRESH_STALE: "true"
+      # The AO3 dump ships titles cut off mid-phrase ("Harry Potter and"), which
+      # only the work page can resolve.
+      TITLE_REPAIR: "true"
     depends_on:
       db:
         condition: service_healthy
