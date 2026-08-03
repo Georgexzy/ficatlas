@@ -42,6 +42,14 @@ const GROUPS: { group: string; rows: Row[] }[] = [
     { syntax: "updated:6m", desc: "Within six months", insert: "updated:6m" },
     { syntax: "since:2024", desc: "Since a given year", insert: "since:2024" },
   ]},
+  { group: "Whole searches to start from", rows: [
+    { syntax: "ship:Draco/Hermione >100k complete",
+      desc: "A pairing, long, finished" },
+    { syntax: "fandom: Harry Potter marauders wip updated:2y",
+      desc: "Still updating, touched in the last two years" },
+    { syntax: "fandom: Harry Potter -tag:fluff rating:M words:>50k",
+      desc: "Everything at once — operators in any order" },
+  ]},
   { group: "Leave things out", rows: [
     { syntax: "-tag:fluff", desc: "Exclude — prefix any operator with a minus", insert: "-tag:" },
     { syntax: "-ship:Harry/Ginny", desc: "Exclude a pairing", insert: "-ship:" },

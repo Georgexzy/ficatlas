@@ -331,15 +331,6 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .empty { text-align: center; padding: 80px 20px; }
 .empty__title { font-family: var(--font-serif); font-size: 28px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
 .empty__sub { font-size: 13px; color: var(--text-faint); font-family: var(--font-mono); margin-bottom: 32px; }
-.empty__examples { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.empty__examples-label { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 4px; }
-.empty__ex {
-  background: var(--surface2); border: 1px solid var(--border2);
-  border-radius: var(--radius); padding: 6px 14px;
-  font-family: var(--font-mono); font-size: 12px; color: var(--accent);
-  transition: all 0.12s;
-}
-.empty__ex:hover { border-color: var(--accent); background: var(--accent-bg); }
 
 /* ── Syntax help ───────────────────────────────────────────────────────────── */
 .syntax-help { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); z-index: 10; }
@@ -2265,4 +2256,67 @@ body.is-resizing * { cursor: col-resize !important; }
 /* Touch gets the drawer, not a drag handle — it would fight swipe-to-close. */
 @media (pointer: coarse), (max-width: 900px) {
   .sidebar__resizer { display: none; }
+}
+
+/* ── Word count range slider ───────────────────────────────────────────────── */
+/* Log scale: counts run 100 to ~1.5M, and linearly everything under 50k — most
+   of the index — is squeezed into the first 3% of the track. */
+.wc-slider { margin-bottom: 10px; }
+.wc-slider__readout {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--text-dim);
+  margin-bottom: 7px;
+}
+.wc-slider__sep { color: var(--text-faint); }
+.wc-slider__clear {
+  margin-left: auto; background: none; border: 0; cursor: pointer;
+  color: var(--text-faint); font-size: 10.5px; font-family: var(--font-mono);
+  text-decoration: underline; padding: 0;
+}
+.wc-slider__clear:hover { color: var(--accent); }
+
+.wc-slider__track {
+  position: relative; height: 22px; cursor: pointer;
+  /* The visible rail is drawn with a pseudo-element so the hit area can stay
+     22px tall — a 4px rail is unhittable, especially on a trackpad. */
+}
+.wc-slider__track::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 9px; height: 4px;
+  background: var(--surface3); border: 1px solid var(--border); border-radius: 2px;
+}
+.wc-slider__fill {
+  position: absolute; top: 9px; height: 4px;
+  background: var(--accent); opacity: 0.55; border-radius: 2px;
+}
+.wc-slider__handle {
+  position: absolute; top: 3px; width: 16px; height: 16px;
+  margin-left: -8px; border-radius: 50%;
+  background: var(--surface2); border: 2px solid var(--accent);
+  cursor: grab; touch-action: none;
+}
+.wc-slider__handle:hover { background: var(--accent-bg); }
+.wc-slider__handle.is-dragging { cursor: grabbing; transform: scale(1.15); }
+.wc-slider__handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wc-slider__scale {
+  display: flex; justify-content: space-between;
+  font-family: var(--font-mono); font-size: 9.5px; color: var(--text-faint);
+  margin-top: 3px;
+}
+
+/* Thumbs need a bigger target on touch than they do under a mouse. */
+@media (pointer: coarse) {
+  .wc-slider__track { height: 30px; }
+  .wc-slider__track::before, .wc-slider__fill { top: 13px; }
+  .wc-slider__handle { top: 5px; width: 22px; height: 22px; margin-left: -11px; }
+}
+
+/* Landing page nudge replacing the old example-query buttons. */
+.empty__nudge {
+  font-size: 12.5px; color: var(--text-faint); margin-bottom: 18px; line-height: 1.6;
+}
+.empty__nudge kbd {
+  font-family: var(--font-mono); font-size: 11px;
+  border: 1px solid var(--border2); border-radius: 3px; padding: 1px 5px;
+  color: var(--text-dim);
 }

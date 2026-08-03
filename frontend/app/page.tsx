@@ -8,10 +8,11 @@ import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS,
-         DATE_PRESETS, AO3_WARNINGS, CATEGORIES } from "@/lib/api"
+         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
+import WordCountSlider from "./WordCountSlider"
 import SiteHeader from "./SiteHeader"
 import { useAuth } from "@/lib/auth"
 
@@ -416,22 +417,18 @@ function StoryCard({ story }: { story: StoryCard }) {
 }
 
 // ── Empty / loading states ────────────────────────────────────────────────────
-function EmptyState({ onPick, onSurprise }: { onPick: (q: string) => void; onSurprise: () => void }) {
-  const examples = [
-    "ship:Draco/Hermione >100k complete",
-    "fandom: Harry Potter marauders wip updated:2y",
-    "fandom: Harry Potter -tag:fluff rating:M complete words:>50k",
-  ]
+// The example queries that used to sit here now live in the syntax panel under
+// the search bar, where they are clickable and next to the box they fill in.
+// On the landing page they were three lines of operator soup competing with the
+// one thing to do — type something.
+function EmptyState({ onSurprise }: { onSurprise: () => void }) {
   return (
     <div className="empty">
       <p className="empty__title">Search the fanfiction internet</p>
       <p className="empty__sub">AO3 · FF.net · FicAlley · and more — fresh AO3 results pulled in as you search</p>
-      <div className="empty__examples">
-        <p className="empty__examples-label">Try:</p>
-        {examples.map(ex => (
-          <button key={ex} className="empty__ex" onClick={() => onPick(ex)}>{ex}</button>
-        ))}
-      </div>
+      <p className="empty__nudge">
+        Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
+      </p>
       <button className="empty__surprise" onClick={onSurprise}>🎲 Surprise me</button>
     </div>
   )
@@ -1098,6 +1095,10 @@ function SearchPageInner() {
                 </button>
               ))}
             </div>
+            <WordCountSlider
+              min={wordMin ?? parsedLive.wordCountMin ?? undefined}
+              max={wordMax ?? parsedLive.wordCountMax ?? undefined}
+              onChange={(lo, hi) => { setWordMin(lo); setWordMax(hi) }} />
             <div className="input-pair">
               <input type="number" placeholder="Min" value={wordMin ?? parsedLive.wordCountMin ?? ""}
                 className="input-sm" onChange={e => setWordMin(e.target.value ? Number(e.target.value) : undefined)} />
@@ -1122,9 +1123,20 @@ function SearchPageInner() {
           </FilterSection>
 
           <FilterSection label="Language" highlighted={!!parsedLive.language}>
-            <input type="text" placeholder="e.g. English, Français…"
+            {/* A dropdown, not free text. Stored values are a mix of English and
+                native names ("Chinese" and "中文-普通话 國語" both occur), so a
+                typed name only ever matched one spelling. Picking a canonical
+                name lets the backend expand it across every spelling. */}
+            <select className="select w-full"
               value={language || parsedLive.language || ""}
-              onChange={e => setLanguage(e.target.value)} className="input-sm w-full" />
+              onChange={e => setLanguage(e.target.value)}>
+              <option value="">Any language</option>
+              {LANGUAGE_OPTIONS.map(l => (
+                <option key={l.value} value={l.value}>
+                  {l.label} ({formatNumber(l.count)})
+                </option>
+              ))}
+            </select>
           </FilterSection>
 
           <hr className="sidebar__rule" />
@@ -1327,9 +1339,7 @@ function SearchPageInner() {
             </>
           )}
 
-          {!results && !loading && <EmptyState
-            onPick={(q) => { setQuery(q); setTimeout(() => doSearch(), 0) }}
-            onSurprise={surpriseMe} />}
+          {!results && !loading && <EmptyState onSurprise={surpriseMe} />}
         </main>
       </div>
     </div>

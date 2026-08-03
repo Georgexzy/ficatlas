@@ -147,3 +147,51 @@ function daysAgo(n: number): string {
   d.setDate(d.getDate() - n)
   return d.toISOString().split("T")[0]
 }
+
+// Languages offered in the filter dropdown, ordered by how much of the index
+// each actually holds — counts measured, not guessed.
+//
+// The VALUE is the canonical English name. The backend expands it through
+// language_aliases.py, so picking "Chinese" matches the 539,217 works stored as
+// "中文-普通话 國語" as well as those stored as "Chinese". Typing the name by
+// hand only ever matched one spelling, which is why the language filter used to
+// return almost nothing.
+export const LANGUAGE_OPTIONS: { value: string; label: string; count: number }[] = [
+  { value: "English", label: "English", count: 17823095 },
+  { value: "Chinese", label: "Chinese", count: 546782 },
+  { value: "Spanish", label: "Spanish", count: 455861 },
+  { value: "Russian", label: "Russian", count: 201735 },
+  { value: "French", label: "French", count: 199461 },
+  { value: "Indonesian", label: "Indonesian", count: 135172 },
+  { value: "Portuguese", label: "Portuguese", count: 104543 },
+  { value: "German", label: "German", count: 49738 },
+  { value: "Italian", label: "Italian", count: 28961 },
+  { value: "Polish", label: "Polish", count: 23481 },
+  { value: "Ukrainian", label: "Ukrainian", count: 19186 },
+  { value: "Filipino", label: "Filipino", count: 10050 },
+  { value: "Vietnamese", label: "Vietnamese", count: 9488 },
+  { value: "Czech", label: "Czech", count: 5678 },
+  { value: "Hungarian", label: "Hungarian", count: 3999 },
+  { value: "Korean", label: "Korean", count: 3466 },
+  { value: "Turkish", label: "Turkish", count: 3374 },
+  { value: "Japanese", label: "Japanese", count: 3139 },
+  { value: "Swedish", label: "Swedish", count: 3130 },
+  { value: "Finnish", label: "Finnish", count: 2773 },
+  { value: "Dutch", label: "Dutch", count: 2640 },
+  { value: "Thai", label: "Thai", count: 2086 },
+  { value: "Norwegian", label: "Norwegian", count: 1270 },
+  { value: "Danish", label: "Danish", count: 1061 },
+  { value: "Belarusian", label: "Belarusian", count: 737 },
+  { value: "Hebrew", label: "Hebrew", count: 611 },
+  { value: "Esperanto", label: "Esperanto", count: 575 },
+  { value: "Greek", label: "Greek", count: 503 },
+  { value: "Latin", label: "Latin", count: 443 },
+  { value: "Catalan", label: "Catalan", count: 383 },
+  { value: "Romanian", label: "Romanian", count: 355 },
+  { value: "Arabic", label: "Arabic", count: 352 },
+  { value: "Persian", label: "Persian", count: 324 },
+  { value: "Croatian", label: "Croatian", count: 229 },
+  { value: "Hindi", label: "Hindi", count: 217 },
+  { value: "Bulgarian", label: "Bulgarian", count: 196 },
+  { value: "Serbian", label: "Serbian", count: 99 },
+]
