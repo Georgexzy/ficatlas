@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from provenance import PROVENANCE_TAGS
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 
 log = logging.getLogger(__name__)
@@ -197,6 +198,21 @@ def _enrich_existing(db: Session, url: str, d: dict) -> bool:
             changed = True
 
         # ── Fill gaps: only where we hold nothing ──────────────────────────
+        # Provenance tags MERGE; every other list field is fill-if-empty.
+        #
+        # A work can legitimately belong to several sources — most of HPFFA's 37
+        # works were already in the index from the AO3 dump, so they carried
+        # `ao3_meta_dump` and the fill-if-empty rule below meant they could never
+        # also be marked `hpffa_archive`. The archive looked 21/37 imported when
+        # in truth all 37 were present and 16 simply could not be labelled.
+        incoming_prov = [t for t in (d.get("tags") or []) if t in PROVENANCE_TAGS]
+        if incoming_prov:
+            have = list(story.tags or [])
+            added = [t for t in incoming_prov if t not in have]
+            if added:
+                story.tags = have + added
+                changed = True
+
         if not (story.summary or "").strip() and (d.get("summary") or "").strip():
             story.summary = d["summary"]
             changed = True
