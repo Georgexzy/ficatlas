@@ -1,6 +1,6 @@
 // Types mirroring the FastAPI response models
 
-export type Site = "ao3" | "ffnet" | "wattpad" | "royalroad" | "spacebattles"
+export type Site = "ao3" | "ffnet" | "fictionalley" | "wattpad" | "royalroad" | "spacebattles"
 export type Rating = "G" | "T" | "M" | "E" | "NR"
 export type Status = "complete" | "in_progress" | "abandoned" | "unknown"
 export type Category = "F/F" | "F/M" | "M/M" | "Gen" | "Other" | "Multi"
@@ -36,6 +36,8 @@ export interface StoryCard {
   is_live?: boolean
   is_hosted?: boolean
   cross_post_urls?: string[]
+  /** Which bulk import this row came from (not a content tag). */
+  sources?: string[]
 }
 
 export interface SearchResponse {
@@ -78,6 +80,12 @@ export interface SearchParams {
   updated_before?: string
   published_after?: string
   explicit?: boolean
+  /** Exact author match — every work by one person, across all archives. */
+  author?: string
+  /** How multiple values in one filter combine: "all" (AND) or "any" (OR). */
+  match_mode?: "all" | "any"
+  /** Also return stories that have no data at all for a filtered field. */
+  include_unknown?: boolean
   search_within?: string
   // Pagination
   sort?: string

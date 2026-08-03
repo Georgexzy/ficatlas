@@ -1,0 +1,117 @@
+"use client"
+import Link from "next/link"
+import { useEffect, useState } from "react"
+import OfflineLink from "./OfflineLink"
+import IndexStatus from "./IndexStatus"
+import { useAuth } from "@/lib/auth"
+
+// The one header every page shares.
+//
+// Previously only the search page had navigation; Library, Settings, Account and
+// the story pages each offered a single "← Back to search" link and nothing else.
+// That made the whole site hub-and-spoke: getting from your Library to Settings,
+// or from a story to your Library, meant going home first. Every page now carries
+// the same header, so any destination is one click from anywhere.
+//
+// `current` suppresses the link to the page you're already on and marks it.
+
+export type NavKey = "search" | "library" | "settings" | "account"
+
+function UserMenu() {
+  const { user, logout, loading, syncing } = useAuth()
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (!t.closest(".user-menu")) setOpen(false)
+    }
+    document.addEventListener("click", close)
+    return () => document.removeEventListener("click", close)
+  }, [open])
+  if (loading) return null
+  if (!user) return <Link href="/login" className="header__link">Sign in</Link>
+  return (
+    <div className="user-menu">
+      <button className="user-menu__btn" onClick={() => setOpen(o => !o)}>
+        <span className="user-menu__avatar">
+          {user.username.slice(0, 1).toUpperCase()}
+          {syncing && <span className="user-menu__sync-dot" title="Syncing…" />}
+        </span>
+        <span className="user-menu__name">{user.username}</span>
+      </button>
+      {open && (
+        <div className="user-menu__dropdown">
+          <p className="user-menu__hint">
+            {syncing ? "⟳ Syncing your data…" : "Bookmarks, progress & settings sync to this account."}
+          </p>
+          <Link href="/account" className="user-menu__link" onClick={() => setOpen(false)}>Account &amp; sync</Link>
+          <OfflineLink href="/library" className="user-menu__link" onClick={() => setOpen(false)}>My library</OfflineLink>
+          <button onClick={async () => { await logout(); setOpen(false) }}>Sign out</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function SiteHeader(
+  { current, children }: { current?: NavKey; children?: React.ReactNode },
+) {
+  const link = (key: NavKey, href: string, label: string, offline = false) => {
+    const cls = `header__link ${current === key ? "header__link--current" : ""}`
+    if (current === key) return <span className={cls} aria-current="page">{label}</span>
+    return offline
+      ? <OfflineLink href={href} className={cls}>{label}</OfflineLink>
+      : <Link href={href} className={cls}>{label}</Link>
+  }
+
+  // Phone navigation is a bottom tab bar rather than more items in the header.
+  // Six header items at 16px gaps overflowed a 375px screen, and putting the
+  // primary destinations within thumb reach is what makes this read as an app
+  // rather than a shrunken desktop page. Same routes, different placement — CSS
+  // shows one or the other, so there is no duplicated navigation on any screen.
+  const tab = (key: NavKey, href: string, label: string, icon: string, offline = false) => {
+    const cls = `tabbar__item ${current === key ? "tabbar__item--current" : ""}`
+    const inner = (
+      <>
+        <span className="tabbar__icon" aria-hidden="true">{icon}</span>
+        <span className="tabbar__label">{label}</span>
+      </>
+    )
+    if (current === key) {
+      return <span className={cls} aria-current="page">{inner}</span>
+    }
+    return offline
+      ? <OfflineLink href={href} className={cls}>{inner}</OfflineLink>
+      : <Link href={href} className={cls}>{inner}</Link>
+  }
+
+  return (
+    <>
+      <header className="header">
+        {/* The wordmark is the way home from everywhere — the convention people
+            already expect, and it was previously not a link at all. */}
+        <Link href="/" className="logo logo--link" aria-label="FicAtlas home">
+          Fic<em>Atlas</em>
+        </Link>
+        <nav className="header__right">
+          <span className="header__nav-links">
+            {link("search", "/", "Search")}
+            {link("library", "/library", "Library", true)}
+            {link("settings", "/settings", "Settings")}
+          </span>
+          <UserMenu />
+          <IndexStatus />
+          {/* Page-specific controls (e.g. the Explicit toggle on search). */}
+          {children}
+        </nav>
+      </header>
+
+      <nav className="tabbar" aria-label="Primary">
+        {tab("search", "/", "Search", "⌕")}
+        {tab("library", "/library", "Library", "▤", true)}
+        {tab("settings", "/settings", "Settings", "⚙")}
+      </nav>
+    </>
+  )
+}

@@ -37,10 +37,59 @@ _QUOTED  = r'"([^"]+)"'
 _BARE    = r'(\S+)'
 _VAL     = f'(?:{_QUOTED}|{_BARE})'
 
-OPERATOR_RE = re.compile(
-    rf'(-?)(\w+):{_VAL}',
+# Operator KEYS only. The value is taken separately, because a bare value can be
+# several words: `fandom: Harry Potter` is documented as the primary syntax.
+#
+# The old pattern was `(-?)(\w+):(?:"..."|(\S+))`, which required a non-space
+# immediately after the colon and stopped at the first whitespace. So the
+# README's own headline example did not parse at all — `fandom: Harry Potter`
+# fell through entirely into free text — and `fandom:Harry Potter` captured only
+# "Harry", leaving "Potter" as a stray search term.
+KEY_RE = re.compile(r'(-?)(\w+)\s*:\s*', re.IGNORECASE)
+
+# A bare multi-word value stops before any of these, so
+# `fandom: Harry Potter complete >100k` still yields status and word count
+# instead of swallowing them into the fandom name.
+_SHORTHAND_RE = re.compile(
+    r'^(?:complete|completed|wip|incomplete|ongoing'
+    r'|explicit|mature|teen|general|gen'
+    r'|[<>]=?[\d.]+[km]?\+?|[\d.]+[km]\+|[\d.]+[km]-[\d.]+[km])$',
     re.IGNORECASE,
 )
+
+
+def _take_value(available: str) -> tuple[str, int]:
+    """Read one operator value from the text following `key:`.
+
+    Returns (value, characters_consumed). A quoted value ends at the closing
+    quote; a bare one runs to the end of `available` (already bounded by the next
+    operator key), minus any trailing shorthand words, which belong to the query
+    rather than to this value.
+    """
+    if available.startswith('"'):
+        end = available.find('"', 1)
+        if end == -1:
+            return available[1:].strip(), len(available)
+        return available[1:end].strip(), end + 1
+
+    words = available.split()
+    keep = len(words)
+    # Never strip below one word: `status:complete` and `rating:mature` have a
+    # shorthand word as their ENTIRE value, and stripping it discarded the
+    # operator altogether.
+    while keep > 1 and _SHORTHAND_RE.match(words[keep - 1]):
+        keep -= 1
+    if keep == 0:
+        return "", 0
+    value = " ".join(words[:keep])
+    # Consume up to the end of the last kept word, so trailing shorthand stays in
+    # the free text where the shorthand pass can find it.
+    idx, consumed = 0, 0
+    for w in words[:keep]:
+        idx = available.index(w, idx)
+        consumed = idx + len(w)
+        idx = consumed
+    return value, consumed
 
 # Standalone word-count shorthands:  >100k  <50k  100k+  100k-200k
 WORDCOUNT_RE = re.compile(
@@ -178,18 +227,26 @@ def parse_query(raw: str) -> ParsedQuery:
     # ── 1. Extract operator tokens ──────────────────────────────────────────
     consumed_spans = []
 
-    for m in OPERATOR_RE.finditer(raw):
-        exclude_flag = m.group(1) == "-"
-        key_raw      = m.group(2).lower()
-        value        = m.group(3) if m.group(3) else m.group(4)  # quoted or bare
+    # Locate every recognised operator key first, so each value can run up to the
+    # NEXT key rather than stopping at the first space.
+    key_hits = []
+    for m in KEY_RE.finditer(raw):
+        canonical = FIELD_ALIASES.get(m.group(2).lower())
+        if canonical:
+            key_hits.append((m.start(), m.end(), m.group(1) == "-", canonical))
 
-        canonical = FIELD_ALIASES.get(key_raw)
-        if not canonical:
-            continue  # unknown operator — leave in text
+    for i, (kstart, kend, exclude_flag, canonical) in enumerate(key_hits):
+        next_start = key_hits[i + 1][0] if i + 1 < len(key_hits) else len(raw)
+        value, used = _take_value(raw[kend:next_start])
+        # Reject values that are only punctuation ("fandom:::" produced "::").
+        if not value or not re.search(r"\w", value):
+            continue
+        span_end = kend + used
 
-        consumed_spans.append((m.start(), m.end()))
+        consumed_spans.append((kstart, span_end))
 
-        token = {"key": canonical, "value": value, "exclude": exclude_flag, "raw": m.group(0)}
+        token = {"key": canonical, "value": value, "exclude": exclude_flag,
+                 "raw": raw[kstart:span_end].strip()}
 
         if canonical == "fandoms":
             (pq.exc_fandoms if exclude_flag else pq.fandoms).append(value)

@@ -1,16 +1,76 @@
 """Search API — unified search across all indexed sites with hybrid live fetch"""
-import asyncio
+import logging
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy import and_, or_, func, literal_column, cast, Text, text as sql_text
+from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from typing import Optional, List
 from pydantic import BaseModel
 
 from db.session import get_db
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 from query_parser import parse_query, parsed_to_search_params
+import re
+from character_aliases import character_variants, relationship_variants
+from language_aliases import language_variants
+from provenance import content_tags, source_labels
 
 router = APIRouter()
+log = logging.getLogger(__name__)
+
+
+# ── Indexed matching helpers ─────────────────────────────────────────────────
+# These MUST stay byte-for-byte equivalent to the index expressions created in
+# init_db.py. Postgres only uses an expression index when the query expression
+# matches the indexed one, so changing either side without the other silently
+# drops search back to a full sequential scan over every row.
+
+# 'english'::regconfig as a literal, matching how Postgres stores it in the index
+_REGCONFIG = literal_column("'english'::regconfig")
+
+
+def _story_tsv(entity=Story):
+    """The indexed tsvector over title + summary + author + all facet arrays.
+    Backed by ix_stories_doc_fts. `entity` may be an alias of Story so the same
+    expression can be re-applied over a materialised candidate subquery."""
+    return func.to_tsvector(
+        _REGCONFIG,
+        func.fic_doc(
+            entity.title, entity.summary, entity.author,
+            entity.fandoms, entity.characters, entity.relationships, entity.tags,
+        ),
+    )
+
+
+# AO3 canonical fandom tags are "Work - Author"; FF.net and the older dumps use
+# the bare work name. So the same fandom is split across several values:
+#
+#   Harry Potter                    686,558
+#   Harry Potter - J. K. Rowling    381,225
+#   Harry Potter - Fandom             6,884
+#   Harry Potter - Rowling            5,700
+#   Harry Potter - J.K. Rowling       1,395
+#
+# Filtering the short form already catches the rest by substring, but picking the
+# AO3 canonical form — which is what autocomplete offers — excluded every story
+# tagged only "Harry Potter". Matching on the part before " - " reunites them.
+#
+# It deliberately does NOT collapse different works: "Harry Potter and the Cursed
+# Child - Thorne & Rowling" reduces to "Harry Potter and the Cursed Child", which
+# is a separate work and stays separate.
+_FANDOM_AUTHOR_SUFFIX = re.compile(r"\s+-\s+.+$")
+
+
+def fandom_base(value: str) -> str:
+    """The work name from a fandom tag, dropping any ' - Author' suffix."""
+    base = _FANDOM_AUTHOR_SUFFIX.sub("", (value or "").strip())
+    return base or (value or "").strip()
+
+
+def _arr_text(col):
+    """IMMUTABLE array->text used by the trigram indexes on the facet columns.
+    Backed by ix_stories_{fandoms,characters,relationships,tags}_trgm."""
+    return func.fic_arr(col)
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -45,6 +105,7 @@ class StoryCard(BaseModel):
     is_live: bool = False          # true = came from live fetch, not index
     is_hosted: bool = False        # true = full text stored locally, one-click reader
     cross_post_urls: List[str] = []  # same work on other sites (deduped result)
+    sources: List[str] = []          # which import(s) this row came from
 
     class Config:
         from_attributes = True
@@ -68,21 +129,109 @@ class SearchResponse(BaseModel):
     parsed_tokens: List[ParsedToken] = []  # for UI filter highlighting
 
 
-SORT_MAP = {
+# (column name, descending). Stored as names rather than bound expressions so the
+# same sort can be applied either to Story or to an aliased subquery of it.
+SORT_MAP: dict[str, tuple[str, bool] | None] = {
     "relevance":       None,
-    "updated_desc":    Story.updated_at.desc(),
-    "updated_asc":     Story.updated_at.asc(),
-    "published_desc":  Story.published_at.desc(),
-    "kudos_desc":      Story.kudos.desc(),
-    "hits_desc":       Story.hits.desc(),
-    "word_count_desc": Story.word_count.desc(),
-    "word_count_asc":  Story.word_count.asc(),
-    "comments_desc":   Story.comments.desc(),
-    "bookmarks_desc":  Story.bookmarks.desc(),
+    "updated_desc":    ("updated_at", True),
+    "updated_asc":     ("updated_at", False),
+    "published_desc":  ("published_at", True),
+    "kudos_desc":      ("kudos", True),
+    "hits_desc":       ("hits", True),
+    "word_count_desc": ("word_count", True),
+    "word_count_asc":  ("word_count", False),
+    "comments_desc":   ("comments", True),
+    "bookmarks_desc":  ("bookmarks", True),
 }
 
 
+def _sort_expr(entity, sort: str):
+    spec = SORT_MAP.get(sort)
+    if spec is None:
+        return None
+    if spec[0] == "updated_at":
+        # Sorting by updated_at alone is meaningless here: it is NULL for 99.83%
+        # of rows, so "recently updated" was really "the 0.17% we have a date for,
+        # then everything else in arbitrary order".
+        col = func.coalesce(entity.updated_at, entity.published_at)
+    else:
+        col = getattr(entity, spec[0])
+    return col.desc().nullslast() if spec[1] else col.asc().nullslast()
+
+
 # ── Live fetch trigger logic ──────────────────────────────────────────────────
+
+# Live-fetch throttle.
+#
+# Every text search schedules a 3-page AO3 fetch, and AO3's search takes 18-21s
+# per page. Without a guard, reloading a page or retyping a query would fire that
+# again and again for the same search, and a handful of tabs could have a dozen
+# fetches running at once — hammering AO3 for results we just indexed.
+#
+# So: the same query is only re-fetched once per window, and only a few fetches
+# run concurrently. In-memory is right for this app's single-process scale.
+_LIVE_REFETCH_WINDOW = 6 * 3600     # seconds before the same query is worth redoing
+_LIVE_MAX_CONCURRENT = 3
+_live_last_run: dict[str, float] = {}
+_live_in_flight: set[str] = set()
+
+
+def _claim_live_fetch(params: dict) -> bool:
+    """Reserve a live fetch for these params, or decline if it's redundant."""
+    import time
+    key = repr(sorted((k, v) for k, v in params.items() if v not in (None, "", False)))
+    now = time.time()
+
+    if key in _live_in_flight:
+        return False
+    if len(_live_in_flight) >= _LIVE_MAX_CONCURRENT:
+        return False
+    if now - _live_last_run.get(key, 0.0) < _LIVE_REFETCH_WINDOW:
+        return False
+
+    # Bound the memory: drop entries that are past the window anyway.
+    if len(_live_last_run) > 2000:
+        for k, t in list(_live_last_run.items()):
+            if now - t > _LIVE_REFETCH_WINDOW:
+                _live_last_run.pop(k, None)
+
+    _live_last_run[key] = now
+    _live_in_flight.add(key)
+    return True
+
+
+def _release_live_fetch(params: dict) -> None:
+    key = repr(sorted((k, v) for k, v in params.items() if v not in (None, "", False)))
+    _live_in_flight.discard(key)
+
+
+async def _fetch_and_persist_live(live_params: dict, want_ao3: bool) -> None:
+    """Pull fresh AO3 results and add them to the index. Runs after the response
+    has been sent, so its latency is invisible to the reader.
+
+    Opens its own DB session: the request-scoped one from Depends(get_db) is
+    already closed by the time a background task runs.
+    """
+    if not want_ao3:
+        return
+    try:
+        from live_fetch.ao3_live import fetch_live_ao3
+        from live_fetch.persist import persist_live_results
+        from db.session import db_session
+
+        results = await fetch_live_ao3(live_params, limit=60, pages=3)
+        if not results:
+            return
+        with db_session() as db:
+            persist_live_results(db, results)
+        log.info("live AO3: indexed %d results for q=%r", len(results), live_params.get("q"))
+    except Exception as e:
+        # Non-fatal by design, but log it — this path was silently broken for a
+        # long time precisely because failures were swallowed without a trace.
+        log.warning("live AO3 fetch/persist failed: %s: %s", type(e).__name__, e)
+    finally:
+        _release_live_fetch(live_params)
+
 
 def _should_fetch_live(sort: str, page: int, q: Optional[str]) -> bool:
     """Only fetch live on page 1 for recency-biased sorts or when text query present."""
@@ -120,6 +269,23 @@ async def search(
     updated_before:        Optional[str] = Query(None),
     published_after:       Optional[str] = Query(None),
     explicit:              bool          = Query(False),
+    include_unknown:       bool          = Query(
+        False,
+        description="Also return stories that have NO data for a filtered field "
+                    "(e.g. no relationships listed). Off by default so filters "
+                    "actually filter.",
+    ),
+    match_mode:            str           = Query(
+        "all",
+        description="How multiple values within one filter combine: 'all' (a "
+                    "story must have every value — crossovers) or 'any' (a story "
+                    "needs just one — variant spellings of the same fandom).",
+    ),
+    author:                Optional[str] = Query(
+        None,
+        description="Exact author match (case-insensitive). Unlike free text, this "
+                    "returns only that author's works — across every archive.",
+    ),
     search_within:         Optional[str] = Query(None),
     sort:                  str           = Query("relevance"),
     page:                  int           = Query(1, ge=1),
@@ -173,17 +339,33 @@ async def search(
         filters.append(or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
 
     if q:
-        terms = q.strip().split()
-        for term in terms:
-            filters.append(or_(
-                Story.title.ilike(f"%{term}%"),
-                Story.summary.ilike(f"%{term}%"),
-                Story.author.ilike(f"%{term}%"),
-                func.array_to_string(Story.fandoms, ",").ilike(f"%{term}%"),
-                func.array_to_string(Story.characters, ",").ilike(f"%{term}%"),
-                func.array_to_string(Story.relationships, ",").ilike(f"%{term}%"),
-                func.array_to_string(Story.tags, ",").ilike(f"%{term}%"),
-            ))
+        # Free text goes through Postgres full-text search against the GIN index
+        # (ix_stories_doc_fts) covering title, summary, author and every facet array.
+        #
+        # This replaces a per-term OR of seven ILIKE '%term%' predicates. No index
+        # can serve a leading-wildcard ILIKE, so that form degraded to a full
+        # sequential scan of all ~2.3M rows on every keystroke — and it was slowest
+        # for RARE terms, because the count ceiling never filled up early enough to
+        # short-circuit the scan.
+        #
+        # websearch_to_tsquery ANDs the terms together, which preserves the previous
+        # "every term must appear somewhere" semantics, and it never raises on
+        # malformed input (unlike to_tsquery), so user text is safe to pass straight
+        # through. It also gives quoted phrases, OR and -negation for free.
+        filters.append(
+            _story_tsv().op("@@")(func.websearch_to_tsquery(_REGCONFIG, q))
+        )
+
+    if author:
+        # Exact, case-insensitive. Free-text search matches the author field too,
+        # but also every summary that merely mentions the name ("TRADUCCIÓN del fic
+        # de SilentAuror"), so it can't answer "show me everything this person
+        # wrote". Backed by ix_stories_author_lower.
+        #
+        # This is something neither AO3 nor FF.net can do: an author's page on
+        # either site shows only the works they posted there, while this spans
+        # every archive in the index.
+        filters.append(func.lower(Story.author) == author.strip().lower())
 
     if search_within:
         filters.append(or_(
@@ -191,31 +373,68 @@ async def search(
             Story.summary.ilike(f"%{search_within}%"),
         ))
 
-    def arr_inc(col, csv_val, permissive_empty=True):
-        """Array-includes filter.
+    # "all" = a story must carry every value (crossovers, tag combinations).
+    # "any" = one is enough (variant spellings of the same fandom).
+    combine = or_ if match_mode == "any" else and_
 
-        permissive_empty=True (default, for secondary facets like characters/ships/
-        tags): a story matches if it contains ALL requested values OR has no data for
-        that field. Missing secondary metadata shouldn't exclude a story.
+    def arr_inc(col, csv_val, permissive_empty=False, normalise=None):
+        """Array-includes filter: a story matches when the column contains ALL of
+        the requested values.
 
-        permissive_empty=False (for the FANDOM axis): empty arrays do NOT match. A
-        story with no fandom listed should never surface under a specific-fandom
-        search, otherwise the millions of empty-fandom dump rows leak into every
-        fandom query and wildly inflate the count.
+        permissive_empty=True additionally lets through stories that have NO data
+        for the column at all. That used to be the default for every secondary
+        facet, on the reasoning that missing metadata shouldn't exclude a story.
+        In practice it made those filters do nothing: 99.7% of indexed rows have no
+        relationships and 98.8% have no characters, so filtering by a ship returned
+        millions of stories that had no ship at all — swamping the handful that
+        genuinely matched.
+
+        Filters are now strict by default, and the caller opts into the permissive
+        behaviour with include_unknown.
         """
         if not csv_val: return None
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
+        if normalise:
+            vals = [normalise(v) for v in vals]
+        vals = [v for v in dict.fromkeys(vals) if v]   # dedupe, keep order
         if not vals: return None
         if permissive_empty:
             empty = or_(col.is_(None), func.cardinality(col) == 0)
-            return and_(*[
-                or_(func.array_to_string(col, ",").ilike(f"%{v}%"), empty)
+            return combine(*[
+                or_(_arr_text(col).ilike(f"%{v}%"), empty)
                 for v in vals
             ])
-        return and_(*[
-            func.array_to_string(col, ",").ilike(f"%{v}%")
+        return combine(*[
+            _arr_text(col).ilike(f"%{v}%")
             for v in vals
         ])
+
+    def arr_inc_aliased(col, csv_val, expand, permissive_empty=False):
+        """Array-includes filter with alias expansion.
+
+        For each requested value we look up every spelling the archives actually
+        store. Those are matched as WHOLE array elements via the && (overlap)
+        operator — critical because aliases like "H" and "D" are single letters
+        that a substring match would find inside almost every row. Overlap also
+        lets Postgres use the plain GIN array indexes.
+
+        Names we have no aliases for fall back to the substring behaviour, so
+        fandoms outside the alias table keep working exactly as before.
+        """
+        if not csv_val: return None
+        vals = [v.strip() for v in csv_val.split(",") if v.strip()]
+        if not vals: return None
+
+        empty = or_(col.is_(None), func.cardinality(col) == 0)
+        clauses = []
+        for v in vals:
+            variants = expand(v)
+            if variants:
+                match = col.op("&&")(cast(variants, PG_ARRAY(Text)))
+            else:
+                match = _arr_text(col).ilike(f"%{v.lower()}%")
+            clauses.append(or_(match, empty) if permissive_empty else match)
+        return combine(*clauses)
 
     def arr_exc(col, csv_val):
         """Strict exclude: only kick out stories that DEFINITELY have the unwanted
@@ -223,18 +442,30 @@ async def search(
         """
         if not csv_val: return None
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
-        return and_(*[~func.array_to_string(col, ",").ilike(f"%{v}%") for v in vals]) if vals else None
+        return and_(*[~_arr_text(col).ilike(f"%{v}%") for v in vals]) if vals else None
 
-    # Fandom is the primary axis → strict. Everything else → permissive on empty.
-    f = arr_inc(Story.fandoms, fandoms, permissive_empty=False)
+    # Fandom is always strict — a story with no fandom listed must never surface
+    # under a specific-fandom search, or the millions of empty-fandom dump rows
+    # leak into every fandom query.
+    f = arr_inc(Story.fandoms, fandoms, permissive_empty=False, normalise=fandom_base)
+    if f is not None: filters.append(f)
+
+    # Characters and relationships get alias expansion so a filter written the
+    # natural way ("Draco/Hermione") also matches how each archive actually stores
+    # it ("D/Hr", "Hermione Granger/Draco Malfoy"). See character_aliases.py.
+    f = arr_inc_aliased(Story.characters, characters, character_variants,
+                        permissive_empty=include_unknown)
+    if f is not None: filters.append(f)
+
+    f = arr_inc_aliased(Story.relationships, relationships, relationship_variants,
+                        permissive_empty=include_unknown)
     if f is not None: filters.append(f)
 
     for col, val in [
-        (Story.characters, characters),
-        (Story.relationships, relationships), (Story.tags, tags),
+        (Story.tags, tags),
         (Story.warnings, warnings), (Story.categories, categories),
     ]:
-        f = arr_inc(col, val)
+        f = arr_inc(col, val, permissive_empty=include_unknown)
         if f is not None: filters.append(f)
 
     for col, val in [
@@ -245,11 +476,17 @@ async def search(
         f = arr_exc(col, val)
         if f is not None: filters.append(f)
 
+    # Scalar filters follow the same rule as the facet filters: a story only matches
+    # if it actually carries the value. `include_unknown` re-admits rows where the
+    # field is NULL (metadata we never captured), rather than that being the default.
+    def _or_unknown(cond, *unknown_conds):
+        return or_(cond, *unknown_conds) if include_unknown else cond
+
     if ratings:
         r_vals = [r.strip().upper() for r in ratings.split(",")]
         valid  = [RatingEnum(r) for r in r_vals if r in RatingEnum._value2member_map_]
-        # Permissive: stories with NULL rating still pass (HF FFN dump rows etc)
-        if valid: filters.append(or_(Story.rating.in_(valid), Story.rating.is_(None)))
+        if valid:
+            filters.append(_or_unknown(Story.rating.in_(valid), Story.rating.is_(None)))
 
     if exclude_ratings:
         r_vals = [r.strip().upper() for r in exclude_ratings.split(",")]
@@ -263,27 +500,47 @@ async def search(
     if status:
         s_vals = [StatusEnum(s.strip()) for s in status.split(",") if s.strip() in StatusEnum.__members__]
         if s_vals:
-            # Permissive: a story whose completion status is unknown (NULL, or the
-            # explicit "unknown" value used by bulk imports that lacked completion
-            # data) still passes — we can't prove it doesn't match, so don't exclude it.
-            filters.append(or_(Story.status.in_(s_vals),
-                               Story.status.is_(None),
-                               Story.status == StatusEnum.unknown))
+            # "unknown" is a real stored value for bulk imports that carried no
+            # completion data, so it counts as unknown here alongside NULL.
+            filters.append(_or_unknown(Story.status.in_(s_vals),
+                                       Story.status.is_(None),
+                                       Story.status == StatusEnum.unknown))
 
     if language:
-        filters.append(or_(Story.language.ilike(language), Story.language.is_(None)))
+        # Match every spelling of the language, not just the one typed. AO3
+        # records a work's language in that language while FF.net uses the
+        # English name, so an exact match found a fraction of what exists —
+        # "Chinese" returned 740 works of roughly 546,000, because the rest are
+        # tagged 中文-普通话 國語.
+        variants = language_variants(language)
+        if variants:
+            lang_match = or_(*[Story.language.ilike(v) for v in variants])
+        else:
+            lang_match = Story.language.ilike(language)
+        filters.append(_or_unknown(lang_match, Story.language.is_(None)))
     if word_count_min:
-        # Permissive on NULL (unknown metadata) but NOT on 0 — a literal 0-word
-        # story is fanart/art/placeholder and must be excluded by a min-words filter.
-        filters.append(or_(Story.word_count >= word_count_min, Story.word_count.is_(None)))
+        # NULL is unknown metadata, but a literal 0-word story is art/placeholder
+        # and must always be excluded by a min-words filter.
+        filters.append(_or_unknown(Story.word_count >= word_count_min, Story.word_count.is_(None)))
     if word_count_max:
-        filters.append(or_(Story.word_count <= word_count_max, Story.word_count.is_(None)))
+        filters.append(_or_unknown(Story.word_count <= word_count_max, Story.word_count.is_(None)))
+    # Date filters compare against updated_at OR, where we never captured one,
+    # published_at.
+    #
+    # updated_at is set for 0.17% of the index (33,169 of 19.7M): the bulk dumps
+    # record when a work was published but not when it was last touched. Filtering
+    # "updated in the past year" strictly against that column returned almost
+    # nothing — a Harry Potter / complete / >100k search went from 2,915 results to
+    # 3. published_at covers 46%, so the coalesce makes the filter ~275x more
+    # useful, and for a completed work the publication date is a fair proxy for
+    # its last activity anyway.
+    _last_activity = func.coalesce(Story.updated_at, Story.published_at)
     if updated_after:
-        filters.append(or_(Story.updated_at >= updated_after, Story.updated_at.is_(None)))
+        filters.append(_or_unknown(_last_activity >= updated_after, _last_activity.is_(None)))
     if updated_before:
-        filters.append(or_(Story.updated_at <= updated_before, Story.updated_at.is_(None)))
+        filters.append(_or_unknown(_last_activity <= updated_before, _last_activity.is_(None)))
     if published_after:
-        filters.append(or_(Story.published_at >= published_after, Story.published_at.is_(None)))
+        filters.append(_or_unknown(Story.published_at >= published_after, Story.published_at.is_(None)))
 
     if filters:
         db_query = db_query.filter(and_(*filters))
@@ -296,51 +553,69 @@ async def search(
     total = db.query(func.count()).select_from(count_subq).scalar() or 0
     count_is_capped = total > COUNT_CEILING
 
-    sort_expr = SORT_MAP.get(sort)
-    db_query  = db_query.order_by(sort_expr if sort_expr is not None else Story.kudos.desc())
+    # Order over a BOUNDED candidate set rather than the whole match set.
+    #
+    # Sorting all matches let the planner walk an ordering index and filter each
+    # row against the text/facet predicate. With a selective predicate that means
+    # reading a large fraction of a 3.8M-row index to fill a single page: a
+    # "dramione" search spent 2.0s discarding ~25k rows per worker from
+    # ix_stories_kudos_desc before it found 20 matches.
+    #
+    # Materialising up to COUNT_CEILING matches first forces the cheap bitmap scan
+    # over the GIN indexes, and sorting at most 5000 rows is trivial. It is also
+    # consistent with what we already promise: the count is only exact up to that
+    # same ceiling, so below it the ordering is exact and above it we order within
+    # the first 5000 matches — which is what "5000+" already implies.
+    candidates = db_query.order_by(None).limit(COUNT_CEILING).subquery()
+    S = aliased(Story, candidates)
+    ordered = db.query(S)
+
+    sort_expr = _sort_expr(S, sort)
+    if sort_expr is not None:
+        ordered = ordered.order_by(sort_expr)
+    elif q:
+        # "Relevance" now means actual text relevance. It previously meant kudos,
+        # which is meaningless on this data: 99.99% of indexed stories have kudos
+        # 0, because the bulk metadata dumps carry no engagement counts at all.
+        ordered = ordered.order_by(
+            func.ts_rank(_story_tsv(S), func.websearch_to_tsquery(_REGCONFIG, q)).desc(),
+            S.word_count.desc().nullslast(),
+        )
+    else:
+        # Nothing to rank against. word_count is the only signal populated for
+        # essentially every row (99.9%), so it beats an all-ties kudos sort.
+        ordered = ordered.order_by(S.word_count.desc().nullslast())
 
     offset  = (page - 1) * per_page
-    indexed = db_query.offset(offset).limit(per_page).all()
+    indexed = ordered.offset(offset).limit(per_page).all()
     indexed_cards = [_to_card(s) for s in indexed]
 
-    # ── Hybrid live fetch (page 1 only) ──────────────────────────────────────
+    # ── Live AO3 fetch ───────────────────────────────────────────────────────
+    # This used to run inline and block the response. AO3's /works/search is a
+    # full-text search over millions of works and takes 18-21s for a single page,
+    # so three pages meant a ~30s search. It also never actually worked (see
+    # live_fetch/ao3_live.py), which is the only reason nobody noticed the cost.
+    #
+    # Now it runs AFTER the response is sent: the reader gets indexed results in
+    # milliseconds, and the fresh works land in the index for the next search.
+    # For freshness on demand there is the explicit "Refresh from AO3" button,
+    # which hits /api/library/refresh-ao3 and shows a spinner while it waits.
+    # Scheduled on the event loop rather than via FastAPI's BackgroundTasks: the
+    # injected `background_tasks` arrived as None here, so the task was never
+    # queued and nothing was ever indexed from a live search. run_in_background
+    # keeps a strong reference, so the task cannot be garbage collected mid-run.
     live_cards: list[StoryCard] = []
-    if live and _should_fetch_live(sort, page, q):
-        live_params = {
+    if live and _should_fetch_live(sort, page, q) and "ao3" in active_sites:
+        params = {
             "q": q, "fandoms": fandoms, "relationships": relationships,
             "characters": characters, "tags": tags, "ratings": ratings,
             "status": status, "word_count_min": word_count_min,
             "word_count_max": word_count_max, "sort": sort,
             "explicit": explicit,
         }
-        try:
-            live_tasks = []
-            if "ao3" in active_sites:
-                from live_fetch.ao3_live import fetch_live_ao3
-                # Fetch 3 pages = up to ~60 fresh results per search
-                live_tasks.append(fetch_live_ao3(live_params, limit=60, pages=3))
-
-            if live_tasks:
-                raw_results = await asyncio.gather(*live_tasks, return_exceptions=True)
-                indexed_urls = {c.url for c in indexed_cards}
-                live_raw_for_persist: list[dict] = []
-                for batch in raw_results:
-                    if isinstance(batch, Exception):
-                        continue
-                    for item in batch:
-                        live_raw_for_persist.append(item)
-                        if item["url"] not in indexed_urls:
-                            live_cards.append(_dict_to_card(item))
-                            indexed_urls.add(item["url"])
-
-                # Persist live results into the DB so the index grows organically
-                try:
-                    from live_fetch.persist import persist_live_results
-                    persist_live_results(db, live_raw_for_persist)
-                except Exception:
-                    pass  # persistence failure shouldn't break search
-        except Exception:
-            pass  # live fetch failure is non-fatal
+        if _claim_live_fetch(params):
+            from live_fetch.jobs import run_in_background
+            run_in_background(lambda: _fetch_and_persist_live(params, True))
 
     # Merge: live results (fresher) shown first on page 1, then the full indexed page.
     # We do NOT truncate indexed cards — that was dropping indexed results off page 1
@@ -368,15 +643,49 @@ async def random_stories(
     db: Session = Depends(get_db),
 ):
     """Surprise-me discovery: returns N random stories, optionally constrained by
-    fandom and a minimum word count (so you don't get art/drabbles). Uses
-    TABLESAMPLE-style random ordering. Biased toward stories with real metadata
-    (non-zero word count) so results are actually readable."""
-    q = db.query(Story).filter(Story.word_count > (min_words or 1000))
-    if fandom:
-        q = q.filter(func.array_to_string(Story.fandoms, ",").ilike(f"%{fandom.strip()}%"))
-    # ORDER BY random() is fine at this scale for a handful of rows.
-    rows = q.order_by(func.random()).limit(count).all()
-    return [_to_card(s) for s in rows]
+    fandom and a minimum word count (so you don't get art/drabbles). Biased toward
+    stories with real metadata (non-zero word count) so results are readable.
+
+    This runs on the landing page, so it has to be cheap. A plain
+    `ORDER BY random() LIMIT 3` makes Postgres assign a random value to every
+    candidate row and sort them all — a full sequential scan of ~1.7M rows for
+    three results (~3s measured).
+
+    Instead we sample a small slice of the table's pages with TABLESAMPLE SYSTEM and
+    pick randomly within that. Percentages escalate because a selective fandom
+    filter may match nothing in a small sample, and the last pass is the original
+    full scan so a rare fandom still returns results rather than an empty page.
+    """
+    min_w = min_words or 1000
+    fandom_pat = f"%{fandom.strip()}%" if fandom else None
+
+    where = ["word_count > :min_w"]
+    params: dict = {"min_w": min_w, "count": count}
+    if fandom_pat:
+        where.append("fic_arr(fandoms) ILIKE :fandom_pat")
+        params["fandom_pat"] = fandom_pat
+    where_sql = " AND ".join(where)
+
+    # Sample IDs only, then load through the ORM so serialisation stays in _to_card
+    # rather than being duplicated for raw rows. Both queries are trivially cheap.
+    for pct in (0.3, 3.0):
+        ids = list(db.execute(
+            sql_text(
+                f"SELECT id FROM stories TABLESAMPLE SYSTEM ({pct}) "
+                f"WHERE {where_sql} ORDER BY random() LIMIT :count"
+            ),
+            params,
+        ).scalars())
+        if len(ids) >= count:
+            rows = db.query(Story).filter(Story.id.in_(ids)).all()
+            return [_to_card(s) for s in rows]
+
+    # Fallback: whole-table scan. Only reached for filters too rare to show up in a
+    # 3% page sample, where correctness matters more than the latency.
+    q = db.query(Story).filter(Story.word_count > min_w)
+    if fandom_pat:
+        q = q.filter(_arr_text(Story.fandoms).ilike(fandom_pat))
+    return [_to_card(s) for s in q.order_by(func.random()).limit(count).all()]
 
 
 # ── Serialisers ───────────────────────────────────────────────────────────────
@@ -393,7 +702,11 @@ def _to_card(s: Story) -> StoryCard:
         kudos=s.kudos or 0, hits=s.hits or 0,
         bookmarks=s.bookmarks or 0, comments=s.comments or 0,
         fandoms=s.fandoms or [], relationships=s.relationships or [],
-        characters=s.characters or [], tags=s.tags or [],
+        characters=s.characters or [],
+        # Content tags only. Provenance ('ffnet_dump') is which import a row
+        # came from, not what it's about, and showed up as a tag chip on 61%
+        # of stories that had no real tags at all.
+        tags=content_tags(s.tags), sources=source_labels(s.tags),
         warnings=s.warnings or [], categories=s.categories or [],
         genres=s.genres or [],
         published_at=s.published_at.isoformat() if s.published_at else None,
@@ -416,7 +729,8 @@ def _dict_to_card(d: dict) -> StoryCard:
         kudos=d.get("kudos", 0), hits=d.get("hits", 0),
         bookmarks=d.get("bookmarks", 0), comments=d.get("comments", 0),
         fandoms=d.get("fandoms", []), relationships=d.get("relationships", []),
-        characters=d.get("characters", []), tags=d.get("tags", []),
+        characters=d.get("characters", []),
+        tags=content_tags(d.get("tags")), sources=source_labels(d.get("tags")),
         warnings=d.get("warnings", []), categories=d.get("categories", []),
         genres=d.get("genres", []),
         published_at=d.get("published_at"), updated_at=d.get("updated_at"),

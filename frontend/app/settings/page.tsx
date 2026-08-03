@@ -1,6 +1,8 @@
 "use client"
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import SiteHeader from "../SiteHeader"
+import { useAuth } from "@/lib/auth"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -35,6 +37,7 @@ const SORT_OPTIONS = [
 ]
 
 export default function SettingsPage() {
+  const { user, loading: authLoading } = useAuth()
   const [settings, setSettings] = useState<Settings | null>(null)
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -88,7 +91,7 @@ export default function SettingsPage() {
 
   if (!settings) return (
     <div className="settings-shell">
-      <Link href="/" className="back-link">← Back to search</Link>
+      <SiteHeader current="settings" />
       <p className="loading">Loading…</p>
     </div>
   )
@@ -97,8 +100,17 @@ export default function SettingsPage() {
 
   return (
     <div className="settings-shell">
-      <Link href="/" className="back-link">← Back to search</Link>
+      <SiteHeader current="settings" />
       <h1 className="settings-title">Settings</h1>
+
+      {/* These are instance-wide settings, not per-user, so saving them needs an
+          account — same guard as the library admin actions. */}
+      {!authLoading && !user && (
+        <p className="library-signin-note">
+          <Link href="/login" className="library-signin-note__link">Sign in</Link>{" "}
+          to change these — they apply to the whole instance.
+        </p>
+      )}
 
       <section className="settings-group">
         <h2 className="settings-group__title">Fresh content</h2>

@@ -26,15 +26,14 @@ import argparse
 import re
 import sys
 
+# The repo contains exactly one data file, on the `master` branch. Every URL this
+# importer previously tried (hpac_only_fics.txt, hp_fics.txt, and a `main` branch)
+# 404s, so the importer could never actually run.
 RAW_URL = (
     "https://raw.githubusercontent.com/janelleshane/"
-    "harry-potter-fanfic-dataset/master/hpac_only_fics.txt"
+    "harry-potter-fanfic-dataset/master/hp_title_by_author_summary.txt"
 )
-# Fallback filenames seen in the repo over time
-ALT_URLS = [
-    "https://raw.githubusercontent.com/janelleshane/harry-potter-fanfic-dataset/master/hp_fics.txt",
-    "https://raw.githubusercontent.com/janelleshane/harry-potter-fanfic-dataset/main/hpac_only_fics.txt",
-]
+ALT_URLS: list[str] = []
 
 PROVENANCE_TAG = "janelleshane_seed"
 
@@ -55,33 +54,35 @@ def _fetch_text() -> str:
     raise SystemExit(f"Could not download dataset. Last error: {last_err}")
 
 
-# Each fic block tends to look like:
-#   Title Of The Fic by AuthorName
-#   Summary text, possibly multiple lines...
-# separated by blank lines. We split on blank lines and parse the first line
-# for "title by author".
-_BY_RE = re.compile(r"^(?P<title>.+?)\s+by\s+(?P<author>.+?)\s*$", re.IGNORECASE)
-
-
+# The file is one record per line, not blank-line-separated blocks:
+#
+#   Title by Author | Summary text
+#   Title by Author                      (summary omitted)
+#   00M by bleibend (mari681) , mari681 | The unspeakables are more than…
+#
+# The previous implementation split on blank lines and read the summary from
+# following lines, which does not match this file at all — it produced a handful
+# of enormous bogus records instead of ~112k fics.
 def _parse_blocks(text: str):
-    blocks = re.split(r"\n\s*\n", text)
-    for blk in blocks:
-        lines = [l.strip() for l in blk.splitlines() if l.strip()]
-        if not lines:
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
             continue
-        m = _BY_RE.match(lines[0])
-        if m:
-            title = m.group("title").strip()
-            author = m.group("author").strip()
-            summary = " ".join(lines[1:]).strip()
-        else:
-            # No "by" — treat first line as title, rest as summary, author unknown
-            title = lines[0]
-            author = ""
-            summary = " ".join(lines[1:]).strip()
+
+        # Summary is everything after the first pipe.
+        head, _, summary = line.partition("|")
+        head, summary = head.strip(), summary.strip()
+
+        # Split on the LAST " by ", so titles that themselves contain " by "
+        # (e.g. "Death by Chocolate by someauthor") still attribute correctly.
+        title, sep, author = head.rpartition(" by ")
+        if not sep:
+            title, author = head, ""
+
+        title = title.strip()
         if len(title) < 2:
             continue
-        yield {"title": title[:500], "author": (author or "Unknown")[:200],
+        yield {"title": title[:500], "author": (author.strip() or "Unknown")[:200],
                "summary": summary[:4000]}
 
 

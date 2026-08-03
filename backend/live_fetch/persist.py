@@ -1,6 +1,6 @@
 """Persist live-fetched results into the DB so the index grows over time."""
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
@@ -38,6 +38,7 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
         existing_urls = {r[0] for r in rows}
 
     saved = 0
+    enriched = 0
     skipped_existing = 0
     failed = 0
     merged_crosspost = 0
@@ -50,7 +51,17 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
             failed += 1
             continue
         if url in existing_urls:
-            skipped_existing += 1
+            # Already indexed — but the live blurb may carry fields the bulk
+            # import never had. AO3's metadata dump has NO summary field at all,
+            # so 13M of our AO3 rows have none, while every AO3 listing blurb
+            # includes one. Skipping outright threw that away on every fetch.
+            #
+            # Only ever FILLS IN what is missing; never overwrites existing data
+            # with the blurb's version.
+            if _enrich_existing(db, url, d):
+                enriched += 1
+            else:
+                skipped_existing += 1
             continue
 
         # Cross-post check: does this same work already exist from another site?
@@ -128,11 +139,115 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
             failed += 1
             log.warning(f"Skip live persist for {url}: {e}")
 
-    if saved or failed or skipped_existing or merged_crosspost:
+    if saved or failed or skipped_existing or merged_crosspost or enriched:
         log.info(
-            f"persist_live_results: saved={saved} "
+            f"persist_live_results: saved={saved} enriched={enriched} "
             f"already_indexed={skipped_existing} cross_post_merged={merged_crosspost} "
             f"failed={failed} (of {len(live_results)} candidates)"
         )
 
     return saved
+
+
+def _enrich_existing(db: Session, url: str, d: dict) -> bool:
+    """Refresh an already-indexed story from a freshly fetched blurb.
+
+    Two jobs, and the second one is why this exists at all.
+
+    Filling gaps: AO3's metadata dump carries no summary field, so 13M rows have
+    none while every listing blurb has one. Missing facets and engagement counts
+    are filled the same way, and never overwritten — a blurb must not downgrade
+    richer data from a full import.
+
+    Tracking updates: a work is otherwise frozen at the moment it was imported.
+    A work-in-progress that has since gained ten chapters kept its original
+    word_count, chapter_count and status forever, because the previous code
+    skipped any URL it already had. Fanfiction is mutable — that is the whole
+    point of a WIP — so mutable fields move forward when the blurb shows the work
+    has progressed.
+
+    "Forward" only: chapters and words may grow, a WIP may become complete, and
+    engagement counts only rise. A blurb reporting *less* is treated as a partial
+    or stale render and ignored, rather than deleting data we already hold.
+    """
+    try:
+        story = db.query(Story).filter(Story.url == url).first()
+        if story is None:
+            return False
+
+        changed = False
+
+        # ── Repair truncated titles ────────────────────────────────────────
+        # The AO3 metadata dump ships titles cut off mid-phrase. Verified
+        # against AO3 itself:
+        #   dump "Harry Potter and"  -> "Harry Potter and Homosexual Rights
+        #                                Feat. Severus Snape"
+        #   dump "The Masochism of"  -> "The Masochism of Self-Defence"
+        # 654,523 AO3 rows end on a dangling "and/of/the/with", and those are
+        # only the ones detectable by inspection.
+        #
+        # A blurb title is taken only when it EXTENDS what we hold — the stored
+        # value must be a prefix of it — so a differently-punctuated or unrelated
+        # title can never overwrite a good one.
+        new_title = (d.get("title") or "").strip()
+        old_title = (story.title or "").strip()
+        if (new_title and len(new_title) > len(old_title)
+                and new_title.lower().startswith(old_title.lower())):
+            story.title = new_title[:500]
+            changed = True
+
+        # ── Fill gaps: only where we hold nothing ──────────────────────────
+        if not (story.summary or "").strip() and (d.get("summary") or "").strip():
+            story.summary = d["summary"]
+            changed = True
+
+        for attr, key in (("tags", "tags"), ("characters", "characters"),
+                          ("relationships", "relationships"), ("fandoms", "fandoms"),
+                          ("warnings", "warnings"), ("categories", "categories")):
+            if not (getattr(story, attr) or []) and (d.get(key) or []):
+                setattr(story, attr, d[key])
+                changed = True
+
+        # ── Track updates: mutable fields move forward ─────────────────────
+        for attr, key in (("chapter_count", "chapter_count"),
+                          ("word_count", "word_count"),
+                          ("kudos", "kudos"), ("hits", "hits"),
+                          ("bookmarks", "bookmarks"), ("comments", "comments")):
+            new_val = d.get(key) or 0
+            if new_val > (getattr(story, attr) or 0):
+                setattr(story, attr, new_val)
+                changed = True
+
+        # A WIP becoming complete is real news; the reverse is not, since AO3
+        # only ever moves a work in that direction.
+        if d.get("status") == "complete" and story.status != StatusEnum.complete:
+            story.status = StatusEnum.complete
+            changed = True
+
+        # The work's own last-updated date, when the blurb reports a newer one.
+        blurb_updated = None
+        if d.get("updated_at"):
+            try:
+                blurb_updated = datetime.fromisoformat(d["updated_at"])
+            except Exception:
+                blurb_updated = None
+        if blurb_updated is not None:
+            current = story.updated_at
+            if current is None or (
+                current.replace(tzinfo=None) < blurb_updated.replace(tzinfo=None)
+            ):
+                story.updated_at = blurb_updated
+                changed = True
+
+        # crawled_at means "when did we last SEE this work". It was set once at
+        # insert and never touched again, so there was no way to tell a row
+        # verified minutes ago from one imported months ago — and therefore no
+        # way to prioritise what to re-check.
+        story.crawled_at = datetime.now(timezone.utc)
+
+        db.commit()
+        return changed
+    except Exception as e:
+        db.rollback()
+        log.warning(f"refresh existing {url} failed: {e}")
+        return False

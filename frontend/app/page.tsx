@@ -1,5 +1,6 @@
 "use client"
-import { useState, useCallback, useTransition, useEffect, useRef } from "react"
+export const dynamic = "force-dynamic"
+import { useState, useCallback, useTransition, useEffect, useRef, Suspense } from "react"
 import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import Link from "next/link"
 import OfflineLink from "./OfflineLink"
@@ -8,47 +9,10 @@ import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS,
          DATE_PRESETS, AO3_WARNINGS, CATEGORIES } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
-import IndexStatus from "./IndexStatus"
+import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
+import SiteHeader from "./SiteHeader"
 import { useAuth } from "@/lib/auth"
-
-// Header user menu - shows login/signup or username + logout
-function UserMenu() {
-  const { user, logout, loading, syncing } = useAuth()
-  const [open, setOpen] = useState(false)
-  useEffect(() => {
-    if (!open) return
-    const close = (e: MouseEvent) => {
-      const t = e.target as HTMLElement
-      if (!t.closest(".user-menu")) setOpen(false)
-    }
-    document.addEventListener("click", close)
-    return () => document.removeEventListener("click", close)
-  }, [open])
-  if (loading) return null
-  if (!user) return <Link href="/login" className="header__link">Sign in</Link>
-  return (
-    <div className="user-menu">
-      <button className="user-menu__btn" onClick={() => setOpen(o => !o)}>
-        <span className="user-menu__avatar">
-          {user.username.slice(0, 1).toUpperCase()}
-          {syncing && <span className="user-menu__sync-dot" title="Syncing…" />}
-        </span>
-        <span className="user-menu__name">{user.username}</span>
-      </button>
-      {open && (
-        <div className="user-menu__dropdown">
-          <p className="user-menu__hint">
-            {syncing ? "⟳ Syncing your data…" : "Bookmarks, progress & settings sync to this account."}
-          </p>
-          <Link href="/account" className="user-menu__link" onClick={() => setOpen(false)}>Account &amp; sync</Link>
-          <OfflineLink href="/library" className="user-menu__link" onClick={() => setOpen(false)}>My library</OfflineLink>
-          <button onClick={async () => { await logout(); setOpen(false) }}>Sign out</button>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function csv(s?: string): string[] {
@@ -76,6 +40,48 @@ const RATING_OPTIONS = [
   { id: "E",  label: "Explicit" },
   { id: "NR", label: "Not Rated" },
 ]
+
+
+// ── Expandable summary ────────────────────────────────────────────────────────
+// Summaries were clamped to three lines with no way to read the rest, so a
+// listing showed a sentence that stopped mid-thought. This adds an expander —
+// but only when the text is ACTUALLY being cut off, measured after layout.
+// Offering "more" on a two-line summary that already fits is just noise.
+function Summary({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const [overflows, setOverflows] = useState(false)
+  const ref = useRef<HTMLParagraphElement | null>(null)
+
+  useEffect(() => {
+    const measure = () => {
+      const el = ref.current
+      if (!el) return
+      // Compare against the clamped height, so this must run while collapsed.
+      if (!expanded) setOverflows(el.scrollHeight > el.clientHeight + 1)
+    }
+    measure()
+    // Rotating a phone or resizing changes how many lines fit.
+    window.addEventListener("resize", measure)
+    return () => window.removeEventListener("resize", measure)
+  }, [text, expanded])
+
+  return (
+    <div className="card__summary-wrap">
+      <p ref={ref} className={`card__summary ${expanded ? "card__summary--open" : ""}`}>
+        {text}
+      </p>
+      {(overflows || expanded) && (
+        <button
+          className="card__summary-toggle"
+          aria-expanded={expanded}
+          onClick={e => { e.preventDefault(); e.stopPropagation(); setExpanded(v => !v) }}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  )
+}
 
 // ── Tag list with expand/collapse ─────────────────────────────────────────────
 function TagList({ tags, className, kind = "tags" }: {
@@ -284,7 +290,7 @@ function StoryCard({ story }: { story: StoryCard }) {
     setImporting(true)
     try {
       const fd = new FormData(); fd.append("url", story.url)
-      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const r = await fetch(`/api/library/import-url`, { method: "POST", body: fd })
       const data = await r.json()
       if (data.id) {
         setImportedId(data.id)
@@ -300,22 +306,12 @@ function StoryCard({ story }: { story: StoryCard }) {
     }
   }
 
-  // External link: FicAlley is defunct, link to Wayback. Snapshots were crawled with
-  // the explicit :80 port in the URL, so we need to inject it for Wayback to match.
-  const externalUrl = (() => {
-    if (story.site !== "fictionalley") return story.url
-    let u = story.url
-    if (u.includes("fictionalley.org") && !u.includes("fictionalley.org:")) {
-      u = u.replace("fictionalley.org/", "fictionalley.org:80/")
-    }
-    return `https://web.archive.org/web/2010/${u}`
-  })()
-  const externalLabel = story.site === "fictionalley"
-    ? "Open on Wayback ↗"
-    : `Open on ${SITE_LABELS[story.site] ?? story.site} ↗`
+  const { href: externalUrl, label: externalLabel } = storyLink(story, SITE_LABELS)
 
-  // Can we one-click import? Only sites FicHub handles, and not already hosted.
-  const canImport = !story.is_hosted && (story.site === "ao3" || story.site === "ffnet")
+  // Can we one-click import? Only sites FicHub handles, not already hosted, and
+  // not a metadata-only seed row — there is no real page for FicHub to fetch.
+  const canImport = !story.is_hosted && !isSeedUrl(story.url)
+    && (story.site === "ao3" || story.site === "ffnet")
 
   return (
     <article className={`card ${story.is_live ? "card--live" : ""}`}>
@@ -337,9 +333,16 @@ function StoryCard({ story }: { story: StoryCard }) {
           </div>
         </div>
         <p className="card__byline">
-          {story.author_url
-            ? <a href={story.author_url} target="_blank" rel="noopener noreferrer">{story.author}</a>
-            : story.author}
+          {/* Clicking the author browses everything they wrote, ACROSS archives —
+              an AO3 or FF.net user page only ever shows what they posted there. */}
+          <Link href={`/?author=${encodeURIComponent(story.author)}`}
+            className="card__author-link" title={`All works by ${story.author}`}>
+            {story.author}
+          </Link>
+          {story.author_url && (
+            <a href={story.author_url} target="_blank" rel="noopener noreferrer"
+              className="card__author-ext" title="Author's page on the original site">↗</a>
+          )}
           {story.fandoms.length > 0 && (
             <> · <span className="card__fandom">
               {story.fandoms.slice(0, 2).map((f, i) => (
@@ -354,7 +357,7 @@ function StoryCard({ story }: { story: StoryCard }) {
         </p>
       </div>
 
-      {story.summary && <p className="card__summary">{story.summary}</p>}
+      {story.summary && <Summary text={story.summary} />}
 
       <div className="card__meta">
         {story.word_count > 0
@@ -434,7 +437,7 @@ function EmptyState({ onPick, onSurprise }: { onPick: (q: string) => void; onSur
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-export default function SearchPage() {
+function SearchPageInner() {
   const router     = useRouter()
   const pathname   = usePathname()
   const rawParams  = useSearchParams()
@@ -446,6 +449,17 @@ export default function SearchPage() {
   const [query,   setQuery]   = useState(get("q") ?? "")
   const [sites,   setSites]   = useState<string[]>(csv(get("sites") ?? "ao3,ffnet,fictionalley"))
   const [explicit, setExplicit] = useState(get("explicit") === "true")
+  // Most bulk-imported rows carry no ship/character data at all. Off by default so
+  // a ship filter returns stories that actually have that ship; on, it widens the
+  // net to include stories whose metadata we simply never captured.
+  const [includeUnknown, setIncludeUnknown] = useState(get("include_unknown") === "true")
+  // Set by clicking an author's name: browse their whole catalogue across archives.
+  const [authorFilter, setAuthorFilter] = useState(get("author") ?? "")
+  // How multiple values inside one filter combine. "all" finds crossovers and
+  // tag combinations; "any" is what you want when one thing is split across
+  // several spellings, which is common for fandoms.
+  const [matchMode, setMatchMode] = useState<"all" | "any">(
+    get("match_mode") === "any" ? "any" : "all")
 
   // Include filters
   const [incFandoms,  setIncFandoms]  = useState(csv(get("fandoms")))
@@ -641,12 +655,15 @@ export default function SearchPage() {
       word_count_max:        wordMax ?? pq.wordCountMax ?? undefined,
       updated_after:         updatedAfter || pq.updatedAfter || undefined,
       explicit,
+      author:                authorFilter || undefined,
+      match_mode:            matchMode,
+      include_unknown:       includeUnknown || undefined,
       search_within:         searchWithin || undefined,
       sort,
       page:                  pg,
       per_page:              20,
     }
-  }, [query, sites, explicit, incFandoms, incChars, incShips, incTags, incRatings,
+  }, [query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
       status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort])
 
@@ -732,7 +749,8 @@ export default function SearchPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
       incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
-      language, wordMin, wordMax, updatedAfter, explicit, sort])
+      language, wordMin, wordMax, updatedAfter, explicit, includeUnknown, authorFilter,
+      matchMode, sort])
 
   const removeToken = (raw: string) =>
     setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim())
@@ -773,20 +791,13 @@ export default function SearchPage() {
   return (
     <div className="shell">
       {/* ── Header ── */}
-      <header className="header">
-        <span className="logo">Fic<em>Atlas</em></span>
-        <div className="header__right">
-          <OfflineLink href="/library" className="header__link">Library</OfflineLink>
-          <Link href="/settings" className="header__link">Settings</Link>
-          <UserMenu />
-          <IndexStatus />
-          <label className="toggle-label">
-            <input type="checkbox" checked={explicit} onChange={e => setExplicit(e.target.checked)} className="sr-only" />
-            <span className="toggle-track"><span className="toggle-thumb" /></span>
-            <span>Explicit</span>
-          </label>
-        </div>
-      </header>
+      <SiteHeader current="search">
+        <label className="toggle-label">
+          <input type="checkbox" checked={explicit} onChange={e => setExplicit(e.target.checked)} className="sr-only" />
+          <span className="toggle-track"><span className="toggle-thumb" /></span>
+          <span>Explicit</span>
+        </label>
+      </SiteHeader>
 
       <div className="layout">
         {/* Mobile filter backdrop — tap to close the drawer */}
@@ -810,6 +821,35 @@ export default function SearchPage() {
             <Pills options={SITE_OPTIONS} selected={sites}
               onToggle={id => tog(sites, setSites, id)}
               highlighted={fromSearch("sites")} />
+          </div>
+
+          <div className="sidebar__group">
+            <label className="sidebar__label">Match multiple values</label>
+            <div className="match-mode">
+              <button className={`match-mode__btn ${matchMode === "all" ? "match-mode__btn--on" : ""}`}
+                onClick={() => setMatchMode("all")}
+                title="A story must have EVERY value you pick — use this to find crossovers.">
+                All of them
+              </button>
+              <button className={`match-mode__btn ${matchMode === "any" ? "match-mode__btn--on" : ""}`}
+                onClick={() => setMatchMode("any")}
+                title="A story needs just ONE of the values — use this when a fandom is split across several spellings.">
+                Any of them
+              </button>
+            </div>
+            <p className="match-mode__hint">
+              {matchMode === "all"
+                ? "Stories carrying every value you pick — finds crossovers."
+                : "Stories carrying any one value — combines split or variant tags."}
+            </p>
+          </div>
+
+          <div className="sidebar__group">
+            <label className="checkbox-row" title="Most bulk-imported stories have no ship or character tags. By default they are excluded from those filters, so a filter returns only stories that genuinely match.">
+              <input type="checkbox" checked={includeUnknown}
+                onChange={e => setIncludeUnknown(e.target.checked)} />
+              <span>Include stories with missing info</span>
+            </label>
           </div>
 
           <hr className="sidebar__rule" />
@@ -1046,9 +1086,35 @@ export default function SearchPage() {
             <>
               <div className="results-bar">
                 <span className="results-bar__count">
-                  <strong>{results.total.toLocaleString()}{results.count_is_capped ? "+" : ""}</strong> stories
+                  {/* The backend counts to a ceiling of 5000 and stops, so a
+                      capped total literally arrives as 5001. Printing that as
+                      "5,001+" leaked the implementation and read as a precise
+                      figure; it means "more than 5,000". */}
+                  <strong>
+                    {results.count_is_capped
+                      ? `${(5000).toLocaleString()}+`
+                      : results.total.toLocaleString()}
+                  </strong>{" "}
+                  {results.total === 1 && !results.count_is_capped ? "story" : "stories"}
+                  {/* Which slice of them you are actually looking at. */}
+                  {results.total > results.per_page && (
+                    <span className="results-bar__range">
+                      {" "}· showing {((results.page - 1) * results.per_page + 1).toLocaleString()}–
+                      {Math.min(results.page * results.per_page,
+                                results.count_is_capped ? 5000 : results.total).toLocaleString()}
+                    </span>
+                  )}
                   {results.sites_searched.length > 0 && ` · ${results.sites_searched.map(s => SITE_LABELS[s] ?? s).join(" + ")}`}
                   {liveCount > 0 && <span className="results-bar__live"> +{liveCount} live</span>}
+                  {/* Without this it looks like the filters are broken: results
+                      appear that have no value for the field being filtered. */}
+                  {includeUnknown && (
+                    <button className="results-bar__loose"
+                      onClick={() => setIncludeUnknown(false)}
+                      title="Results include stories with no data for the fields you filtered on. Click to show only confirmed matches.">
+                      · incl. missing info ✕
+                    </button>
+                  )}
                 </span>
                 <span className="results-bar__actions">
                   {sites.includes("ao3") && (
@@ -1065,9 +1131,28 @@ export default function SearchPage() {
                 {results.results.length === 0 ? (
                   <div className="no-results">
                     <p className="no-results__title">No stories matched</p>
-                    <p className="no-results__sub">
-                      Try removing a filter, broadening the word count, or checking a different site.
-                    </p>
+                    {/* Ship/character/tag data is missing for most bulk-imported
+                        stories, so a strict filter on those is the likeliest reason
+                        for an empty page. Say so, and offer the fix directly. */}
+                    {!includeUnknown && (incShips.length || incChars.length || incTags.length) ? (
+                      <>
+                        <p className="no-results__sub">
+                          No indexed story lists {incShips.length ? "that relationship"
+                            : incChars.length ? "that character" : "that tag"}.
+                          Most imported stories carry no {incShips.length ? "relationship"
+                            : incChars.length ? "character" : "tag"} data at all, so they are
+                          excluded from this filter.
+                        </p>
+                        <button className="btn btn--primary no-results__fetch"
+                          onClick={() => setIncludeUnknown(true)}>
+                          Include stories with missing info
+                        </button>
+                      </>
+                    ) : (
+                      <p className="no-results__sub">
+                        Try removing a filter, broadening the word count, or checking a different site.
+                      </p>
+                    )}
                     {sites.includes("ao3") && (
                       <button className="btn btn--primary no-results__fetch"
                         onClick={refreshFromAO3} disabled={refreshing}>
@@ -1104,5 +1189,13 @@ export default function SearchPage() {
         </main>
       </div>
     </div>
+  )
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={null}>
+      <SearchPageInner />
+    </Suspense>
   )
 }

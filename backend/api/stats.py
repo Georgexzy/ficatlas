@@ -1,9 +1,11 @@
 """Stats endpoint — per-site counts, totals, last-updated info"""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import bindparam, func, text
 from db.session import get_db
 from models.story import Story
+from provenance import PROVENANCE_TAGS
+from api.auth import require_admin
 
 router = APIRouter()
 
@@ -16,8 +18,16 @@ _FACET_COLUMNS = {
 }
 
 
-@router.get("/sites")
-async def site_stats(db: Session = Depends(get_db)):
+# Same story as /totals: this feeds the index status widget on every page load,
+# but grouping and taking max(indexed_at) over the whole table can't be answered
+# from an index, so each call was a full scan (~1.8s at 4M rows). Cached for the
+# same reason — these are informational counts that move slowly.
+_SITES_TTL_SECONDS = 300
+_sites_cache: list | None = None
+_sites_cached_at: float = 0.0
+
+
+def _compute_sites(db: Session) -> list:
     rows = (db.query(Story.site, func.count(Story.id), func.max(Story.indexed_at))
             .group_by(Story.site).all())
     return [
@@ -29,19 +39,110 @@ async def site_stats(db: Session = Depends(get_db)):
         for r in rows
     ]
 
+
+def _recompute_sites() -> None:
+    global _sites_cache, _sites_cached_at
+    import time
+    from db.session import db_session
+    try:
+        with db_session() as db:
+            _sites_cache = _compute_sites(db)
+        _sites_cached_at = time.monotonic()
+    except Exception:
+        pass  # keep serving the previous numbers
+
+
+@router.get("/sites")
+async def site_stats(
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
+    refresh: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    global _sites_cache, _sites_cached_at
+    import time
+    now = time.monotonic()
+    fresh = _sites_cache is not None and (now - _sites_cached_at) < _SITES_TTL_SECONDS
+    if not refresh and fresh:
+        return _sites_cache
+
+    # Same stale-while-revalidate as /totals: this grouping is a full scan (~9s at
+    # 18M rows), so never make a page load wait on it once we have numbers.
+    if not refresh and _sites_cache is not None and background_tasks is not None:
+        background_tasks.add_task(_recompute_sites)
+        return _sites_cache
+
+    _sites_cache = _compute_sites(db)
+    _sites_cached_at = now
+    return _sites_cache
+
+# The index status widget calls /totals on every page load, but these are
+# whole-table aggregates — count(*) and sum(word_count) can't be answered from an
+# index, so each call scanned every row. Five separate queries meant several
+# passes over the table (~2.3s at 2.3M rows, and growing with every import).
+#
+# One pass now computes all five figures, and the result is cached briefly. These
+# numbers move slowly and are purely informational, so a slightly stale count is
+# fine; the page load no longer waits on a table scan.
+_TOTALS_TTL_SECONDS = 300
+_totals_cache: dict | None = None
+_totals_cached_at: float = 0.0
+
+def _recompute_totals() -> None:
+    """Refresh the cached totals off the request path."""
+    global _totals_cache, _totals_cached_at
+    import time
+    from db.session import db_session
+    try:
+        with db_session() as db:
+            row = db.execute(_TOTALS_SQL).mappings().first()
+        _totals_cache = {
+            "stories": row["stories"], "hosted": row["hosted"],
+            "total_words": int(row["total_words"]), "dlp": row["dlp"],
+            "hpffa": row["hpffa"],
+        }
+        _totals_cached_at = time.monotonic()
+    except Exception:
+        pass  # keep serving the previous numbers
+
+
+_TOTALS_SQL = text("""
+    SELECT count(*)                                                   AS stories,
+           count(*) FILTER (WHERE is_hosted)                          AS hosted,
+           coalesce(sum(word_count), 0)                               AS total_words,
+           count(*) FILTER (WHERE tags @> ARRAY['dlp_library'])       AS dlp,
+           count(*) FILTER (WHERE tags @> ARRAY['hpffa_archive'])     AS hpffa
+    FROM stories
+""")
+
+
 @router.get("/totals")
-async def total_stats(db: Session = Depends(get_db)):
-    stories = db.query(func.count(Story.id)).scalar() or 0
-    hosted  = db.query(func.count(Story.id)).filter(Story.is_hosted == True).scalar() or 0
-    total_words = db.query(func.sum(Story.word_count)).scalar() or 0
-    dlp = db.query(func.count(Story.id)).filter(
-        Story.tags.any("dlp_library")  # type: ignore[arg-type]
-    ).scalar() or 0
-    hpffa = db.query(func.count(Story.id)).filter(
-        Story.tags.any("hpffa_archive")  # type: ignore[arg-type]
-    ).scalar() or 0
-    return {"stories": stories, "hosted": hosted, "total_words": int(total_words),
-            "dlp": dlp, "hpffa": hpffa}
+async def total_stats(
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
+    refresh: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    global _totals_cache, _totals_cached_at
+    import time
+    now = time.monotonic()
+    fresh = _totals_cache is not None and (now - _totals_cached_at) < _TOTALS_TTL_SECONDS
+    if not refresh and fresh:
+        return _totals_cache
+
+    # Stale-while-revalidate. The scan is ~10s at 18M rows and grows with the
+    # index, so once we have any numbers at all we serve them immediately and
+    # recompute behind the response rather than making someone wait for a widget.
+    if not refresh and _totals_cache is not None and background_tasks is not None:
+        background_tasks.add_task(_recompute_totals)
+        return _totals_cache
+
+    row = db.execute(_TOTALS_SQL).mappings().first()
+    _totals_cache = {
+        "stories": row["stories"], "hosted": row["hosted"],
+        "total_words": int(row["total_words"]), "dlp": row["dlp"],
+        "hpffa": row["hpffa"],
+    }
+    _totals_cached_at = now
+    return _totals_cache
 
 
 @router.get("/suggest")
@@ -58,32 +159,43 @@ async def suggest(
         kind = "fandom"
     ql = q.strip().lower()
 
-    # Try the precomputed facet table first.
+    # Try the precomputed facet table first. Provenance is filtered at read time as
+    # well as at rebuild time, so a facets table built before this rule existed
+    # still won't suggest import tags.
+    prov = sorted(PROVENANCE_TAGS)
     try:
         if ql:
             rows = db.execute(text(
                 "SELECT value, count FROM facets "
-                "WHERE kind = :kind AND value ILIKE :pat "
+                "WHERE kind = :kind AND value ILIKE :pat AND NOT (value = ANY(:provenance)) "
                 "ORDER BY count DESC LIMIT :lim"
-            ), {"kind": kind, "pat": f"%{ql}%", "lim": limit}).fetchall()
+            ), {"kind": kind, "pat": f"%{ql}%", "lim": limit, "provenance": prov}).fetchall()
         else:
             rows = db.execute(text(
-                "SELECT value, count FROM facets WHERE kind = :kind "
+                "SELECT value, count FROM facets "
+                "WHERE kind = :kind AND NOT (value = ANY(:provenance)) "
                 "ORDER BY count DESC LIMIT :lim"
-            ), {"kind": kind, "lim": limit}).fetchall()
+            ), {"kind": kind, "lim": limit, "provenance": prov}).fetchall()
         if rows:
             return [{"value": r[0], "count": r[1]} for r in rows]
     except Exception:
         pass
 
-    # Fallback: bounded live scan (only if facets table empty/unbuilt).
+    # Fallback, used only while the facets table is empty (never refreshed, or a
+    # rebuild is in flight). This is a SAMPLE, not a survey: the LIMIT applies to
+    # unnested values in physical heap order, so both the suggestions and their
+    # counts reflect an arbitrary slice of the table rather than the whole index.
+    # Good enough to keep autocomplete usable; POST /api/stats/refresh-facets for
+    # accurate values.
     col = _FACET_COLUMNS[kind]
     sql = text(
         f"SELECT v AS value, count(*) AS c FROM ("
         f"  SELECT unnest({col}) AS v FROM stories LIMIT 200000"
-        f") s WHERE (:q = '' OR v ILIKE :pat) GROUP BY v ORDER BY c DESC LIMIT :lim"
+        f") s WHERE (:q = '' OR v ILIKE :pat) AND NOT (v = ANY(:provenance)) "
+        f"GROUP BY v ORDER BY c DESC LIMIT :lim"
     )
-    rows = db.execute(sql, {"q": ql, "pat": f"%{ql}%", "lim": limit}).fetchall()
+    rows = db.execute(sql, {"q": ql, "pat": f"%{ql}%", "lim": limit,
+                            "provenance": sorted(PROVENANCE_TAGS)}).fetchall()
     return [{"value": r[0], "count": r[1]} for r in rows]
 
 
@@ -96,13 +208,15 @@ async def suggest_canonical(
 ):
     """Combined fandom/tag autocomplete for the Import tab.
 
-    Index-first, AO3-canonical fallback: suggest fandoms we already have (instant),
-    and when the typed text doesn't match the index, query AO3's public autocomplete
-    so the user can discover and correctly spell NEW fandoms to scrape. Picking a
-    canonical suggestion guarantees valid AO3 tag syntax (avoids the malformed-tag
-    URLs that broke earlier discover jobs).
+    Index first, then AO3's canonical vocabulary for fandoms we do not hold —
+    which is the case that matters here, since this box exists to find something
+    new to scrape. Both come from our own facets table; see
+    ao3_canonical_fandoms.py for how the canonical half gets there without
+    hitting the /autocomplete/ endpoint AO3 disallows.
 
-    Returns: [{value, count, source}] where source is 'index' or 'ao3'.
+    Returns: [{value, count, source}]. 'index' means works we hold and the count
+    is ours; 'ao3' means a canonical fandom we have not indexed and the count is
+    AO3's.
     """
     ql = q.strip().lower()
     out: list[dict] = []
@@ -124,50 +238,110 @@ async def suggest_canonical(
     except Exception:
         pass
 
-    # 2) If we have few index hits, top up with AO3 canonical tags
-    if len(out) < limit:
+    # 2) Top up with AO3's canonical fandom names for anything we do not hold.
+    #
+    # This used to proxy AO3's /autocomplete/ per keystroke, which their
+    # robots.txt disallows outright. The vocabulary now comes from our own
+    # facets table, synced occasionally by ao3_canonical_fandoms.py from the
+    # eleven /media/<category>/fandoms pages — not disallowed, and eleven
+    # requests total rather than one per character typed.
+    #
+    # The top-up matters most exactly where the index cannot help: this box
+    # exists to find a fandom to START scraping, so not having it yet is the
+    # normal case, and a canonical name is what makes the resulting tag URL
+    # valid.
+    if kind == "fandom" and len(out) < limit:
         try:
-            import httpx
-            from live_fetch.ao3_feeds import HEADERS, AO3_LIVE_TIMEOUT
-            # AO3's public autocomplete endpoint, e.g.
-            # /autocomplete/fandom?term=harry  → [{id, name}, ...]
-            ao3_kind = {"fandom": "fandom", "relationship": "relationship",
-                        "character": "character", "tag": "freeform"}.get(kind, "fandom")
-            url = f"https://archiveofourown.org/autocomplete/{ao3_kind}?term={ql}"
-            async with httpx.AsyncClient(headers=HEADERS, timeout=AO3_LIVE_TIMEOUT,
-                                         follow_redirects=True) as client:
-                r = await client.get(url)
-                if r.status_code == 200:
-                    for item in r.json():
-                        name = (item.get("name") or "").strip()
-                        if name and name.lower() not in seen:
-                            seen.add(name.lower())
-                            out.append({"value": name, "count": None, "source": "ao3"})
-                        if len(out) >= limit:
-                            break
+            rows = db.execute(text(
+                "SELECT value, count FROM facets "
+                "WHERE kind = 'fandom_ao3' AND value ILIKE :pat "
+                "ORDER BY count DESC LIMIT :lim"
+            ), {"pat": f"%{ql}%", "lim": limit}).fetchall()
+            for r in rows:
+                if r[0].lower() in seen:
+                    continue
+                seen.add(r[0].lower())
+                out.append({"value": r[0], "count": r[1], "source": "ao3"})
+                if len(out) >= limit:
+                    break
         except Exception:
-            # AO3 slow/unreachable — index suggestions are still useful on their own
             pass
 
     return out[:limit]
 
 
 @router.post("/refresh-facets")
-async def refresh_facets(db: Session = Depends(get_db)):
-    """Rebuild the facets table from current stories. Run this after big imports
-    so autocomplete reflects the latest data. Takes a while on millions of rows,
-    but it's a one-shot batch, not per-request."""
+async def refresh_facets(
+    min_count: int = Query(1, ge=1, description="Drop values rarer than this"),
+    db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
+    """Rebuild the facets table from current stories. Run this after big imports so
+    autocomplete reflects the latest data. It's a one-shot batch (four grouped
+    scans of the whole table), not a per-request cost.
+
+    Built into a staging table and swapped in at the end. The previous version
+    deleted each kind before repopulating it, so for the several minutes the
+    rebuild took, autocomplete saw an empty table and silently fell back to the
+    sampled live scan — and a failure part-way through left it that way.
+    """
     built = {}
-    for kind, col in _FACET_COLUMNS.items():
-        db.execute(text("DELETE FROM facets WHERE kind = :k"), {"k": kind})
+    db.execute(text("DROP TABLE IF EXISTS facets_rebuild"))
+    db.execute(text(
+        "CREATE TABLE facets_rebuild ("
+        "  kind VARCHAR(20) NOT NULL, value TEXT NOT NULL,"
+        "  count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (kind, value))"
+    ))
+    try:
+        for kind, col in _FACET_COLUMNS.items():
+            # Provenance tags ("ffnet_dump", "ao3_meta_dump", …) live in the same
+            # array as content tags but describe which import a row came from, not
+            # what it is about. With millions of uses each they dominated tag
+            # autocomplete — typing "dump" suggested ffnet_dump (3.4M) ahead of the
+            # real tag "Infodumping" (9). Keep them filterable, but never suggest
+            # them as content tags.
+            db.execute(text(
+                f"INSERT INTO facets_rebuild (kind, value, count) "
+                f"SELECT :k, v, count(*) AS c FROM ("
+                f"  SELECT unnest({col}) AS v FROM stories"
+                f") s WHERE v IS NOT NULL AND v <> '' AND NOT (v = ANY(:provenance)) "
+                f"GROUP BY v HAVING count(*) >= :min_count"
+            ), {"k": kind, "min_count": min_count,
+                "provenance": sorted(PROVENANCE_TAGS)})
+            built[kind] = db.execute(
+                text("SELECT count(*) FROM facets_rebuild WHERE kind = :k"), {"k": kind}
+            ).scalar()
+
+        # Carry over kinds that are NOT derived from stories. The rebuild below
+        # swaps a freshly-built table in and drops the old one, so anything this
+        # loop did not produce would be silently destroyed — and the AO3
+        # canonical vocabulary costs eleven network requests to regenerate,
+        # which a local facets rebuild has no business triggering.
+        carried = db.execute(text(
+            "INSERT INTO facets_rebuild (kind, value, count) "
+            "SELECT kind, value, count FROM facets WHERE kind NOT IN :kinds "
+            "ON CONFLICT (kind, value) DO NOTHING"
+        ).bindparams(bindparam("kinds", expanding=True)),
+            {"kinds": list(_FACET_COLUMNS.keys())}).rowcount
+        if carried:
+            built["carried_over"] = carried
+
+        # Swap. Readers see the old table right up until this commit.
+        db.execute(text("DROP TABLE IF EXISTS facets_old"))
+        db.execute(text("ALTER TABLE facets RENAME TO facets_old"))
+        db.execute(text("ALTER TABLE facets_rebuild RENAME TO facets"))
         db.execute(text(
-            f"INSERT INTO facets (kind, value, count) "
-            f"SELECT :k, v, count(*) FROM ("
-            f"  SELECT unnest({col}) AS v FROM stories"
-            f") s WHERE v IS NOT NULL AND v <> '' "
-            f"GROUP BY v"
-        ), {"k": kind})
-        n = db.execute(text("SELECT count(*) FROM facets WHERE kind = :k"), {"k": kind}).scalar()
-        built[kind] = n
-    db.commit()
+            "CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm "
+            "ON facets USING gin (value gin_trgm_ops)"
+        ))
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC)"
+        ))
+        db.execute(text("DROP TABLE IF EXISTS facets_old"))
+        db.commit()
+    except Exception:
+        db.rollback()
+        db.execute(text("DROP TABLE IF EXISTS facets_rebuild"))
+        db.commit()
+        raise
     return {"ok": True, "facets": built}

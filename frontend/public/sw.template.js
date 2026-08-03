@@ -22,8 +22,8 @@
 // change to the precache set or fetch strategy, and forgetting meant the old
 // cache was never evicted — entries for superseded hashed assets accumulated
 // build after build. Tying it to the build removes the step and the mistake.
-const CACHE = "ficatlas-shell-20260803145843"
-const PRECACHE = ["/","/library","/login","/settings","/account","/story/offline-shell","/story/offline-shell/chapter/1","/_next/static/chunks/polyfills.js","/_next/static/development/_buildManifest.js","/_next/static/development/_ssgManifest.js"]
+const CACHE = "__CACHE_VERSION__"
+const PRECACHE = __PRECACHE_MANIFEST__
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

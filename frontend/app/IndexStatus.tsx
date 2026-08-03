@@ -14,6 +14,7 @@ const SITE_LABELS: Record<string, string> = {
 export default function IndexStatus() {
   const [open, setOpen] = useState(false)
   const [sites, setSites] = useState<SiteStat[]>([])
+  const [built, setBuilt] = useState<string | null>(null)
   const [totals, setTotals] = useState<Totals | null>(null)
 
   useEffect(() => {
@@ -23,6 +24,11 @@ export default function IndexStatus() {
   useEffect(() => {
     if (!open) return
     fetch(`${API_BASE}/api/stats/sites`).then(r => r.json()).then(setSites).catch(() => {})
+    // cache: "no-store" so this reports the BUILD THIS PAGE IS RUNNING, not
+    // whatever the service worker has cached — the whole point is to tell a
+    // stale bundle apart from a real bug.
+    fetch("/build.json", { cache: "no-store" })
+      .then(r => r.json()).then(d => setBuilt(d.built)).catch(() => {})
   }, [open])
 
   useEffect(() => {
@@ -32,9 +38,31 @@ export default function IndexStatus() {
     return () => window.removeEventListener("keydown", onKey)
   }, [open])
 
-  const fmt = (n: number) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(1)}M`
-                       : n >= 1000 ? `${(n/1000).toFixed(0)}k`
-                       : String(n)
+  // Was millions-only, so the index's 126 billion words rendered as "126305.5M".
+  const fmt = (n: number) =>
+      n >= 1_000_000_000_000 ? `${(n/1_000_000_000_000).toFixed(1)}T`
+    : n >= 1_000_000_000     ? `${(n/1_000_000_000).toFixed(1)}B`
+    : n >= 1_000_000         ? `${(n/1_000_000).toFixed(1)}M`
+    : n >= 1_000             ? `${(n/1_000).toFixed(0)}k`
+    : String(n)
+
+  // "3 hours ago" reads better than a timestamp for freshness at a glance.
+  const ago = (iso: string | null) => {
+    if (!iso) return "never"
+    const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000))
+    if (mins < 1) return "just now"
+    if (mins < 60) return `${mins}m ago`
+    const hrs = Math.round(mins / 60)
+    if (hrs < 24) return `${hrs}h ago`
+    return `${Math.round(hrs / 24)}d ago`
+  }
+
+  const siteTotal = sites.reduce((a, s) => a + (s.count || 0), 0)
+  const newestIndexed = sites
+    .map(s => s.last_indexed)
+    .filter(Boolean)
+    .sort()
+    .pop() as string | undefined
 
   return (
     <div className="index-status">
@@ -63,17 +91,41 @@ export default function IndexStatus() {
               </dl>
             )}
 
+            {/* A bar per archive: the share each contributes is the thing worth
+                seeing, and a column of raw numbers doesn't convey it. */}
             <div className="index-status__sites">
-              {sites.map(s => (
-                <div key={s.site} className="index-status__site">
-                  <span className={`badge badge--site-${s.site}`}>{SITE_LABELS[s.site] ?? s.site}</span>
-                  <span className="index-status__count">{s.count.toLocaleString()}</span>
-                </div>
-              ))}
+              {sites.map(s => {
+                const pct = siteTotal ? (s.count / siteTotal) * 100 : 0
+                return (
+                  <div key={s.site} className="index-status__site">
+                    <div className="index-status__site-row">
+                      <span className={`badge badge--site-${s.site}`}>{SITE_LABELS[s.site] ?? s.site}</span>
+                      <span className="index-status__count">
+                        {s.count.toLocaleString()}
+                        <span className="index-status__pct">{pct.toFixed(0)}%</span>
+                      </span>
+                    </div>
+                    <div className="index-status__meter">
+                      <div className={`index-status__meter-fill index-status__meter-fill--${s.site}`}
+                        style={{ width: `${Math.max(pct, 0.5)}%` }} />
+                    </div>
+                  </div>
+                )
+              })}
             </div>
 
+            {built && (
+              <p className="index-status__build">
+                app build {new Date(built).toLocaleString(undefined,
+                  { dateStyle: "medium", timeStyle: "short" })}
+              </p>
+            )}
+
             <p className="index-status__hint">
-              Bulk-imported from official archives. Live results pulled on-demand.
+              {newestIndexed
+                ? <>Last new story indexed <strong>{ago(newestIndexed)}</strong>. Updates to
+                   tracked fandoms are picked up automatically.</>
+                : <>Bulk-imported from official archives. Live results pulled on-demand.</>}
             </p>
           </div>
         </>

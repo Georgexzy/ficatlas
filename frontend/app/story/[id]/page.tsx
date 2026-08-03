@@ -3,6 +3,8 @@ import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory } from "@/lib/offline"
+import { storyLink, isSeedUrl } from "@/lib/storyLinks"
+import SiteHeader from "@/app/SiteHeader"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -21,6 +23,18 @@ interface StoryDetail {
 const SITE_LABELS: Record<string, string> = {
   ao3: "AO3", ffnet: "FF.net", fictionalley: "FicAlley",
   royalroad: "Royal Road", spacebattles: "SpaceBattles",
+}
+
+// This used to be `status === "complete" ? "Complete" : "In Progress"`, which
+// states "In Progress" for anything that is not explicitly finished. Most of
+// the index is neither: the bulk dumps carry no completion data, so 5.3M FF.net
+// and 8.5k FicAlley works are stored as `unknown` precisely so we stop claiming
+// they are unfinished. A binary label put that claim straight back on the page.
+const STATUS_LABEL: Record<string, string> = {
+  complete: "Complete",
+  in_progress: "In Progress",
+  abandoned: "Abandoned",
+  unknown: "Not stated",
 }
 
 export default function StoryPage() {
@@ -123,12 +137,12 @@ export default function StoryPage() {
     } catch {}
   }
 
-  if (error) return <div className="reader-shell"><Link href="/" className="back-link">← Back to search</Link><div className="alert alert--error">{error}</div></div>
-  if (!story) return <div className="reader-shell"><Link href="/" className="back-link">← Back to search</Link><p className="loading">Loading…</p></div>
+  if (error) return <div className="reader-shell"><SiteHeader /><div className="alert alert--error">{error}</div></div>
+  if (!story) return <div className="reader-shell"><SiteHeader /><p className="loading">Loading…</p></div>
 
   return (
     <div className="reader-shell">
-      <Link href="/" className="back-link">← Back to search</Link>
+      <SiteHeader />
 
       <article className="story-detail">
         <header className="story-detail__header">
@@ -169,27 +183,25 @@ export default function StoryPage() {
               </Link>
             )
           })()}
-          {!story.is_hosted && (story.site === "ao3" || story.site === "ffnet") && (
+          {/* Seed rows are excluded: there is no real page for FicHub to fetch. */}
+          {!story.is_hosted && !isSeedUrl(story.url)
+            && (story.site === "ao3" || story.site === "ffnet") && (
             <button className="btn btn--primary" onClick={importAndRead} disabled={importing}>
               {importing ? "Importing…" : "Import & Read here"}
             </button>
           )}
-          {!story.is_hosted && story.site !== "ao3" && story.site !== "ffnet" && (() => {
-            // FicAlley snapshots were crawled with explicit :80 port — inject if missing
-            let target = story.url
-            if (story.site === "fictionalley") {
-              let u = story.url
-              if (u.includes("fictionalley.org") && !u.includes("fictionalley.org:")) {
-                u = u.replace("fictionalley.org/", "fictionalley.org:80/")
-              }
-              target = `https://web.archive.org/web/2010/${u}`
-            }
-            return (
-              <a href={target} target="_blank" rel="noopener noreferrer" className="btn btn--primary">
-                Read on {story.site === "fictionalley" ? "Wayback" : (SITE_LABELS[story.site] ?? story.site)} ↗
-              </a>
-            )
-          })()}
+          {/* Metadata-only seed rows have no page of their own, so they need this
+              link even though they are filed under AO3. */}
+          {!story.is_hosted
+            && (isSeedUrl(story.url) || (story.site !== "ao3" && story.site !== "ffnet"))
+            && (() => {
+              const { href, label } = storyLink(story, SITE_LABELS)
+              return (
+                <a href={href} target="_blank" rel="noopener noreferrer" className="btn btn--primary">
+                  {label}
+                </a>
+              )
+            })()}
           <button className={`btn ${bookmarked ? "btn--on" : ""}`} onClick={toggleBookmark}>
             {bookmarked ? "★ Bookmarked" : "☆ Bookmark"}
           </button>
@@ -270,7 +282,7 @@ export default function StoryPage() {
         <dl className="story-detail__meta">
           <div><dt>Words</dt><dd>{story.word_count.toLocaleString()}</dd></div>
           <div><dt>Chapters</dt><dd>{story.chapter_count}{story.chapter_count_total ? `/${story.chapter_count_total}` : "/?"}</dd></div>
-          <div><dt>Status</dt><dd>{story.status === "complete" ? "Complete" : "In Progress"}</dd></div>
+          <div><dt>Status</dt><dd>{STATUS_LABEL[story.status] ?? "Not stated"}</dd></div>
           {story.rating && <div><dt>Rating</dt><dd>{story.rating}</dd></div>}
           {story.kudos > 0 && <div><dt>Kudos</dt><dd>{story.kudos.toLocaleString()}</dd></div>}
           {story.hits > 0 && <div><dt>Hits</dt><dd>{story.hits.toLocaleString()}</dd></div>}
@@ -308,6 +320,19 @@ export default function StoryPage() {
               <Link key={t} href={`/?tags=${encodeURIComponent(t)}`} className="tag tag--clickable">{t}</Link>
             )}</div>
           </section>
+        )}
+        {/* Where this record came from. Kept out of the tag list above: these are
+            provenance, not content, and 61% of the index has nothing but these —
+            rendering them as tags made untagged stories look tagged. */}
+        {(story as any).sources?.length > 0 && (
+          <p className="story-detail__source">
+            Indexed from {(story as any).sources.join(" · ")}
+            {story.tags.length === 0 && (
+              <span className="story-detail__source-note">
+                {" "}— this source provides no content tags
+              </span>
+            )}
+          </p>
         )}
         {story.warnings?.filter(w => w !== "No Archive Warnings Apply").length > 0 && (
           <section className="story-detail__taggroup">
