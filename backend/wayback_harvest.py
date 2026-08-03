@@ -9,9 +9,16 @@ AO3 rate-limits to roughly 0.4 req/s per IP (see ao3_budget). At 20 works per
 listing page that is still weeks of continuous crawling, and every request of it
 is load on a nonprofit's servers.
 
-Wayback breaks that trade-off. archive.org has snapshotted AO3 work pages for
+Wayback changes that trade-off. archive.org has snapshotted AO3 work pages for
 years, and a snapshot is a byte-for-byte copy of the page including the summary,
 the tags, the dates and the stats. Fetching one costs AO3 nothing at all.
+
+It is not free throughput, though — archive.org rate-limits at least as firmly
+as AO3, and signals it by refusing connections rather than answering 429 (see
+_Budget.network_error, and the measurements behind BASE_INTERVAL). So this is
+not a fast route to closing the gap. What it is, is a route that does not spend
+AO3's capacity, which means it can run indefinitely alongside the AO3 loops
+instead of competing with them for the same budget.
 
 This is also the collection route the OTW explicitly considers legitimate: their
 statement on scraping (transformativeworks.org/ai-and-data-scraping-on-the-
@@ -56,18 +63,32 @@ log = logging.getLogger(__name__)
 CDX_URL = "http://web.archive.org/cdx/search/cdx"
 SNAPSHOT = "https://web.archive.org/web/{ts}id_/https://archiveofourown.org/works/{wid}"
 
-# Wayback is a CDN and tolerates far more than AO3 does, but it is still a
-# donation-funded nonprofit and it does return 429/503 under load. Same shape of
-# limiter as ao3_budget, different and much smaller starting interval — this is
-# the entire reason the module exists, so pacing it like AO3 would waste it.
-BASE_INTERVAL = float(os.getenv("WAYBACK_MIN_INTERVAL", "1.0"))
-MAX_INTERVAL = 60.0
+# Same shape of limiter as ao3_budget, tuned to what archive.org was measured to
+# actually allow rather than to what a CDN "should" tolerate.
+#
+# The first pass ran at 1s and that was far too fast. archive.org throttles by
+# refusing TCP connections rather than answering 429, so the harvest read the
+# refusals as noise and kept pushing until it was blocked outright: 9 of 10
+# requests refused, and still 5 of 6 refused at a 10-second gap after a minute
+# of cooling off. The block outlasts the request rate that caused it, which
+# means guessing upward is expensive and being wrong is not self-correcting.
+#
+# Hence a starting interval well above anything that drew a block, and a ceiling
+# high enough that a block turns into a genuine pause rather than a permanent
+# slow probe. This is still vastly cheaper than the AO3 path it replaces: the
+# constraint is politeness to archive.org, not throughput.
+BASE_INTERVAL = float(os.getenv("WAYBACK_MIN_INTERVAL", "5.0"))
+MAX_INTERVAL = float(os.getenv("WAYBACK_MAX_INTERVAL", "600.0"))
 BACKOFF = 2.0
 RECOVER = 0.9
 RECOVER_AFTER = 20
-# Consecutive transport failures before the shared interval widens. See
-# _Budget.network_error for why a single one must not.
-NET_ERRORS_BEFORE_BACKOFF = int(os.getenv("WAYBACK_NET_ERRORS", "4"))
+# Recovery is on a clock as well as a success count — see _Budget.reward. A
+# throttled host cannot produce the successes that a count-only rule needs to
+# climb back down, so the interval would stick at the ceiling forever.
+RECOVER_EVERY = float(os.getenv("WAYBACK_RECOVER_EVERY", "120"))
+# Consecutive connection failures before the interval widens. Small, because
+# from archive.org these ARE the throttle signal, not transport noise.
+NET_ERRORS_BEFORE_BACKOFF = int(os.getenv("WAYBACK_NET_ERRORS", "2"))
 
 HEADERS = {
     "User-Agent": "FicAtlas/0.1 (fanfiction search index; contact: admin@ficatlas.app)",
@@ -84,6 +105,7 @@ class _Budget:
         self._next = 0.0
         self._clean = 0
         self._net_errors = 0
+        self._last_recover = 0.0
         self.throttled = 0
         self.granted = 0
 
@@ -108,17 +130,21 @@ class _Budget:
             log.info(f"wayback budget: throttled -> {before:.1f}s to {self.interval:.1f}s")
 
     def network_error(self) -> None:
-        """A connection failed. Only treat a RUN of them as backpressure.
+        """A connection failed — which from archive.org means "slow down".
 
-        archive.org drops connections fairly often without being overloaded, and
-        widening the shared interval on every single blip is a ratchet: one
-        ConnectError doubles it, and recovery needs RECOVER_AFTER consecutive
-        clean requests, which cannot accumulate faster than the next blip
-        arrives. The fetch loop pinned itself at 57.6s that way — a batch of 20
-        taking nineteen minutes — while archive.org was in fact serving fine.
+        Measured, after this ran too fast for a while: 9 of 10 requests refused
+        at TCP connect, then 1 of 10 while a cooling-off period was still in
+        effect. archive.org does not answer 429 when it throttles a host; it
+        refuses the connection. So a ConnectError here is not a blip to be
+        tolerated, it is the rate-limit signal itself, and treating it as
+        transport noise is what let the harvest keep pushing while already cut
+        off.
 
-        A 429/503/504 is the server explicitly asking for less and still
-        penalises immediately; this is for the transport simply failing.
+        Still requires a short run rather than a single failure, because a real
+        one-off drop should not double the interval — but the run is small, and
+        recovery is time-based (see reward) so the interval cannot ratchet up
+        and stay there the way it did when recovery needed consecutive successes
+        that a throttled host could never produce.
         """
         with self._lock:
             self._net_errors += 1
@@ -128,12 +154,25 @@ class _Budget:
         self.penalise()
 
     def reward(self) -> None:
+        """A clean response. Narrow the interval, but only slowly and on a clock.
+
+        Recovery was originally "RECOVER_AFTER consecutive clean requests",
+        which deadlocks against a host that refuses most connections: the
+        successes needed to recover are exactly what being throttled prevents.
+        Requiring elapsed time instead means the interval always comes back down
+        eventually, even from a long block.
+        """
+        now = time.monotonic()
         with self._lock:
             self._clean += 1
-            self._net_errors = 0      # a success means the transport is healthy
-            if self._clean >= RECOVER_AFTER and self.interval > BASE_INTERVAL:
-                self._clean = 0
-                self.interval = max(self.interval * RECOVER, BASE_INTERVAL)
+            self._net_errors = 0
+            if self.interval <= BASE_INTERVAL:
+                return
+            if self._clean < RECOVER_AFTER or now - self._last_recover < RECOVER_EVERY:
+                return
+            self._clean = 0
+            self._last_recover = now
+            self.interval = max(self.interval * RECOVER, BASE_INTERVAL)
 
     def snapshot(self) -> dict:
         return {"interval": round(self.interval, 2), "granted": self.granted,
