@@ -277,18 +277,20 @@ def _pick_targets(limit: int | None) -> list:
     EXISTS` waited behind it on every API start, the lifespan never completed, and
     the whole app returned 500 until the transaction was killed.
 
-    Longest first: those are the stories people actually read.
+    Targets are chosen by how much is missing AND how likely the work is to be
+    seen, via gap_filler — not just "longest first" as before. Length is a crude
+    stand-in for readership and says nothing about how much a row actually
+    lacks, so a 200k-word story missing only its language outranked a widely-read
+    one with no summary, characters or dates at all.
+
+    Rows already checked and still empty fall to the back through the
+    crawled_at tiebreak, so the queue keeps advancing.
     """
+    from gap_filler import find_gaps
     with db_session() as db:
-        return db.execute(sql_text("""
-            SELECT id, site_id, word_count
-            FROM stories
-            WHERE site = 'ffnet'
-              AND (characters IS NULL OR cardinality(characters) = 0)
-              AND site_id ~ '^[0-9]+$'
-            ORDER BY word_count DESC NULLS LAST
-            LIMIT :lim
-        """), {"lim": limit or 1000}).fetchall()
+        rows = find_gaps(db, "ffnet", limit=limit or 1000)
+    # Shape kept as (id, site_id, word_count) for the caller.
+    return [(r["id"], r["site_id"], r["gap_score"]) for r in rows]
 
 
 def run(limit: int | None, dry_run: bool, delay: float, batch: int) -> None:

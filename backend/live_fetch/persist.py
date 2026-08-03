@@ -1,5 +1,6 @@
 """Persist live-fetched results into the DB so the index grows over time."""
 import logging
+import re
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -20,6 +21,48 @@ _STATUS_MAP = {
     "complete":    StatusEnum.complete,
     "in_progress": StatusEnum.in_progress,
 }
+
+
+# URL -> (site, site_id). The id patterns are each archive's own permalink form.
+_SITE_PATTERNS = [
+    (SiteEnum.ao3,          re.compile(r"archiveofourown\.org/works/(\d+)")),
+    (SiteEnum.ffnet,        re.compile(r"fanfiction\.net/s/(\d+)")),
+    (SiteEnum.fictionalley, re.compile(r"fictionalley\.org/authors/([^/]+/[^/?#]+)")),
+]
+
+
+def _site_and_id(url: str, d: dict) -> tuple:
+    """Work out which archive a row belongs to and its id there.
+
+    An explicit "id" from the caller still wins, including the historical
+    "live_ao3_<n>" form, so existing callers are unaffected.
+    """
+    raw_id = str(d.get("id") or "")
+    if raw_id.startswith("live_ao3_"):
+        return SiteEnum.ao3, raw_id.replace("live_ao3_", "")
+
+    for site, pattern in _SITE_PATTERNS:
+        m = pattern.search(url or "")
+        if m:
+            return site, m.group(1)[:64]
+
+    # Unknown host: fall back to whatever the caller gave us rather than
+    # guessing a site, so a row can still be stored if it carries its own id.
+    if raw_id:
+        return SiteEnum.ao3, raw_id[:64]
+    return SiteEnum.ao3, ""
+
+
+def _as_datetime(value):
+    """Accept a datetime or an ISO string; callers supply both."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
 
 
 def persist_live_results(db: Session, live_results: list[dict]) -> int:
@@ -88,16 +131,22 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
             except Exception:
                 db.rollback()
         try:
-            site_id = d["id"].replace("live_ao3_", "")
-            updated_at = None
-            if d.get("updated_at"):
-                try:
-                    updated_at = datetime.fromisoformat(d["updated_at"])
-                except Exception:
-                    pass
+            # Site and id come from the URL unless the caller supplied them.
+            #
+            # This used to be `site_id = d["id"].replace("live_ao3_", "")` with
+            # `site=SiteEnum.ao3` hardcoded, which made the function AO3-only
+            # despite its name. Any other source passing rows here either raised
+            # KeyError on the missing "id" and lost the row silently, or — worse
+            # — had its FF.net works stored as if they were AO3. Both happened:
+            # the DLP importer reported "140 not indexed, 0 added".
+            site, site_id = _site_and_id(url, d)
+            if not site_id:
+                skipped_existing += 1
+                continue
+            updated_at = _as_datetime(d.get("updated_at"))
 
             story = Story(
-                site=SiteEnum.ao3,
+                site=site,
                 site_id=site_id,
                 url=url,
                 title=(d.get("title") or "Untitled")[:500],
