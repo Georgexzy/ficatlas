@@ -68,10 +68,16 @@ def _classify_failure(err: str) -> str:
     transient_markers = ("readtimeout", "connecttimeout", "timeout", "timed out",
                          "502", "503", "504", "525", "connectionreset",
                          "remoteprotocolerror", "temporarily")
-    if any(m in low for m in blocked_markers):
-        return "blocked"
+    # Transient wins over blocked when both appear. A 525 is Cloudflare failing to
+    # reach AO3's origin and clears on its own, but the message for one often also
+    # carries a blocked marker — most of all when a fallback host answered 403,
+    # producing "all fallbacks failed ... (last status: 403)". Checking blocked
+    # first therefore recorded ordinary AO3 slowness as a block, and five of those
+    # in six hours auto-disabled AO3 crawling.
     if any(m in low for m in transient_markers):
         return "transient"
+    if any(m in low for m in blocked_markers):
+        return "blocked"
     return "transient"
 
 

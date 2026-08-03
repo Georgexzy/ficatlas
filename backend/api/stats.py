@@ -5,6 +5,7 @@ from sqlalchemy import func, text
 from db.session import get_db
 from models.story import Story
 from provenance import PROVENANCE_TAGS
+from api.auth import require_admin
 
 router = APIRouter()
 
@@ -267,6 +268,7 @@ async def suggest_canonical(
 async def refresh_facets(
     min_count: int = Query(1, ge=1, description="Drop values rarer than this"),
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
     """Rebuild the facets table from current stories. Run this after big imports so
     autocomplete reflects the latest data. It's a one-shot batch (four grouped

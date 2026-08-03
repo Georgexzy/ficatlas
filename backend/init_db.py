@@ -259,6 +259,16 @@ def init():
     for stmt in statements:
         try:
             with engine.connect() as conn:
+                # Never let startup block on someone else's transaction. The
+                # ALTER TABLE statements need ACCESS EXCLUSIVE, which queues
+                # behind ANY open transaction on `stories` — a background
+                # backfill holding one idle-in-transaction hung the API's
+                # lifespan indefinitely, so every request 500'd until the
+                # transaction was killed by hand. These statements are all
+                # idempotent, so timing out and retrying next boot is harmless;
+                # hanging is not.
+                conn.execute(text("SET lock_timeout = '5s'"))
+                conn.execute(text("SET statement_timeout = '10min'"))
                 conn.execute(text(stmt))
                 conn.commit()
         except Exception as e:

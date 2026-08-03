@@ -169,12 +169,20 @@ def fetch_meta(client: httpx.Client, site_id: str) -> dict | None:
     return parse_ffn_meta(page.text)
 
 
-def run(limit: int | None, dry_run: bool, delay: float, batch: int) -> None:
-    updated = missing = failed = 0
-    with httpx.Client(headers=UA) as client, db_session() as db:
-        # Longest first: those are the stories people actually read, and the ones
-        # most visible in search results.
-        rows = db.execute(sql_text("""
+def _pick_targets(limit: int | None) -> list:
+    """Choose which stories to enrich, in a transaction that ends immediately.
+
+    Kept deliberately separate from the fetching. Holding one session open across
+    the whole run left a transaction idle-in-transaction for minutes while each
+    archive.org request ran, and an open transaction on `stories` blocks any
+    ACCESS EXCLUSIVE lock — so init_db()'s `ALTER TABLE stories ADD COLUMN IF NOT
+    EXISTS` waited behind it on every API start, the lifespan never completed, and
+    the whole app returned 500 until the transaction was killed.
+
+    Longest first: those are the stories people actually read.
+    """
+    with db_session() as db:
+        return db.execute(sql_text("""
             SELECT id, site_id, word_count
             FROM stories
             WHERE site = 'ffnet'
@@ -184,60 +192,79 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int) -> None:
             LIMIT :lim
         """), {"lim": limit or 1000}).fetchall()
 
-        log.info(f"{len(rows)} FF.net stories to enrich")
+
+def run(limit: int | None, dry_run: bool, delay: float, batch: int) -> None:
+    updated = missing = failed = 0
+    rows = _pick_targets(limit)
+    log.info(f"{len(rows)} FF.net stories to enrich")
+    pending: list[tuple] = []          # (story_id, parsed metadata) awaiting a write
+
+    with httpx.Client(headers=UA) as client:
         for n, (sid, site_id, wc) in enumerate(rows, 1):
             meta = fetch_meta(client, site_id)
             if not meta:
                 missing += 1
+            elif any(meta.get(k) for k in
+                     ("genres", "characters", "relationships", "favs", "follows", "reviews")):
+                pending.append((sid, meta))
             else:
-                story = db.query(Story).filter(Story.id == sid).first()
-                if not story:
-                    continue
-                changed = []
-                if meta.get("genres"):
-                    story.genres = meta["genres"]
-                    # FF.net genres ARE the content tags for these works — they
-                    # are what a reader filters by, so surface them as tags too.
-                    existing = list(story.tags or [])
-                    for g in meta["genres"]:
-                        if g not in existing:
-                            existing.append(g)
-                    story.tags = existing
-                    changed.append("genres")
-                if meta.get("characters"):
-                    story.characters = meta["characters"]
-                    changed.append("characters")
-                if meta.get("relationships"):
-                    story.relationships = meta["relationships"]
-                    changed.append("ships")
-                # Engagement: the index has almost none, so this is the only real
-                # popularity signal available for ranking.
-                if meta.get("favs") is not None:
-                    story.kudos = meta["favs"]; changed.append("favs")
-                if meta.get("follows") is not None:
-                    story.bookmarks = meta["follows"]
-                if meta.get("reviews") is not None:
-                    story.comments = meta["reviews"]
-                if changed:
-                    updated += 1
-                else:
-                    failed += 1
+                failed += 1
 
-            if not dry_run and n % batch == 0:
-                db.commit()
-                log.info(f"  {n}/{len(rows)} — {updated} enriched, {missing} no snapshot")
             if dry_run and n <= 10 and meta:
                 log.info(f"  {site_id}: genres={meta.get('genres')} "
                          f"chars={meta.get('characters')} ships={meta.get('relationships')} "
                          f"favs={meta.get('favs')}")
+
+            # Write in short bursts. The database session is only open for the
+            # write itself, never across an archive.org request.
+            if not dry_run and len(pending) >= batch:
+                updated += _write_batch(pending)
+                pending.clear()
+                log.info(f"  {n}/{len(rows)} — {updated} enriched, {missing} no snapshot")
+
             time.sleep(delay)
 
-        if dry_run:
-            db.rollback()
-            log.info(f"Dry run — {updated} would be enriched, {missing} had no snapshot.")
-            return
-        db.commit()
+    if dry_run:
+        log.info(f"Dry run — {len(pending)} would be enriched, {missing} had no snapshot.")
+        return
+
+    if pending:
+        updated += _write_batch(pending)
     log.info(f"DONE — enriched={updated} no_snapshot={missing} unparseable={failed}")
+
+
+def _write_batch(items: list[tuple]) -> int:
+    """Apply a batch of parsed metadata. Opens and closes its own short session."""
+    written = 0
+    with db_session() as db:
+        for sid, meta in items:
+            story = db.query(Story).filter(Story.id == sid).first()
+            if not story:
+                continue
+            if meta.get("genres"):
+                story.genres = meta["genres"]
+                # FF.net genres ARE the content tags for these works — they are
+                # what a reader filters by, so surface them as tags too.
+                existing = list(story.tags or [])
+                for g in meta["genres"]:
+                    if g not in existing:
+                        existing.append(g)
+                story.tags = existing
+            if meta.get("characters"):
+                story.characters = meta["characters"]
+            if meta.get("relationships"):
+                story.relationships = meta["relationships"]
+            # Engagement: the index has almost none, so this is the only real
+            # popularity signal available for ranking.
+            if meta.get("favs") is not None:
+                story.kudos = meta["favs"]
+            if meta.get("follows") is not None:
+                story.bookmarks = meta["follows"]
+            if meta.get("reviews") is not None:
+                story.comments = meta["reviews"]
+            written += 1
+        db.commit()
+    return written
 
 
 def main():

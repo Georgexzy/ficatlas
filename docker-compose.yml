@@ -110,9 +110,12 @@ services:
       # The bulk AO3 dump stops at work id 63,178,258 (~mid-2024) while AO3 is
       # now issuing ~89.7M, so everything recent can only come from crawling.
       RECENT_WORKS: "true"
-      # Backfills are off by default — turn them on to fill gaps over days.
-      # ENRICH_FFNET: "true"       # FF.net genres/characters/favs via Wayback
-      # DEDUP_CROSSPOSTS: "true"   # merge newly-imported duplicates
+      # 6.6M FF.net works have no genres, characters, ships or engagement counts
+      # at all — that dump carries none. This recovers them from archive.org's
+      # copies, a few hundred stories at a time, longest first.
+      ENRICH_FFNET: "true"
+      # New imports and live fetches keep introducing cross-posted duplicates.
+      DEDUP_CROSSPOSTS: "true"
     depends_on:
       db:
         condition: service_healthy
