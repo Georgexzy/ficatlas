@@ -148,13 +148,32 @@ export default function StoryPage() {
         <header className="story-detail__header">
           <p className="story-detail__site">{SITE_LABELS[story.site] ?? story.site}</p>
           <h1 className="story-detail__title">{story.title}</h1>
+          {/* The author's name searches OUR index — the whole point of the
+              site is that it spans archives, and an AO3 user page only ever
+              shows what they posted on AO3. The link out to their profile is
+              kept as a separate arrow rather than being the primary action. */}
           <p className="story-detail__byline">
-            by {story.author_url
-              ? <a href={story.author_url} target="_blank" rel="noopener noreferrer">{story.author}</a>
-              : story.author}
+            by <Link href={`/?author=${encodeURIComponent(story.author)}`}
+                 className="story-detail__author-link"
+                 title={`All works by ${story.author}, across every archive`}>
+              {story.author}
+            </Link>
+            {story.author_url && (
+              <a href={story.author_url} target="_blank" rel="noopener noreferrer"
+                className="story-detail__author-ext"
+                title="Their profile on the original site">↗</a>
+            )}
           </p>
           {story.fandoms.length > 0 && (
-            <p className="story-detail__fandom">{story.fandoms.join(" · ")}</p>
+            <p className="story-detail__fandom">
+              {story.fandoms.map((f, i) => (
+                <span key={f}>
+                  {i > 0 && " · "}
+                  <Link href={`/?fandoms=${encodeURIComponent(f)}`}
+                    className="story-detail__fandom-link">{f}</Link>
+                </span>
+              ))}
+            </p>
           )}
         </header>
 
