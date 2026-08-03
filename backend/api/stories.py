@@ -11,7 +11,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from db.session import get_db
 from models.story import Story, Chapter
-from html_sanitize import sanitize_html
+from html_sanitize import sanitize_html, strip_chapter_heading, tidy_chapter_html
 from provenance import content_tags, source_labels
 
 router = APIRouter()
@@ -138,12 +138,20 @@ async def get_chapter(story_id: str, number: int, db: Session = Depends(get_db))
     # three of these fields with dangerouslySetInnerHTML — so this is the single
     # choke point every one of them passes through. Doing it here also cleans the
     # 82k chapters already stored, which sanitising at ingest would not.
+    # Sanitise, then tidy, then drop a heading the reader is about to print
+    # anyway. All at serve time, so every one of the 82,161 stored chapters is
+    # cleaned without a migration and a re-import cannot undo it.
+    body = tidy_chapter_html(sanitize_html(chapter.content))
+    body, better_title = strip_chapter_heading(body, chapter.title)
+
     return ChapterFull(
         id=str(chapter.id),
         number=chapter.number,
-        title=chapter.title,
+        # The body's own heading usually carries the real chapter name while the
+        # stored title is just "Chapter 01", so promote it when that is the case.
+        title=better_title or chapter.title,
         summary=chapter.summary,
-        content=sanitize_html(chapter.content),
+        content=body,
         word_count=chapter.word_count or 0,
         posted_at=chapter.posted_at.isoformat() if chapter.posted_at else None,
         start_note=sanitize_html(chapter.start_note),

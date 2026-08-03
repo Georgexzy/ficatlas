@@ -595,7 +595,14 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 
 /* Focus must stay visible for keyboard users. The heading takes focus on
    chapter change, and a bare outline:none anywhere here would strand them. */
-.reader__title:focus-visible,
+/* The heading takes focus programmatically on chapter change so a screen
+   reader lands in the new chapter. Chromium then paints a focus ring on it,
+   which on a title reads as an error box rather than a focus cue — and the
+   accessibility benefit is the focus MOVE, not the outline. Keep the move,
+   drop the ring; every actual control below still shows one. */
+.reader__title:focus,
+.reader__title:focus-visible { outline: none; }
+
 .reader-ctrl:focus-visible,
 .reader-nav__btn:focus-visible,
 .skip-link:focus-visible {

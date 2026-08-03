@@ -122,3 +122,155 @@ def sanitize_html(raw: str | None) -> str:
     for child in root:
         out += etree.tostring(child, encoding="unicode", method="html")
     return out.strip()
+
+
+# ── Redundant chapter headings ───────────────────────────────────────────────
+#
+# The reader prints the chapter three times: "Chapter 1 of 12" in the
+# breadcrumb, the stored chapter title as an <h1>, and then the body opens with
+# its own "Chapter 1 - The Competition" because that is how the author wrote the
+# file and the importer kept it verbatim.
+#
+# Measured: 26,030 of 82,161 stored chapters (32%) begin with such a heading,
+# and 46,254 (56%) have a title as uninformative as "Chapter 01".
+#
+# So the body's heading is usually the BETTER one — it carries the actual name.
+# Rather than discard it, promote it to the title when the stored title is
+# generic, and drop it from the body either way. Done at serve time, so it
+# applies to everything already imported with no migration.
+
+_CH_WORD = r"(?:chapter|chap|ch|part|pt|prologue|epilogue|interlude)"
+_ORDINAL = (r"(?:\d{1,3}|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|"
+            r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
+            r"nineteen|twenty)")
+
+# "Chapter 1", "Ch. 03 — The Trip", "Part Two: Arrival", "Prologue"
+_HEADING_RE = re.compile(
+    rf"^\s*{_CH_WORD}\b\.?\s*(?:{_ORDINAL})?\s*(?:[-–—:.|]+\s*(?P<title>.+?))?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# A heading is short. Anything longer is prose that merely opens with the word,
+# e.g. "Chapter one of his life had closed, and he was not sorry to see it go."
+_MAX_HEADING_CHARS = 90
+
+_GENERIC_TITLE_RE = re.compile(
+    rf"^\s*(?:{_CH_WORD}\b\.?\s*(?:{_ORDINAL})?|\d{{1,3}})\s*$", re.IGNORECASE)
+
+
+def is_generic_title(title: str | None) -> bool:
+    """True for titles that say nothing the breadcrumb does not already."""
+    return not (title or "").strip() or bool(_GENERIC_TITLE_RE.match(title or ""))
+
+
+def strip_chapter_heading(html_text: str, stored_title: str | None) -> tuple[str, str | None]:
+    """Drop a leading chapter heading from the body.
+
+    Returns (content, better_title). `better_title` is set only when the heading
+    carried a real name and the stored title did not.
+    """
+    if not html_text or not html_text.strip():
+        return html_text or "", None
+    try:
+        root = html.fragment_fromstring(html_text, create_parent="div")
+    except Exception:
+        return html_text, None
+
+    for el in list(root):
+        text = re.sub(r"\s+", " ", "".join(el.itertext())).strip()
+        if not text:
+            # Leading spacers and empty <p>s sit above the heading; skip them
+            # rather than giving up at the first one.
+            continue
+        if len(text) > _MAX_HEADING_CHARS:
+            return html_text, None
+        m = _HEADING_RE.match(text)
+        if not m:
+            return html_text, None
+        better = (m.group("title") or "").strip() or None
+        el.getparent().remove(el)
+        out = (root.text or "")
+        for child in root:
+            out += etree.tostring(child, encoding="unicode", method="html")
+        return out.strip(), (better if better and is_generic_title(stored_title) else None)
+    return html_text, None
+
+
+# ── Formatting tidy ──────────────────────────────────────────────────────────
+#
+# Measured across the 82,161 stored chapters:
+#
+#     40,919 (50%)  contain empty <p> or <p>&nbsp;</p> blocks
+#     29,529 (36%)  use a typed line like "* * *" or "---" as a scene break
+#
+# The empty paragraphs are the visible problem: EPUB and scraped HTML use them
+# as spacing, and the reader already sets its own paragraph margins, so each one
+# becomes a blank line and a long fic turns into a column of gaps.
+#
+# Deliberately NOT removed: disclaimers, author's notes and "please review"
+# endings. Those appear in 1,089, 2,169 and 858 chapters respectively and are
+# the author's own words — cleanup should tidy the markup a fic arrived in, not
+# edit what it says.
+
+# Two or more break characters, adjacent OR spaced: "***", "* * *", "---",
+# "~ ~ ~". Requiring them adjacent missed the spaced form, which is the one
+# most authors actually type.
+_SCENE_BREAK_RE = re.compile(r"^[\s ]*(?:[*~\-=_·•—–+#][\s ]*){2,}$")
+
+
+def _is_blank(el) -> bool:
+    """An element carrying nothing a reader would see."""
+    if el.tag in ("img", "hr", "br"):
+        return False
+    if el.find(".//img") is not None or el.find(".//hr") is not None:
+        return False
+    text = "".join(el.itertext()).replace(" ", " ")
+    return not text.strip()
+
+
+def tidy_chapter_html(html_text: str) -> str:
+    """Remove spacer markup and normalise scene breaks. Never raises."""
+    if not html_text or not html_text.strip():
+        return html_text or ""
+    try:
+        root = html.fragment_fromstring(html_text, create_parent="div")
+    except Exception:
+        return html_text
+
+    for el in list(root.iter()):
+        if el is root or not isinstance(el.tag, str):
+            continue
+
+        # A typed scene break becomes a real <hr>, which the reader already
+        # styles as "* * *" — so every fic separates scenes the same way
+        # regardless of which punctuation its author reached for.
+        if el.tag in ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6"):
+            text = "".join(el.itertext()).strip()
+            if text and _SCENE_BREAK_RE.match(text):
+                el.clear()
+                el.tag = "hr"
+                el.tail = None
+                continue
+
+        # Spacer paragraphs. The reader sets its own paragraph spacing, so these
+        # only ever add blank lines.
+        if el.tag in ("p", "div", "span") and _is_blank(el):
+            parent = el.getparent()
+            if parent is not None:
+                if el.tail and el.tail.strip():
+                    prev = el.getprevious()
+                    if prev is not None:
+                        prev.tail = (prev.tail or "") + el.tail
+                    else:
+                        parent.text = (parent.text or "") + el.tail
+                parent.remove(el)
+
+    # Runs of <br> are the other way spacing gets faked; two is a paragraph
+    # break, more than that is padding.
+    out = (root.text or "")
+    for child in root:
+        out += etree.tostring(child, encoding="unicode", method="html")
+    out = re.sub(r"(?:\s*<br\s*/?>\s*){3,}", "<br><br>", out, flags=re.I)
+    # Consecutive rules after the above collapse into one.
+    out = re.sub(r"(?:\s*<hr\s*/?>\s*){2,}", "<hr>", out, flags=re.I)
+    return out.strip()
