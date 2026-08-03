@@ -34,6 +34,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timezone
 
 sys.path.insert(0, "/app")
 os.environ.setdefault("DATABASE_URL", "postgresql://ficatlas:ficatlas@db:5432/ficatlas")
@@ -42,7 +43,7 @@ import httpx
 from sqlalchemy import text as sql_text
 
 from db.session import db_session
-from models.story import Story
+from models.story import StatusEnum, Story
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
@@ -69,6 +70,56 @@ LANGUAGES = {
 
 _LABELLED = re.compile(
     r"^(Chapters|Words|Reviews|Favs|Follows|Published|Updated|Status|Rated|id)\s*:", re.I)
+
+
+def _ffn_date(value: str):
+    """FF.net writes dates two ways, both seen in the wild:
+
+        "Updated: 11/26/2012"   M/D/YYYY
+        "Published: 09-19-10"   MM-DD-YY
+
+    Returned as UTC midnight. These were previously parsed and thrown away —
+    the docstring below claimed "counts and dates" but only counts were kept,
+    which is why 100% of 6,572,195 FF.net rows had no dates at all while the
+    line right there on the page carried them.
+    """
+    value = (value or "").strip()
+    for fmt in ("%m/%d/%Y", "%m-%d-%y", "%m/%d/%y", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _classify_genres(part: str) -> list[str]:
+    """Split an unlabelled segment into FF.net genres, or [] if it is not genres.
+
+    Must test the WHOLE string before splitting on "/", because "Hurt/Comfort"
+    is itself a single genre. Splitting first turned it into ["Hurt","Comfort"],
+    matched neither, and fell through to the character branch — which then also
+    blocked the real character list, since that branch only fires when no
+    characters have been recorded yet.
+    """
+    part = part.strip()
+    if part in GENRES:
+        return [part]
+    pieces = [p.strip() for p in part.split("/") if p.strip()]
+    if pieces and all(p in GENRES for p in pieces):
+        return pieces
+    # "Hurt/Comfort/Romance" — recombine adjacent pieces that form a real genre.
+    out: list[str] = []
+    i = 0
+    while i < len(pieces):
+        if i + 1 < len(pieces) and f"{pieces[i]}/{pieces[i+1]}" in GENRES:
+            out.append(f"{pieces[i]}/{pieces[i+1]}")
+            i += 2
+        elif pieces[i] in GENRES:
+            out.append(pieces[i])
+            i += 1
+        else:
+            return []
+    return out
 
 
 def parse_ffn_meta(page_text: str) -> dict | None:
@@ -119,14 +170,25 @@ def parse_ffn_meta(page_text: str) -> dict | None:
                     out[key] = int(val.replace(",", ""))
                 except ValueError:
                     pass
+            elif key in ("published", "updated"):
+                dt = _ffn_date(val)
+                if dt:
+                    out[f"{key}_at"] = dt
+            elif key == "status":
+                # "Status: Complete". The bare-word test below only catches a
+                # segment that STARTS with "complete", so a labelled status was
+                # swallowed by this branch and dropped.
+                if val.strip().lower().startswith("complete"):
+                    out["complete"] = True
             continue
         if part.lower().startswith("complete"):
             out["complete"] = True
             continue
-        # Unlabelled: genres if every slash-part is a known genre, else characters.
-        pieces = [p.strip() for p in part.split("/") if p.strip()]
-        if pieces and all(p in GENRES for p in pieces):
-            out["genres"] = pieces
+        # Unlabelled: genres if the whole segment resolves to known genres,
+        # else characters.
+        genres = _classify_genres(part)
+        if genres:
+            out["genres"] = genres
         elif not seen_counts and not out["characters"]:
             # FF.net marks a romantic pairing by bracketing it:
             #   "[Renamon, Terriermon] Aayla S., Lopmon"
@@ -262,6 +324,26 @@ def _write_batch(items: list[tuple]) -> int:
                 story.bookmarks = meta["follows"]
             if meta.get("reviews") is not None:
                 story.comments = meta["reviews"]
+
+            # Dates. The FFN dump carried none at all, so before this every one
+            # of 6,572,195 rows sorted and filtered as undated.
+            if meta.get("published_at") and story.published_at is None:
+                story.published_at = meta["published_at"]
+            upd = meta.get("updated_at")
+            if upd and (story.updated_at is None or upd > story.updated_at):
+                story.updated_at = upd
+
+            # "Complete" on the page IS evidence, unlike the dump's silence that
+            # everything else defaults to `unknown` for.
+            if meta.get("complete") and story.status != StatusEnum.complete:
+                story.status = StatusEnum.complete
+
+            # Parsed already and previously discarded; only fills gaps.
+            if meta.get("words") and not (story.word_count or 0):
+                story.word_count = meta["words"]
+            if meta.get("chapters") and (story.chapter_count or 0) < meta["chapters"]:
+                story.chapter_count = meta["chapters"]
+
             written += 1
         db.commit()
     return written
