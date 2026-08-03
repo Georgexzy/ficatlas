@@ -844,7 +844,14 @@ function SearchPageInner() {
     excShips.forEach(v => parts.push(`-ship:${q(v)}`))
     excChars.forEach(v => parts.push(`-char:${q(v)}`))
     excTags.forEach(v => parts.push(`-tag:${q(v)}`))
-    if (incRatings.length) incRatings.forEach(v => parts.push(`rating:${v}`))
+    // Only write ratings into the bar when they are a real narrowing. Having
+    // every available rating selected IS the default, and spelling it out put
+    // "rating:G rating:T rating:M rating:NR" in front of whatever the reader
+    // actually searched for.
+    const allRatings = RATING_OPTIONS.filter(r => explicit || r.id !== "E").map(r => r.id)
+    const ratingsAreDefault =
+      incRatings.length === 0 || incRatings.length === allRatings.length
+    if (!ratingsAreDefault) incRatings.forEach(v => parts.push(`rating:${v}`))
     if (status.length === 1) parts.push(status[0] === "complete" ? "complete" : "wip")
     // The parser only understands k/m-suffixed word counts (100k, 1m), not raw
     // digits — format accordingly so the bar round-trips back to the same filter.
@@ -853,9 +860,15 @@ function SearchPageInner() {
     else if (wordMin != null) parts.push(`words:>${wc(wordMin)}`)
     else if (wordMax != null) parts.push(`words:<${wc(wordMax)}`)
     if (language) parts.push(`lang:${q(language)}`)
+    // author was missing, and this function REPLACES the bar's contents. So
+    // clicking an author link searched correctly and then rewrote the bar
+    // without it — leaving "rating:G rating:T ..." on screen and losing the
+    // author the moment anything re-ran the search.
+    if (authorFilter) parts.push(`author:${q(authorFilter)}`)
     return [freeText, ...parts].filter(Boolean).join(" ")
   }, [query, incFandoms, incShips, incChars, incTags, excFandoms, excShips,
-      excChars, excTags, incRatings, status, wordMin, wordMax, language])
+      excChars, excTags, incRatings, status, wordMin, wordMax, language,
+      authorFilter, explicit])
 
   // Build search params
   const buildParams = useCallback((pg: number): SearchParams => {
@@ -885,7 +898,11 @@ function SearchPageInner() {
       word_count_max:        wordMax ?? pq.wordCountMax ?? undefined,
       updated_after:         updatedAfter || pq.updatedAfter || undefined,
       explicit,
-      author:                authorFilter || undefined,
+      // Fall through to the parsed value like every other field does. The
+      // sidebar has no author input, so a typed `author:` operator was the only
+      // way to set it — and buildParams read the state variable alone, so the
+      // operator parsed and was then dropped.
+      author:                authorFilter || pq.author || undefined,
       match_mode:            matchMode,
       include_unknown:       includeUnknown || undefined,
       search_within:         searchWithin || undefined,
@@ -1015,7 +1032,7 @@ function SearchPageInner() {
         total: cards.length, page: 1, per_page: cards.length,
         results: cards, sites_searched: [], live_count: 0,
       } as any)
-      setLiveCount(0); setParsedTokens([])
+      setParsedTokens([])
       window.scrollTo({ top: 0, behavior: "smooth" })
     } catch (e: any) {
       setError(e.message || "Couldn't fetch random stories")
@@ -1538,10 +1555,27 @@ function SearchPageInner() {
   )
 }
 
+function SearchPageKeyed() {
+  // Remount the search page whenever the URL's search params change.
+  //
+  // Clicking a tag, fandom, character or author is a Next.js <Link>, which is a
+  // CLIENT-side navigation: the URL changes but the component does not remount.
+  // Every piece of state here is initialised from the URL once (`get(...)` in
+  // useState) and the run-on-mount search has an empty dependency array, so a
+  // link updated the address bar and then nothing happened at all — no state
+  // change, no search.
+  //
+  // Keying on the params is deliberate over syncing twenty state variables back
+  // from the URL by hand: a link IS a new search, so starting the page over is
+  // what should happen, and there is no partial-sync bug to get wrong.
+  const params = useSearchParams()
+  return <SearchPageInner key={params.toString()} />
+}
+
 export default function SearchPage() {
   return (
     <Suspense fallback={null}>
-      <SearchPageInner />
+      <SearchPageKeyed />
     </Suspense>
   )
 }

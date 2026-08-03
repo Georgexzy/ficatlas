@@ -26,6 +26,9 @@ export interface ParsedQuery {
   excTags: string[]
   status: string | null
   language: string | null
+  /** Exact author match. The syntax panel advertises `author:`; without this it
+      fell through to free text, so author:astolat found 1 work instead of 150. */
+  author: string | null
   wordCountMin: number | null
   wordCountMax: number | null
   updatedAfter: string | null
@@ -43,6 +46,7 @@ const FIELD_ALIASES: Record<string, string> = {
   status: "status", s: "status",
   word: "word_count", words: "word_count", wc: "word_count", w: "word_count",
   lang: "language", language: "language",
+  author: "author", by: "author",
   updated: "updated_after", update: "updated_after", since: "updated_after",
   site: "sites",
   crossover: "crossovers", xover: "crossovers",
@@ -115,7 +119,7 @@ export function parseQuery(raw: string): ParsedQuery {
     cleanText: "", fandoms: [], relationships: [], characters: [],
     tags: [], ratings: [], warnings: [], categories: [], sites: [],
     excFandoms: [], excRelationships: [], excCharacters: [], excTags: [],
-    status: null, language: null, wordCountMin: null, wordCountMax: null,
+    status: null, language: null, author: null, wordCountMin: null, wordCountMax: null,
     updatedAfter: null, crossovers: null, tokens: [],
   }
 
@@ -176,6 +180,7 @@ export function parseQuery(raw: string): ParsedQuery {
     }
     else if (canonical === "updated_after") { const d = parseDate(value); if (d) pq.updatedAfter = d }
     else if (canonical === "language")  { pq.language = value }
+    else if (canonical === "author")    { pq.author = value }
     else if (canonical === "sites")     { pq.sites.push(value.toLowerCase()) }
     else if (canonical === "crossovers") {
       const v = value.toLowerCase()
@@ -233,6 +238,7 @@ export function parsedToSearchParams(pq: ParsedQuery): Record<string, any> {
     exclude_tags: csv(pq.excTags),
     status: pq.status ?? undefined,
     language: pq.language ?? undefined,
+    author: pq.author ?? undefined,
     word_count_min: pq.wordCountMin ?? undefined,
     word_count_max: pq.wordCountMax ?? undefined,
     updated_after: pq.updatedAfter ?? undefined,
