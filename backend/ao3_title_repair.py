@@ -171,6 +171,30 @@ def parse_work_page(html_text: str) -> dict | None:
             out[key] = _int(m.group(1))
     return out
 
+# Ordering, which has to satisfy two things at once.
+#
+# Popularity first, so the works people actually open get a summary and a real
+# title before the long tail does. But popularity ALONE reintroduces a bug this
+# module already had: an unreachable work (deleted, orphaned, locked) would sit
+# at the top of the queue and be re-requested on every pass forever, and the
+# most popular works are exactly the ones that stay there longest.
+#
+# So the day a row was last checked is the primary key and popularity only
+# breaks ties within it. Never-checked rows (NULL) come first, most-popular
+# first; anything checked today drops behind everything not checked today.
+# Truncating to the day rather than the timestamp is what makes the tie-break
+# apply to a large group instead of ordering by microseconds.
+#
+# The expressions below must match ix_stories_repair_queue EXACTLY, including
+# `AT TIME ZONE 'UTC'` — date_trunc on a timestamptz is only STABLE, so it
+# cannot be indexed, and a mismatch silently falls back to a full scan:
+# 11,816ms versus 57ms measured.
+#
+# Engagement is 0 for all but 17 of the ~396k rows right now, so word_count
+# carries most of the ordering today. That is deliberate: the harvest itself
+# writes kudos and hits back, so this ordering sharpens as it runs rather than
+# needing a popularity source up front.
+
 # Only endings that genuinely cannot finish a title.
 #
 # A broader list (for/in/to/by/on/at/a) is mostly false positives — "A Kiss Worth
@@ -187,7 +211,9 @@ TRUNCATED_SQL = r"""
       AND site_id ~ '^[0-9]+$'
       AND tags @> ARRAY['ao3_meta_dump']
       AND title ~* ' (and|of|the|with)$'
-    ORDER BY crawled_at ASC NULLS FIRST
+    ORDER BY date_trunc('day', crawled_at AT TIME ZONE 'UTC') ASC NULLS FIRST,
+             (COALESCE(kudos, 0) + COALESCE(hits, 0)) DESC,
+             COALESCE(word_count, 0) DESC
     LIMIT :lim
 """
 

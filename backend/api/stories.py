@@ -11,6 +11,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from db.session import get_db
 from models.story import Story, Chapter
+from html_sanitize import sanitize_html
 from provenance import content_tags, source_labels
 
 router = APIRouter()
@@ -132,16 +133,21 @@ async def get_chapter(story_id: str, number: int, db: Session = Depends(get_db))
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
+    # Sanitised on the way OUT rather than at import. Chapter bodies are scraped
+    # from four sites and accepted from EPUB uploads, and the reader injects all
+    # three of these fields with dangerouslySetInnerHTML — so this is the single
+    # choke point every one of them passes through. Doing it here also cleans the
+    # 82k chapters already stored, which sanitising at ingest would not.
     return ChapterFull(
         id=str(chapter.id),
         number=chapter.number,
         title=chapter.title,
         summary=chapter.summary,
-        content=chapter.content,
+        content=sanitize_html(chapter.content),
         word_count=chapter.word_count or 0,
         posted_at=chapter.posted_at.isoformat() if chapter.posted_at else None,
-        start_note=chapter.start_note,
-        end_note=chapter.end_note,
+        start_note=sanitize_html(chapter.start_note),
+        end_note=sanitize_html(chapter.end_note),
     )
 
 

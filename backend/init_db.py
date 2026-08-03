@@ -174,6 +174,23 @@ CREATE INDEX IF NOT EXISTS ix_stories_stale_wip
 -- Composite index for the most common access pattern: filter by word_count, sort by kudos.
 CREATE INDEX IF NOT EXISTS ix_stories_kudos_desc ON stories (kudos DESC);
 
+-- Drives the AO3 repair/harvest queue in ao3_title_repair.py: most-read works
+-- first, but only among rows not already checked today so unreachable works
+-- cannot camp at the head of the queue.
+--
+-- The expression list must stay identical to TRUNCATED_SQL's ORDER BY, down to
+-- `AT TIME ZONE 'UTC'`. date_trunc over a timestamptz is only STABLE — it
+-- depends on the session TimeZone — so it cannot be indexed at all without the
+-- cast, and any mismatch silently degrades to a full scan: 11,816ms against
+-- 57ms measured on 13M AO3 rows.
+CREATE INDEX IF NOT EXISTS ix_stories_repair_queue ON stories (
+    (date_trunc('day', crawled_at AT TIME ZONE 'UTC')) NULLS FIRST,
+    ((COALESCE(kudos, 0) + COALESCE(hits, 0))) DESC,
+    (COALESCE(word_count, 0)) DESC
+) WHERE site = 'ao3'
+    AND tags @> ARRAY['ao3_meta_dump']
+    AND title ~* ' (and|of|the|with)$';
+
 -- ── Dropped indexes ─────────────────────────────────────────────────────────
 -- ix_stories_search_vector: 355MB GIN over a search_vector column that was never
 --   populated (100% NULL) and never scanned. Superseded by ix_stories_doc_fts.
