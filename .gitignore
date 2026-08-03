@@ -8,3 +8,8 @@ backend/data/
 
 # Database dumps — large, and may contain user password hashes
 backups/
+
+# Timestamped copies made by apply-prod-frontend.sh before it edits compose.
+# Superseded the moment the change is committed, and they accumulate.
+*.bak
+*.bak.[0-9]*
