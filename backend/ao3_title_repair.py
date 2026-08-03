@@ -33,7 +33,9 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, "/app")
 os.environ.setdefault("DATABASE_URL", "postgresql://ficatlas:ficatlas@db:5432/ficatlas")
@@ -76,6 +78,30 @@ TRUNCATED_SQL = r"""
 """
 
 
+class RateLimiter:
+    """Caps how often a request may START, across every worker thread.
+
+    The pacing target is a total rate against AO3, not a per-thread one, so the
+    limiter is global and the pool size below it only decides how much waiting
+    happens in parallel. Raising WORKERS therefore cannot raise the request
+    rate — it can only stop threads idling while AO3 thinks.
+    """
+
+    def __init__(self, min_interval: float):
+        self.min_interval = min_interval
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next)
+            self._next = start + self.min_interval
+        delay = start - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+
+
 def fetch_title(client: httpx.Client, work_id: str) -> str | None:
     try:
         r = client.get(f"https://archiveofourown.org/works/{work_id}",
@@ -92,33 +118,78 @@ def fetch_title(client: httpx.Client, work_id: str) -> str | None:
     return title or None
 
 
+# Enough in-flight requests to cover AO3's own latency, and no more.
+#
+# Measured: a work page takes ~5.6s to come back. Fetching them one at a time
+# with a 1s sleep therefore ran at 0.15 req/s, not the intended 1 — the process
+# spent 85% of its time blocked on the network, and shortening the sleep would
+# not have changed that. WORKERS * (1 / latency) needs to reach the target rate,
+# so ~6 covers 1 req/s; 8 leaves headroom for slower pages. The limiter, not
+# this number, is what bounds the rate.
+WORKERS = int(os.getenv("TITLE_REPAIR_WORKERS", "8"))
+
+# Write in batches rather than a session per row: 300 short transactions per
+# pass is pointless churn, and holding one open across the HTTP calls is what
+# previously produced an idle-in-transaction session that blocked schema changes
+# and took the whole API down with it.
+WRITE_BATCH = 50
+
+
+def _flush(pending: list[tuple[int, str]]) -> None:
+    if not pending:
+        return
+    with db_session() as db:
+        for sid, title in pending:
+            s = db.query(Story).filter(Story.id == sid).first()
+            if s:
+                s.title = title[:500]
+        db.commit()
+    pending.clear()
+
+
 def run(limit: int, dry_run: bool, delay: float) -> None:
     with db_session() as db:
         rows = db.execute(sql_text(TRUNCATED_SQL), {"lim": limit}).fetchall()
-    log.info(f"{len(rows)} truncated-looking AO3 titles to check")
+    log.info(f"{len(rows)} truncated-looking AO3 titles to check "
+             f"({WORKERS} workers, {delay}s between requests)")
 
-    fixed = missed = unchanged = 0
-    with httpx.Client(headers=UA) as client:
-        for sid, work_id, stored in rows:
-            real = fetch_title(client, work_id)
+    limiter = RateLimiter(delay)
+    counts = {"fixed": 0, "missed": 0, "unchanged": 0}
+    pending: list[tuple[int, str]] = []
+    lock = threading.Lock()
+    started = time.monotonic()
+
+    def handle(row) -> None:
+        sid, work_id, stored = row
+        limiter.wait()
+        real = fetch_title(client, work_id)
+        with lock:
             if not real:
-                missed += 1
+                counts["missed"] += 1
             elif len(real) > len(stored or "") and real.lower().startswith((stored or "").lower()):
+                counts["fixed"] += 1
                 if dry_run:
                     log.info(f"  {work_id}: {stored!r} -> {real!r}")
                 else:
-                    with db_session() as db:
-                        s = db.query(Story).filter(Story.id == sid).first()
-                        if s:
-                            s.title = real[:500]
-                            db.commit()
-                fixed += 1
+                    pending.append((sid, real))
+                    if len(pending) >= WRITE_BATCH:
+                        _flush(pending)
             else:
-                unchanged += 1
-            time.sleep(delay)
+                counts["unchanged"] += 1
 
+    # One client for the pool so connections are reused; httpx.Client is thread-safe.
+    with httpx.Client(headers=UA, limits=httpx.Limits(max_connections=WORKERS)) as client:
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            list(pool.map(handle, rows))
+
+    with lock:
+        _flush(pending)
+
+    elapsed = max(time.monotonic() - started, 0.001)
     verb = "would repair" if dry_run else "repaired"
-    log.info(f"DONE — {verb}={fixed} unchanged={unchanged} unreachable={missed}")
+    log.info(f"DONE — {verb}={counts['fixed']} unchanged={counts['unchanged']} "
+             f"unreachable={counts['missed']} in {elapsed:.0f}s "
+             f"({len(rows) / elapsed:.2f} req/s)")
 
 
 def main() -> None:
