@@ -232,23 +232,33 @@ async def _title_repair_loop() -> None:
 
     One request per work, so this is paced to grind slowly rather than finish.
     """
-    # Pacing. AO3's robots.txt sets no global Crawl-delay (only Slurp gets one,
-    # at 30s) and does not disallow individual work pages, so the limit here is
-    # courtesy rather than a stated rule. One request per second sustained is a
-    # rate their infrastructure will not notice from a single reader, and it is
-    # 27x the previous pace: the old 100 works per 45 minutes was 0.04 req/s,
-    # which would have taken about four months to work through the 398,817
-    # identifiable rows. At 1/s it is roughly five days.
+    # Pacing, arrived at by measurement after two wrong guesses.
     #
-    # Then measurement moved it back. Running 8 connections at ~0.87 req/s drew
-    # 76 HTTP 429s in one 300-work pass, against zero for the serial version —
-    # AO3 enforces a limit it does not publish anywhere. So the target is now
-    # ~0.5 req/s over 4 connections, and the limiter widens itself further if
-    # AO3 still objects. That is roughly nine days for the backlog, and about
-    # 3x the original serial pace rather than the 6x that got us throttled.
+    # AO3's robots.txt sets no Crawl-delay for `*` and does not disallow work
+    # pages, which is NOT the same as having no limit — they enforce one they
+    # do not publish. Running 8 connections at ~0.87 req/s drew 76 HTTP 429s in
+    # a single 300-work pass, against zero for the serial version.
     #
-    # Deliberately not faster. Going wider would finish sooner and is exactly
-    # the kind of thing that gets a scraper blocked for everyone.
+    # The second wrong guess was that concurrency would help. It does not.
+    # Complete passes, works processed per second of working time:
+    #
+    #     serial, 1 conn                 100 works / 525s  = 5.25s per work
+    #     4 conns + adaptive limiter     300 works / 1724s = 5.75s per work
+    #
+    # Once you back off to a rate AO3 tolerates, its limit binds BELOW where
+    # latency was binding, so overlapping the waiting has nothing left to
+    # recover. The pool is kept anyway because the limiter is what stopped the
+    # 429 storm and it self-corrects, but it is not what made this faster.
+    #
+    # What made it faster was deleting the idle gap. The old config did 100
+    # works in ~9 minutes and then slept 45, so ~84% of the wall clock was
+    # spent doing nothing:
+    #
+    #     old (100/pass, 45min gap)   32.3s per work   ~149 days for 398,751
+    #     now (300/pass, 1min gap)     5.95s per work   ~27 days
+    #
+    # Deliberately not faster. The measured pass still takes 3 x 429 at this
+    # rate, and the limiter widens itself when it does.
     delay = _num("TITLE_REPAIR_DELAY", 2.0)
     interval = _num("TITLE_REPAIR_INTERVAL_MIN", 1) * 60
     batch = int(_num("TITLE_REPAIR_BATCH", 300))
