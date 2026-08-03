@@ -413,13 +413,25 @@ function StoryCard({ story }: { story: StoryCard }) {
       )}
       {/* dlp_stars is rendered as stars in the badge row above, so it must not
           also appear here as a literal "dlp_stars:4.67" chip. */}
+      {/* Characters were collected but never shown on a card, so the only way
+          to see who is in a story was to open it — and unlike AO3 they could
+          not be clicked to search. They sit above the freeform tags because
+          that is the order AO3 lists them in and it is the more useful signal. */}
+      {story.characters.length > 0 && (
+        <TagList tags={story.characters} kind="characters" className="card__chars" />
+      )}
       {story.tags.filter(t => !t.startsWith("dlp_stars:")).length > 0 && (
         <TagList tags={story.tags.filter(t => !t.startsWith("dlp_stars:"))} className="card__tags" />
       )}
       {story.warnings.filter(w => w !== "No Archive Warnings Apply").length > 0 && (
         <div className="card__warnings">
+          {/* Clickable like every other facet — a warning is a thing you search
+              FOR as often as one you avoid, and the exclude form is a click away
+              in the sidebar. */}
           {story.warnings.filter(w => w !== "No Archive Warnings Apply").map(w =>
-            <span key={w} className="tag tag--warn">{w}</span>)}
+            <Link key={w} href={`/?warnings=${encodeURIComponent(w)}`}
+              className="tag tag--warn tag--clickable"
+              title={`Find works tagged "${w}"`}>{w}</Link>)}
         </div>
       )}
 
