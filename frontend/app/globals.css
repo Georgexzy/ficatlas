@@ -83,7 +83,8 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 
 /* ── Sidebar ───────────────────────────────────────────────────────────────── */
 .sidebar {
-  width: 220px;
+  /* Width is user-set (drag handle) and remembered; 220px until then. */
+  width: var(--sidebar-w, 220px);
   flex-shrink: 0;
   background: var(--surface);
   border-right: 1px solid var(--border);
@@ -350,7 +351,8 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   transition: all 0.12s;
 }
 .syntax-help__btn:hover { border-color: var(--accent); color: var(--accent); }
-.syntax-help__backdrop { position: fixed; inset: 0; z-index: 150; background: rgba(0,0,0,0.4); pointer-events: none; }
+/* Clickable: a dimmed overlay that ignores clicks reads as broken. */
+.syntax-help__backdrop { position: fixed; inset: 0; z-index: 150; background: rgba(0,0,0,0.5); }
 .syntax-help__panel {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
   width: min(660px, 92vw); max-height: 80vh; overflow-y: auto;
@@ -365,9 +367,27 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .syntax-help__intro { font-size: 13px; color: var(--text-dim); margin-bottom: 18px; line-height: 1.5; }
 .syntax-help__group { margin-bottom: 18px; }
 .syntax-help__group-label { font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 7px; }
-.syntax-help__row { display: flex; gap: 16px; align-items: baseline; padding: 3px 0; }
-.syntax-help__code { font-family: var(--font-mono); font-size: 12px; color: var(--accent); background: var(--accent-bg); padding: 2px 7px; border-radius: 3px; white-space: nowrap; flex-shrink: 0; }
-.syntax-help__desc { font-size: 12px; color: var(--text-dim); }
+/* The code column used to be `white-space: nowrap; flex-shrink: 0`, so the
+   "Combined example" — one long line — pushed the row wider than the panel and
+   was clipped at the edge. Let it wrap instead; the description drops beneath
+   it once the row can no longer sit side by side. */
+.syntax-help__row {
+  display: flex; gap: 8px 16px; align-items: baseline;
+  padding: 3px 0; flex-wrap: wrap;
+}
+.syntax-help__code {
+  font-family: var(--font-mono); font-size: 12px; color: var(--accent);
+  background: var(--accent-bg); padding: 2px 7px; border-radius: 3px;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%;
+}
+.syntax-help__desc { font-size: 12px; color: var(--text-dim); flex: 1 1 200px; min-width: 0; }
+
+/* On a phone the two columns never fit, so stop pretending and stack them. */
+@media (max-width: 560px) {
+  .syntax-help__row { flex-direction: column; gap: 3px; }
+  .syntax-help__desc { flex: none; }
+  .syntax-help__panel { padding: 16px 14px; max-height: 85vh; }
+}
 
 /* ── Index status ──────────────────────────────────────────────────────────── */
 .index-status { position: relative; }
@@ -2146,43 +2166,59 @@ html, body { overflow-x: hidden; max-width: 100%; }
 }
 .helptip__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* Portalled onto <body> and positioned from JS, so no scroll container can
+   clip it. Coordinates come from the button and are clamped to the viewport;
+   see HelpTip.tsx for why an in-place bubble did not work. */
 .helptip__bubble {
-  position: absolute; z-index: 60; left: 50%; bottom: calc(100% + 7px);
-  transform: translateX(-50%);
-  width: max-content; max-width: min(280px, 70vw);
+  position: fixed; z-index: 400;
+  width: min(300px, calc(100vw - 24px));
   background: var(--surface2); color: var(--text);
   border: 1px solid var(--border2); border-radius: var(--radius);
-  padding: 8px 10px; font-size: 12px; line-height: 1.5;
+  padding: 10px 30px 10px 12px; font-size: 12px; line-height: 1.55;
   font-family: var(--font-sans); font-weight: 400; text-transform: none;
   letter-spacing: normal; white-space: normal; text-align: left;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+  box-shadow: 0 8px 26px rgba(0,0,0,0.5);
 }
-.helptip__bubble::after {
-  content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px;
-  border: 5px solid transparent; border-top-color: var(--border2);
-}
+.helptip__bubble strong { color: var(--accent); font-weight: 600; }
 
-/* On a phone the bubble is wider than the control it hangs off, so anchoring
-   it to the tip's centre pushes it off-screen near either edge. Pin it across
-   the viewport instead. */
-@media (max-width: 560px) {
-  .helptip__bubble {
-    position: fixed; left: 12px; right: 12px; top: auto;
-    transform: none; max-width: none; width: auto;
-    /* Sit ABOVE the bottom tab bar, not behind it. The bar is fixed to the
-       bottom on phones, so a bubble pinned to bottom:12px is simply hidden. */
-    bottom: calc(72px + env(safe-area-inset-bottom));
-  }
-  .helptip__bubble::after { display: none; }
+/* An explicit close, because a bubble opened by TAP has nothing to hover away
+   from — and on a phone the nearest tappable thing might be a filter. */
+.helptip__close {
+  position: absolute; top: 4px; right: 4px;
+  width: 22px; height: 22px; padding: 0; border: 0;
+  background: none; color: var(--text-faint);
+  font-size: 12px; line-height: 1; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
 }
-
-/* The reader has no tab bar, so the bubble can sit lower there. */
-@media (max-width: 560px) {
-  body:not(:has(.tabbar)) .helptip__bubble { bottom: 16px; }
-}
+.helptip__close:hover { color: var(--accent); }
+.helptip__close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* A 16px circle is fine for a mouse and far too small for a thumb, so grow the
-   hit area on touch without changing how it looks. */
+   hit area on touch without changing how the control looks. */
 @media (pointer: coarse) {
   .helptip__btn::before { content: ""; position: absolute; inset: -11px; }
+  .helptip__close { width: 30px; height: 30px; }
+}
+
+/* ── Resizable filter panel (desktop) ──────────────────────────────────────── */
+.sidebar__resizer {
+  position: absolute; top: 0; right: -3px; bottom: 0;
+  width: 7px; cursor: col-resize; z-index: 5;
+  background: transparent;
+}
+.sidebar__resizer:hover, .sidebar__resizer:focus-visible { background: var(--accent-dim); }
+.sidebar__resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* The handle is a child of a scrolling panel, so it needs the panel to be a
+   positioning context or it scrolls away from the edge it is meant to mark. */
+.sidebar { position: sticky; }
+
+/* While dragging, stop the pointer selecting text across the whole page and
+   keep the resize cursor even when it outruns the 7px handle. */
+body.is-resizing { user-select: none; cursor: col-resize; }
+body.is-resizing * { cursor: col-resize !important; }
+
+/* Touch gets the drawer, not a drag handle — it would fight swipe-to-close. */
+@media (pointer: coarse), (max-width: 900px) {
+  .sidebar__resizer { display: none; }
 }

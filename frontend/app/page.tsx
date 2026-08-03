@@ -438,11 +438,83 @@ function EmptyState({ onPick, onSurprise }: { onPick: (q: string) => void; onSur
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
+
+// Drag-to-resize for the filter panel (desktop only).
+//
+// The panel was a fixed 220px, which is too narrow for long fandom names —
+// "Harry Potter and the Cursed Child - Thorne & Rowling" wrapped to three
+// lines — and too wide for anyone who mostly wants the results. The width is
+// remembered, so it is set once rather than every visit.
+//
+// Not offered on touch: there the panel is a full-height drawer, where a drag
+// handle would fight the swipe-to-close gesture and the width is the screen.
+const SIDEBAR_MIN = 180
+const SIDEBAR_MAX = 460
+const SIDEBAR_DEFAULT = 220
+
+function useSidebarResize() {
+  const [sidebarWidth, setSidebarWidth] = useState<number | null>(null)
+  const dragging = useRef(false)
+
+  useEffect(() => {
+    const saved = Number(localStorage.getItem("ficatlas:sidebar_w"))
+    if (saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) setSidebarWidth(saved)
+  }, [])
+
+  const commit = useCallback((w: number) => {
+    const clamped = Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w)))
+    setSidebarWidth(clamped)
+    try { localStorage.setItem("ficatlas:sidebar_w", String(clamped)) } catch {}
+  }, [])
+
+  const startResize = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // Pointer capture keeps the drag alive when the cursor outruns the handle,
+    // which it will — a 6px target and a fast mouse part company immediately.
+    if (window.matchMedia("(pointer: coarse)").matches) return
+    e.preventDefault()
+    dragging.current = true
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    const startX = e.clientX
+    const startW = sidebarWidth ?? SIDEBAR_DEFAULT
+    document.body.classList.add("is-resizing")
+
+    const move = (ev: PointerEvent) => {
+      if (dragging.current) commit(startW + (ev.clientX - startX))
+    }
+    const up = (ev: PointerEvent) => {
+      dragging.current = false
+      document.body.classList.remove("is-resizing")
+      try { el.releasePointerCapture(ev.pointerId) } catch {}
+      el.removeEventListener("pointermove", move)
+      el.removeEventListener("pointerup", up)
+      el.removeEventListener("pointercancel", up)
+    }
+    el.addEventListener("pointermove", move)
+    el.addEventListener("pointerup", up)
+    el.addEventListener("pointercancel", up)
+  }, [sidebarWidth, commit])
+
+  // A drag handle that only responds to dragging is unusable without a mouse.
+  const onResizeKey = useCallback((e: React.KeyboardEvent) => {
+    const w = sidebarWidth ?? SIDEBAR_DEFAULT
+    if (e.key === "ArrowLeft") { e.preventDefault(); commit(w - 16) }
+    if (e.key === "ArrowRight") { e.preventDefault(); commit(w + 16) }
+    if (e.key === "Home") { e.preventDefault(); commit(SIDEBAR_DEFAULT) }
+  }, [sidebarWidth, commit])
+
+  const resetWidth = useCallback(() => commit(SIDEBAR_DEFAULT), [commit])
+
+  return { sidebarWidth, startResize, onResizeKey, resetWidth }
+}
+
+
 function SearchPageInner() {
   const router     = useRouter()
   const pathname   = usePathname()
   const rawParams  = useSearchParams()
   const [, startTransition] = useTransition()
+  const { sidebarWidth, startResize, onResizeKey, resetWidth } = useSidebarResize()
 
   const get = (k: string) => rawParams.get(k) ?? undefined
 
@@ -805,7 +877,20 @@ function SearchPageInner() {
         {filtersOpen && <div className="sidebar-backdrop" onClick={() => setFiltersOpen(false)} />}
 
         {/* ── Sidebar (slide-out drawer on mobile) ── */}
-        <aside className={`sidebar ${filtersOpen ? "sidebar--open" : ""}`}>
+        <aside className={`sidebar ${filtersOpen ? "sidebar--open" : ""}`}
+          style={sidebarWidth ? ({ ["--sidebar-w" as any]: `${sidebarWidth}px` }) : undefined}>
+          {/* Drag to resize, desktop only — see useSidebarResize. */}
+          <div
+            className="sidebar__resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize filter panel"
+            tabIndex={0}
+            onPointerDown={startResize}
+            onDoubleClick={resetWidth}
+            onKeyDown={onResizeKey}
+            title="Drag to resize · double-click to reset · arrow keys also work"
+          />
           <div className="sidebar__mobile-head">
             <span>Filters</span>
             <button className="sidebar__close" onClick={() => setFiltersOpen(false)} aria-label="Close filters">✕</button>

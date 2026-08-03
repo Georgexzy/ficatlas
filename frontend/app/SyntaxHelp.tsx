@@ -45,22 +45,59 @@ export default function SyntaxHelp() {
   const panelRef = useRef<HTMLDivElement | null>(null)
   const btnRef   = useRef<HTMLButtonElement | null>(null)
 
-  // Close on Escape or outside-click
+  // Close on Escape or outside-click, trap focus, and stop the page scrolling
+  // underneath.
+  //
+  // It declares role="dialog" aria-modal="true" but did none of those things:
+  // focus stayed on the page behind, so Tab walked through the filters you
+  // could not see while a modal covered them, and Escape was the only way back
+  // to where you were. That is what made it feel wrong to use rather than
+  // merely plain.
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false) }
+    const panel = panelRef.current
+    const previouslyFocused = document.activeElement as HTMLElement | null
+
+    const focusables = () => Array.from(
+      panel?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    ).filter(el => el.offsetParent !== null)
+
+    // Move focus in, so a keyboard user is actually inside the thing that just
+    // opened rather than still behind it.
+    focusables()[0]?.focus()
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setOpen(false); return }
+      if (e.key !== "Tab") return
+      const items = focusables()
+      if (!items.length) return
+      const first = items[0], last = items[items.length - 1]
+      // Wrap at both ends instead of letting Tab escape to the page behind.
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
     const onClick = (e: MouseEvent) => {
       const t = e.target as Node
       if (panelRef.current?.contains(t)) return         // click inside panel
       if (btnRef.current?.contains(t)) return           // click on the trigger toggles
       setOpen(false)
     }
+
+    // A modal that lets the page scroll behind it drifts away from whatever
+    // you were looking at when you opened it.
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+
     window.addEventListener("keydown", onKey)
     // capture phase so we close even if a child stops propagation
     document.addEventListener("click", onClick, true)
     return () => {
       window.removeEventListener("keydown", onKey)
       document.removeEventListener("click", onClick, true)
+      document.body.style.overflow = prevOverflow
+      previouslyFocused?.focus?.()      // return the caret where it came from
     }
   }, [open])
 
@@ -71,8 +108,10 @@ export default function SyntaxHelp() {
 
       {open && (
         <>
-          <div className="syntax-help__backdrop" aria-hidden="true" />
-          <div ref={panelRef} className="syntax-help__panel" role="dialog" aria-modal="true">
+          <div className="syntax-help__backdrop" aria-hidden="true"
+            onClick={() => setOpen(false)} />
+          <div ref={panelRef} className="syntax-help__panel" role="dialog"
+            aria-modal="true" aria-label="Search syntax help">
             <div className="syntax-help__header">
               <p className="syntax-help__title">Search Syntax</p>
               <button className="syntax-help__close" onClick={() => setOpen(false)} aria-label="Close">✕</button>
