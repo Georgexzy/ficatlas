@@ -14,9 +14,15 @@
 //     then boots and reads that specific chapter from IndexedDB.
 //   - /api/*: never cached; offline data comes from IndexedDB in the app.
 
-// Bump on any change to the precache set or fetch strategy: `activate` deletes
-// every cache whose name differs, which is what evicts the previous shell.
-const CACHE = "ficatlas-shell-v8"
+// Derived from the build stamp by gen-sw-precache.js, so it changes on every
+// build. `activate` deletes every cache whose name differs, which is what
+// evicts the previous shell.
+//
+// This used to be a hand-maintained "v8". Bumping it was a manual step on any
+// change to the precache set or fetch strategy, and forgetting meant the old
+// cache was never evicted — entries for superseded hashed assets accumulated
+// build after build. Tying it to the build removes the step and the mistake.
+const CACHE = "__CACHE_VERSION__"
 const PRECACHE = __PRECACHE_MANIFEST__
 
 self.addEventListener("install", (event) => {

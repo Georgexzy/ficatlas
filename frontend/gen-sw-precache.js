@@ -59,6 +59,16 @@ if (!sw.includes("__PRECACHE_MANIFEST__")) {
   process.exit(1)
 }
 sw = sw.split("__PRECACHE_MANIFEST__").join(JSON.stringify(manifest))
+
+// One stamp shared by the service worker cache name and build.json below, so
+// the version a client reports always matches the cache it is actually using.
+const buildStamp = new Date().toISOString()
+if (!sw.includes("__CACHE_VERSION__")) {
+  console.error("gen-sw-precache: placeholder __CACHE_VERSION__ not found in template")
+  process.exit(1)
+}
+sw = sw.split("__CACHE_VERSION__").join(
+  "ficatlas-shell-" + buildStamp.replace(/[^0-9]/g, "").slice(0, 14))
 fs.writeFileSync(OUT, sw)
 console.log(`gen-sw-precache: wrote ${OUT} with ${manifest.length} precached URLs`)
 
@@ -68,6 +78,6 @@ console.log(`gen-sw-precache: wrote ${OUT} with ${manifest.length} precached URL
 // indistinguishable from the outside.
 fs.writeFileSync(
   path.join("public", "build.json"),
-  JSON.stringify({ built: new Date().toISOString() }) + "\n",
+  JSON.stringify({ built: buildStamp }) + "\n",
 )
 console.log("gen-sw-precache: wrote public/build.json")

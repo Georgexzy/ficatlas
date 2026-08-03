@@ -25,6 +25,18 @@ const SITE_LABELS: Record<string, string> = {
   royalroad: "Royal Road", spacebattles: "SpaceBattles",
 }
 
+// This used to be `status === "complete" ? "Complete" : "In Progress"`, which
+// states "In Progress" for anything that is not explicitly finished. Most of
+// the index is neither: the bulk dumps carry no completion data, so 5.3M FF.net
+// and 8.5k FicAlley works are stored as `unknown` precisely so we stop claiming
+// they are unfinished. A binary label put that claim straight back on the page.
+const STATUS_LABEL: Record<string, string> = {
+  complete: "Complete",
+  in_progress: "In Progress",
+  abandoned: "Abandoned",
+  unknown: "Not stated",
+}
+
 export default function StoryPage() {
   const params = useParams()
   const id = params?.id as string
@@ -270,7 +282,7 @@ export default function StoryPage() {
         <dl className="story-detail__meta">
           <div><dt>Words</dt><dd>{story.word_count.toLocaleString()}</dd></div>
           <div><dt>Chapters</dt><dd>{story.chapter_count}{story.chapter_count_total ? `/${story.chapter_count_total}` : "/?"}</dd></div>
-          <div><dt>Status</dt><dd>{story.status === "complete" ? "Complete" : "In Progress"}</dd></div>
+          <div><dt>Status</dt><dd>{STATUS_LABEL[story.status] ?? "Not stated"}</dd></div>
           {story.rating && <div><dt>Rating</dt><dd>{story.rating}</dd></div>}
           {story.kudos > 0 && <div><dt>Kudos</dt><dd>{story.kudos.toLocaleString()}</dd></div>}
           {story.hits > 0 && <div><dt>Hits</dt><dd>{story.hits.toLocaleString()}</dd></div>}
