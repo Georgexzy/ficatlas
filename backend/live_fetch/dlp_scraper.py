@@ -73,6 +73,26 @@ _EXT_RE = re.compile(r'<a[^>]+href="(https?://[^"]+)"[^>]*>([^<]*)</a>', re.IGNO
 
 
 # Identify the host of an external link to label it
+# Trailing junk cutoff. DLP posts contain hand-written BBCode, and a malformed
+# link there renders as an <a href> with the rest of the broken tag glued on:
+#
+#     http://archiveofourown.org/works/680944&quot;]Valar Morgulis
+#
+# The regex faithfully captured that, and the result matched nothing when
+# looked up, so 28 of 1,061 curated links silently did not resolve.
+_URL_JUNK = re.compile(r'(&quot;|&amp;quot;|["\'\[\]<>]|\s).*$')
+
+
+def _clean_url(href: str) -> str:
+    """Trim a scraped href back to the URL, dropping any BBCode wreckage."""
+    href = _html.unescape(href or "").strip()
+    href = _URL_JUNK.sub("", href)
+    # After trimming, a bare scheme or a fragment is not a story link.
+    if not href.startswith(("http://", "https://")) or len(href) < 15:
+        return ""
+    return href.rstrip(".,;)")
+
+
 def _classify(url: str) -> str | None:
     u = url.lower()
     if "fanfiction.net/s/" in u: return "ffn"
@@ -149,8 +169,8 @@ def parse_dlp_library(html_text: str) -> list[dict]:
         # External links (FFN/AO3/etc)
         urls: dict[str, str] = {}
         for em in _EXT_RE.finditer(item):
-            href = em.group(1).strip()
-            if "darklordpotter.net" in href: continue
+            href = _clean_url(em.group(1))
+            if not href or "darklordpotter.net" in href: continue
             kind = _classify(href)
             if kind and kind not in urls:
                 urls[kind] = href
@@ -165,6 +185,41 @@ def parse_dlp_library(html_text: str) -> list[dict]:
         })
 
     return entries
+
+
+# DLP runs XenForo's thread-rating add-on, so every library thread carries a
+# community star rating — but only on the THREAD page, never on the library
+# list this module otherwise parses:
+#
+#     <div class="threadrating"> … <span class="ratings" title="4.00">
+#
+# That is a genuinely useful signal: DLP's list is already curated, so the
+# rating separates "good enough to include" from "the best of them".
+_RATING_RE = re.compile(r'<div class="threadrating".{0,400}?<span class="ratings" title="([\d.]+)"',
+                        re.DOTALL)
+
+
+async def fetch_dlp_rating(client, thread_url: str) -> float | None:
+    """The community star rating on a DLP library thread, 0-5, or None.
+
+    One request per thread, so callers should pace themselves — this is a
+    volunteer-run forum, not an API.
+    """
+    try:
+        r = await client.get(thread_url)
+    except Exception:
+        return None
+    if r.status_code != 200:
+        return None
+    m = _RATING_RE.search(r.text)
+    if not m:
+        return None
+    try:
+        value = float(m.group(1))
+    except ValueError:
+        return None
+    # An unrated thread renders as 0.00; that is "no rating", not "rated zero".
+    return value if 0 < value <= 5 else None
 
 
 async def fetch_dlp_library(corpus: str = "hp", limit: int | None = None) -> list[dict]:

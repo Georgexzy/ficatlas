@@ -2,6 +2,7 @@
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 from db.session import get_db
+from api.auth import require_admin
 from models.story import CrawlJob, SiteEnum
 from crawlers.ao3 import AO3Crawler
 from crawlers.ffnet import FFNetCrawler
@@ -21,7 +22,17 @@ async def trigger_crawl(
     job_type: str = "incremental",
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
+    """Start a crawl. Requires an account.
+
+    This was the one mutating endpoint with no guard on it. Anyone who could
+    reach the app could queue unlimited crawls — not just free compute, but
+    outbound requests to AO3 and FF.net from the host's IP, which is exactly
+    what gets an address rate-limited or blocked for everyone using it. Every
+    other discover/import endpoint already required an account; this one was
+    simply missed.
+    """
     if site not in CRAWLERS:
         return {"error": f"No crawler for site: {site}"}
 

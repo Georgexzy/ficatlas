@@ -286,6 +286,12 @@ async def search(
         description="Exact author match (case-insensitive). Unlike free text, this "
                     "returns only that author's works — across every archive.",
     ),
+    dlp_min_rating:        Optional[float] = Query(
+        None, ge=0, le=5,
+        description="Minimum DarkLordPotter community star rating. DLP's list is "
+                    "already curated, so this separates the best of it from the "
+                    "merely-included.",
+    ),
     search_within:         Optional[str] = Query(None),
     sort:                  str           = Query("relevance"),
     page:                  int           = Query(1, ge=1),
@@ -355,6 +361,22 @@ async def search(
         filters.append(
             _story_tsv().op("@@")(func.websearch_to_tsquery(_REGCONFIG, q))
         )
+
+    if dlp_min_rating is not None:
+        # The rating lives in a `dlp_stars:4.67` tag rather than a column, so it
+        # has to be pulled out and compared numerically. That is a per-row
+        # subquery, which would be unusable across 19.6M rows — but the tag only
+        # exists on DLP works, and requiring `dlp_library` first narrows the scan
+        # to a few hundred through the GIN index before this ever runs.
+        filters.append(Story.tags.op("@>")(cast(["dlp_library"], PG_ARRAY(Text))))
+        filters.append(sql_text(
+            "EXISTS (SELECT 1 FROM unnest(stories.tags) AS t "
+            "WHERE t LIKE 'dlp_stars:%' "
+            # split_part, not substring(t FROM n) — the prefix is 10 characters
+            # so the number starts at 11, and an off-by-one read '.67' as 0.67,
+            # which quietly matched nothing at any threshold above zero.
+            "AND split_part(t, ':', 2)::float >= :dlp_min)"
+        ).bindparams(dlp_min=float(dlp_min_rating)))
 
     if author:
         # Exact, case-insensitive. Free-text search matches the author field too,
@@ -549,9 +571,6 @@ async def search(
     # search. We only need an exact count up to a ceiling; beyond that "5000+" is
     # fine for pagination UI. This caps the count subquery for big result sets.
     COUNT_CEILING = 5000
-    count_subq = db_query.order_by(None).limit(COUNT_CEILING + 1).subquery()
-    total = db.query(func.count()).select_from(count_subq).scalar() or 0
-    count_is_capped = total > COUNT_CEILING
 
     # Order over a BOUNDED candidate set rather than the whole match set.
     #
@@ -566,9 +585,20 @@ async def search(
     # consistent with what we already promise: the count is only exact up to that
     # same ceiling, so below it the ordering is exact and above it we order within
     # the first 5000 matches — which is what "5000+" already implies.
-    candidates = db_query.order_by(None).limit(COUNT_CEILING).subquery()
+    # ONE pass, not two.
+    #
+    # The count and the page used to run the same expensive predicate twice —
+    # a LIMIT 5001 subquery to count, then an all-but-identical LIMIT 5000
+    # subquery to sort and paginate. On a filtered query that is the whole cost
+    # of the search paid over again for a number.
+    #
+    # A window function gives the count over the same bounded candidate set the
+    # page is drawn from, so the predicate runs once. The ceiling is +1 so
+    # "5000+" can still be distinguished from exactly 5000.
+    candidates = db_query.order_by(None).limit(COUNT_CEILING + 1).subquery()
     S = aliased(Story, candidates)
-    ordered = db.query(S)
+    total_over = func.count().over().label("total_matches")
+    ordered = db.query(S, total_over)
 
     sort_expr = _sort_expr(S, sort)
     if sort_expr is not None:
@@ -587,7 +617,23 @@ async def search(
         ordered = ordered.order_by(S.word_count.desc().nullslast())
 
     offset  = (page - 1) * per_page
-    indexed = ordered.offset(offset).limit(per_page).all()
+    rows    = ordered.offset(offset).limit(per_page).all()
+    # count(*) OVER () repeats the same total on every row; it is only absent
+    # when the page is empty, which also means there was nothing to count.
+    if rows:
+        total = int(rows[0][1])
+    elif page > 1:
+        # An empty page past the first tells us nothing about the total — the
+        # window count only rides along on rows that came back. Paging beyond
+        # the end would otherwise report "0 results" for a search that has
+        # thousands, so fall back to counting for this uncommon case.
+        total = db.query(func.count()).select_from(candidates).scalar() or 0
+    else:
+        total = 0
+    count_is_capped = total > COUNT_CEILING
+    if count_is_capped:
+        total = COUNT_CEILING
+    indexed = [r[0] for r in rows]
     indexed_cards = [_to_card(s) for s in indexed]
 
     # ── Live AO3 fetch ───────────────────────────────────────────────────────

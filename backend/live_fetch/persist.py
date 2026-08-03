@@ -1,8 +1,10 @@
 """Persist live-fetched results into the DB so the index grows over time."""
 import logging
+import re
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from provenance import PROVENANCE_TAGS
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 
 log = logging.getLogger(__name__)
@@ -19,6 +21,48 @@ _STATUS_MAP = {
     "complete":    StatusEnum.complete,
     "in_progress": StatusEnum.in_progress,
 }
+
+
+# URL -> (site, site_id). The id patterns are each archive's own permalink form.
+_SITE_PATTERNS = [
+    (SiteEnum.ao3,          re.compile(r"archiveofourown\.org/works/(\d+)")),
+    (SiteEnum.ffnet,        re.compile(r"fanfiction\.net/s/(\d+)")),
+    (SiteEnum.fictionalley, re.compile(r"fictionalley\.org/authors/([^/]+/[^/?#]+)")),
+]
+
+
+def _site_and_id(url: str, d: dict) -> tuple:
+    """Work out which archive a row belongs to and its id there.
+
+    An explicit "id" from the caller still wins, including the historical
+    "live_ao3_<n>" form, so existing callers are unaffected.
+    """
+    raw_id = str(d.get("id") or "")
+    if raw_id.startswith("live_ao3_"):
+        return SiteEnum.ao3, raw_id.replace("live_ao3_", "")
+
+    for site, pattern in _SITE_PATTERNS:
+        m = pattern.search(url or "")
+        if m:
+            return site, m.group(1)[:64]
+
+    # Unknown host: fall back to whatever the caller gave us rather than
+    # guessing a site, so a row can still be stored if it carries its own id.
+    if raw_id:
+        return SiteEnum.ao3, raw_id[:64]
+    return SiteEnum.ao3, ""
+
+
+def _as_datetime(value):
+    """Accept a datetime or an ISO string; callers supply both."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
 
 
 def persist_live_results(db: Session, live_results: list[dict]) -> int:
@@ -76,27 +120,85 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
         if existing_work is not None:
             try:
                 alts = set(existing_work.cross_post_urls or [])
+                changed_here = False
                 if url not in alts and url != existing_work.url:
                     alts.add(url)
                     existing_work.cross_post_urls = sorted(alts)
                     existing_work.is_crossover = existing_work.is_crossover or False
-                    db.commit()
+                    changed_here = True
                     merged_crosspost += 1
+
+                # Carry provenance across the merge.
+                #
+                # Recognising a cross-post and NOT creating a duplicate is the
+                # right call, but it silently dropped the incoming source tags,
+                # which is the entire point of some of those fetches. A DLP
+                # curated work already indexed from the AO3 dump was correctly
+                # merged and then left untagged, so "recommended by DLP" could
+                # not be answered for it — the list looked imported while
+                # marking almost nothing.
+                incoming_prov = [t for t in (d.get("tags") or []) if t in PROVENANCE_TAGS]
+                if incoming_prov:
+                    have = list(existing_work.tags or [])
+                    added = [t for t in incoming_prov if t not in have]
+                    if added:
+                        existing_work.tags = have + added
+                        changed_here = True
+
+                # Take the FRESHER copy's content forward.
+                #
+                # The merge previously recorded the other site's URL and nothing
+                # else, so if the copy we already held was the abandoned one, it
+                # stayed abandoned in the index while the still-updating version
+                # was demoted to an "also on" link. A reader following the main
+                # link got a story three years behind.
+                #
+                # Forward-only, as everywhere else: dates advance, chapter counts
+                # and engagement rise, status may reach complete. Nothing here can
+                # make a row staler than it already is.
+                inc_when = _as_datetime(d.get("updated_at"))
+                if inc_when and (existing_work.updated_at is None
+                                 or inc_when > existing_work.updated_at):
+                    existing_work.updated_at = inc_when
+                    changed_here = True
+                for attr, key in (("chapter_count", "chapter_count"),
+                                  ("word_count", "word_count"),
+                                  ("kudos", "kudos"), ("hits", "hits"),
+                                  ("comments", "comments"), ("bookmarks", "bookmarks")):
+                    val = d.get(key)
+                    if isinstance(val, int) and val > (getattr(existing_work, attr) or 0):
+                        setattr(existing_work, attr, val)
+                        changed_here = True
+                if d.get("status") == "complete" and existing_work.status != StatusEnum.complete:
+                    existing_work.status = StatusEnum.complete
+                    changed_here = True
+                if d.get("summary") and not (existing_work.summary or "").strip():
+                    existing_work.summary = d["summary"]
+                    changed_here = True
+
+                if changed_here:
+                    db.commit()
                 existing_urls.add(url)
                 continue
             except Exception:
                 db.rollback()
         try:
-            site_id = d["id"].replace("live_ao3_", "")
-            updated_at = None
-            if d.get("updated_at"):
-                try:
-                    updated_at = datetime.fromisoformat(d["updated_at"])
-                except Exception:
-                    pass
+            # Site and id come from the URL unless the caller supplied them.
+            #
+            # This used to be `site_id = d["id"].replace("live_ao3_", "")` with
+            # `site=SiteEnum.ao3` hardcoded, which made the function AO3-only
+            # despite its name. Any other source passing rows here either raised
+            # KeyError on the missing "id" and lost the row silently, or — worse
+            # — had its FF.net works stored as if they were AO3. Both happened:
+            # the DLP importer reported "140 not indexed, 0 added".
+            site, site_id = _site_and_id(url, d)
+            if not site_id:
+                skipped_existing += 1
+                continue
+            updated_at = _as_datetime(d.get("updated_at"))
 
             story = Story(
-                site=SiteEnum.ao3,
+                site=site,
                 site_id=site_id,
                 url=url,
                 title=(d.get("title") or "Untitled")[:500],
@@ -197,6 +299,21 @@ def _enrich_existing(db: Session, url: str, d: dict) -> bool:
             changed = True
 
         # ── Fill gaps: only where we hold nothing ──────────────────────────
+        # Provenance tags MERGE; every other list field is fill-if-empty.
+        #
+        # A work can legitimately belong to several sources — most of HPFFA's 37
+        # works were already in the index from the AO3 dump, so they carried
+        # `ao3_meta_dump` and the fill-if-empty rule below meant they could never
+        # also be marked `hpffa_archive`. The archive looked 21/37 imported when
+        # in truth all 37 were present and 16 simply could not be labelled.
+        incoming_prov = [t for t in (d.get("tags") or []) if t in PROVENANCE_TAGS]
+        if incoming_prov:
+            have = list(story.tags or [])
+            added = [t for t in incoming_prov if t not in have]
+            if added:
+                story.tags = have + added
+                changed = True
+
         if not (story.summary or "").strip() and (d.get("summary") or "").strip():
             story.summary = d["summary"]
             changed = True

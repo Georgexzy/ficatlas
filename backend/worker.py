@@ -37,6 +37,7 @@ days, not to saturate the database or hammer archive.org:
 """
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import os
 import sys
@@ -163,60 +164,475 @@ async def _recent_works_loop() -> None:
 
 
 async def _refresh_stale_loop() -> None:
-    """Re-check works we already hold, stalest first, so the index isn't a
+    """Re-check works that may have gained chapters, so the index is not a
     permanent snapshot of import day.
 
-    Fanfiction is mutable — a WIP gains chapters, changes word count, and
-    eventually completes — but a row was frozen at the moment it was imported.
-    Re-encounters now refresh (see persist._enrich_existing), and for the tracked
-    fandoms that happens for free: the recent-works loop walks tag pages sorted
-    by revised_at, which IS AO3's update feed, so anything that updates surfaces
-    within the interval.
+    Fanfiction is mutable: a WIP gains chapters, its word count grows, and it
+    eventually completes. Three things already catch some of that —
 
-    This covers what that cannot: works outside the tracked fandoms. Refreshing
-    all 10.7M in_progress rows individually is not feasible and would be rude to
-    AO3, so it targets HOSTED works — the ones actually being read, ~30k rather
-    than millions — oldest crawled_at first.
+      * _recent_works_loop walks tag pages sorted by revised_at, which IS AO3's
+        update ordering, so anything updating in a TRACKED fandom surfaces on
+        its own;
+      * persist._enrich_existing applies updates forward-only whenever a work
+        is re-encountered by any path;
+      * the work-page harvest reads updated_at directly.
+
+    — but none of them covers a work outside the tracked fandoms that nothing
+    happens to re-encounter, and that is 5.48M in_progress AO3 rows.
+
+    This used to target `is_hosted AND status='in_progress' AND site='ao3'`,
+    which matches ZERO rows (only two AO3 works are hosted and both are
+    complete), and to fetch through AO3 free-text search, which is
+    robots-disallowed and returns nothing for an automated caller. It was a
+    no-op on both counts.
+
+    Now it re-reads the work page — permitted, authoritative, and the same
+    request shape the harvest already makes — and picks WIPs by readership so
+    the works someone will actually open are the ones kept current.
     """
-    interval = _num("REFRESH_INTERVAL_MIN", 60) * 60
+    interval = _num("REFRESH_INTERVAL_MIN", 30) * 60
     batch = int(_num("REFRESH_BATCH", 40))
+    delay = _num("REFRESH_DELAY", 2.0)
     from sqlalchemy import text as sql_text
     from db.session import db_session
-    from live_fetch.ao3_live import fetch_live_ao3
-    from live_fetch.persist import persist_live_results
+    from models.story import Story
+    from ao3_title_repair import RateLimiter, THROTTLED, fetch_work, apply_work, UA
+    import httpx
+
+    # Which WIP is worth a request right now?
+    #
+    # Ranking by popularity alone keeps re-reading the same well-read fic that
+    # was abandoned in 2019, and never looks at the one that gained a chapter
+    # last week. Three independent factors, multiplied:
+    #
+    #   activity  exp(-days_since_update / 365)
+    #             A fic updated recently is very likely to update again; one
+    #             untouched for years probably never will. Decays to 0.37 at a
+    #             year and 0.05 at three, so a three-year-dormant work needs
+    #             ~20x the readership to earn the same slot — it still gets
+    #             checked eventually, just far less often. Falls back to
+    #             published_at, and an unknown date is treated as a year old
+    #             rather than as dead or as fresh.
+    #
+    #   reach     ln(1 + kudos + hits)
+    #             Logarithmic on purpose: a 100k-hit fic matters more than a
+    #             100-hit one, but not a thousand times more, or the head of
+    #             the index would be all that ever got checked.
+    #
+    #   overdue   ln(2 + days_since_we_looked)
+    #             Grows slowly and without bound, so nothing can be starved
+    #             forever by works that merely score higher.
+    #
+    # And a nudge for works AO3 says are unfinished: chapter_count_total IS
+    # NULL is the "12/?" form, an explicit statement that more is coming.
+    STALE_SQL = sql_text("""
+        WITH scored AS (
+            SELECT id, site_id,
+                   exp(-LEAST(
+                       EXTRACT(EPOCH FROM (now() - COALESCE(updated_at, published_at,
+                                                            now() - interval '365 days')))
+                       / 86400.0, 3650) / 365.0)
+                   * ln(1 + COALESCE(kudos,0) + COALESCE(hits,0))
+                   * ln(2 + COALESCE(
+                         EXTRACT(EPOCH FROM (now() - crawled_at)) / 86400.0, 3650))
+                   * CASE WHEN chapter_count_total IS NULL THEN 1.3 ELSE 1.0 END
+                   AS refresh_score
+            FROM stories
+            WHERE site = 'ao3'
+              AND site_id ~ '^[0-9]+$'
+              AND status = 'in_progress'
+              AND (crawled_at IS NULL
+                   OR crawled_at < now() - (:min_age || ' days')::interval)
+        )
+        SELECT id, site_id FROM scored
+        ORDER BY refresh_score DESC NULLS LAST
+        LIMIT :lim
+    """)
 
     while True:
         try:
             def _stalest():
                 with db_session() as db:
-                    return db.execute(sql_text("""
-                        SELECT title, author FROM stories
-                        WHERE is_hosted AND status = 'in_progress'
-                          AND site = 'ao3' AND title IS NOT NULL
-                        ORDER BY crawled_at ASC NULLS FIRST
-                        LIMIT :lim
-                    """), {"lim": batch}).fetchall()
+                    return db.execute(STALE_SQL, {
+                        "lim": batch, "min_age": int(_num("REFRESH_MIN_AGE_DAYS", 7)),
+                    }).fetchall()
 
             rows = await asyncio.to_thread(_stalest)
-            refreshed = 0
-            for title, author in rows:
-                try:
-                    results = await fetch_live_ao3(
-                        {"q": f"{title} {author or ''}".strip(), "status": None,
-                         "sort": "relevance"}, limit=20, pages=1, automated=True)
-                    if results:
-                        def _save():
-                            with db_session() as db:
-                                return persist_live_results(db, results)
-                        await asyncio.to_thread(_save)
-                        refreshed += 1
-                except Exception:
-                    pass
-                await asyncio.sleep(5)      # polite spacing between works
-            if refreshed:
-                log.info(f"refreshed {refreshed} stale hosted works")
+            if not rows:
+                await asyncio.sleep(interval)
+                continue
+
+            limiter = RateLimiter(delay)
+            stats: dict[str, int] = {}
+            checked = 0
+
+            def _run() -> int:
+                nonlocal checked
+                with httpx.Client(headers=UA) as client:
+                    for sid, work_id in rows:
+                        limiter.wait()
+                        data = fetch_work(client, work_id, limiter)
+                        if data is THROTTLED or not data:
+                            continue
+                        checked += 1
+                        with db_session() as db:
+                            story = db.query(Story).filter(Story.id == sid).first()
+                            if not story:
+                                continue
+                            for field in apply_work(story, data):
+                                stats[field] = stats.get(field, 0) + 1
+                            story.crawled_at = datetime.now(timezone.utc)
+                            db.commit()
+                return checked
+
+            await asyncio.to_thread(_run)
+            changed = " ".join(f"{k}={v}" for k, v in sorted(stats.items(), key=lambda kv: -kv[1]))
+            log.info(f"stale refresh: {checked}/{len(rows)} re-read — {changed or 'no changes'}")
         except Exception as e:
-            log.warning(f"refresh pass failed: {type(e).__name__}: {e}")
+            log.warning(f"stale refresh failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
+# ── Alternative archives: full, resumable import ─────────────────────────────
+#
+# The Open Doors archives were only ever reachable through the Library page's
+# one-click buttons, which cap at 20 pages and always restart from page 1. The
+# index held 21 HPFFA works, 0 HexFiles and 0 SquidgeWorld, so "search every
+# archive at once" was true only for AO3, FFN and FicAlley.
+#
+# Those 21 rows were also 100% empty of metadata, because the works-listing
+# parser silently dropped every field inside a collection listing — fixed
+# separately in ao3_works_scraper.py. Re-walking them repairs them, since
+# persist_live_results enriches rows it already has.
+#
+# This walks each of them end to end in the background instead. State is a page
+# cursor in app_settings, so a restart resumes rather than re-reading page 1
+# forever, and an archive that reports no "next" link is marked done and
+# skipped from then on.
+#
+# The metadata is the good kind: an Otwarchive works listing carries summary,
+# characters, relationships, freeform tags, warnings, word and chapter counts,
+# language, kudos, comments, bookmarks, hits and the updated date — richer per
+# work than any of the bulk dumps.
+ARCHIVES: list[dict] = [
+    {"name": "hpffa",        "tag": "hpffa_archive",
+     "kwargs": {"tag": "", "collection": "hpfanfiction_hpff"}},
+    {"name": "hexfiles",     "tag": "hexfiles_archive",
+     "kwargs": {"tag": "", "collection": "harrypotterfanficarchive"}},
+]
+
+# SquidgeWorld is deliberately absent. It now sits behind an interactive bot
+# challenge ("Making sure you're not a bot!") that returns a JS gate instead of
+# a works listing, so a server-side scrape gets 0 works no matter how it is
+# paged — which is why the index holds none of it. Retrying that on a timer
+# would be pointless load on someone else's box. The Library page button
+# remains for a human to try from a browser.
+#
+# Sizes are also far smaller than the archives they came from. Open Doors
+# imports only carry the works whose authors opted in, and AO3 reports:
+#     hpfanfiction_hpff        37 works  (HarryPotterFanfiction.com, ~85k live)
+#     harrypotterfanficarchive 834 works (Harry Potter FanFic Archive, ~18k live)
+# So a complete walk of both is ~871 works, not the tens of thousands the
+# original sites held.
+
+
+def _cursor_get(name: str) -> tuple[int, bool]:
+    from api.settings import get_setting
+    from db.session import db_session
+    with db_session() as db:
+        page = get_setting(db, f"archive_page:{name}")
+        done = get_setting(db, f"archive_done:{name}")
+    try:
+        page_n = max(1, int(page))
+    except (TypeError, ValueError):
+        page_n = 1
+    return page_n, str(done).lower() in ("1", "true", "yes")
+
+
+def _cursor_put(name: str, page: int, done: bool) -> None:
+    from api.settings import put_setting
+    from db.session import db_session
+    with db_session() as db:
+        put_setting(db, f"archive_page:{name}", str(page))
+        if done:
+            put_setting(db, f"archive_done:{name}", "true")
+
+
+
+def _dlp_import_missing(items: list[tuple[str, list[str]]], provenance: str) -> int:
+    """Resolve DLP URLs we do not hold through FicHub and index them."""
+    import httpx
+    from db.session import db_session
+    from fichub_meta import fetch_meta, HEADERS
+    from live_fetch.persist import persist_live_results
+
+    rows: list[dict] = []
+    with httpx.Client(headers=HEADERS, follow_redirects=True) as client:
+        for url, dlp_tags in items:
+            meta = fetch_meta(client, url)
+            if not meta:
+                continue
+            meta.setdefault("tags", [])
+            # DLP's own curation tags are the point of the list — they are what
+            # makes "recommended by DLP, tagged Time Travel" answerable.
+            for t in list(dlp_tags) + [provenance]:
+                if t and t not in meta["tags"]:
+                    meta["tags"].append(t)
+            rows.append(meta)
+
+    if not rows:
+        return 0
+    with db_session() as db:
+        return persist_live_results(db, rows)
+
+
+async def _dlp_ratings(entries: list[dict]) -> None:
+    """Attach DLP's community star rating to curated works we already hold."""
+    import httpx
+    from db.session import db_session
+    from models.story import Story
+    from api.library import _find_indexed_story
+    from live_fetch.dlp_scraper import fetch_dlp_rating
+
+    batch = int(_num("DLP_RATING_BATCH", 12))
+    delay = _num("DLP_RATING_DELAY", 3.0)
+
+    todo: list[tuple] = []
+    with db_session() as db:
+        for e in entries:
+            thread = e.get("dlp_thread")
+            cand = [v for k, v in (e.get("urls") or {}).items() if k in ("ffn", "ao3")]
+            if not thread or not cand:
+                continue
+            hit = _find_indexed_story(db, cand)
+            if hit is None:
+                continue
+            if any(str(t).startswith("dlp_stars:") for t in (hit.tags or [])):
+                continue        # already rated
+            todo.append((hit.id, thread))
+            if len(todo) >= batch:
+                break
+    if not todo:
+        return
+
+    rated = 0
+    async with httpx.AsyncClient(
+        headers={"User-Agent": "FicAtlas/1.0 (personal fanfiction index)"},
+        follow_redirects=True, timeout=60,
+    ) as client:
+        for story_id, thread in todo:
+            value = await fetch_dlp_rating(client, thread)
+            if value is not None:
+                def _write():
+                    with db_session() as db:
+                        story = db.query(Story).filter(Story.id == story_id).first()
+                        if story:
+                            tags = list(story.tags or [])
+                            tags = [t for t in tags if not str(t).startswith("dlp_stars:")]
+                            tags.append(f"dlp_stars:{value:.2f}")
+                            story.tags = tags
+                            db.commit()
+                await asyncio.to_thread(_write)
+                rated += 1
+            await asyncio.sleep(delay)
+    log.info(f"dlp ratings: {rated}/{len(todo)} threads rated")
+
+
+async def _dlp_pass() -> None:
+    """Merge DLP's curation onto stories already in the index, both corpora.
+
+    DLP publishes two lists — HP (729 entries) and everything else (376) — and
+    only 432 rows carried the tag, because the Library button defaults to the HP
+    list with a limit and was evidently never run for the other one.
+
+    This is the cheap half of the DLP flow deliberately: matching a curated
+    entry to a story we already hold costs one indexed lookup and no network
+    fetch per work, and it is what makes `dlp_library` usable as a quality
+    filter. Pulling in the works we do NOT hold means a FicHub fetch each, which
+    stays on the Library page's explicit button rather than running unattended.
+    """
+    from db.session import db_session
+    from api.library import _find_indexed_story, _merge_dlp_tags, _record_cross_posts
+    from live_fetch.dlp_scraper import fetch_dlp_library
+
+    for corpus in ("hp", "other"):
+        try:
+            entries = await fetch_dlp_library(corpus=corpus, limit=None)
+        except Exception as e:
+            log.warning(f"dlp {corpus}: fetch failed: {type(e).__name__}: {e}")
+            continue
+        if not entries:
+            continue
+        tagged = 0
+        with db_session() as db:
+            for e in entries:
+                cand = [v for k, v in (e.get("urls") or {}).items() if k in ("ffn", "ao3")]
+                if not cand:
+                    continue
+                hit = _find_indexed_story(db, cand)
+                if hit is None:
+                    continue
+                before = set(hit.tags or [])
+                _merge_dlp_tags(hit, e.get("dlp_tags") or [])
+                _record_cross_posts(hit, cand)
+                if set(hit.tags or []) != before:
+                    tagged += 1
+            db.commit()
+        # Then ADD the curated works we do not hold at all.
+        #
+        # Metadata only, via FicHub's /api/v0/meta — which resolves FFN URLs we
+        # cannot reach ourselves, and produces no download. Full text is a
+        # separate matter: /api/v0/epub hands back a /cache/epub/... URL and
+        # FicHub's robots.txt disallows that path, so EPUB fetching stays on the
+        # Library page's explicit button rather than running unattended here.
+        missing = []
+        with db_session() as db:
+            for e in entries:
+                cand = [v for k, v in (e.get("urls") or {}).items() if k in ("ffn", "ao3")]
+                if cand and _find_indexed_story(db, cand) is None:
+                    missing.append((cand[0], e.get("dlp_tags") or []))
+        if missing:
+            batch = int(_num("DLP_IMPORT_BATCH", 25))
+            added = await asyncio.to_thread(_dlp_import_missing, missing[:batch], provenance="dlp_library")
+            log.info(f"dlp {corpus}: {len(missing)} not indexed, {added} added this pass")
+        log.info(f"dlp {corpus}: {len(entries)} curated, {tagged} newly tagged")
+
+        # Star ratings live on the thread page, one request each, so they are
+        # fetched a few per pass and only for works we hold and have not rated
+        # yet. Stored as a tag rather than a column because the tag filter does
+        # substring matching, which makes "dlp_stars:4" mean 4.00-4.99 for free.
+        await _dlp_ratings(entries)
+        await asyncio.sleep(5)
+
+
+async def _archives_loop() -> None:
+    """Walk each alternative archive to completion, a few pages at a time."""
+    from db.session import db_session
+    from live_fetch.ao3_works_scraper import scrape_tag_works
+    from live_fetch.persist import persist_live_results
+
+    # Pages per pass is small and the gap between passes long, because these are
+    # the same Otwarchive endpoints the title repair already competes for and
+    # AO3 rate-limits harder than its robots.txt implies (see ao3_title_repair).
+    pages = int(_num("ARCHIVES_PAGES", 4))
+    interval = _num("ARCHIVES_INTERVAL_MIN", 12) * 60
+
+    while True:
+        for arch in ARCHIVES:
+            name, provenance = arch["name"], arch["tag"]
+            try:
+                start, done = _cursor_get(name)
+                if done:
+                    continue
+                log.info(f"archive {name}: pages {start}-{start + pages - 1}")
+                result = await scrape_tag_works(
+                    max_pages=pages, start_page=start,
+                    sort="revised_at", **arch["kwargs"],
+                )
+                entries = result.get("entries") or []
+
+                # All pages failing is a transport problem, not the end of the
+                # archive — leave the cursor alone so the next pass retries the
+                # same range instead of skipping past it.
+                if result.get("pages_ok", 0) == 0 and result.get("pages_failed", 0) > 0:
+                    log.warning(f"archive {name}: all pages failed, cursor held at {start}")
+                    continue
+
+                for e in entries:
+                    e.setdefault("tags", [])
+                    if provenance not in e["tags"]:
+                        e["tags"].append(provenance)
+
+                saved = 0
+                if entries:
+                    with db_session() as db:
+                        saved = persist_live_results(db, entries)
+
+                exhausted = bool(result.get("exhausted"))
+                _cursor_put(name, int(result.get("next_page", start + pages)), exhausted)
+                log.info(f"archive {name}: {len(entries)} works, {saved} saved, "
+                         f"next page {result.get('next_page')}"
+                         + (" — COMPLETE" if exhausted else ""))
+            except Exception as e:
+                log.warning(f"archive {name} pass failed: {type(e).__name__}: {e}")
+            await asyncio.sleep(20)
+
+        # DLP is a flat curated list rather than a paginated archive, so it gets
+        # a full re-check each cycle instead of a page cursor. It is two HTTP
+        # requests and the tagging is idempotent.
+        try:
+            await _dlp_pass()
+        except Exception as e:
+            log.warning(f"dlp pass failed: {type(e).__name__}: {e}")
+
+        await asyncio.sleep(interval)
+
+
+async def _listing_harvest_loop() -> None:
+    """Fill AO3 metadata from tag-works listings, 20 works per request.
+
+    See ao3_listing_harvest.py for why this exists: the work-page harvest costs
+    one request per work, and a listing carries twenty. Same data, 20x fewer
+    requests — which is both the only way the 13M-row summary gap is reachable
+    and a straight reduction in load on AO3.
+
+    Enrichment happens through persist_live_results, which fills gaps on rows we
+    already hold and inserts anything new, so a pass both back-fills summaries
+    and picks up works published since the dump.
+    """
+    from db.session import db_session
+    from ao3_listing_harvest import next_fandoms, get_cursor, set_cursor, PAGES_PER_VISIT
+    from live_fetch.ao3_works_scraper import scrape_tag_works
+    from live_fetch.persist import persist_live_results
+
+    interval = _num("LISTING_INTERVAL_MIN", 3) * 60
+
+    while True:
+        try:
+            with db_session() as db:
+                fandoms = next_fandoms(db, limit=int(_num("LISTING_FANDOMS", 40)))
+            if not fandoms:
+                log.info("listing harvest: no canonical fandoms yet "
+                         "(run ao3_canonical_fandoms.py)")
+                await asyncio.sleep(interval)
+                continue
+
+            # One fandom per pass, rotating by how far behind each one is, so a
+            # 25,000-page fandom cannot monopolise the queue.
+            with db_session() as db:
+                pending = sorted(
+                    ((f, n, get_cursor(db, f)) for f, n in fandoms),
+                    key=lambda t: (t[2], -t[1]),      # least-walked, then biggest
+                )
+            fandom, works, start = pending[0]
+
+            result = await scrape_tag_works(
+                tag=fandom, max_pages=PAGES_PER_VISIT, start_page=start,
+                sort="revised_at",
+            )
+            entries = result.get("entries") or []
+
+            if result.get("pages_ok", 0) == 0 and result.get("pages_failed", 0) > 0:
+                log.warning(f"listing {fandom[:40]}: all pages failed, cursor held")
+                await asyncio.sleep(interval)
+                continue
+
+            saved = 0
+            if entries:
+                with db_session() as db:
+                    saved = persist_live_results(db, entries)
+
+            with db_session() as db:
+                # Exhausted means we walked off the end; go round again next time
+                # rather than stopping, since fandoms gain works continuously.
+                set_cursor(db, fandom, 1 if result.get("exhausted")
+                           else int(result.get("next_page", start + PAGES_PER_VISIT)))
+
+            log.info(f"listing {fandom[:44]!r} ({works:,} works): pages {start}-"
+                     f"{result.get('next_page', start) - 1}, {len(entries)} works, "
+                     f"{saved} new")
+        except Exception as e:
+            log.warning(f"listing harvest failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
 
 
@@ -304,6 +720,14 @@ async def main() -> None:
     if _flag("REFRESH_STALE"):
         tasks.append(asyncio.create_task(_refresh_stale_loop()))
         log.info("stale-work refresh enabled")
+
+    if _flag("ARCHIVES_IMPORT", "true"):
+        tasks.append(asyncio.create_task(_archives_loop()))
+        log.info("alternative-archive full import enabled (HPFFA + HexFiles)")
+
+    if _flag("LISTING_HARVEST", "true"):
+        tasks.append(asyncio.create_task(_listing_harvest_loop()))
+        log.info("AO3 listing harvest enabled (20 works per request)")
 
     if _flag("TITLE_REPAIR", "true"):
         tasks.append(asyncio.create_task(_title_repair_loop()))
