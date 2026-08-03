@@ -1,7 +1,7 @@
 """Stats endpoint — per-site counts, totals, last-updated info"""
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import bindparam, func, text
 from db.session import get_db
 from models.story import Story
 from provenance import PROVENANCE_TAGS
@@ -208,13 +208,15 @@ async def suggest_canonical(
 ):
     """Combined fandom/tag autocomplete for the Import tab.
 
-    Index-first, AO3-canonical fallback: suggest fandoms we already have (instant),
-    and when the typed text doesn't match the index, query AO3's public autocomplete
-    so the user can discover and correctly spell NEW fandoms to scrape. Picking a
-    canonical suggestion guarantees valid AO3 tag syntax (avoids the malformed-tag
-    URLs that broke earlier discover jobs).
+    Index first, then AO3's canonical vocabulary for fandoms we do not hold —
+    which is the case that matters here, since this box exists to find something
+    new to scrape. Both come from our own facets table; see
+    ao3_canonical_fandoms.py for how the canonical half gets there without
+    hitting the /autocomplete/ endpoint AO3 disallows.
 
-    Returns: [{value, count, source}] where source is 'index' or 'ao3'.
+    Returns: [{value, count, source}]. 'index' means works we hold and the count
+    is ours; 'ao3' means a canonical fandom we have not indexed and the count is
+    AO3's.
     """
     ql = q.strip().lower()
     out: list[dict] = []
@@ -236,20 +238,34 @@ async def suggest_canonical(
     except Exception:
         pass
 
-    # There used to be a step 2 here that topped up thin results by proxying
-    # AO3's /autocomplete/<kind>?term=... endpoint. That is removed, because
-    # AO3's robots.txt disallows it for every user agent:
+    # 2) Top up with AO3's canonical fandom names for anything we do not hold.
     #
-    #     Disallow: /autocomplete/
+    # This used to proxy AO3's /autocomplete/ per keystroke, which their
+    # robots.txt disallows outright. The vocabulary now comes from our own
+    # facets table, synced occasionally by ao3_canonical_fandoms.py from the
+    # eleven /media/<category>/fandoms pages — not disallowed, and eleven
+    # requests total rather than one per character typed.
     #
-    # and this is the worst possible place to ignore that — the suggestion box
-    # calls it as someone types, so a single search session fired a burst of
-    # requests at an endpoint they have asked automated clients to leave alone.
-    #
-    # The facets table is built from the whole index, so suggestions still come
-    # from millions of real works. What is lost is canonical tags AO3 has minted
-    # that we have not indexed yet; those arrive on the next refresh-facets, and
-    # a tag nobody has written in is not much of a suggestion anyway.
+    # The top-up matters most exactly where the index cannot help: this box
+    # exists to find a fandom to START scraping, so not having it yet is the
+    # normal case, and a canonical name is what makes the resulting tag URL
+    # valid.
+    if kind == "fandom" and len(out) < limit:
+        try:
+            rows = db.execute(text(
+                "SELECT value, count FROM facets "
+                "WHERE kind = 'fandom_ao3' AND value ILIKE :pat "
+                "ORDER BY count DESC LIMIT :lim"
+            ), {"pat": f"%{ql}%", "lim": limit}).fetchall()
+            for r in rows:
+                if r[0].lower() in seen:
+                    continue
+                seen.add(r[0].lower())
+                out.append({"value": r[0], "count": r[1], "source": "ao3"})
+                if len(out) >= limit:
+                    break
+        except Exception:
+            pass
 
     return out[:limit]
 
@@ -295,6 +311,20 @@ async def refresh_facets(
             built[kind] = db.execute(
                 text("SELECT count(*) FROM facets_rebuild WHERE kind = :k"), {"k": kind}
             ).scalar()
+
+        # Carry over kinds that are NOT derived from stories. The rebuild below
+        # swaps a freshly-built table in and drops the old one, so anything this
+        # loop did not produce would be silently destroyed — and the AO3
+        # canonical vocabulary costs eleven network requests to regenerate,
+        # which a local facets rebuild has no business triggering.
+        carried = db.execute(text(
+            "INSERT INTO facets_rebuild (kind, value, count) "
+            "SELECT kind, value, count FROM facets WHERE kind NOT IN :kinds "
+            "ON CONFLICT (kind, value) DO NOTHING"
+        ).bindparams(bindparam("kinds", expanding=True)),
+            {"kinds": list(_FACET_COLUMNS.keys())}).rowcount
+        if carried:
+            built["carried_over"] = carried
 
         # Swap. Readers see the old table right up until this commit.
         db.execute(text("DROP TABLE IF EXISTS facets_old"))
