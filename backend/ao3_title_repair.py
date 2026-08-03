@@ -14,13 +14,14 @@ identified with confidence — no real title ends there. Cuts that happen to lan
 on a content word are indistinguishable from a short title and are only repaired
 if the work is re-encountered by a live fetch.
 
-The work page carries the real title in <h2 class="title heading">, so this walks
-the detectable ones and repairs them. One request per work, so it is a slow
-backfill rather than a migration; it is idempotent and safe to interrupt.
+One request per work, so it is a slow backfill rather than a migration; it is
+idempotent and safe to interrupt.
 
 A fetched title is only accepted when it EXTENDS what we hold — the stored value
 must be a prefix of it — so a redirect, an error page or an unrelated work can
-never overwrite a good title.
+never overwrite a good title. Every other field is gap-filling only: we never
+replace something we already have with something we just read, except the
+engagement counters, which only ever move up.
 
 Usage
 -----
@@ -45,7 +46,7 @@ import httpx
 from sqlalchemy import text as sql_text
 
 from db.session import db_session
-from models.story import Story
+from models.story import StatusEnum, Story
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
@@ -57,6 +58,107 @@ log = logging.getLogger(__name__)
 # Crawl-delay is set, so the pacing here is courtesy, not a stated limit.
 UA = {"User-Agent": "FicAtlas/1.0 (personal fanfiction index; +https://github.com/Georgexzy/ficatlas)"}
 TITLE_RE = re.compile(r'<h2 class="title heading">(.*?)</h2>', re.S)
+
+# The stats block, verified against a live page:
+#   <dt class="published">Published:</dt><dd class="published">2026-05-23</dd>
+#   <dt class="status">Updated:</dt><dd class="status">2026-06-11</dd>
+#   <dd class="words">10,014</dd>  <dd class="chapters">4/?</dd>
+#   <dd class="comments">31</dd>   <dd class="kudos">19</dd>
+#   <dd class="bookmarks"><a href="...">2</a></dd>   <dd class="hits">527</dd>
+SUMMARY_RE = re.compile(
+    r'<div class="summary module"[^>]*>.*?<blockquote class="userstuff">(.*?)</blockquote>', re.S)
+PUBLISHED_RE = re.compile(r'<dd class="published">\s*([\d-]+)\s*</dd>')
+# The dt label distinguishes an ongoing work from a finished one; the dd holds
+# the date either way, so both are read from the same pair.
+STATUS_RE = re.compile(
+    r'<dt class="status">\s*([^<:]+):?\s*</dt>\s*<dd class="status">\s*([\d-]+)\s*</dd>')
+WORDS_RE = re.compile(r'<dd class="words">\s*([\d,]+)\s*</dd>')
+CHAPTERS_RE = re.compile(r'<dd class="chapters">\s*(?:<[^>]+>)?\s*(\d+)\s*/\s*([\d?]+)')
+LANGUAGE_RE = re.compile(r'<dd class="language"[^>]*>\s*([^<]+?)\s*</dd>')
+_COUNT_RES = {
+    "kudos":     re.compile(r'<dd class="kudos">\s*(?:<[^>]+>)?\s*([\d,]+)'),
+    "hits":      re.compile(r'<dd class="hits">\s*(?:<[^>]+>)?\s*([\d,]+)'),
+    "comments":  re.compile(r'<dd class="comments">\s*(?:<[^>]+>)?\s*([\d,]+)'),
+    "bookmarks": re.compile(r'<dd class="bookmarks">\s*(?:<[^>]+>)?\s*([\d,]+)'),
+}
+
+
+def _text(fragment: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", fragment)).strip()
+
+
+def _int(raw: str | None) -> int | None:
+    if not raw:
+        return None
+    try:
+        return int(raw.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _date(raw: str | None):
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def parse_work_page(html_text: str) -> dict | None:
+    """Everything the work page carries. None when it is not a work page at all
+    (a login redirect, an error, a deleted work)."""
+    m = TITLE_RE.search(html_text)
+    if not m:
+        return None
+    out: dict = {"title": _text(m.group(1)) or None}
+
+    m = SUMMARY_RE.search(html_text)
+    if m:
+        # Keep paragraph breaks; the blockquote is user-authored HTML.
+        raw = re.sub(r"</p>\s*<p>", "\n\n", m.group(1))
+        out["summary"] = _text(raw)[:5000] or None
+
+    m = PUBLISHED_RE.search(html_text)
+    if m:
+        out["published_at"] = _date(m.group(1))
+
+    m = STATUS_RE.search(html_text)
+    if m:
+        label = m.group(1).strip().lower()
+        out["updated_at"] = _date(m.group(2))
+        # "Completed:" is AO3 stating the work is finished. "Updated:" is not
+        # evidence either way on its own — the chapter counts below decide.
+        if label.startswith("complet"):
+            out["status"] = StatusEnum.complete
+
+    m = WORDS_RE.search(html_text)
+    if m:
+        out["word_count"] = _int(m.group(1))
+
+    m = CHAPTERS_RE.search(html_text)
+    if m:
+        posted, total = _int(m.group(1)), _int(m.group(2))
+        out["chapter_count"] = posted
+        out["chapter_count_total"] = total          # None when AO3 shows "?"
+        if out.get("status") is None:
+            # "4/?" is AO3 explicitly saying more is coming, which is real
+            # evidence of a WIP — unlike the bulk dumps, where a missing value
+            # meant nothing and had to become `unknown`.
+            if total is None:
+                out["status"] = StatusEnum.in_progress
+            elif posted is not None and posted >= total:
+                out["status"] = StatusEnum.complete
+
+    m = LANGUAGE_RE.search(html_text)
+    if m:
+        out["language"] = _text(m.group(1))[:32] or None
+
+    for key, rx in _COUNT_RES.items():
+        m = rx.search(html_text)
+        if m:
+            out[key] = _int(m.group(1))
+    return out
 
 # Only endings that genuinely cannot finish a title.
 #
@@ -165,9 +267,11 @@ class RateLimiter:
 THROTTLED = object()
 
 
-def fetch_title(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
+def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
     try:
-        r = client.get(f"https://archiveofourown.org/works/{work_id}",
+        # view_adult skips the "this work could have adult content" interstitial
+        # that would otherwise be parsed as a work page with no title.
+        r = client.get(f"https://archiveofourown.org/works/{work_id}?view_adult=true",
                        timeout=45, follow_redirects=True)
     except Exception:
         return None
@@ -181,12 +285,9 @@ def fetch_title(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
     limiter.reward()
     if r.status_code != 200:
         return None
-    m = TITLE_RE.search(r.text)
-    if not m:
-        return None
-    title = re.sub(r"<[^>]+>", "", m.group(1))
-    title = re.sub(r"\s+", " ", title).strip()
-    return title or None
+    # A restricted work redirects to /users/login, which is a 200 with no work
+    # markup — parse_work_page returns None for it rather than inventing fields.
+    return parse_work_page(r.text)
 
 
 # Enough in-flight requests to cover AO3's own latency, and no more.
@@ -206,8 +307,96 @@ WORKERS = int(os.getenv("TITLE_REPAIR_WORKERS", "4"))
 WRITE_BATCH = 50
 
 
-def _flush(pending: list[tuple[int, str]], touched: list[int]) -> None:
-    """Write repaired titles, and stamp crawled_at on everything we looked at.
+def _norm(text: str) -> str:
+    """Lowercase, alphanumerics only — for comparing a dump title to a real one."""
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def _extends(old: str, new: str) -> bool:
+    """Is `new` the same title as `old`, continued?
+
+    Compared on alphanumerics only, because the dump did not just truncate
+    titles, it also dropped punctuation:
+
+        dump  "A Dead Body A Lot of"
+        real  "A Dead Body, A Lot of Cash, and a Whole Heap of Crazy"
+
+    A literal prefix test rejects that over the missing comma, so 2 of every 14
+    fetched works kept a broken title after paying for the request. Normalising
+    keeps the guarantee that matters — the stored title must still be a genuine
+    prefix of what we fetched, so an unrelated work or an error page can never
+    overwrite a good title — while tolerating punctuation the dump lost.
+    """
+    n_old, n_new = _norm(old), _norm(new)
+    return bool(n_old) and n_new.startswith(n_old)
+
+
+def apply_work(story: Story, data: dict) -> list[str]:
+    """Merge a fetched page onto a stored row. Returns the field names changed.
+
+    Gap-filling only. The dumps are the authority for anything they supplied;
+    this fills what they left empty. The two exceptions are stated inline: the
+    title, which may be EXTENDED because the dump truncated it, and the
+    engagement counters, which are point-in-time and only move up.
+    """
+    changed: list[str] = []
+
+    new_title = (data.get("title") or "").strip()
+    old_title = (story.title or "").strip()
+    if new_title and len(new_title) > len(old_title) and _extends(old_title, new_title):
+        story.title = new_title[:500]
+        changed.append("title")
+
+    if data.get("summary") and not (story.summary or "").strip():
+        story.summary = data["summary"]
+        changed.append("summary")
+
+    if data.get("published_at") and story.published_at is None:
+        story.published_at = data["published_at"]
+        changed.append("published_at")
+
+    # updated_at is allowed to move forward: a work we indexed months ago may
+    # genuinely have new chapters since, and that is the field the "recently
+    # updated" sort depends on.
+    upd = data.get("updated_at")
+    if upd and (story.updated_at is None or upd > story.updated_at):
+        story.updated_at = upd
+        changed.append("updated_at")
+
+    if data.get("word_count") and not (story.word_count or 0):
+        story.word_count = data["word_count"]
+        changed.append("word_count")
+
+    if data.get("chapter_count") and (story.chapter_count or 0) < data["chapter_count"]:
+        story.chapter_count = data["chapter_count"]
+        changed.append("chapter_count")
+
+    if data.get("chapter_count_total") and story.chapter_count_total is None:
+        story.chapter_count_total = data["chapter_count_total"]
+        changed.append("chapter_count_total")
+
+    # AO3 states completion outright, so it may correct a stored guess — but
+    # only ever toward what the page says, never back to unknown.
+    st = data.get("status")
+    if st is not None and story.status != st:
+        story.status = st
+        changed.append("status")
+
+    if data.get("language") and not (story.language or "").strip():
+        story.language = data["language"]
+        changed.append("language")
+
+    for key in ("kudos", "hits", "comments", "bookmarks"):
+        val = data.get(key)
+        if val is not None and val > (getattr(story, key) or 0):
+            setattr(story, key, val)
+            changed.append(key)
+
+    return changed
+
+
+def _flush(pending: list[tuple[int, dict]], touched: list[int], stats: dict) -> None:
+    """Write harvested fields, and stamp crawled_at on everything we looked at.
 
     The stamp is what keeps the queue moving. TRUNCATED_SQL orders by
     crawled_at ASC, so a work that cannot be fetched — deleted, orphaned, or
@@ -222,15 +411,16 @@ def _flush(pending: list[tuple[int, str]], touched: list[int]) -> None:
     """
     if not pending and not touched:
         return
-    fixes = dict(pending)
+    fetched = dict(pending)
     with db_session() as db:
         for sid in touched:
-            s = db.query(Story).filter(Story.id == sid).first()
-            if not s:
+            story = db.query(Story).filter(Story.id == sid).first()
+            if not story:
                 continue
-            if sid in fixes:
-                s.title = fixes[sid][:500]
-            s.crawled_at = datetime.now(timezone.utc)
+            if sid in fetched:
+                for field in apply_work(story, fetched[sid]):
+                    stats[field] = stats.get(field, 0) + 1
+            story.crawled_at = datetime.now(timezone.utc)
         db.commit()
     pending.clear()
     touched.clear()
@@ -243,8 +433,9 @@ def run(limit: int, dry_run: bool, delay: float) -> None:
              f"({WORKERS} workers, {delay}s between requests)")
 
     limiter = RateLimiter(delay)
-    counts = {"fixed": 0, "missed": 0, "unchanged": 0, "throttled": 0}
-    pending: list[tuple[int, str]] = []
+    counts = {"fetched": 0, "missed": 0, "throttled": 0}
+    stats: dict[str, int] = {}
+    pending: list[tuple[int, dict]] = []
     touched: list[int] = []
     lock = threading.Lock()
     started = time.monotonic()
@@ -252,37 +443,39 @@ def run(limit: int, dry_run: bool, delay: float) -> None:
     def handle(row) -> None:
         sid, work_id, stored = row
         limiter.wait()
-        real = fetch_title(client, work_id, limiter)
+        data = fetch_work(client, work_id, limiter)
         # One retry after a throttle, since the limiter has now widened and
         # parked the queue. Still throttled after that: leave the row alone so
         # the next pass picks it up rather than burning it as unreachable.
-        if real is THROTTLED:
+        if data is THROTTLED:
             limiter.wait()
-            real = fetch_title(client, work_id, limiter)
+            data = fetch_work(client, work_id, limiter)
 
         with lock:
-            if real is THROTTLED:
+            if data is THROTTLED:
                 # Not our answer to record — do not stamp, so it keeps its place
                 # in the queue rather than being pushed to the back unexamined.
                 counts["throttled"] += 1
                 return
 
-            if not real:
+            if not data:
                 counts["missed"] += 1
-            elif len(real) > len(stored or "") and real.lower().startswith((stored or "").lower()):
-                counts["fixed"] += 1
-                if dry_run:
-                    log.info(f"  {work_id}: {stored!r} -> {real!r}")
-                else:
-                    pending.append((sid, real))
             else:
-                counts["unchanged"] += 1
+                counts["fetched"] += 1
+                if dry_run:
+                    new = (data.get("title") or "").strip()
+                    if new and new != (stored or "").strip():
+                        log.info(f"  {work_id}: {stored!r} -> {new!r}")
+                    if data.get("summary"):
+                        log.info(f"           summary: {data['summary'][:70]!r}")
+                else:
+                    pending.append((sid, data))
 
             # A dry run must not write anything at all, stamps included.
             if not dry_run:
                 touched.append(sid)
                 if len(touched) >= WRITE_BATCH:
-                    _flush(pending, touched)
+                    _flush(pending, touched, stats)
 
     # One client for the pool so connections are reused; httpx.Client is thread-safe.
     with httpx.Client(headers=UA, limits=httpx.Limits(max_connections=WORKERS)) as client:
@@ -290,14 +483,15 @@ def run(limit: int, dry_run: bool, delay: float) -> None:
             list(pool.map(handle, rows))
 
     with lock:
-        _flush(pending, touched)
+        _flush(pending, touched, stats)
 
     elapsed = max(time.monotonic() - started, 0.001)
-    verb = "would repair" if dry_run else "repaired"
-    log.info(f"DONE — {verb}={counts['fixed']} unchanged={counts['unchanged']} "
-             f"unreachable={counts['missed']} throttled={counts['throttled']} "
-             f"in {elapsed:.0f}s ({len(rows) / elapsed:.2f} req/s, "
-             f"{limiter.throttled} x 429, interval now {limiter.interval:.2f}s)")
+    filled = " ".join(f"{k}={v}" for k, v in sorted(stats.items(), key=lambda kv: -kv[1]))
+    log.info(f"DONE — fetched={counts['fetched']} unreachable={counts['missed']} "
+             f"throttled={counts['throttled']} in {elapsed:.0f}s "
+             f"({len(rows) / elapsed:.2f} req/s, {limiter.throttled} x 429, "
+             f"interval now {limiter.interval:.2f}s)")
+    log.info(f"       filled: {filled or '(nothing)'}")
 
 
 def main() -> None:
