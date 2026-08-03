@@ -1,39 +1,133 @@
-version: "3.9"
-
 services:
   db:
     image: postgres:16-alpine
+    # No service had a restart policy, which is why the whole stack sat dead for
+    # four weeks after a reboot. Docker itself is enabled at boot, so this alone
+    # makes FicAtlas come back on its own. "unless-stopped" (not "always") so an
+    # explicit `docker compose stop` stays stopped.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ficatlas
       POSTGRES_PASSWORD: ficatlas
       POSTGRES_DB: ficatlas
+    # Postgres ships with defaults sized for a tiny machine (shared_buffers 128MB,
+    # work_mem 4MB, random_page_cost 4.0). The stories table alone is ~3.7GB, so
+    # those defaults meant almost nothing stayed cached between queries and the
+    # planner was biased against index scans.
+    #
+    # random_page_cost is the important one: 4.0 encodes the seek cost of a
+    # spinning disk. On the NVMe this runs on, random reads are nearly as cheap as
+    # sequential, and the high default actively pushed the planner toward
+    # sequential scans over the GIN indexes that make search fast.
+    #
+    # Sized to leave room for the other containers on this host — raise
+    # shared_buffers toward 25% of RAM if FicAtlas gets a box to itself.
+    # Sized for the index as it now stands (~18M works, table + indexes well over
+    # 10GB). shared_buffers was 512MB when the host only had ~2GB free during the
+    # bulk imports; with those done there is room to keep far more of the hot
+    # index pages resident, which is where fandom/tag browsing spends its time.
+    command: >
+      postgres
+      -c shared_buffers=2GB
+      -c effective_cache_size=6GB
+      -c work_mem=32MB
+      -c maintenance_work_mem=512MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c max_parallel_workers_per_gather=2
+    # Loopback only. This was bound to 0.0.0.0, which put a Postgres with the
+    # password "ficatlas" on every interface — reachable by anything on the LAN or
+    # the tailnet. Nothing outside this host needs it: the backend connects over the
+    # compose network, and `docker compose exec db psql` still works for admin.
+    # Docker gives a container 64MB of /dev/shm by default. Postgres allocates
+    # shared memory segments there for parallel query workers, and at 18M rows the
+    # parallel plans need more than that — real searches (tags=Fluff, page=3,
+    # sort=word_count_desc) were failing outright with
+    #   DiskFull: could not resize shared memory segment ... No space left on device
+    # which surfaces as a 500, not a slow query.
+    shm_size: "1gb"
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ficatlas -d ficatlas"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   backend:
     build: ./backend
+    # Named so the worker can reuse this exact image instead of compose building
+    # a second identical 2.7GB copy under its own service name.
+    image: ficatlas-backend
+    restart: unless-stopped
+    # --reload is a development convenience: it restarts the API on any file
+    # change, which also kills anything running inside the container. Drop it for
+    # an unattended box.
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    # Loopback only, matching the architecture in the README: clients reach the API
+    # through the frontend's /api/* rewrite on port 3000, so 8000 never needs to be
+    # externally reachable. It matters because api/library.py has no auth on any of
+    # its endpoints — including DELETE /api/library/hosted/{id} and the scrape
+    # triggers — so an open port 8000 let anyone on the network delete hosted
+    # stories. http://localhost:8000/docs still works on this host.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       DATABASE_URL: postgresql://ficatlas:ficatlas@db:5432/ficatlas
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     volumes:
       - ./backend:/app
 
   frontend:
     build: ./frontend
-    command: npm run dev
+    restart: unless-stopped
     ports:
       - "3000:3000"
+    depends_on:
+      - backend
+
+  # ── Background worker ──────────────────────────────────────────────────────
+  # Scheduled feed polls, crawls and long backfills used to run inside the API
+  # process. Two problems with that: heavy work competed with request handling on
+  # the same event loop, and anything started with `docker compose exec backend`
+  # died whenever the API restarted — which killed the dedup and enrichment runs
+  # twice during this work.
+  #
+  # The worker owns all recurring background work. Only it runs the scheduler
+  # (RUN_SCHEDULER), so the API never double-polls, and its restarts are
+  # independent of the API's.
+  worker:
+    image: ficatlas-backend    # same image as the API; built by the backend service
+    restart: unless-stopped
+    command: python worker.py
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      DATABASE_URL: postgresql://ficatlas:ficatlas@db:5432/ficatlas
+      RUN_SCHEDULER: "true"
+      # The bulk AO3 dump stops at work id 63,178,258 (~mid-2024) while AO3 is
+      # now issuing ~89.7M, so everything recent can only come from crawling.
+      RECENT_WORKS: "true"
+      # 6.6M FF.net works have no genres, characters, ships or engagement counts
+      # at all — that dump carries none. This recovers them from archive.org's
+      # copies, a few hundred stories at a time, longest first.
+      ENRICH_FFNET: "true"
+      # New imports and live fetches keep introducing cross-posted duplicates.
+      DEDUP_CROSSPOSTS: "true"
+      # Works were frozen at import time. Tracked fandoms refresh for free via
+      # the recent-works loop; this re-checks hosted works-in-progress, which are
+      # the ones actually being read.
+      REFRESH_STALE: "true"
+      # The AO3 dump ships titles cut off mid-phrase ("Harry Potter and"), which
+      # only the work page can resolve.
+      TITLE_REPAIR: "true"
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - ./backend:/app
 
 volumes:
   pgdata:

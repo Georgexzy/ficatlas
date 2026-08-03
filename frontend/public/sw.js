@@ -1,76 +1,122 @@
-// FicAtlas service worker — makes the app shell load with no network so saved
-// stories are readable offline. Story *content* lives in IndexedDB (see
-// lib/offline.ts); this SW only handles caching the HTML/JS/CSS shell and static
-// assets, plus serving a graceful offline fallback for navigations.
+// FicAtlas service worker (generated from sw.template.js at build time).
+// The precache manifest placeholder below is replaced by gen-sw-precache.js
+// with the real list of built asset URLs, so install-time caching covers the
+// whole app shell — every JS chunk — and the app can cold-start with no network.
 //
-// Strategy:
-//   - Static assets (/_next/static/*, fonts, icons): cache-first (they're
-//     content-hashed and immutable, so a cache hit is always correct).
-//   - Navigations (HTML page loads): network-first, falling back to the cached
-//     shell when offline so the SPA can boot and read from IndexedDB.
-//   - API calls (/api/*): network-only. We never cache search/API responses —
-//     offline reading is served from IndexedDB inside the app, not here.
+// Offline strategy:
+//   - Precache all build assets + top-level page shells at install.
+//   - Hashed assets (/_next/static/*): cache-first (immutable; a hit is always
+//     correct, and serving without a network round-trip is what lets the app
+//     boot offline).
+//   - The reader route /story/<id>/chapter/<n> is dynamic (one URL per story),
+//     so it can't be precached per-instance. Instead, any offline navigation to
+//     a /story/.../chapter/... URL is served the cached reader SHELL; the JS
+//     then boots and reads that specific chapter from IndexedDB.
+//   - /api/*: never cached; offline data comes from IndexedDB in the app.
 
-const CACHE = "ficatlas-shell-v2"
-const OFFLINE_URLS = ["/", "/library", "/offline"]
+// Derived from the build stamp by gen-sw-precache.js, so it changes on every
+// build. `activate` deletes every cache whose name differs, which is what
+// evicts the previous shell.
+//
+// This used to be a hand-maintained "v8". Bumping it was a manual step on any
+// change to the precache set or fetch strategy, and forgetting meant the old
+// cache was never evicted — entries for superseded hashed assets accumulated
+// build after build. Tying it to the build removes the step and the mistake.
+const CACHE = "ficatlas-shell-20260803145843"
+const PRECACHE = ["/","/library","/login","/settings","/account","/story/offline-shell","/story/offline-shell/chapter/1","/_next/static/chunks/polyfills.js","/_next/static/development/_buildManifest.js","/_next/static/development/_ssgManifest.js"]
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(OFFLINE_URLS).catch(() => {})),
+    caches.open(CACHE).then((cache) =>
+      // addAll fails atomically if any URL 404s; add individually so one bad
+      // entry can't abort the whole precache.
+      Promise.all(PRECACHE.map((u) =>
+        cache.add(u).catch(() => {}))),
+    ),
   )
   self.skipWaiting()
 })
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))),
-    ),
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim()),
   )
-  self.clients.claim()
 })
+
+// Serve a cached story shell for any /story/... URL when offline.
+//
+// Both story routes are dynamic (one URL per story), so the exact page is only
+// in the cache if it happened to be visited online. The build precaches one
+// placeholder instance of each shell (/story/offline-shell[/chapter/1]); every
+// story renders the same shell and then loads its content from IndexedDB, so any
+// cached instance works for any story.
+//
+// `wantChapter` picks the reader shell vs the story-detail shell — they are
+// different pages and serving the wrong one would render the wrong screen.
+async function cachedStoryShell(cache, wantChapter) {
+  const keys = await cache.keys()
+  let fallback = null
+  for (const req of keys) {
+    const p = new URL(req.url).pathname
+    if (!p.startsWith("/story/")) continue
+    const isChapter = p.includes("/chapter/")
+    if (isChapter !== wantChapter) continue
+    const hit = await cache.match(req)
+    if (hit) {
+      // Prefer the dedicated placeholder; fall back to any real visited story.
+      if (p.startsWith("/story/offline-shell")) return hit
+      if (!fallback) fallback = hit
+    }
+  }
+  return fallback
+}
 
 self.addEventListener("fetch", (event) => {
   const { request } = event
   const url = new URL(request.url)
 
-  // Never touch API traffic — let it hit the network (and fail naturally offline;
-  // the app handles that by reading IndexedDB).
   if (url.pathname.startsWith("/api/")) return
-
-  // Skip Next.js dev/HMR machinery — caching these breaks hot reload and can
-  // serve stale chunks in dev mode. (Harmless in prod; these paths won't exist.)
-  if (url.pathname.startsWith("/_next/webpack-hmr") ||
-      url.pathname.includes("__nextjs") ||
-      url.search.includes("hot-update")) return
-
-  // Only handle same-origin GETs.
+  // Never cache the build stamp — it exists precisely to reveal a stale cache.
+  if (url.pathname === "/build.json") return
   if (request.method !== "GET" || url.origin !== self.location.origin) return
 
-  // Next.js chunks and other static assets. In dev these change on rebuild, so
-  // use network-first (fall back to cache only when offline) to avoid serving
-  // stale JS. The cache still enables offline boot.
-  if (url.pathname.startsWith("/_next/") ||
-      url.pathname.match(/\.(?:js|css|woff2?|ttf|png|svg|ico|webp)$/)) {
+  // Immutable hashed assets → cache-first.
+  const isHashedAsset =
+    url.pathname.startsWith("/_next/static/") ||
+    url.pathname.match(/\.(?:js|css|woff2?|ttf|otf|png|svg|ico|webp|jpg|jpeg|gif)$/)
+
+  if (isHashedAsset) {
     event.respondWith(
-      fetch(request)
-        .then((res) => {
-          const copy = res.clone()
-          caches.open(CACHE).then((c) => c.put(request, copy)).catch(() => {})
+      caches.open(CACHE).then(async (cache) => {
+        const hit = await cache.match(request)
+        if (hit) return hit
+        try {
+          const res = await fetch(request)
+          if (res && res.status === 200) cache.put(request, res.clone()).catch(() => {})
           return res
-        })
-        .catch(() => caches.match(request)),
+        } catch {
+          return new Response("", { status: 504, statusText: "offline" })
+        }
+      }),
     )
     return
   }
 
-  // Navigations (page loads) → network-first, fall back to cached shell.
+  // Other /_next/* (RSC/data) → network, fall back to cache.
+  if (url.pathname.startsWith("/_next/")) {
+    event.respondWith(fetch(request).catch(() => caches.match(request)))
+    return
+  }
+
+  // Navigations → network-first; offline, fall back to cache. For the dynamic
+  // reader route, serve any cached reader shell so the JS can boot and read the
+  // requested chapter from IndexedDB.
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request)
         .then((res) => {
-          // Cache a clean copy keyed by pathname (no query) so a later offline
-          // visit to the same route matches regardless of query string.
           const copy = res.clone()
           caches.open(CACHE).then((c) => {
             c.put(request, copy.clone()).catch(() => {})
@@ -79,11 +125,19 @@ self.addEventListener("fetch", (event) => {
           return res
         })
         .catch(async () => {
-          // Offline: try exact match, then pathname-only, then the known shells.
           const cache = await caches.open(CACHE)
-          return (await cache.match(request)) ||
-            (await cache.match(url.origin + url.pathname)) ||
-            (await cache.match("/library")) ||
+          // Exact, then pathname-only.
+          let hit = (await cache.match(request)) ||
+                    (await cache.match(url.origin + url.pathname))
+          if (hit) return hit
+          // Dynamic story routes: serve the matching cached shell, which then
+          // reads the story from IndexedDB.
+          if (url.pathname.startsWith("/story/")) {
+            hit = await cachedStoryShell(cache, url.pathname.includes("/chapter/"))
+            if (hit) return hit
+          }
+          // Known shells, then a friendly fallback.
+          return (await cache.match("/library")) ||
             (await cache.match("/")) ||
             new Response(
               "<!doctype html><meta charset=utf-8><title>Offline</title>" +

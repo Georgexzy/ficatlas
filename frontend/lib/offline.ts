@@ -122,11 +122,25 @@ export async function downloadStoryForOffline(
   if (!metaRes.ok) throw new Error(`Couldn't load story (HTTP ${metaRes.status})`)
   const meta = await metaRes.json()
 
-  const total: number = meta.chapter_count || (meta.chapters?.length ?? 1)
+  // Iterate the chapters the story ACTUALLY has, not its declared chapter_count.
+  // Those disagree on real rows (a story can claim 50 chapters while 30 are
+  // stored), and looping 1..chapter_count then threw on the first missing number
+  // — aborting the whole save, so the story ended up not available offline at
+  // all. Chapter numbers are also not guaranteed contiguous.
+  const numbers: number[] = Array.isArray(meta.chapters) && meta.chapters.length
+    ? meta.chapters.map((c: any) => c.number).sort((a: number, b: number) => a - b)
+    : Array.from({ length: meta.chapter_count || 1 }, (_, i) => i + 1)
+
+  const total = numbers.length
   const chapters: OfflineChapter[] = []
-  for (let n = 1; n <= total; n++) {
+  for (const [i, n] of numbers.entries()) {
     const r = await fetch(`/api/stories/${storyId}/chapters/${n}`)
-    if (!r.ok) throw new Error(`Chapter ${n} failed (HTTP ${r.status})`)
+    if (!r.ok) {
+      // Skip a chapter we can't fetch rather than losing the whole download.
+      // A partially saved story is far more useful than nothing.
+      if (r.status === 404) continue
+      throw new Error(`Chapter ${n} failed (HTTP ${r.status})`)
+    }
     const ch = await r.json()
     chapters.push({
       number: n,
@@ -136,7 +150,10 @@ export async function downloadStoryForOffline(
       end_note: ch.end_note,
       summary: ch.summary,
     })
-    onProgress?.(n, total)
+    onProgress?.(i + 1, total)
+  }
+  if (chapters.length === 0) {
+    throw new Error("No chapters could be downloaded for this story.")
   }
 
   await saveStoryOffline({
@@ -148,9 +165,36 @@ export async function downloadStoryForOffline(
     summary: meta.summary,
     fandoms: meta.fandoms,
     word_count: meta.word_count,
-    chapter_count: total,
+    chapter_count: chapters.length,   // what we actually hold, not what was claimed
     chapters,
     savedAt: new Date().toISOString(),
   })
+  // Cache the reader shell so this story opens offline with no prior online
+  // visit. The service worker serves one cached reader shell for ANY
+  // /story/.../chapter/... URL, so fetching one chapter page is enough — but we
+  // do it on every save so it's always present. We're online here (the fetches
+  // above just succeeded), so this fetch will hit the network and the SW caches
+  // it. Find the current shell cache dynamically so this never goes stale when
+  // the SW cache version is bumped.
+  try {
+    if (typeof caches !== "undefined") {
+      const keys = await caches.keys()
+      const shell = keys.find(k => k.startsWith("ficatlas-shell-"))
+      if (shell) {
+        const cache = await caches.open(shell)
+        // Both routes: the reader AND the story detail page. Caching only the
+        // reader meant a saved story's own page fell through to the generic
+        // offline screen, so you could read it but not get to it.
+        const first = chapters[0]?.number ?? 1
+        for (const u of [`/story/${storyId}`, `/story/${storyId}/chapter/${first}`]) {
+          try {
+            const res = await fetch(u)
+            if (res.ok) await cache.put(u, res.clone())
+          } catch {}
+        }
+      }
+    }
+  } catch {}
+
   return chapters.length
 }

@@ -96,6 +96,12 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .sidebar__group { padding: 0 14px 10px; }
 .sidebar__label { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; display: block; margin-bottom: 6px; }
 .sidebar__rule { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+/* Checkbox + label row inside the filter sidebar. 18px touch target and a
+   wrapping label so the text stays readable in the mobile drawer. */
+.checkbox-row { display: flex; align-items: flex-start; gap: 8px; font-size: 12px;
+  color: var(--text-dim); user-select: none; cursor: pointer; line-height: 1.35; }
+.checkbox-row input { width: 16px; height: 16px; margin: 1px 0 0; flex: 0 0 auto; cursor: pointer; accent-color: var(--accent); }
+.checkbox-row:hover { color: var(--text); }
 .sidebar__section-head { font-size: 10px; color: var(--text-faint); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.12em; padding: 6px 14px 2px; }
 
 /* ── Filter sections ───────────────────────────────────────────────────────── */
@@ -238,6 +244,10 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 }
 .results-bar strong { color: var(--text); }
 .results-bar__live { color: var(--green); margin-left: 4px; }
+/* Reminder that the filters were deliberately widened, and a one-click undo. */
+.results-bar__loose { color: var(--text-faint); margin-left: 6px; background: none;
+  border: none; padding: 0; font: inherit; font-size: 11px; cursor: pointer; }
+.results-bar__loose:hover { color: var(--accent); }
 .results-bar__page { color: var(--text-faint); }
 
 /* ── Story cards ───────────────────────────────────────────────────────────── */
@@ -525,6 +535,40 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .reader {
   font-family: var(--font-serif); line-height: 1.75; color: var(--text);
   max-width: 660px; margin: 0 auto;
+}
+
+/* Off-screen until focused, then visible. A keyboard user otherwise tabs the
+   whole toolbar before reaching the first word of the chapter. */
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 100;
+  background: var(--surface2); color: var(--text);
+  border: 1px solid var(--accent); border-radius: var(--radius);
+  padding: 8px 14px; font-size: 13px;
+}
+.skip-link:focus { left: 8px; top: 8px; }
+
+/* Justified prose without hyphenation opens rivers of whitespace in a narrow
+   column, so the two are switched on together. lang= on the article is what
+   lets the browser hyphenate correctly per language. */
+.reader[data-justify="on"] .reader__content {
+  text-align: justify;
+  hyphens: auto; -webkit-hyphens: auto;
+}
+
+/* Focus must stay visible for keyboard users. The heading takes focus on
+   chapter change, and a bare outline:none anywhere here would strand them. */
+.reader__title:focus-visible,
+.reader-ctrl:focus-visible,
+.reader-nav__btn:focus-visible,
+.skip-link:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+/* Scroll restore jumps the page by design; honour a stated preference not to
+   animate, and stop the progress bar transitioning under the same setting. */
+@media (prefers-reduced-motion: reduce) {
+  .reader-progress { transition: none; }
+  html { scroll-behavior: auto; }
 }
 .reader__header { margin-bottom: 32px; }
 .reader__breadcrumb {
@@ -1125,14 +1169,15 @@ kbd {
 .book__meta {
   margin-top: 12px; padding: 0 2px;
 }
+/* Truncation removed at source rather than overridden further down: relying on
+   cascade order for this is what let a stale nowrap keep clipping titles while
+   the override looked correct in the file. */
 .book__title {
   font-size: 13px; color: var(--text); font-weight: 500;
   line-height: 1.3; margin-bottom: 2px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .book__author {
   font-size: 12px; color: var(--text-dim);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .book__stats {
   font-size: 11px; color: var(--text-faint); font-family: var(--font-mono);
@@ -1798,3 +1843,290 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   transition: all 0.12s;
 }
 .offline-item__remove:hover { border-color: var(--red); color: var(--red); }
+
+/* Author name as a browse link. Clicking it lists everything that author wrote
+   across every archive in the index — AO3 and FF.net can each only show you what
+   was posted on their own site. The ↗ still goes to their page on the source. */
+.card__author-link { background: none; border: none; padding: 0; font: inherit;
+  color: inherit; cursor: pointer; text-decoration: underline;
+  text-decoration-color: var(--border); text-underline-offset: 2px; }
+.card__author-link:hover { color: var(--accent); text-decoration-color: var(--accent); }
+.card__author-ext { margin-left: 3px; font-size: 10px; color: var(--text-faint);
+  text-decoration: none; }
+.card__author-ext:hover { color: var(--accent); }
+
+/* ── Shared site header ─────────────────────────────────────────────────────
+   Every page carries the same header now, so Search / Library / Settings /
+   account are one click from anywhere. Previously only the search page had
+   navigation and every other page offered a single "back to search" link,
+   which made every cross-page move a two-hop trip through the home page. */
+.logo--link { text-decoration: none; color: inherit; }
+.logo--link:hover em { filter: brightness(1.15); }
+
+/* The current page is shown but not linked, so you always know where you are. */
+.header__link--current { color: var(--accent); cursor: default; position: relative; }
+.header__link--current::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -3px;
+  height: 1px; background: var(--accent);
+}
+
+/* The reader deliberately has no site header — it's a reading surface, and its
+   own top bar links back to the story, which does carry the full header. */
+
+/* Provenance line on the story page — where the record came from, shown apart
+   from content tags so an untagged story doesn't look tagged. */
+.story-detail__source { font-size: 11px; color: var(--text-faint);
+  font-family: var(--font-mono); margin-top: 10px; }
+.story-detail__source-note { font-style: italic; opacity: 0.85; }
+
+/* Signed-out notice on the Library page: says plainly which actions need an
+   account, instead of letting the import buttons fail with a bare 401. */
+.library-signin-note { font-size: 12px; color: var(--text-dim);
+  background: var(--accent-bg); border: 1px solid var(--accent-dim);
+  border-radius: 6px; padding: 9px 12px; margin: 0 0 14px; }
+.library-signin-note__link { color: var(--accent); font-weight: 600; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE
+   The phone layout was a shrunken desktop page: six header items overflowed a
+   375px screen, book titles were clipped to one line by `white-space: nowrap`
+   so most were unreadable in the 2-column grid, and tap targets were mouse-sized.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Bottom tab bar — hidden on desktop, primary navigation on phones. */
+.tabbar { display: none; }
+
+@media (max-width: 700px) {
+  /* Header keeps only identity + account; navigation moves to the tab bar. */
+  .header__nav-links { display: none; }
+  .header {
+    padding: 10px 14px;
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+  .header__right { gap: 10px; }
+
+  .tabbar {
+    display: flex;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 180;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    backdrop-filter: saturate(180%) blur(12px);
+    border-top: 1px solid var(--border);
+    /* Clear the home indicator on notched phones. */
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tabbar__item {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 2px;
+    min-height: 52px; padding: 6px 4px;
+    color: var(--text-faint); text-decoration: none;
+    font-size: 10px; letter-spacing: 0.04em;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tabbar__item--current { color: var(--accent); }
+  .tabbar__icon { font-size: 19px; line-height: 1; }
+  .tabbar__label { font-weight: 600; }
+
+  /* Room for the bar so the last row isn't trapped underneath it.
+     Scoped with :has() because the chapter reader uses .reader-shell too but
+     renders no tab bar — a blanket rule left dead space at the end of a chapter.
+     !important because the existing phone rules for these shells already use it. */
+  body:has(.tabbar) .main,
+  body:has(.tabbar) .library-shell,
+  body:has(.tabbar) .settings-shell,
+  body:has(.tabbar) .reader-shell,
+  body:has(.tabbar) .account-shell {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
+  }
+
+  /* Float the reader's exit button above the bar rather than under it. */
+  body:has(.tabbar) .reader-fab {
+    bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+
+  /* ── Titles must wrap, not be cut off ──────────────────────────────────
+     These were single-line with an ellipsis. In a 2-column grid each card is
+     roughly 160px wide, so nearly every real title was truncated to a few
+     characters. Two lines is readable and keeps the grid even. */
+  .book__title  { font-size: 13px; line-height: 1.28; }
+
+  /* Long titles, URLs and tag names must never widen the page. */
+  .card__title, .story-detail__title, .book__title { overflow-wrap: anywhere; }
+
+  /* Comfortable, thumb-sized controls. */
+  .btn, .page-btn, .library-tab, .reader-ctrl { min-height: 44px; }
+  .tag { padding: 5px 9px; }
+
+  /* 16px inputs stop iOS Safari zooming the viewport on focus. */
+  input, select, textarea { font-size: 16px; }
+}
+
+/* Nothing may scroll the page sideways — the single most common way a mobile
+   layout feels broken. Wide content scrolls inside its own container instead. */
+html, body { overflow-x: hidden; max-width: 100%; }
+.card, .book, .story-detail, .settings-group { min-width: 0; }
+
+/* ── Book cover titles scale with the cover ─────────────────────────────────
+   The title size used to be a fixed pixel value picked in JS from the title's
+   length, chosen for the desktop cover. On the 2-column phone grid each cover is
+   about 166px wide — 134px of text once padding is removed — so longer titles
+   overflowed the 4-line clamp and were visibly cut off.
+
+   Sizing in container-query units ties the text to the cover's actual width, so
+   it holds at any number of grid columns. The data-len steps keep a long title
+   proportionally smaller than a short one, which is what the JS was for. */
+.book__cover { container-type: inline-size; }
+
+.book__cover-title {
+  overflow-wrap: anywhere;               /* never let one long word overflow */
+  -webkit-line-clamp: 5;
+}
+.book__cover-title[data-len="s"]  { font-size: clamp(13px, 11cqw, 19px); }
+.book__cover-title[data-len="m"]  { font-size: clamp(12px, 9.5cqw, 17px); }
+.book__cover-title[data-len="l"]  { font-size: clamp(11px, 8cqw, 15px); -webkit-line-clamp: 6; }
+.book__cover-title[data-len="xl"] { font-size: clamp(10px, 7cqw, 13px); -webkit-line-clamp: 7; }
+
+@media (max-width: 700px) {
+  /* Reclaim width for the text — 32px of side padding out of a 166px cover was
+     nearly a fifth of it. */
+  .book__cover-content { padding: 12px 9px 10px 12px; }
+  .book__cover-author { font-size: 8px; letter-spacing: 0.1em; overflow-wrap: anywhere; }
+}
+
+/* The reader's back link carries the story title ("← Some Long Title"). It was
+   truncated to one ellipsised line at 60vw, so on a phone you often could not
+   read which story you were in. Two lines, and the width it actually has. */
+@media (max-width: 700px) {
+  .reader-topbar .back-link {
+    max-width: none; white-space: normal; overflow: visible; text-overflow: clip;
+    display: block; -webkit-line-clamp: unset;
+    overflow-wrap: anywhere; line-height: 1.25;
+  }
+  /* Recommendation cards and the story heading wrap rather than clip too. */
+  .similar-card__title, .similar-card__author { overflow-wrap: anywhere; }
+  .story-detail__title { overflow-wrap: anywhere; hyphens: auto; }
+}
+
+/* ── Expandable summaries in search listings ────────────────────────────────
+   The clamp stays as the default so a results page keeps its rhythm; the
+   expander only appears when the text is genuinely cut off (measured in JS
+   against the clamped height), so short summaries get no pointless button. */
+.card__summary-wrap { margin-bottom: 10px; }
+.card__summary-wrap .card__summary { margin-bottom: 0; }
+.card__summary--open {
+  -webkit-line-clamp: unset; display: block; overflow: visible;
+}
+.card__summary-toggle {
+  background: none; border: none; padding: 2px 0 0; margin-top: 2px;
+  font: inherit; font-size: 12px; color: var(--accent);
+  cursor: pointer; letter-spacing: 0.01em;
+}
+.card__summary-toggle:hover { text-decoration: underline; }
+@media (max-width: 700px) {
+  /* Bigger tap target on a phone without adding visual weight. */
+  .card__summary-toggle { padding: 8px 0 4px; }
+}
+
+/* ── Titles below covers are never truncated ────────────────────────────────
+   This started as a one-line ellipsis, which I then changed to a two-line
+   clamp — still a truncation. At 13px in a ~166px phone card two lines is about
+   28 characters, and 4,230 of the 29,977 hosted stories have titles longer than
+   that, so they still ended in "…". The original markup carried a title=""
+   tooltip, which is the tell that it had always been cutting text off.
+
+   The grid does not need equal-height cells, so the title simply wraps in full.
+   The cover ART title keeps its clamp — it has to fit inside the artwork, and
+   the complete title sits directly beneath it. */
+.book__title {
+  white-space: normal !important;
+  display: block !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  -webkit-line-clamp: unset !important;
+  overflow-wrap: anywhere;
+}
+.book__author {
+  white-space: normal; overflow: visible; text-overflow: clip;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+/* Cells are top-aligned so uneven title heights don't push covers around. */
+.books-grid { align-items: start; }
+
+/* Which slice of the results you're on — quieter than the total itself. */
+.results-bar__range { color: var(--text-faint); }
+
+/* ── Index status: proportion, not just counts ──────────────────────────────
+   The panel listed three raw numbers, which doesn't convey that AO3 is two
+   thirds of the index. A bar per archive does it at a glance. */
+.index-status__site { margin-bottom: 9px; }
+.index-status__site-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 4px;
+}
+.index-status__count { display: flex; align-items: baseline; gap: 6px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+.index-status__pct { color: var(--text-faint); font-size: 10px; min-width: 26px; text-align: right; }
+.index-status__meter {
+  height: 3px; background: var(--surface3); border-radius: 2px; overflow: hidden;
+}
+.index-status__meter-fill { height: 100%; border-radius: 2px; background: var(--accent); }
+/* Match each archive's badge colour so the bar and label read as one unit. */
+.index-status__meter-fill--ao3          { background: #7aa2f7; }
+.index-status__meter-fill--ffnet        { background: #9ece6a; }
+.index-status__meter-fill--fictionalley { background: #bb9af7; }
+
+/* ── AND / OR for multi-value filters ───────────────────────────────────────
+   Multiple values in one filter were always ANDed, with nothing saying so. That
+   is right for crossovers and wrong when one fandom is split across several
+   spellings — which it is: Harry Potter exists as "Harry Potter",
+   "Harry Potter - J. K. Rowling", "- Rowling", "- Fandom" and more. */
+.match-mode { display: flex; gap: 0; border: 1px solid var(--border2);
+  border-radius: 6px; overflow: hidden; }
+.match-mode__btn {
+  flex: 1; background: var(--surface2); border: none; color: var(--text-dim);
+  font: inherit; font-size: 12px; padding: 7px 8px; cursor: pointer;
+}
+.match-mode__btn + .match-mode__btn { border-left: 1px solid var(--border2); }
+.match-mode__btn:hover { color: var(--text); }
+.match-mode__btn--on { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.match-mode__hint { font-size: 11px; color: var(--text-faint); margin-top: 5px; line-height: 1.35; }
+
+/* Which build the page is actually running. A fix can be live on the server
+   while an installed PWA still runs a bundle it cached days ago, and from the
+   outside those look identical. */
+.index-status__build {
+  margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
+}
+
+/* ── No title is ever truncated ─────────────────────────────────────────────
+   AO3 titles run to 255 characters where FF.net's stop at 103, and 62,938 AO3
+   titles are over 60 — so they are the ones that hit any clamp first, which is
+   why truncation showed up as "an AO3 problem". Rather than chase each surface
+   one at a time, every title element is stated here explicitly.
+
+   The single exception is .book__cover-title, the title painted ON the cover
+   artwork: it must fit inside a fixed-aspect box, and the complete title always
+   sits directly beneath it. */
+.card__title,
+.story-detail__title,
+.book__title,
+.library-item__title,
+.similar-card__title,
+.chapter-list__title,
+.dlp-entry__title,
+.reader__title,
+.reader-topbar .back-link {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  -webkit-line-clamp: unset;
+  display: block;
+  overflow-wrap: anywhere;
+  min-width: 0;          /* so a flex parent can't force max-content width */
+}
+/* A flex item defaults to min-width:auto, which refuses to shrink below its
+   content — that alone can push a long title out of its card. */
+.card__title-row, .library-item, .library-item__main, .similar-card { min-width: 0; }
+.card__title-row > * { min-width: 0; max-width: 100%; }

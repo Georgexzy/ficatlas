@@ -3,6 +3,7 @@ import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth"
+import SiteHeader from "../SiteHeader"
 
 interface Session {
   current: boolean
@@ -101,7 +102,7 @@ export default function AccountPage() {
 
   return (
     <div className="settings-shell">
-      <Link href="/" className="back-link-plain">← Back to search</Link>
+      <SiteHeader current="account" />
       <h1 className="settings-title">Account</h1>
 
       {/* Identity + sync */}

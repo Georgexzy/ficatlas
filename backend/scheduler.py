@@ -68,10 +68,16 @@ def _classify_failure(err: str) -> str:
     transient_markers = ("readtimeout", "connecttimeout", "timeout", "timed out",
                          "502", "503", "504", "525", "connectionreset",
                          "remoteprotocolerror", "temporarily")
-    if any(m in low for m in blocked_markers):
-        return "blocked"
+    # Transient wins over blocked when both appear. A 525 is Cloudflare failing to
+    # reach AO3's origin and clears on its own, but the message for one often also
+    # carries a blocked marker — most of all when a fallback host answered 403,
+    # producing "all fallbacks failed ... (last status: 403)". Checking blocked
+    # first therefore recorded ordinary AO3 slowness as a block, and five of those
+    # in six hours auto-disabled AO3 crawling.
     if any(m in low for m in transient_markers):
         return "transient"
+    if any(m in low for m in blocked_markers):
+        return "blocked"
     return "transient"
 
 
@@ -151,6 +157,7 @@ async def _run_crawl(site: str):
         db.flush()
         job_id = str(job_record.id)
 
+    crawler = None
     try:
         crawler = CRAWLERS[site]()
         stats = await crawler.run(job_type="incremental")
@@ -191,9 +198,47 @@ async def _run_crawl(site: str):
                 if fails >= CRAWL_FAIL_THRESHOLD and not _site_crawl_disabled(db, site):
                     _trip_breaker(db, site, fails)
 
+    finally:
+        # Both crawlers close their HTTP client at the END of run(), so a crawl
+        # that raises never closes it — and these crawlers fail routinely (FF.net
+        # is permanently 403, AO3 returns 525s). Every failed scheduled crawl
+        # leaked an httpx.AsyncClient and its connection pool, every few hours,
+        # for as long as the process lived.
+        if crawler is not None:
+            try:
+                await crawler.close()
+            except Exception:
+                pass
+
+
+def _reap_orphaned_jobs() -> None:
+    """Mark crawl jobs left as "running" by a previous process as failed.
+
+    A crawl job only lives in the process that started it, so any row still
+    marked running at startup belongs to a process that is gone — killed by a
+    restart or a crash. They otherwise sit as "running" forever, showing a crawl
+    in progress that is not, and skewing the recent-jobs list in the UI.
+    """
+    from datetime import timedelta
+    from db.session import db_session
+    from models.story import CrawlJob
+    try:
+        with db_session() as db:
+            stale = (db.query(CrawlJob)
+                     .filter(CrawlJob.status == "running")
+                     .update({"status": "failed",
+                              "error": "[transient] interrupted — process restarted",
+                              "finished_at": datetime.now(timezone.utc)},
+                             synchronize_session=False))
+            if stale:
+                logger.info(f"[scheduler] reaped {stale} interrupted crawl job(s)")
+    except Exception as e:
+        logger.warning(f"[scheduler] could not reap orphaned jobs: {e}")
+
 
 def start_scheduler():
     """Register jobs and start the scheduler. Call once at app startup."""
+    _reap_orphaned_jobs()
 
     # Feed polling is the reliable fresh-AO3 path. Runs on a schedule.
     FEED_INTERVAL_HOURS = float(os.getenv("FEED_INTERVAL_HOURS", "6"))

@@ -53,6 +53,9 @@ export function buildSearchParams(raw: Record<string, string | string[] | undefi
     updated_before: get("updated_before"),
     published_after: get("published_after"),
     explicit: bool("explicit"),
+    author: get("author"),
+    match_mode: (get("match_mode") as "all" | "any") ?? "all",
+    include_unknown: bool("include_unknown"),
     search_within: get("search_within"),
     sort: get("sort") ?? "relevance",
     page: num("page") ?? 1,
@@ -66,9 +69,15 @@ export function formatWordCount(n: number): string {
   return String(n)
 }
 
+// Compact counts. Must go past millions: the index holds 126 BILLION words, and
+// a millions-only formatter rendered that as "126305.5M".
 export function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  if (!Number.isFinite(n)) return "—"
+  const abs = Math.abs(n)
+  if (abs >= 1_000_000_000_000) return `${(n / 1_000_000_000_000).toFixed(1)}T`
+  if (abs >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
+  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}k`
   return String(n)
 }
 

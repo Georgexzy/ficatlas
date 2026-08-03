@@ -1,4 +1,4 @@
-"""
+r"""
 FicAlley Archive Importer — full text (stories + chapters)
 ==========================================================
 Imports stories AND their chapter content. Marks stories as is_hosted=True
@@ -112,10 +112,23 @@ def import_all(limit, include_hidden, include_corrupt, with_chapters):
                     summary=(row["summary"] or "").strip() or None,
                     language="English",
                     rating=parse_rating(row["rating"]),
-                    status=StatusEnum.complete if row["is_complete"] else StatusEnum.in_progress,
+                    # The dump carries NO completion signal: is_complete is NOT NULL
+                    # and false for all 30,108 rows, so `is_complete ? x : y` reduces
+                    # to a constant. Reading it as "unfinished" asserts something the
+                    # data does not say, and because a `status=complete` search
+                    # excludes in_progress (while treating unknown as permissive),
+                    # that assertion HIDES the work. Same defect as 38be858.
+                    #
+                    # A single-chapter story on an archive that stopped accepting
+                    # updates in 2018 is complete in every sense that matters, so that
+                    # much is inferable. Anything longer is genuinely unknown.
+                    status=(StatusEnum.complete if int(row["chapters"] or 1) == 1
+                            else StatusEnum.unknown),
                     word_count=int(row["words"] or 0),
                     chapter_count=int(row["chapters"] or 1),
-                    chapter_count_total=int(row["chapters"] or 1) if row["is_complete"] else None,
+                    # Only claim a known total for the one-shots above; leaving it
+                    # NULL is what signals "we don't know how long this ends up".
+                    chapter_count_total=(1 if int(row["chapters"] or 1) == 1 else None),
                     fandoms=["Harry Potter - J. K. Rowling"],
                     characters=list(row["main_characters"] or []),
                     relationships=list(row["ships"] or []),

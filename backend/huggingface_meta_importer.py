@@ -14,6 +14,9 @@ Schema (per row):
     summary:     story summary
     language:    "English", "Spanish", ...
 
+There is NO completion/status column. Rows import as status=unknown, which a
+search treats permissively, rather than claiming they are unfinished.
+
 Dataset is stored as arrow; parquet conversion lives at refs/convert/parquet.
 This script downloads it via huggingface_hub from inside the container — no curl.
 
@@ -208,7 +211,18 @@ def main():
                     summary=summary,
                     language=str(row.get("language") or "English")[:50],
                     rating=_normalise_rating(row.get("rating")).value,
-                    status=StatusEnum.in_progress.value,
+                    # The dataset has EIGHT columns and completion is not one of
+                    # them (verified against the parquet, not just the docstring
+                    # above): source_file, category, rating, chapters, words,
+                    # story_url, summary, language.
+                    #
+                    # This used to hardcode in_progress, which asserts "unfinished"
+                    # for 6.57M stories on no evidence whatsoever — and since a
+                    # status=complete search excludes in_progress while treating
+                    # unknown as permissive, it hid 5.28M of them outright, 29% of
+                    # the whole index. Nothing else ever writes in_progress from
+                    # evidence either; persist.py only ever upgrades TO complete.
+                    status=StatusEnum.unknown.value,
                     word_count=_parse_int(row.get("words")),
                     chapter_count=max(1, _parse_int(row.get("chapters"), 1)),
                     fandoms=fandoms,
@@ -253,6 +267,17 @@ def main():
 
     log.info(f"DONE — inserted={inserted:,}  dup_skipped={skipped_dup:,}  "
              f"filtered_out={filtered_out:,}  missing_id={skipped_missing:,}  errors={errors:,}")
+
+    # Refresh planner statistics. Without this the planner keeps using the row
+    # counts from before the import and search slows down by orders of magnitude.
+    if not args.dry_run:
+        from sqlalchemy import text
+        try:
+            with db_session() as db:
+                db.execute(text("ANALYZE stories"))
+            log.info("ANALYZE stories — planner statistics refreshed")
+        except Exception as e:
+            log.warning(f"ANALYZE failed ({e}); run it manually or search will be slow")
 
 
 if __name__ == "__main__":

@@ -1,10 +1,11 @@
 "use client"
-import { useState, useEffect } from "react"
+export const dynamic = "force-dynamic"
+import { useState, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { useAuth } from "@/lib/auth"
 
-export default function LoginPage() {
+function LoginPageInner() {
   const router = useRouter()
   const params = useSearchParams()
   const { user, login, signup, loading } = useAuth()
@@ -73,5 +74,13 @@ export default function LoginPage() {
         </p>
       </form>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageInner />
+    </Suspense>
   )
 }

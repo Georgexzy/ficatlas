@@ -28,48 +28,50 @@ class AO3Crawler(BaseCrawler):
     BASE = "https://archiveofourown.org"
 
     async def run(self, job_type: str = "incremental") -> dict:
+        """Pull recently-updated AO3 works for the tracked fandoms.
+
+        Rewritten. The previous implementation was wrong in three ways:
+
+          * it fetched EVERY work's full page individually — 20 works per listing
+            page, at a 5s rate limit, so a 5-page incremental crawl meant ~100
+            page loads and eight-plus minutes. The listing blurbs already carry
+            title, author, summary, fandoms, ships, characters, tags, rating,
+            word count and status, so none of those requests were needed.
+          * the "full" branch built `{BASE}/works&page=1` — no "?" — which is a
+            404, so that mode could never have worked at all.
+          * it browsed bare /works, which is the tag-listing endpoint. Measured
+            2/2 successful at 4-5s for a real tag versus 1/2 and 29s for
+            /works/search, and it ignores &page without a tag.
+
+        It now uses the same tag-endpoint fetch and blurb parser as live search
+        and the worker's recent-works loop, so there is one code path to keep
+        working rather than three.
+        """
+        from api.settings import get_setting
+        from live_fetch.ao3_live import fetch_live_ao3
+        from live_fetch.persist import persist_live_results
+
         stats = {"found": 0, "new": 0, "updated": 0}
+        pages = 5 if job_type == "incremental" else 20
 
-        # Incremental: crawl recently updated works
-        # Full: crawl from works index (very slow, millions of works)
-        if job_type == "incremental":
-            url = f"{self.BASE}/works?sort_column=revised_at&sort_direction=desc"
-        else:
-            url = f"{self.BASE}/works"
+        with db_session() as db:
+            tracked = get_setting(db, "tracked_fandom") or ""
+        fandoms = [f.strip() for f in tracked.split(",") if f.strip()]
+        if not fandoms:
+            return stats
 
-        page = 1
-        max_pages = 5 if job_type == "incremental" else 500
-
-        while page <= max_pages:
-            page_url = f"{url}&page={page}"
-            html = await self.fetch(page_url)
-            if not html:
-                break
-
-            work_ids = self._extract_work_ids(html)
-            if not work_ids:
-                break
-
-            for work_id in work_ids:
-                stats["found"] += 1
-                work_html = await self.fetch(f"{self.BASE}/works/{work_id}")
-                if not work_html:
-                    continue
-
-                data = self._parse_work(work_id, work_html)
-                if not data:
-                    continue
-
-                with db_session() as db:
-                    is_new, is_updated = self.upsert_story(db, data)
-                    if is_new:
-                        stats["new"] += 1
-                    elif is_updated:
-                        stats["updated"] += 1
-
-            page += 1
-
-        await self.close()
+        try:
+            for fandom in fandoms:
+                results = await fetch_live_ao3(
+                    {"fandoms": fandom, "status": None, "sort": "updated_desc"},
+                    limit=pages * 20, pages=pages,
+                )
+                stats["found"] += len(results)
+                if results:
+                    with db_session() as db:
+                        stats["new"] += persist_live_results(db, results)
+        finally:
+            await self.close()
         return stats
 
     def _extract_work_ids(self, html: str) -> list[str]:

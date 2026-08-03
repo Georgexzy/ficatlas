@@ -24,12 +24,25 @@ import re
 import asyncio
 import logging
 from datetime import datetime
+import os
 import httpx
 
 log = logging.getLogger(__name__)
 
 PRIMARY = "https://archiveofourown.org"
-MIRROR  = "https://archive.transformativeworks.org"
+# archive.transformativeworks.org was AO3's alternate hostname. It now returns 403
+# to everything, including its own homepage, while archiveofourown.org returns
+# 200 — so it is not a fallback, it is a dead host that makes every failure worse:
+#
+#   AO3 returns a transient 525  ->  fall back to the mirror  ->  403
+#     ->  error reads "all fallbacks failed ... (last status: 403)"
+#     ->  scheduler._classify_failure matches BOTH "403" and "all fallbacks
+#         failed", so a momentary AO3 hiccup is recorded as BLOCKED
+#     ->  five of those trip the circuit breaker and auto-disable AO3 crawling
+#
+# which is precisely the misclassification the breaker exists to avoid. Left
+# configurable so a working mirror can be restored without a code change.
+MIRROR  = os.getenv("AO3_MIRROR", "").strip()
 
 HEADERS = {
     # AO3 doesn't formally rate-limit by UA but their CDN happily 5xxs on custom bot UAs.
@@ -161,7 +174,7 @@ async def _get_with_fallback(
     """
     import asyncio, time
 
-    use_bases = bases or (PRIMARY, MIRROR)
+    use_bases = bases or tuple(b for b in (PRIMARY, MIRROR) if b)
     is_ao3 = bases is None
 
     # If AO3 just blanket-blocked us, don't bother attempting — fail fast so the

@@ -13,8 +13,34 @@ interface ChapterFull {
 
 interface StoryMin {
   id: string; title: string; author: string; chapter_count: number;
+  language?: string
   chapters: { number: number; title?: string }[]
 }
+
+// Stored languages are display names in their own script ("Русский", not "ru"),
+// because that is how AO3 records them. A screen reader needs a BCP-47 code on
+// the element or it reads the whole chapter with English pronunciation rules —
+// and a large share of this index is not English. Names here mirror the
+// canonical keys in backend/language_aliases.py.
+const LANG_CODES: Record<string, string> = {
+  English: "en", Chinese: "zh", Spanish: "es", Russian: "ru", French: "fr",
+  Portuguese: "pt", Indonesian: "id", German: "de", Italian: "it",
+  Ukrainian: "uk", Polish: "pl", Filipino: "fil", Vietnamese: "vi",
+  Czech: "cs", Turkish: "tr", Japanese: "ja", Hungarian: "hu", Korean: "ko",
+  Thai: "th", Swedish: "sv", Finnish: "fi", Dutch: "nl", Norwegian: "no",
+  Danish: "da", Belarusian: "be", Hebrew: "he", Esperanto: "eo", Arabic: "ar",
+  Greek: "el", Romanian: "ro", Bulgarian: "bg", Croatian: "hr",
+  Serbian: "sr", Catalan: "ca", Latin: "la", Persian: "fa", Hindi: "hi",
+  "中文-普通话 國語": "zh", "Español": "es", "Français": "fr", "日本語": "ja",
+  "Português brasileiro": "pt-BR", "Deutsch": "de", "Italiano": "it",
+  "Polski": "pl", "Українська": "uk", "한국어": "ko", "Tiếng Việt": "vi",
+}
+
+// Right-to-left scripts need dir="rtl" or the text renders in the wrong order.
+const RTL = new Set(["ar", "he", "fa", "ur"])
+
+// 250 wpm is the usual middle of the range quoted for adult prose reading.
+const WORDS_PER_MINUTE = 250
 
 export default function ChapterPage() {
   const params = useParams()
@@ -28,6 +54,7 @@ export default function ChapterPage() {
   const [width, setWidth] = useState<"narrow" | "wide">("narrow")
   const [lineHeight, setLineHeight] = useState(1.7)
   const [theme, setTheme] = useState<"default" | "sepia" | "dark">("default")
+  const [justify, setJustify] = useState(false)
   const [scrollPct, setScrollPct] = useState(0)
 
   useEffect(() => {
@@ -41,6 +68,7 @@ export default function ChapterPage() {
     if (savedLH) setLineHeight(Number(savedLH))
     const savedTheme = localStorage.getItem("ficatlas:reader_theme")
     if (savedTheme === "sepia" || savedTheme === "dark" || savedTheme === "default") setTheme(savedTheme)
+    setJustify(localStorage.getItem("ficatlas:reader_justify") === "1")
 
     // Fall back to server settings if localStorage is empty (different browser etc.)
     if (!savedFont || !savedWidth) {
@@ -67,6 +95,10 @@ export default function ChapterPage() {
   useEffect(() => {
     localStorage.setItem("ficatlas:reader_lineheight", String(lineHeight))
   }, [lineHeight])
+  useEffect(() => {
+    localStorage.setItem("ficatlas:reader_justify", justify ? "1" : "0")
+  }, [justify])
+
   useEffect(() => {
     localStorage.setItem("ficatlas:reader_theme", theme)
   }, [theme])
@@ -202,34 +234,66 @@ export default function ChapterPage() {
   // Keyboard navigation
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return
+      // Any editable target, not just <input> — a textarea or contenteditable
+      // otherwise had "-" shrink the text and the arrows change chapter
+      // mid-sentence. Modifier chords belong to the browser, not to us.
+      const t = e.target as HTMLElement | null
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
       if (e.key === "ArrowLeft" && num > 1) goChapter(num - 1)
       if (e.key === "ArrowRight" && story && num < story.chapter_count) goChapter(num + 1)
       if (e.key === "+" || e.key === "=") setFontSize(s => Math.min(s + 1, 24))
       if (e.key === "-") setFontSize(s => Math.max(s - 1, 13))
       if (e.key === "t") setTheme(t => t === "default" ? "sepia" : t === "sepia" ? "dark" : "default")
+      if (e.key === "j") setJustify(j => !j)
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
   }, [num, story, storyId, router])
 
-  if (!chapter || !story) return <div className="reader-shell"><p className="loading">Loading…</p></div>
+  if (!chapter || !story) {
+    return (
+      <div className="reader-shell">
+        <p className="loading" role="status" aria-live="polite">Loading…</p>
+      </div>
+    )
+  }
 
   const hasPrev = num > 1
   const hasNext = num < story.chapter_count
+  const langCode = LANG_CODES[(story.language || "English").trim()] || "en"
+  const dir = RTL.has(langCode) ? "rtl" : undefined
+  const minutes = Math.max(1, Math.round((chapter.word_count || 0) / WORDS_PER_MINUTE))
 
   return (
     <div className="reader-shell" data-width={width} data-font={fontFamily} data-theme={theme}>
-      <div className="reader-progress" style={{ width: `${scrollPct}%` }} />
+      {/* Keyboard users land on the toolbar first and would otherwise tab through
+          every control before reaching a word of the story. */}
+      <a href="#reader-body" className="skip-link">Skip to chapter text</a>
+      <div className="reader-progress" style={{ width: `${scrollPct}%` }}
+        role="progressbar" aria-label="Reading progress"
+        aria-valuenow={Math.round(scrollPct)} aria-valuemin={0} aria-valuemax={100} />
       <div className="reader-topbar reader-topbar--sticky">
         <Link href={`/story/${storyId}`} className="back-link">← {story.title}</Link>
         <div className="reader-controls">
+          {/* aria-label states what the control DOES; the visible glyph states
+              the current value, which a screen reader would otherwise announce
+              as the action ("Sepia" reads as if pressing it were already done). */}
           <button className="reader-ctrl" onClick={() => setTheme(t => t === "default" ? "sepia" : t === "sepia" ? "dark" : "default")}
-            title="Cycle theme (t)">{theme === "default" ? "◐ Light" : theme === "sepia" ? "◖ Sepia" : "◑ Dark"}</button>
+            title="Cycle theme (t)" aria-label={`Change colour theme, currently ${theme === "default" ? "light" : theme}`}
+          >{theme === "default" ? "◐ Light" : theme === "sepia" ? "◖ Sepia" : "◑ Dark"}</button>
           <button className="reader-ctrl" onClick={() => setFontFamily(f => f === "serif" ? "sans" : "serif")}
-            title="Toggle serif / sans">{fontFamily === "serif" ? "Serif" : "Sans"}</button>
+            title="Toggle serif / sans" aria-pressed={fontFamily === "sans"}
+            aria-label={`Sans-serif type, currently ${fontFamily}`}
+          >{fontFamily === "serif" ? "Serif" : "Sans"}</button>
           <button className="reader-ctrl" onClick={() => setWidth(w => w === "narrow" ? "wide" : "narrow")}
-            title="Toggle column width">{width === "narrow" ? "↔ Wide" : "↔ Narrow"}</button>
+            title="Toggle column width" aria-pressed={width === "wide"}
+            aria-label={`Wide column, currently ${width}`}
+          >{width === "narrow" ? "↔ Wide" : "↔ Narrow"}</button>
+          <button className="reader-ctrl" onClick={() => setJustify(j => !j)}
+            title="Justify text (j)" aria-pressed={justify}
+            aria-label={`Justify text, currently ${justify ? "on" : "off"}`}
+          >{justify ? "≡ Justified" : "≡ Ragged"}</button>
           <button className="reader-ctrl" onClick={() => setLineHeight(l => Math.max(1.3, +(l - 0.1).toFixed(1)))}
             title="Tighter line spacing" aria-label="Tighter lines">↕−</button>
           <button className="reader-ctrl" onClick={() => setLineHeight(l => Math.min(2.4, +(l + 0.1).toFixed(1)))}
@@ -244,10 +308,21 @@ export default function ChapterPage() {
         ✕
       </Link>
 
-      <article className="reader" data-width={width} data-font={fontFamily} style={{ fontSize: `${fontSize}px`, lineHeight }}>
+      {/* fontSize is expressed in rem, not px. A px size ignores the reader's
+          own browser font-size setting entirely, which is the setting people
+          with low vision actually rely on; rem scales with it and still honours
+          the in-app A+/A- buttons on top. */}
+      <article className="reader" data-width={width} data-font={fontFamily}
+        data-justify={justify ? "on" : "off"}
+        lang={langCode} dir={dir}
+        style={{ fontSize: `${(fontSize / 16).toFixed(3)}rem`, lineHeight }}>
         <header className="reader__header">
-          <p className="reader__breadcrumb">Chapter {num} of {story.chapter_count}</p>
-          <h1 className="reader__title">{chapter.title || `Chapter ${num}`}</h1>
+          <p className="reader__breadcrumb">
+            Chapter {num} of {story.chapter_count}
+            <span className="dot"> · </span>
+            <span>{minutes} min read</span>
+          </p>
+          <h1 className="reader__title" tabIndex={-1}>{chapter.title || `Chapter ${num}`}</h1>
           {chapter.summary && <p className="reader__summary">{chapter.summary}</p>}
         </header>
 
@@ -258,7 +333,8 @@ export default function ChapterPage() {
           </aside>
         )}
 
-        <div className="reader__body reader__content" dangerouslySetInnerHTML={{ __html: chapter.content }} />
+        <div id="reader-body" className="reader__body reader__content"
+          dangerouslySetInnerHTML={{ __html: chapter.content }} />
 
         {chapter.end_note && (
           <aside className="reader__note">
@@ -276,7 +352,7 @@ export default function ChapterPage() {
           onClick={() => goChapter(num + 1)}>Next →</button>
       </nav>
 
-      <p className="reader-hint">Keys: ← → chapters · + − text size · t theme. Line spacing, serif/sans &amp; column width: buttons above.</p>
+      <p className="reader-hint">Keys: ← → chapters · + − text size · t theme · j justify. Line spacing, serif/sans &amp; column width: buttons above.</p>
     </div>
   )
 }

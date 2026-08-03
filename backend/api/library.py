@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from db.session import get_db
+from api.auth import require_admin
 from models.story import Story, Chapter, SiteEnum, RatingEnum, StatusEnum
 
 log = logging.getLogger(__name__)
@@ -68,7 +69,9 @@ async def crawl_status(db: Session = Depends(get_db)):
 
 
 @router.post("/crawl-reset-breaker")
-async def crawl_reset_breaker(site: str = Form(...), db: Session = Depends(get_db)):
+async def crawl_reset_breaker(site: str = Form(...), db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Re-enable a site that the circuit breaker auto-disabled after repeated
     crawl failures. Clears the crawl_disabled_<site> flag."""
     from api.settings import put_setting
@@ -316,7 +319,9 @@ def _ingest_epub_bytes(data: bytes, db: Session) -> dict:
 
 
 @router.post("/upload-epub")
-async def upload_epub(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_epub(file: UploadFile = File(...), db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Upload a single EPUB into the library as a hosted story."""
     if not file.filename or not file.filename.lower().endswith(".epub"):
         raise HTTPException(400, "Must be an .epub file")
@@ -331,7 +336,9 @@ async def upload_epub(file: UploadFile = File(...), db: Session = Depends(get_db
 
 
 @router.post("/upload-epubs")
-async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
+async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """
     Bulk upload up to 100 EPUBs at once. Each file processed independently;
     failures don't roll back the batch. Returns per-file results.
@@ -371,8 +378,20 @@ async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depend
 
 
 @router.post("/import-url")
-async def import_url(url: str = Form(...), db: Session = Depends(get_db)):
+async def import_url(url: str = Form(...), db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Fetch a story from AO3/FFnet via FicHub and import it as a hosted story."""
+    # Metadata-only seed rows carry a synthetic seed:// URL with no page behind it.
+    # The UI hides the import button for these, but reject them here too so a stale
+    # client can't send FicHub a URL it will only fail on.
+    if url.startswith("seed://"):
+        raise HTTPException(
+            400,
+            "This is a metadata-only entry with no source page. "
+            "Use the AO3 search link on the story to find the work itself.",
+        )
+
     # Check exact URL match first
     existing = db.query(Story).filter(Story.url == url).first()
     # ...then check if any existing story knows this URL as a cross-post
@@ -446,6 +465,7 @@ async def refresh_ao3(
     fandom: Optional[str] = Form(None),
     pages: int = Form(5),
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
     """Force a wider live AO3 fetch for the given query/fandom.
     Useful when the user wants to refresh results beyond what a normal search returns."""
@@ -511,6 +531,7 @@ async def poll_feed(
     max_words: Optional[int] = Form(None),
     complete_only: bool = Form(False),
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
     """
     Resolve a fandom name to its AO3 canonical tag feed, poll it, and index new works.
@@ -553,7 +574,9 @@ async def poll_feed(
 _last_autopoll = {"at": None}
 
 @router.post("/autopoll")
-async def autopoll(db: Session = Depends(get_db)):
+async def autopoll(db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """
     Called by the frontend on page load. Polls the tracked fandom's AO3 feed,
     but debounced server-side to at most once every 10 minutes so refreshing
@@ -607,7 +630,9 @@ async def autopoll(db: Session = Depends(get_db)):
 # ── Delete hosted stories ────────────────────────────────────────────────────
 
 @router.delete("/hosted/{story_id}")
-async def delete_hosted(story_id: str, db: Session = Depends(get_db)):
+async def delete_hosted(story_id: str, db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Delete a hosted story and its chapters from the library."""
     story = db.query(Story).filter(Story.id == story_id).first()
     if not story:
@@ -631,6 +656,7 @@ async def discover_ffnet(
     limit: int = Form(50),
     auto_import: bool = Form(False),
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
     """
     Discover FFN story URLs via the Wayback Machine CDX index (no Cloudflare).
@@ -705,6 +731,38 @@ def _ingest_epub_from_url(db: Session, url: str, epub_bytes: bytes, site: SiteEn
 
 # ── DLP (DarkLordPotter) library discovery ───────────────────────────────────
 
+
+def _story_key_from_url(url: str) -> tuple[str, str] | None:
+    """(site, site_id) for an FFN/AO3 story URL, ignoring scheme and host form.
+
+    DLP publishes "http://www.fanfiction.net/s/3639659/1/" while the importers
+    normalised the same story to "https://www.fanfiction.net/s/3639659/1/", so
+    matching on the URL string found nothing — 484 of DLP's 630 curated stories
+    were already indexed and only 20 carried the tag.
+    """
+    m = re.search(r"fanfiction\.net/s/(\d+)", url or "")
+    if m:
+        return ("ffnet", m.group(1))
+    m = re.search(r"archiveofourown\.org/works/(\d+)", url or "")
+    if m:
+        return ("ao3", m.group(1))
+    return None
+
+
+def _find_indexed_story(db: Session, urls: list[str]):
+    """Find an already-indexed story for any of these URLs, by site + id."""
+    for u in urls:
+        key = _story_key_from_url(u)
+        if not key:
+            continue
+        hit = (db.query(Story)
+               .filter(Story.site == SiteEnum(key[0]), Story.site_id == key[1])
+               .first())
+        if hit:
+            return hit
+    return None
+
+
 @router.post("/discover-dlp")
 async def discover_dlp(
     corpus: str = Form("hp"),            # "hp" or "other"
@@ -712,6 +770,7 @@ async def discover_dlp(
     auto_import: bool = Form(False),
     prefer: str = Form("ao3"),           # which URL to import: "ao3" or "ffn"
     db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
     """
     Scrape the DLP library list. Returns parsed entries with FFN/AO3/etc URLs.
@@ -725,8 +784,32 @@ async def discover_dlp(
     if not entries:
         return {"ok": False, "error": "Couldn't fetch the DLP library list. Try again later."}
 
+    # Tag the stories we ALREADY have, before considering any download.
+    #
+    # 484 of DLP's 630 curated works are already in the index from the bulk
+    # dumps; they simply weren't tagged, because the old matcher compared full
+    # URL strings and DLP's are http:// while ours are https://. Merging the
+    # curation onto existing rows costs a few hundred indexed lookups and needs
+    # no FicHub fetch at all — which is what made this feature look broken, with
+    # only 20 of them tagged.
+    tagged = 0
+    for e in entries:
+        cand = [v for k, v in (e.get("urls") or {}).items() if k in ("ffn", "ao3")]
+        if not cand:
+            continue
+        hit = _find_indexed_story(db, cand)
+        if hit is not None:
+            before = set(hit.tags or [])
+            _merge_dlp_tags(hit, e.get("dlp_tags") or [])
+            _record_cross_posts(hit, cand)
+            if set(hit.tags or []) != before:
+                tagged += 1
+    if tagged:
+        db.commit()
+
     if not auto_import:
-        return {"ok": True, "found": len(entries), "entries": entries, "imported": 0}
+        return {"ok": True, "found": len(entries), "tagged_existing": tagged,
+                "entries": entries, "imported": 0}
 
     # Auto-import flow: per entry, pick a URL and import it via FicHub
     fallbacks = [prefer, "ao3", "ffn", "patronuscharm", "ficwad", "hpfanficarchive"]
@@ -750,7 +833,11 @@ async def discover_dlp(
 
             # Is this story (or any of its siblings) already in our index?
             candidates = [chosen_url] + sibling_urls
-            existing = db.query(Story).filter(Story.url.in_(candidates)).first()
+            # Match on site + story id, not the raw URL: DLP's links are http://
+            # and ours are https://, so a string comparison never matched.
+            existing = _find_indexed_story(db, candidates)
+            if not existing:
+                existing = db.query(Story).filter(Story.url.in_(candidates)).first()
             if not existing:
                 # Also check cross_post_urls of existing stories
                 for u in candidates:
@@ -829,7 +916,8 @@ async def discover_ao3(
     direction: str = Form("desc"),
     ratings: Optional[str] = Form(None),       # comma-separated, e.g. "T,M,E"
     excluded_tags: Optional[str] = Form(None), # comma-separated
-    max_pages: int = Form(5),                  # 5 pages = ~100 works
+    max_pages: int = Form(5),                  # 5 pages = ~100 works,
+    _admin=Depends(require_admin),
 ):
     """
     Kick off a deep AO3 discovery as an ASYNC JOB. Returns immediately with a
@@ -914,6 +1002,7 @@ async def discover_hpffa(
     complete_only: bool = Form(False),
     sort: str = Form("revised_at"),
     max_pages: int = Form(5),
+    _admin=Depends(require_admin),
 ):
     """
     Pulls stories from the HPFFA Open Doors collection on AO3 as an async job.
@@ -988,6 +1077,7 @@ async def discover_hexfiles(
     complete_only: bool = Form(False),
     sort: str = Form("revised_at"),
     max_pages: int = Form(5),
+    _admin=Depends(require_admin),
 ):
     """Pull stories from the Harry Potter FanFic Archive ("the HexFiles") Open
     Doors collection on AO3. This is a SEPARATE ~18k-member archive from HPFFA —
@@ -1061,6 +1151,7 @@ async def discover_squidgeworld(
     complete_only: bool = Form(False),
     sort: str = Form("revised_at"),
     max_pages: int = Form(5),
+    _admin=Depends(require_admin),
 ):
     """Scrape SquidgeWorld Archive (squidgeworld.org). It runs the same OTW
     'Otwarchive' software as AO3, so its /works listing shares AO3's HTML
@@ -1119,7 +1210,10 @@ async def discover_squidgeworld(
 # ── Cross-post dedup (one-shot batch over existing data) ─────────────────────
 
 @router.post("/dedup-crossposts")
-async def dedup_crossposts(limit: Optional[int] = Form(None)):
+async def dedup_crossposts(limit: Optional[int] = Form(None),
+    dry_run: bool = Form(False),
+    _admin=Depends(require_admin),
+):
     """Scan existing stories and merge cross-posted copies (same title+author on
     different sites) into single canonical rows, recording the alternates in
     cross_post_urls and keeping the most-recently-updated copy's hosted text.
@@ -1136,6 +1230,29 @@ async def dedup_crossposts(limit: Optional[int] = Form(None)):
             with db_session() as db:
                 groups = group_existing(db, limit=limit)
                 state["groups_found"] = len(groups)
+
+                # merge_group DELETES every non-canonical row in a group, so this
+                # batch is irreversible. dry_run reports exactly what would be
+                # merged — and a sample of it — without touching anything.
+                if dry_run:
+                    state["sample"] = [
+                        {
+                            "title": g[0].title,
+                            "author": g[0].author,
+                            "copies": len(g),
+                            "sites": sorted({s2.site.value for s2 in g}),
+                            "urls": [s2.url for s2 in g][:4],
+                        }
+                        for g in groups[:25]
+                    ]
+                    state["would_merge"] = sum(len(g) - 1 for g in groups)
+                    state["status"] = "done"
+                    state["progress"] = (
+                        f"Dry run — would merge {state['would_merge']} rows "
+                        f"across {len(groups)} works. Nothing changed."
+                    )
+                    return
+
                 merged = 0
                 for i, group in enumerate(groups):
                     try:
@@ -1190,7 +1307,9 @@ async def ao3_status():
 
 
 @router.post("/admin/clear-ao3-cooldown")
-async def clear_ao3_cooldown_endpoint():
+async def clear_ao3_cooldown_endpoint(
+    _admin=Depends(require_admin),
+):
     """Force-clear the AO3 cooldown so the next scrape will retry immediately.
     Useful when you know AO3 has come back (e.g. you tested with curl from the
     server and got a 200), but our cooldown timer hasn't expired yet."""
@@ -1202,30 +1321,76 @@ async def clear_ao3_cooldown_endpoint():
 # ── Admin: remove orphaned example/seed stories ──────────────────────────────
 
 @router.delete("/admin/cleanup-seeds")
-async def cleanup_seeds(db: Session = Depends(get_db)):
-    """Best-effort removal of seed/example/test stories left over from earlier runs.
-    Matches by site_id pattern and obvious placeholder authors.
+async def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
+    """Remove the fabricated demo stories written by seed_data.py.
+
+    Those rows are invented works ("realistic test stories for UI development")
+    carrying invented kudos counts in the tens of thousands — higher than anything
+    else in the AO3 set — so they sorted to the top of real searches, and their
+    URLs point at unrelated genuine AO3 works.
+
+    The previous matcher looked for site_id LIKE 'seed%'/'example%'/'test%'/'demo%'
+    and placeholder author names. seed_data.py uses neither: its rows have numeric
+    site_ids (1234001-1234008) and real-looking author names, so the cleanup never
+    matched the very data it exists to remove. Worse, `seed%` DID match the
+    synthetic site_ids of the janelleshane metadata seed, so running this endpoint
+    would have deleted that entire legitimate import.
+
+    Match the demo rows by their actual signature instead, and never touch a row
+    carrying a provenance tag from a real importer.
     """
-    from sqlalchemy import or_
-    candidates = db.query(Story).filter(or_(
-        Story.site_id.like("seed%"),
+    from sqlalchemy import or_, and_, not_
+
+    # Provenance tags applied by genuine bulk importers. Rows carrying one of these
+    # are real index data regardless of what their site_id looks like.
+    PROVENANCE_TAGS = [
+        "janelleshane_seed", "hpffa_archive", "hexfiles_archive",
+        "squidgeworld_archive", "dlp_library",
+    ]
+
+    looks_like_demo = or_(
+        # The tag seed_data.py now stamps on every fixture — matching by
+        # provenance rather than guessing at a site_id pattern, which is what
+        # made this endpoint miss the very rows it exists to remove.
+        Story.tags.any("ui_fixture"),
+        # Older fixtures predating that tag. Matched by EXACT id, not a range:
+        # `^123400[0-9]$` also caught site_id 1234000, which is a genuine AO3
+        # work ("Fortune Teller" by Margo_Kim) — this endpoint would have
+        # deleted it.
+        and_(Story.site == SiteEnum.ao3,
+             Story.site_id.in_([f"123400{n}" for n in range(1, 9)])),
         Story.site_id.like("example%"),
         Story.site_id.like("test%"),
         Story.site_id.like("demo%"),
         Story.author.in_(["Example Author", "Test Author", "Demo Author", "Seed Author"]),
         Story.tags.any("example"),
-        Story.tags.any("seed"),
-    )).all()
-    removed = []
-    for s in candidates:
-        removed.append({"id": str(s.id), "title": s.title, "site_id": s.site_id})
-        db.delete(s)
-    db.commit()
-    return {"ok": True, "removed_count": len(removed), "removed": removed}
+    )
+
+    candidates = db.query(Story).filter(
+        looks_like_demo,
+        # Story.tags is a generic ARRAY column, so it has no .overlap(); .any() is
+        # the comparator this file uses elsewhere.
+        not_(or_(*[Story.tags.any(t) for t in PROVENANCE_TAGS])),
+        Story.is_hosted == False,  # noqa: E712 — never delete full text we hold
+    ).all()
+
+    removed = [{"id": str(s.id), "title": s.title, "site_id": s.site_id,
+                "site": s.site.value if s.site else None, "kudos": s.kudos}
+               for s in candidates]
+    if not dry_run:
+        for s in candidates:
+            db.delete(s)
+        db.commit()
+    return {"ok": True, "dry_run": dry_run,
+            "removed_count": len(removed), "removed": removed}
 
 
 @router.post("/cleanup-preface-chapters")
-async def cleanup_preface_chapters(dry_run: bool = Form(False), db: Session = Depends(get_db)):
+async def cleanup_preface_chapters(dry_run: bool = Form(False), db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Fix already-imported stories whose first 'chapter' is actually FicHub/AO3
     front matter (the metadata sheet + author's preliminary notes) rather than a
     real chapter — the bug this addresses surfaced those as Chapter 1.

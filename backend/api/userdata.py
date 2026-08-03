@@ -25,7 +25,9 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
     - bookmarks: array of story objects/ids → union, dedup by id (or by value)
     - recents:   array → union preserving recency, cap at 50
     - progress:  dict keyed by story id → per-story keep the most-recently-updated
-    - settings/explicit: scalars/objects → client wins (it's the active device's choice)
+    - settings:  dict of unrelated preferences → merged per key, client winning
+                 the keys it set, so one device never wipes another's choices
+    - explicit:  scalar → client wins (it's the active device's choice)
     """
     if server is None:
         return client
@@ -56,7 +58,16 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
                 out[sid] = c_entry if c_at >= s_at else s_entry
         return out
 
-    # settings, explicit, anything else: client (active device) wins
+    if key == "settings" and isinstance(client, dict) and isinstance(server, dict):
+        # Per-KEY merge, not whole-object replace. Settings is one JSON blob holding
+        # unrelated preferences (reader font, column width, default sites, poll
+        # options...). Replacing the whole object meant that a phone which had never
+        # seen a preference changed on the laptop would wipe it on its next sync —
+        # silent cross-device data loss. Merging per key keeps both devices' choices,
+        # with the active device still winning any key it actually set.
+        return {**server, **client}
+
+    # explicit, and anything else scalar: client (active device) wins
     return client
 
 

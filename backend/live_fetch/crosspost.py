@@ -15,6 +15,7 @@ suffixes so "Harry's Story" by "Jane_Doe" matches "Harry's Story" by "jane doe".
 import re
 from datetime import datetime
 from collections import defaultdict
+from sqlalchemy import func, text as sql_text
 from sqlalchemy.orm import Session
 from models.story import Story
 
@@ -39,11 +40,32 @@ def norm_author(author: str) -> str:
     return a
 
 
+# Titles and authors that identify nothing. These are real values in the data, not
+# parse failures — AO3 has 58,688 distinct works titled "Unknown" by "Anonymous",
+# and hundreds each of "Untitled"/"Home"/"Nightmares" by "orphan_account" (the
+# pseudonym AO3 assigns when a user orphans their work). Keying on them would
+# merge tens of thousands of unrelated stories into one row.
+_PLACEHOLDER_TITLES = {
+    "unknown", "untitled", "no title", "none", "tbd", "test", "drabble",
+    "drabbles", "oneshot", "one shot", "prologue", "chapter 1", "story",
+}
+_PLACEHOLDER_AUTHORS = {
+    "anonymous", "orphanaccount", "orphan", "unknown", "anon", "guest", "admin",
+}
+
+# A work genuinely cross-posted to several archives has a handful of copies. Any
+# "group" bigger than this is a collision on a common title, not one work.
+MAX_PLAUSIBLE_COPIES = 6
+
+
 def match_key(title: str, author: str) -> str | None:
     """A conservative identity key for a work. Returns None when too little to
-    safely match on (no author, or trivially short title)."""
+    safely match on (no author, trivially short title, or a placeholder identity
+    that would match unrelated works)."""
     nt, na = norm_title(title), norm_author(author)
     if not na or len(nt) < 6:        # need a real author and a non-trivial title
+        return None
+    if nt in _PLACEHOLDER_TITLES or na in _PLACEHOLDER_AUTHORS:
         return None
     return f"{nt}::{na}"
 
@@ -64,22 +86,65 @@ def group_existing(db: Session, limit: int | None = None) -> list[list[Story]]:
     """Scan the DB and return groups of 2+ stories that look like the same work
     across different sites. Single-site duplicates are ignored (those are handled
     by the unique site+site_id constraint)."""
-    q = db.query(Story)
-    if limit:
-        q = q.limit(limit)
-    buckets: dict[str, list[Story]] = defaultdict(list)
-    for s in q:
-        k = match_key(s.title, s.author)
-        if k:
-            buckets[k].append(s)
-    # Only groups spanning more than one site are real cross-posts.
+    # Group in SQL, then fetch only the rows that are actually in a group.
+    #
+    # Doing this in Python meant walking every row and building a dict keyed by
+    # (title, author). At 19M works that dict alone is multiple GB, so the batch
+    # could only be run with a `limit` — and `limit` bounds the SCAN, not the
+    # output, so cross-posted pairs that straddled the cutoff were simply missed:
+    # a 400k-row scan found 12 groups where the whole table holds ~83k.
+    #
+    # Postgres can do the grouping without materialising anything on our side.
+    # The normalisation below must stay equivalent to norm_title/norm_author:
+    #   title  — lowercase, punctuation to spaces, whitespace collapsed
+    #   author — lowercase, everything but [a-z0-9] stripped
+    sql = sql_text("""
+        WITH normed AS (
+            SELECT id, site,
+                   btrim(regexp_replace(regexp_replace(lower(title), '[^\\w\\s]', ' ', 'g'),
+                                        '\\s+', ' ', 'g')) AS nt,
+                   regexp_replace(lower(author), '[^a-z0-9]', '', 'g')  AS na
+            FROM stories
+            WHERE title IS NOT NULL AND author IS NOT NULL
+        )
+        SELECT array_agg(id) AS ids
+        FROM normed
+        WHERE length(nt) >= 6
+          AND na <> ''
+          AND NOT (nt = ANY(:bad_titles))
+          AND NOT (na = ANY(:bad_authors))
+        GROUP BY nt, na
+        -- 2..max copies spanning at least two sites: a genuine cross-post.
+        HAVING count(*) BETWEEN 2 AND :max_copies
+           AND count(DISTINCT site) >= 2
+        LIMIT :lim
+    """)
+    id_groups = [row[0] for row in db.execute(sql, {
+        "bad_titles":  sorted(_PLACEHOLDER_TITLES),
+        "bad_authors": sorted(_PLACEHOLDER_AUTHORS),
+        "max_copies":  MAX_PLAUSIBLE_COPIES,
+        "lim":         limit or 100000,
+    }).fetchall()]
+    if not id_groups:
+        return []
+
+    # Load only the rows in a group — a few hundred thousand at most, not 19M.
+    all_ids = [i for g in id_groups for i in g]
+    by_id = {s.id: s for s in db.query(Story).filter(Story.id.in_(all_ids)).yield_per(2000)}
+
     groups = []
-    for stories in buckets.values():
-        if len(stories) < 2:
+    for ids in id_groups:
+        stories = [by_id[i] for i in ids if i in by_id]
+        if len(stories) < 2 or len(stories) > MAX_PLAUSIBLE_COPIES:
             continue
-        sites = {s.site for s in stories}
-        if len(sites) >= 2:
-            groups.append(stories)
+        if len({s.site for s in stories}) < 2:
+            continue
+        # match_key stays the authority on identity: SQL narrows the candidates,
+        # this confirms them, so the two definitions cannot silently drift apart.
+        keys = {match_key(s.title, s.author) for s in stories}
+        if len(keys) != 1 or None in keys:
+            continue
+        groups.append(stories)
     return groups
 
 
@@ -145,10 +210,16 @@ def find_crosspost_for(db: Session, title: str, author: str, exclude_url: str | 
     if not k:
         return None
     nt, na = k.split("::", 1)
-    # Cheap candidate fetch by exact author match, then verify normalized title.
+    # Candidate fetch by exact author match, then verify the normalized title.
+    #
+    # This MUST be lower(author) = ..., not author ILIKE ... . Postgres cannot use
+    # the functional index ix_stories_author_lower for an ILIKE, even one with no
+    # wildcards, so that form was a full sequential scan: 9,995ms per call versus
+    # 6.4ms here. This is called once per incoming story, so a single live fetch
+    # of 60 results spent ten minutes scanning the table.
     candidates = (
         db.query(Story)
-        .filter(Story.author.ilike(author.strip()))
+        .filter(func.lower(Story.author) == author.strip().lower())
         .limit(50)
         .all()
     )

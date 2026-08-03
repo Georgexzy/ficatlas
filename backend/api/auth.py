@@ -91,28 +91,95 @@ def _set_session_cookie(response: Response, token: str) -> None:
     )
 
 
+# How stale last_used may get before we bother writing it back. This field only
+# drives the "active sessions" list, so minute-level precision is plenty.
+_LAST_USED_REFRESH = timedelta(minutes=15)
+
+# Sessions slide: once a session is within this much of expiring, using it pushes
+# the expiry back out to a full SESSION_DAYS and re-sends the cookie with a fresh
+# Max-Age. Without this, both the DB row and the browser cookie died a fixed 90
+# days after login no matter how actively the account was used, and you were
+# silently signed out. Refreshing only in the final third keeps this to roughly
+# one extra write per month per device rather than one per request.
+_SESSION_SLIDE_WHEN_UNDER = timedelta(days=SESSION_DAYS * 2 // 3)
+
+
 def get_current_user(
+    response: Response,
     sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
     db: Session = Depends(get_db),
 ) -> Optional[User]:
     if not sat:
         return None
-    s = db.query(UserSession).filter(UserSession.token == sat).first()
-    if not s:
+    # One round trip instead of two: the session and its user together.
+    row = (
+        db.query(UserSession, User)
+        .join(User, User.id == UserSession.user_id)
+        .filter(UserSession.token == sat)
+        .first()
+    )
+    if not row:
         return None
-    if s.expires_at < datetime.utcnow():
+    s, user = row
+    now = datetime.utcnow()
+    if s.expires_at < now:
         db.delete(s); db.commit()
         return None
-    # Refresh last_used (cheap)
-    s.last_used = datetime.utcnow()
-    db.commit()
-    return db.query(User).filter(User.id == s.user_id).first()
+
+    dirty = False
+    # Only write last_used when it has actually gone stale. Refreshing it on every
+    # request turned each authenticated GET into an UPDATE + COMMIT, which meant a
+    # row write (and WAL) per page view for no user-visible benefit.
+    if s.last_used is None or (now - s.last_used) > _LAST_USED_REFRESH:
+        s.last_used = now
+        dirty = True
+
+    if (s.expires_at - now) < _SESSION_SLIDE_WHEN_UNDER:
+        s.expires_at = now + timedelta(days=SESSION_DAYS)
+        dirty = True
+        # The browser cookie carries its own Max-Age, so extending the DB row alone
+        # would not keep the client signed in. Re-issue it with the same token.
+        _set_session_cookie(response, sat)
+
+    if dirty:
+        db.commit()
+    return user
 
 
 def require_user(user: Optional[User] = Depends(get_current_user)) -> User:
     if not user:
         raise HTTPException(401, "Not authenticated")
     return user
+
+
+def require_admin(
+    user: Optional[User] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """Guard for endpoints that modify the library: uploads, URL imports, bulk
+    scrapes, deleting hosted stories, dedup and cleanup batches.
+
+    Every one of those was completely unauthenticated, including
+    DELETE /api/library/hosted/{id} — which deletes hosted full text. Some of that
+    text is irreplaceable (the ~30k FicAlley stories come from a dead archive).
+    The only thing protecting them was binding the API to loopback, which meant
+    the app could never be put behind a tunnel or reverse proxy.
+
+    Accounts are optional in this app, so demanding one unconditionally would
+    break a fresh install before you could even sign up — you would not be able to
+    import anything. Instead: if the instance has no accounts at all, these stay
+    open; the moment an account exists, they require it. So a solo setup keeps
+    working, and creating an account locks the instance down.
+    """
+    if user is not None:
+        return user
+    if db.query(User.id).first() is None:
+        return None          # no accounts yet — nothing to protect
+    raise HTTPException(
+        401,
+        "Sign in to modify the library. (These endpoints are unprotected only "
+        "until the first account is created.)",
+    )
 
 
 # ── endpoints ───────────────────────────────────────────────────────────────

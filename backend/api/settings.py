@@ -1,8 +1,9 @@
 """Runtime settings — small key/value store for user-configurable options."""
-from fastapi import APIRouter, Depends, Form
+from fastapi import APIRouter, Depends, Form, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from db.session import get_db
+from api.auth import require_admin
 
 router = APIRouter()
 
@@ -34,7 +35,16 @@ DEFAULTS = {
 }
 
 
+# The table only has to be created once per process, but _ensure_table ran a
+# CREATE TABLE IF NOT EXISTS plus a COMMIT on every single get/put — and
+# all_settings is called on page load. Do it once and remember.
+_table_ready = False
+
+
 def _ensure_table(db: Session):
+    global _table_ready
+    if _table_ready:
+        return
     db.execute(text("""
         CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
@@ -42,6 +52,7 @@ def _ensure_table(db: Session):
         )
     """))
     db.commit()
+    _table_ready = True
 
 
 def get_setting(db: Session, key: str) -> str:
@@ -70,7 +81,27 @@ async def all_settings(db: Session = Depends(get_db)):
 
 
 @router.post("")
-async def set_setting(key: str = Form(...), value: str = Form(...), db: Session = Depends(get_db)):
+async def set_setting(
+    key: str = Form(...),
+    value: str = Form(...),
+    db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
+    """Write one setting.
+
+    These are INSTANCE-wide, not per-user — they include things like
+    enable_direct_crawl and the tracked fandom — so this needs the same guard as
+    the library admin endpoints: any signed-in user, or anyone at all while the
+    instance still has no accounts.
+
+    Keys are restricted to the known set. The endpoint previously accepted any
+    key at all, so app_settings was an unbounded write-anything key/value store.
+    """
+    if key not in DEFAULTS:
+        raise HTTPException(400, f"Unknown setting '{key}'")
+    if len(value) > 2000:
+        raise HTTPException(400, "Setting value too long")
+
     _ensure_table(db)
     db.execute(text("""
         INSERT INTO app_settings (key, value) VALUES (:k, :v)

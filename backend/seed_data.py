@@ -1,4 +1,16 @@
-"""Seed the database with realistic test stories for UI development."""
+"""Seed the database with fabricated test stories for UI development.
+
+DANGEROUS AGAINST A REAL INDEX. These works do not exist: they carry invented
+engagement counts in the tens of thousands (higher than anything genuine in this
+index, so they sort to the top of real searches), they are attributed to real AO3
+authors, and their URLs point at unrelated real AO3 works. Eight of them were
+found sitting in the live index during an audit, ranking above real fiction.
+
+So this now refuses to run unless you ask twice: --yes, and --force if the index
+already holds real data. Every row is tagged `ui_fixture` so it can be found and
+removed again with DELETE /api/library/admin/cleanup-seeds.
+"""
+import argparse
 import os, sys
 sys.path.insert(0, '/app')
 os.environ.setdefault('DATABASE_URL', 'postgresql://ficatlas:ficatlas@db:5432/ficatlas')
@@ -138,11 +150,47 @@ STORIES = [
     },
 ]
 
-with db_session() as db:
-    count = 0
-    for data in STORIES:
-        existing = db.query(Story).filter(Story.site == data["site"], Story.site_id == data["site_id"]).first()
-        if not existing:
-            db.add(Story(**data))
-            count += 1
-    print(f"Inserted {count} stories.")
+FIXTURE_TAG = "ui_fixture"
+REAL_INDEX_THRESHOLD = 1000
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--yes", action="store_true",
+                    help="Required. Confirms you want fabricated stories inserted.")
+    ap.add_argument("--force", action="store_true",
+                    help="Also insert when the index already contains real data.")
+    args = ap.parse_args()
+
+    if not args.yes:
+        print("Refusing to run: these are FABRICATED stories with invented kudos, "
+              "attributed to real authors, whose URLs point at unrelated real works.\n"
+              "They will outrank genuine fiction in search. Pass --yes if that is "
+              "really what you want.")
+        raise SystemExit(2)
+
+    with db_session() as db:
+        total = db.query(Story).count()
+        if total > REAL_INDEX_THRESHOLD and not args.force:
+            print(f"Refusing to run: the index holds {total:,} stories, so this is not "
+                  f"an empty development database. Pass --force to insert anyway.")
+            raise SystemExit(2)
+
+        count = 0
+        for data in STORIES:
+            existing = (db.query(Story)
+                        .filter(Story.site == data["site"], Story.site_id == data["site_id"])
+                        .first())
+            if not existing:
+                row = dict(data)
+                # Tag every fixture so cleanup-seeds can find them by provenance
+                # rather than by guessing at the site_id pattern.
+                row["tags"] = [*row.get("tags", []), FIXTURE_TAG]
+                db.add(Story(**row))
+                count += 1
+        print(f"Inserted {count} fabricated stories (tagged '{FIXTURE_TAG}').")
+        print("Remove with: DELETE /api/library/admin/cleanup-seeds")
+
+
+if __name__ == "__main__":
+    main()
