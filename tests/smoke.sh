@@ -160,6 +160,20 @@ chk "stale device cannot clobber newer progress" "$(curl -s -b "$J" -X POST -H '
 chk "bookmarks survive the merge" "$(curl -s -b "$K" -X POST -H 'Content-Type: application/json' -d '{}' \
   "$B/api/userdata/merge" | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("bookmarks",[])))')" "2"
 
+head_ "Destructive admin paths"
+# cleanup-seeds deletes rows. Its matcher has been wrong in both directions: it
+# once missed the fixtures entirely (wrong site_id pattern), and a later fix
+# widened the pattern enough to match site_id 1234000 — a genuine AO3 work,
+# "Fortune Teller" by Margo_Kim — which it would have deleted. A dry run must
+# never propose removing anything that is real.
+chk "cleanup-seeds proposes nothing real" "$(curl -s -b "$J" -X DELETE \
+  "$B/api/library/admin/cleanup-seeds?dry_run=true" | python3 -c '
+import sys,json
+d=json.load(sys.stdin)
+bad=[r for r in d.get("removed",[]) if r.get("site_id") not in
+     {f"123400{n}" for n in range(1,9)}]
+print("clean" if not bad else "would delete real rows")')" "clean"
+
 head_ "Admin endpoints require an account"
 chk "import-url rejects anonymous"      "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d 'url=x' "$B/api/library/import-url")" 401
 chk "cleanup-seeds rejects anonymous"   "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$B/api/library/admin/cleanup-seeds")" 401
