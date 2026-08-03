@@ -30,6 +30,7 @@ Usage
 """
 
 import argparse
+import html
 import logging
 import os
 import re
@@ -84,7 +85,17 @@ _COUNT_RES = {
 
 
 def _text(fragment: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", fragment)).strip()
+    """Markup and entities out, readable text in.
+
+    Stripping tags alone is not enough: some summaries are DOUBLE-escaped, so
+    the author's "<p>" reaches us as "&lt;p&gt;" and survives tag-stripping to
+    be shown to a reader verbatim. Hence strip, unescape, then strip again for
+    whatever the unescape turned back into a tag.
+    """
+    s = re.sub(r"<[^>]+>", "", fragment)
+    s = html.unescape(s)
+    s = re.sub(r"<[^>]+>", "", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def _int(raw: str | None) -> int | None:
