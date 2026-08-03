@@ -1913,12 +1913,7 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
      These were single-line with an ellipsis. In a 2-column grid each card is
      roughly 160px wide, so nearly every real title was truncated to a few
      characters. Two lines is readable and keeps the grid even. */
-  .book__title, .book__author {
-    white-space: normal;
-    display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
-  }
-  .book__title  { -webkit-line-clamp: 2; font-size: 13px; line-height: 1.28; }
-  .book__author { -webkit-line-clamp: 1; }
+  .book__title  { font-size: 13px; line-height: 1.28; }
 
   /* Long titles, URLs and tag names must never widen the page. */
   .card__title, .story-detail__title, .book__title { overflow-wrap: anywhere; }
@@ -1996,3 +1991,29 @@ html, body { overflow-x: hidden; max-width: 100%; }
   /* Bigger tap target on a phone without adding visual weight. */
   .card__summary-toggle { padding: 8px 0 4px; }
 }
+
+/* ── Titles below covers are never truncated ────────────────────────────────
+   This started as a one-line ellipsis, which I then changed to a two-line
+   clamp — still a truncation. At 13px in a ~166px phone card two lines is about
+   28 characters, and 4,230 of the 29,977 hosted stories have titles longer than
+   that, so they still ended in "…". The original markup carried a title=""
+   tooltip, which is the tell that it had always been cutting text off.
+
+   The grid does not need equal-height cells, so the title simply wraps in full.
+   The cover ART title keeps its clamp — it has to fit inside the artwork, and
+   the complete title sits directly beneath it. */
+.book__title {
+  white-space: normal !important;
+  display: block !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  -webkit-line-clamp: unset !important;
+  overflow-wrap: anywhere;
+}
+.book__author {
+  white-space: normal; overflow: visible; text-overflow: clip;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+/* Cells are top-aligned so uneven title heights don't push covers around. */
+.books-grid { align-items: start; }

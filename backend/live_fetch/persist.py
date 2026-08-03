@@ -38,6 +38,7 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
         existing_urls = {r[0] for r in rows}
 
     saved = 0
+    enriched = 0
     skipped_existing = 0
     failed = 0
     merged_crosspost = 0
@@ -50,7 +51,17 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
             failed += 1
             continue
         if url in existing_urls:
-            skipped_existing += 1
+            # Already indexed — but the live blurb may carry fields the bulk
+            # import never had. AO3's metadata dump has NO summary field at all,
+            # so 13M of our AO3 rows have none, while every AO3 listing blurb
+            # includes one. Skipping outright threw that away on every fetch.
+            #
+            # Only ever FILLS IN what is missing; never overwrites existing data
+            # with the blurb's version.
+            if _enrich_existing(db, url, d):
+                enriched += 1
+            else:
+                skipped_existing += 1
             continue
 
         # Cross-post check: does this same work already exist from another site?
@@ -128,11 +139,59 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
             failed += 1
             log.warning(f"Skip live persist for {url}: {e}")
 
-    if saved or failed or skipped_existing or merged_crosspost:
+    if saved or failed or skipped_existing or merged_crosspost or enriched:
         log.info(
-            f"persist_live_results: saved={saved} "
+            f"persist_live_results: saved={saved} enriched={enriched} "
             f"already_indexed={skipped_existing} cross_post_merged={merged_crosspost} "
             f"failed={failed} (of {len(live_results)} candidates)"
         )
 
     return saved
+
+
+def _enrich_existing(db: Session, url: str, d: dict) -> bool:
+    """Fill gaps on an already-indexed story from a freshly fetched blurb.
+
+    Returns True if anything was written. Deliberately conservative: a field is
+    only set when the stored row has nothing, so a blurb can never downgrade
+    better data that came from a full import.
+    """
+    try:
+        story = db.query(Story).filter(Story.url == url).first()
+        if story is None:
+            return False
+
+        changed = False
+
+        if not (story.summary or "").strip() and (d.get("summary") or "").strip():
+            story.summary = d["summary"]
+            changed = True
+
+        # Facet arrays: fill only when we hold nothing for that facet.
+        for attr, key in (("tags", "tags"), ("characters", "characters"),
+                          ("relationships", "relationships"), ("fandoms", "fandoms"),
+                          ("warnings", "warnings"), ("categories", "categories")):
+            if not (getattr(story, attr) or []) and (d.get(key) or []):
+                setattr(story, attr, d[key])
+                changed = True
+
+        # Engagement counts: the bulk dumps carry none, so any real number is an
+        # improvement over the 0 they were imported with.
+        for attr, key in (("kudos", "kudos"), ("hits", "hits"),
+                          ("bookmarks", "bookmarks"), ("comments", "comments")):
+            if not (getattr(story, attr) or 0) and (d.get(key) or 0):
+                setattr(story, attr, d[key])
+                changed = True
+
+        if not (story.word_count or 0) and (d.get("word_count") or 0):
+            story.word_count = d["word_count"]
+            changed = True
+
+        if changed:
+            db.commit()
+            return True
+        return False
+    except Exception as e:
+        db.rollback()
+        log.warning(f"enrich existing {url} failed: {e}")
+        return False
