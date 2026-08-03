@@ -1058,7 +1058,24 @@ function SearchPageInner() {
             <>
               <div className="results-bar">
                 <span className="results-bar__count">
-                  <strong>{results.total.toLocaleString()}{results.count_is_capped ? "+" : ""}</strong> stories
+                  {/* The backend counts to a ceiling of 5000 and stops, so a
+                      capped total literally arrives as 5001. Printing that as
+                      "5,001+" leaked the implementation and read as a precise
+                      figure; it means "more than 5,000". */}
+                  <strong>
+                    {results.count_is_capped
+                      ? `${(5000).toLocaleString()}+`
+                      : results.total.toLocaleString()}
+                  </strong>{" "}
+                  {results.total === 1 && !results.count_is_capped ? "story" : "stories"}
+                  {/* Which slice of them you are actually looking at. */}
+                  {results.total > results.per_page && (
+                    <span className="results-bar__range">
+                      {" "}· showing {((results.page - 1) * results.per_page + 1).toLocaleString()}–
+                      {Math.min(results.page * results.per_page,
+                                results.count_is_capped ? 5000 : results.total).toLocaleString()}
+                    </span>
+                  )}
                   {results.sites_searched.length > 0 && ` · ${results.sites_searched.map(s => SITE_LABELS[s] ?? s).join(" + ")}`}
                   {liveCount > 0 && <span className="results-bar__live"> +{liveCount} live</span>}
                   {/* Without this it looks like the filters are broken: results

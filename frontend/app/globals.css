@@ -2017,3 +2017,26 @@ html, body { overflow-x: hidden; max-width: 100%; }
 }
 /* Cells are top-aligned so uneven title heights don't push covers around. */
 .books-grid { align-items: start; }
+
+/* Which slice of the results you're on — quieter than the total itself. */
+.results-bar__range { color: var(--text-faint); }
+
+/* ── Index status: proportion, not just counts ──────────────────────────────
+   The panel listed three raw numbers, which doesn't convey that AO3 is two
+   thirds of the index. A bar per archive does it at a glance. */
+.index-status__site { margin-bottom: 9px; }
+.index-status__site-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 4px;
+}
+.index-status__count { display: flex; align-items: baseline; gap: 6px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+.index-status__pct { color: var(--text-faint); font-size: 10px; min-width: 26px; text-align: right; }
+.index-status__meter {
+  height: 3px; background: var(--surface3); border-radius: 2px; overflow: hidden;
+}
+.index-status__meter-fill { height: 100%; border-radius: 2px; background: var(--accent); }
+/* Match each archive's badge colour so the bar and label read as one unit. */
+.index-status__meter-fill--ao3          { background: #7aa2f7; }
+.index-status__meter-fill--ffnet        { background: #9ece6a; }
+.index-status__meter-fill--fictionalley { background: #bb9af7; }
