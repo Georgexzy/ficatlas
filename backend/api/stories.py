@@ -142,7 +142,12 @@ async def get_chapter(story_id: str, number: int, db: Session = Depends(get_db))
     # anyway. All at serve time, so every one of the 82,161 stored chapters is
     # cleaned without a migration and a re-import cannot undo it.
     body = tidy_chapter_html(sanitize_html(chapter.content))
-    body, better_title = strip_chapter_heading(body, chapter.title)
+    # The story title is passed in because chapters routinely repeat it as the
+    # first line of the body; without it that line is indistinguishable from a
+    # chapter title and would be promoted into the heading.
+    story = db.query(Story).filter(Story.id == story_id).first()
+    body, better_title = strip_chapter_heading(body, chapter.title,
+                                               story.title if story else None)
 
     return ChapterFull(
         id=str(chapter.id),

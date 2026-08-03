@@ -138,11 +138,18 @@ def parse_epub(data: bytes) -> dict:
 
     # Parse <item> tags — attributes can be in ANY order, so extract id and href separately
     items = {}
+    nav_ids = set()
     for item_tag in re.findall(r'<item\b[^>]*>', opf):
         id_m   = re.search(r'\bid="([^"]+)"', item_tag)
         href_m = re.search(r'\bhref="([^"]+)"', item_tag)
         if id_m and href_m:
             items[id_m.group(1)] = href_m.group(1)
+            # EPUB 3 marks its navigation document with properties="nav", and
+            # that document is usually IN THE SPINE — so the filename filter on
+            # the fallback path below never saw it and the book's table of
+            # contents was imported as a chapter. 22 stories had one.
+            if 'properties="nav"' in item_tag or "properties='nav'" in item_tag:
+                nav_ids.add(id_m.group(1))
 
     base_dir = os.path.dirname(opf_path)
     chapters = []
@@ -151,7 +158,7 @@ def parse_epub(data: bytes) -> dict:
     ordered_hrefs = []
     if spine_ids and items:
         for sid in spine_ids:
-            if sid in items:
+            if sid in items and sid not in nav_ids:
                 ordered_hrefs.append(items[sid])
 
     # Fallback: if spine parsing yielded nothing, read all xhtml/html files in zip order
@@ -264,6 +271,12 @@ def parse_epub(data: bytes) -> dict:
             body = body_match.group(1) if body_match else html
             body = re.sub(r"<script.*?</script>", "", body, flags=re.DOTALL | re.IGNORECASE)
             body = re.sub(r"<style.*?</style>", "", body, flags=re.DOTALL | re.IGNORECASE)
+            # Second line of defence: some EPUBs mark the nav document only in
+            # the document itself, not in the manifest. A table of contents
+            # passes the word-count check easily — it is a list of every chapter
+            # title in the book — so it has to be recognised by shape.
+            if re.search(r'epub:type=["\']toc["\']|role=["\']doc-toc["\']', body, re.I):
+                continue
             title_match = re.search(r"<h\d[^>]*>(.*?)</h\d>", body, re.DOTALL)
             ch_title = re.sub(r"<[^>]+>", "", title_match.group(1)).strip() if title_match else None
             words = len(re.sub(r"<[^>]+>", " ", body).split())
