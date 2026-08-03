@@ -648,11 +648,22 @@ export default function LibraryPage() {
           they now require an account — they were completely unauthenticated
           before, including deleting hosted stories whose text is irreplaceable.
           Reading, bookmarks and offline copies stay available signed out. */}
+      {/* Three states, because "signed out" and "signed in without permission"
+          are different situations and the same sentence cannot serve both.
+          Telling a reader to sign in when they already are is the sort of copy
+          that makes an app feel broken. */}
       {!authLoading && !user && (
         <p className="library-signin-note">
           Browsing and offline reading work as normal.{" "}
           <Link href="/login" className="library-signin-note__link">Sign in</Link>{" "}
-          to import stories, upload EPUBs, or run an archive scrape.
+          to keep bookmarks and reading progress across devices.
+        </p>
+      )}
+      {!authLoading && user && !user.can_import && (
+        <p className="library-signin-note">
+          Your bookmarks, reading progress and offline copies are yours and sync
+          across your devices. Importing stories and running archive scrapes are
+          handled by whoever runs this instance.
         </p>
       )}
 
@@ -669,9 +680,12 @@ export default function LibraryPage() {
         <button className={`library-tab ${tab === "offline" ? "library-tab--on" : ""}`} onClick={() => setTab("offline")}>
           Offline <span className="library-tab__count">{offlineStories.length}</span>
         </button>
-        <button className={`library-tab ${tab === "import" ? "library-tab--on" : ""}`} onClick={() => setTab("import")}>
-          Import
-        </button>
+        {user?.can_import && (
+          <button className={`library-tab ${tab === "import" ? "library-tab--on" : ""}`}
+            onClick={() => setTab("import")}>
+            Import
+          </button>
+        )}
       </div>
 
       {tab === "hosted" && (
@@ -773,7 +787,7 @@ export default function LibraryPage() {
         </div>
       )}
 
-      {tab === "import" && (
+      {tab === "import" && user?.can_import && (
         <div className="import-pane">
           <section className="import-section">
             <h3>Import from URL</h3>

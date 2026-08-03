@@ -193,10 +193,19 @@ bad=[r for r in d.get("removed",[]) if r.get("site_id") not in
      {f"123400{n}" for n in range(1,9)}]
 print("clean" if not bad else "would delete real rows")')" "clean"
 
-head_ "Admin endpoints require an account"
-chk "import-url rejects anonymous"      "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d 'url=x' "$B/api/library/import-url")" 401
-chk "cleanup-seeds rejects anonymous"   "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$B/api/library/admin/cleanup-seeds")" 401
-chk "signed in may run cleanup dry-run" "$(curl -s -b "$J" -o /dev/null -w '%{http_code}' -X DELETE "$B/api/library/admin/cleanup-seeds?dry_run=true")" 200
+head_ "Roles"
+# There used to be one tier — "logged in" — so any account could scrape, import
+# and delete hosted text. These check the three tiers actually hold. The signed
+# -in account here is a fresh signup, which is a READER.
+chk "import-url rejects anonymous"       "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d 'url=x' "$B/api/library/import-url")" 401
+chk "cleanup-seeds rejects anonymous"    "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$B/api/library/admin/cleanup-seeds")" 401
+chk "new signup is a reader"             "$(curl -s -b "$J" "$B/api/auth/me" | python3 -c 'import sys,json;print(json.load(sys.stdin)["user"]["role"])')" "reader"
+chk "reader cannot import"               "$(curl -s -b "$J" -o /dev/null -w '%{http_code}' -X POST -d 'url=x' "$B/api/library/import-url")" 403
+chk "reader cannot scrape"               "$(curl -s -b "$J" -o /dev/null -w '%{http_code}' -X POST "$B/api/library/discover-dlp")" 403
+chk "reader cannot run cleanup"          "$(curl -s -b "$J" -o /dev/null -w '%{http_code}' -X DELETE "$B/api/library/admin/cleanup-seeds?dry_run=true")" 403
+chk "reader cannot list accounts"        "$(curl -s -b "$J" -o /dev/null -w '%{http_code}' "$B/api/auth/users")" 403
+chk "reader keeps search"                "$(curl -s -b "$J" -o /dev/null -w '%{http_code}' "$B/api/search?q=harry&per_page=1")" 200
+chk "reader keeps their own data"        "$(curl -s -b "$J" -o /dev/null -w '%{http_code}' "$B/api/userdata")" 200
 chk "read-only stays public"            "$(code "$B/api/library/hosted?limit=2")" 200
 
 curl -s -b "$J" -X POST -d "password=smokepw123" "$B/api/auth/delete-account" >/dev/null

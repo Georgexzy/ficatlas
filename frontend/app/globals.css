@@ -2595,3 +2595,13 @@ body.is-resizing * { cursor: col-resize !important; }
   .reader-sheet__row { padding: 9px 0; }
   .reader-seg button { min-height: 38px; }
 }
+
+/* Role chip on the account page. */
+.role-chip {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.08em; padding: 1px 7px; border-radius: 3px;
+  border: 1px solid var(--border2); color: var(--text-faint);
+}
+.role-chip--owner { color: var(--accent); border-color: var(--accent); }
+.role-chip--admin { color: var(--green); border-color: rgba(90,185,120,0.4); }
+.account-help--muted { color: var(--text-faint); margin-top: 8px; }

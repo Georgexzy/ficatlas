@@ -152,14 +152,36 @@ def require_user(user: Optional[User] = Depends(get_current_user)) -> User:
     return user
 
 
+def _require_role(user, db, needed: str):
+    """Shared gate. Falls open only while the instance has no accounts at all.
+
+    Accounts are optional here, so demanding one unconditionally would break a
+    fresh install before you could sign up — you could not import anything.
+    Once ANY account exists the instance is considered claimed and the gate
+    closes.
+    """
+    from models.user import ROLE_OWNER
+    if user is not None:
+        if user.at_least(needed):
+            return user
+        raise HTTPException(
+            403,
+            f"This needs the {needed} role. Your account can search, read and "
+            f"keep bookmarks, but not change the shared library.",
+        )
+    if db.query(User.id).first() is None:
+        return None          # unclaimed instance — nothing to protect yet
+    raise HTTPException(401, "Sign in to do this.")
+
+
 def require_admin(
     user: Optional[User] = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Optional[User]:
-    """Guard for endpoints that modify the library: uploads, URL imports, bulk
-    scrapes, deleting hosted stories, dedup and cleanup batches.
+    """Guard for endpoints that modify the shared library: uploads, URL imports,
+    bulk scrapes, deleting hosted stories, dedup and cleanup batches.
 
-    Every one of those was completely unauthenticated, including
+    Every one of those was completely unauthenticated at one point, including
     DELETE /api/library/hosted/{id} — which deletes hosted full text.
 
     (An earlier version of this comment called the ~30k FicAlley works
@@ -170,24 +192,23 @@ def require_admin(
     lost, and Open Doors is the process through which their authors were given
     a say — so our copies are a duplicate of a consented migration, not a
     rescue.)
-    The only thing protecting them was binding the API to loopback, which meant
-    the app could never be put behind a tunnel or reverse proxy.
 
-    Accounts are optional in this app, so demanding one unconditionally would
-    break a fresh install before you could even sign up — you would not be able to
-    import anything. Instead: if the instance has no accounts at all, these stay
-    open; the moment an account exists, they require it. So a solo setup keeps
-    working, and creating an account locks the instance down.
+    Scraping in particular sits behind this because those requests leave from
+    the HOST's IP: a reader who triggers them spends the operator's standing
+    with AO3 and FF.net rather than their own.
     """
-    if user is not None:
-        return user
-    if db.query(User.id).first() is None:
-        return None          # no accounts yet — nothing to protect
-    raise HTTPException(
-        401,
-        "Sign in to modify the library. (These endpoints are unprotected only "
-        "until the first account is created.)",
-    )
+    from models.user import ROLE_ADMIN
+    return _require_role(user, db, ROLE_ADMIN)
+
+
+def require_owner(
+    user: Optional[User] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """Guard for things that are hard or impossible to undo: destructive
+    cleanup batches and changing other people's accounts."""
+    from models.user import ROLE_OWNER
+    return _require_role(user, db, ROLE_OWNER)
 
 
 # ── endpoints ───────────────────────────────────────────────────────────────
@@ -257,11 +278,19 @@ async def logout(
 async def me(user: Optional[User] = Depends(get_current_user)):
     if not user:
         return {"user": None}
+    from models.user import ROLE_ADMIN, ROLE_OWNER
     return {"user": {
         "username": user.username,
         "id": str(user.id),
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "last_login": user.last_login.isoformat() if user.last_login else None,
+        # The UI needs these to decide what to SHOW, not just what to allow.
+        # Rendering an Import tab that 403s on every button is worse than not
+        # rendering it: the reader learns the app is broken rather than that
+        # the feature is not theirs.
+        "role": user.role,
+        "can_import": user.at_least(ROLE_ADMIN),
+        "can_manage": user.at_least(ROLE_OWNER),
     }}
 
 
@@ -362,3 +391,46 @@ async def delete_account(
     db.commit()
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"ok": True, "message": "Account deleted."}
+
+# ── Account management (owner only) ─────────────────────────────────────────
+
+@router.get("/users")
+async def list_users(db: Session = Depends(get_db), _owner=Depends(require_owner)):
+    """Every account and its role. Owner-only: it exposes who exists."""
+    rows = db.query(User).order_by(User.created_at.asc()).all()
+    return {"users": [{
+        "id": str(u.id), "username": u.username, "role": u.role,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "last_login": u.last_login.isoformat() if u.last_login else None,
+    } for u in rows]}
+
+
+@router.post("/users/{user_id}/role")
+async def set_user_role(
+    user_id: str,
+    role: str = Form(...),
+    db: Session = Depends(get_db),
+    owner: Optional[User] = Depends(require_owner),
+):
+    """Change an account's role."""
+    from models.user import ROLE_ADMIN, ROLE_OWNER, ROLE_RANK
+    role = (role or "").strip().lower()
+    if role not in ROLE_RANK:
+        raise HTTPException(400, f"Unknown role {role!r}.")
+
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(404, "No such account.")
+
+    # An owner must not demote themselves out of the only owner seat — that
+    # locks the instance permanently, with no way back short of SQL.
+    if owner is not None and str(target.id) == str(owner.id) and role != ROLE_OWNER:
+        others = (db.query(User.id)
+                  .filter(User.role == ROLE_OWNER, User.id != target.id).first())
+        if not others:
+            raise HTTPException(
+                400, "You are the only owner. Promote someone else first.")
+
+    target.role = role
+    db.commit()
+    return {"ok": True, "username": target.username, "role": target.role}

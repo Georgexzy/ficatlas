@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from db.session import get_db
-from api.auth import require_admin
+from api.auth import require_admin, require_owner
 from models.story import Story, Chapter, SiteEnum, RatingEnum, StatusEnum
 
 log = logging.getLogger(__name__)
@@ -1354,7 +1354,7 @@ async def clear_ao3_cooldown_endpoint(
 
 @router.delete("/admin/cleanup-seeds")
 async def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db),
-    _admin=Depends(require_admin),
+    _owner=Depends(require_owner),
 ):
     """Remove the fabricated demo stories written by seed_data.py.
 
@@ -1421,7 +1421,7 @@ async def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db),
 
 @router.post("/cleanup-preface-chapters")
 async def cleanup_preface_chapters(dry_run: bool = Form(False), db: Session = Depends(get_db),
-    _admin=Depends(require_admin),
+    _owner=Depends(require_owner),
 ):
     """Fix already-imported stories whose first 'chapter' is actually FicHub/AO3
     front matter (the metadata sheet + author's preliminary notes) rather than a

@@ -114,6 +114,7 @@ export default function AccountPage() {
             <p className="account-username">{user.username}</p>
             <p className="account-meta">
               Joined {user.created_at ? new Date(user.created_at).toLocaleDateString() : "—"}
+              {user.role && <> · <span className={`role-chip role-chip--${user.role}`}>{user.role}</span></>}
             </p>
           </div>
         </div>
@@ -128,6 +129,29 @@ export default function AccountPage() {
           account and merge across devices — nothing gets overwritten when you use your
           phone and laptop together.
         </p>
+        {/* Say plainly what the role does, rather than leaving someone to
+            discover it by finding a button missing. */}
+        {user.role === "reader" && (
+          <p className="account-help account-help--muted">
+            Your account is a <strong>reader</strong>: search, read, bookmark and sync.
+            Importing stories and running archive scrapes belong to whoever runs
+            this instance.
+          </p>
+        )}
+        {user.role === "admin" && (
+          <p className="account-help account-help--muted">
+            Your account is an <strong>admin</strong>: you can import stories and run
+            archive scrapes. Destructive cleanup and managing accounts stay with
+            the owner.
+          </p>
+        )}
+        {user.role === "owner" && (
+          <p className="account-help account-help--muted">
+            Your account is the <strong>owner</strong>: everything, including cleanup
+            batches and setting other people&rsquo;s roles. Scrapes you start leave
+            from this machine&rsquo;s IP address.
+          </p>
+        )}
       </section>
 
       {/* Active sessions */}

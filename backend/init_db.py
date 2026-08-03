@@ -218,6 +218,15 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE INDEX IF NOT EXISTS ix_users_username ON users (username);
 
+-- Roles. Added after the fact, so: give existing rows the default, then promote
+-- the OLDEST account to owner. On an instance that predates roles the first
+-- account is the person who set the thing up, and leaving them as a reader
+-- would lock them out of their own library.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'reader';
+UPDATE users SET role = 'owner'
+WHERE id = (SELECT id FROM users ORDER BY created_at ASC LIMIT 1)
+  AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner');
+
 CREATE TABLE IF NOT EXISTS user_sessions (
     token       VARCHAR(80) PRIMARY KEY,
     user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
