@@ -296,6 +296,28 @@ def tidy_chapter_html(html_text: str) -> str:
     except Exception:
         return html_text
 
+    # Flatten layout wrappers FIRST.
+    #
+    # Scraped and EPUB HTML nests prose inside anonymous <div>s used purely for
+    # layout — one real fic wraps its chapter as
+    # <div><div><div>Chapter 1</div><div><p>…prose…</p></div></div></div>, which
+    # hides the heading lines from anything that walks top-level children. The
+    # reader styles paragraphs, not containers, so the wrappers carry no meaning
+    # worth keeping and flattening them puts every block at one level where the
+    # heading and spacer passes below can actually see it.
+    for _ in range(6):                      # bounded: deep nesting is finite
+        wrappers = [el for el in root.iter()
+                    if isinstance(el.tag, str) and el is not root
+                    and el.tag in ("div", "section", "article")
+                    and len(el) > 0]
+        if not wrappers:
+            break
+        for el in wrappers:
+            try:
+                el.drop_tag()               # keeps children, text and tail
+            except Exception:
+                pass
+
     for el in list(root.iter()):
         if el is root or not isinstance(el.tag, str):
             continue
