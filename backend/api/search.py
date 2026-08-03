@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from db.session import get_db
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 from query_parser import parse_query, parsed_to_search_params
+import re
 from character_aliases import character_variants, relationship_variants
 from provenance import content_tags, source_labels
 
@@ -38,6 +39,31 @@ def _story_tsv(entity=Story):
             entity.fandoms, entity.characters, entity.relationships, entity.tags,
         ),
     )
+
+
+# AO3 canonical fandom tags are "Work - Author"; FF.net and the older dumps use
+# the bare work name. So the same fandom is split across several values:
+#
+#   Harry Potter                    686,558
+#   Harry Potter - J. K. Rowling    381,225
+#   Harry Potter - Fandom             6,884
+#   Harry Potter - Rowling            5,700
+#   Harry Potter - J.K. Rowling       1,395
+#
+# Filtering the short form already catches the rest by substring, but picking the
+# AO3 canonical form — which is what autocomplete offers — excluded every story
+# tagged only "Harry Potter". Matching on the part before " - " reunites them.
+#
+# It deliberately does NOT collapse different works: "Harry Potter and the Cursed
+# Child - Thorne & Rowling" reduces to "Harry Potter and the Cursed Child", which
+# is a separate work and stays separate.
+_FANDOM_AUTHOR_SUFFIX = re.compile(r"\s+-\s+.+$")
+
+
+def fandom_base(value: str) -> str:
+    """The work name from a fandom tag, dropping any ' - Author' suffix."""
+    base = _FANDOM_AUTHOR_SUFFIX.sub("", (value or "").strip())
+    return base or (value or "").strip()
 
 
 def _arr_text(col):
@@ -248,6 +274,12 @@ async def search(
                     "(e.g. no relationships listed). Off by default so filters "
                     "actually filter.",
     ),
+    match_mode:            str           = Query(
+        "all",
+        description="How multiple values within one filter combine: 'all' (a "
+                    "story must have every value — crossovers) or 'any' (a story "
+                    "needs just one — variant spellings of the same fandom).",
+    ),
     author:                Optional[str] = Query(
         None,
         description="Exact author match (case-insensitive). Unlike free text, this "
@@ -340,7 +372,11 @@ async def search(
             Story.summary.ilike(f"%{search_within}%"),
         ))
 
-    def arr_inc(col, csv_val, permissive_empty=False):
+    # "all" = a story must carry every value (crossovers, tag combinations).
+    # "any" = one is enough (variant spellings of the same fandom).
+    combine = or_ if match_mode == "any" else and_
+
+    def arr_inc(col, csv_val, permissive_empty=False, normalise=None):
         """Array-includes filter: a story matches when the column contains ALL of
         the requested values.
 
@@ -357,14 +393,17 @@ async def search(
         """
         if not csv_val: return None
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
+        if normalise:
+            vals = [normalise(v) for v in vals]
+        vals = [v for v in dict.fromkeys(vals) if v]   # dedupe, keep order
         if not vals: return None
         if permissive_empty:
             empty = or_(col.is_(None), func.cardinality(col) == 0)
-            return and_(*[
+            return combine(*[
                 or_(_arr_text(col).ilike(f"%{v}%"), empty)
                 for v in vals
             ])
-        return and_(*[
+        return combine(*[
             _arr_text(col).ilike(f"%{v}%")
             for v in vals
         ])
@@ -394,7 +433,7 @@ async def search(
             else:
                 match = _arr_text(col).ilike(f"%{v.lower()}%")
             clauses.append(or_(match, empty) if permissive_empty else match)
-        return and_(*clauses)
+        return combine(*clauses)
 
     def arr_exc(col, csv_val):
         """Strict exclude: only kick out stories that DEFINITELY have the unwanted
@@ -407,7 +446,7 @@ async def search(
     # Fandom is always strict — a story with no fandom listed must never surface
     # under a specific-fandom search, or the millions of empty-fandom dump rows
     # leak into every fandom query.
-    f = arr_inc(Story.fandoms, fandoms, permissive_empty=False)
+    f = arr_inc(Story.fandoms, fandoms, permissive_empty=False, normalise=fandom_base)
     if f is not None: filters.append(f)
 
     # Characters and relationships get alias expansion so a filter written the

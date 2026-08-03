@@ -98,6 +98,25 @@ syntax_check "status from shorthand"      "fandom: Harry Potter complete" status
 # A value that IS a shorthand word must survive.
 syntax_check "status:complete"            "status:complete"               status        "complete"
 
+head_ "Multi-value filter modes"
+# Values inside one filter were always ANDed with nothing saying so — right for
+# crossovers, wrong when one fandom is split across several spellings.
+chk "match_mode=all narrows (crossovers)" "$(curl -s --max-time 60 \
+  "$B/api/search?fandoms=Discworld,Good+Omens&match_mode=all&live=false" \
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);print("narrow" if not d["count_is_capped"] and d["total"]>0 else "wrong")')" "narrow"
+chk "match_mode=any widens (union)" "$(curl -s --max-time 60 \
+  "$B/api/search?fandoms=Discworld,Good+Omens&match_mode=any&live=false" \
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);print("wide" if d["count_is_capped"] or d["total"]>1000 else "wrong")')" "wide"
+# AO3 writes "Work - Author" while FF.net writes the bare name, so the same
+# fandom is split; picking the canonical form must not exclude the short one.
+chk "fandom variants resolve alike" "$(python3 -c '
+import json,urllib.request
+def n(f):
+    u="'"$B"'/api/search?live=false&sites=ffnet&fandoms="+urllib.request.quote(f)
+    return json.load(urllib.request.urlopen(u))["total"]
+a=n("Harry Potter"); b=n("Harry Potter - J. K. Rowling")
+print("same" if a==b else f"{a} vs {b}")')" "same"
+
 head_ "Stats"
 for e in "stats/totals" "stats/sites" "stats/suggest?kind=fandom&q=harry" \
          "stats/suggest?kind=relationship&q=draco" "stats/suggest?kind=character&q=her"; do

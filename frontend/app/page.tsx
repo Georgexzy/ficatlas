@@ -455,6 +455,11 @@ function SearchPageInner() {
   const [includeUnknown, setIncludeUnknown] = useState(get("include_unknown") === "true")
   // Set by clicking an author's name: browse their whole catalogue across archives.
   const [authorFilter, setAuthorFilter] = useState(get("author") ?? "")
+  // How multiple values inside one filter combine. "all" finds crossovers and
+  // tag combinations; "any" is what you want when one thing is split across
+  // several spellings, which is common for fandoms.
+  const [matchMode, setMatchMode] = useState<"all" | "any">(
+    get("match_mode") === "any" ? "any" : "all")
 
   // Include filters
   const [incFandoms,  setIncFandoms]  = useState(csv(get("fandoms")))
@@ -651,13 +656,14 @@ function SearchPageInner() {
       updated_after:         updatedAfter || pq.updatedAfter || undefined,
       explicit,
       author:                authorFilter || undefined,
+      match_mode:            matchMode,
       include_unknown:       includeUnknown || undefined,
       search_within:         searchWithin || undefined,
       sort,
       page:                  pg,
       per_page:              20,
     }
-  }, [query, sites, explicit, includeUnknown, authorFilter, incFandoms, incChars, incShips, incTags, incRatings,
+  }, [query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
       status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort])
 
@@ -743,7 +749,8 @@ function SearchPageInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
       incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
-      language, wordMin, wordMax, updatedAfter, explicit, includeUnknown, authorFilter, sort])
+      language, wordMin, wordMax, updatedAfter, explicit, includeUnknown, authorFilter,
+      matchMode, sort])
 
   const removeToken = (raw: string) =>
     setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim())
@@ -814,6 +821,27 @@ function SearchPageInner() {
             <Pills options={SITE_OPTIONS} selected={sites}
               onToggle={id => tog(sites, setSites, id)}
               highlighted={fromSearch("sites")} />
+          </div>
+
+          <div className="sidebar__group">
+            <label className="sidebar__label">Match multiple values</label>
+            <div className="match-mode">
+              <button className={`match-mode__btn ${matchMode === "all" ? "match-mode__btn--on" : ""}`}
+                onClick={() => setMatchMode("all")}
+                title="A story must have EVERY value you pick — use this to find crossovers.">
+                All of them
+              </button>
+              <button className={`match-mode__btn ${matchMode === "any" ? "match-mode__btn--on" : ""}`}
+                onClick={() => setMatchMode("any")}
+                title="A story needs just ONE of the values — use this when a fandom is split across several spellings.">
+                Any of them
+              </button>
+            </div>
+            <p className="match-mode__hint">
+              {matchMode === "all"
+                ? "Stories carrying every value you pick — finds crossovers."
+                : "Stories carrying any one value — combines split or variant tags."}
+            </p>
           </div>
 
           <div className="sidebar__group">

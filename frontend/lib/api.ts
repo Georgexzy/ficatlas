@@ -54,6 +54,7 @@ export function buildSearchParams(raw: Record<string, string | string[] | undefi
     published_after: get("published_after"),
     explicit: bool("explicit"),
     author: get("author"),
+    match_mode: (get("match_mode") as "all" | "any") ?? "all",
     include_unknown: bool("include_unknown"),
     search_within: get("search_within"),
     sort: get("sort") ?? "relevance",

@@ -2040,3 +2040,19 @@ html, body { overflow-x: hidden; max-width: 100%; }
 .index-status__meter-fill--ao3          { background: #7aa2f7; }
 .index-status__meter-fill--ffnet        { background: #9ece6a; }
 .index-status__meter-fill--fictionalley { background: #bb9af7; }
+
+/* ── AND / OR for multi-value filters ───────────────────────────────────────
+   Multiple values in one filter were always ANDed, with nothing saying so. That
+   is right for crossovers and wrong when one fandom is split across several
+   spellings — which it is: Harry Potter exists as "Harry Potter",
+   "Harry Potter - J. K. Rowling", "- Rowling", "- Fandom" and more. */
+.match-mode { display: flex; gap: 0; border: 1px solid var(--border2);
+  border-radius: 6px; overflow: hidden; }
+.match-mode__btn {
+  flex: 1; background: var(--surface2); border: none; color: var(--text-dim);
+  font: inherit; font-size: 12px; padding: 7px 8px; cursor: pointer;
+}
+.match-mode__btn + .match-mode__btn { border-left: 1px solid var(--border2); }
+.match-mode__btn:hover { color: var(--text); }
+.match-mode__btn--on { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.match-mode__hint { font-size: 11px; color: var(--text-faint); margin-top: 5px; line-height: 1.35; }

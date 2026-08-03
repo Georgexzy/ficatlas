@@ -82,6 +82,8 @@ export interface SearchParams {
   explicit?: boolean
   /** Exact author match — every work by one person, across all archives. */
   author?: string
+  /** How multiple values in one filter combine: "all" (AND) or "any" (OR). */
+  match_mode?: "all" | "any"
   /** Also return stories that have no data at all for a filtered field. */
   include_unknown?: boolean
   search_within?: string
