@@ -91,7 +91,9 @@ const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 interface Bookmark { id: string; title: string; author: string; site: string; url: string; savedAt: string }
 interface ProgressEntry { chapter: number; at: string; title: string }
 interface HostedStory { id: string; title: string; author: string; site: string; word_count: number; chapter_count: number; summary?: string; tags: string[] }
-type Tab = "hosted" | "bookmarks" | "reading" | "searches" | "offline" | "import"
+// "searches" is gone — recent searches now sit under the search bar, which is
+// where you are when you want to re-run one.
+type Tab = "hosted" | "bookmarks" | "reading" | "offline" | "import"
 
 export default function LibraryPage() {
   const { user, loading: authLoading } = useAuth()
@@ -104,7 +106,6 @@ export default function LibraryPage() {
   }, [])
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [progress, setProgress] = useState<Record<string, ProgressEntry>>({})
-  const [recents, setRecents] = useState<string[]>([])
   const [hosted, setHosted] = useState<HostedStory[]>([])
   const [tab, setTab] = useState<Tab>("hosted")
   const [offlineStories, setOfflineStories] = useState<any[]>([])
@@ -252,7 +253,6 @@ export default function LibraryPage() {
     }
     setBookmarks(safe("ficatlas:bookmarks", []))
     setProgress(safe("ficatlas:progress", {}))
-    setRecents(safe("ficatlas:recent-searches", []))
     loadHosted()
   }, [])
 
@@ -265,9 +265,6 @@ export default function LibraryPage() {
     const next = { ...progress }; delete next[id]
     setProgress(next)
     localStorage.setItem("ficatlas:progress", JSON.stringify(next))
-  }
-  const clearRecents = () => {
-    setRecents([]); localStorage.setItem("ficatlas:recent-searches", "[]")
   }
 
   const importFromUrl = async () => {
@@ -662,9 +659,6 @@ export default function LibraryPage() {
         <button className={`library-tab ${tab === "reading" ? "library-tab--on" : ""}`} onClick={() => setTab("reading")}>
           Reading <span className="library-tab__count">{Object.keys(progress).length}</span>
         </button>
-        <button className={`library-tab ${tab === "searches" ? "library-tab--on" : ""}`} onClick={() => setTab("searches")}>
-          Searches <span className="library-tab__count">{recents.length}</span>
-        </button>
         <button className={`library-tab ${tab === "offline" ? "library-tab--on" : ""}`} onClick={() => setTab("offline")}>
           Offline <span className="library-tab__count">{offlineStories.length}</span>
         </button>
@@ -715,21 +709,6 @@ export default function LibraryPage() {
                   <button className="library-item__remove" onClick={() => clearProgress(id)}>✕</button>
                 </div>
               ))}
-        </div>
-      )}
-
-      {tab === "searches" && (
-        <div className="library-list">
-          {recents.length === 0
-            ? <p className="library-empty">No recent searches.</p>
-            : <>
-                <button className="library-clear" onClick={clearRecents}>Clear all</button>
-                {recents.map((q, i) => (
-                  <Link key={i} href={`/?q=${encodeURIComponent(q)}`} className="library-item">
-                    <p className="library-item__title">{q}</p>
-                  </Link>
-                ))}
-              </>}
         </div>
       )}
 

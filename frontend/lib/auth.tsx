@@ -29,9 +29,41 @@ type SyncKey = typeof SYNC_KEYS[number]
 
 const LS = (k: string) => `ficatlas:${k}`
 
+// Sync key -> the localStorage key the app actually writes.
+//
+// These drifted apart and two of the four advertised sync keys did nothing:
+// the account page, the user menu and the README all said bookmarks, progress,
+// recents and settings sync, but sync read `ficatlas:recents` while search
+// writes `ficatlas:recent-searches`, and read `ficatlas:settings` which no code
+// has ever written. Only bookmarks and progress were ever really syncing.
+const STORAGE_KEY: Record<SyncKey, string> = {
+  bookmarks: "bookmarks",
+  progress:  "progress",
+  recents:   "recent-searches",
+  settings:  "settings",          // synthesised below from the individual prefs
+}
+
+// Preferences are stored one key per setting, which is convenient for the
+// components that own them and useless for syncing — there is nothing to send.
+// They are gathered into a single `settings` object on the way out and fanned
+// back out on the way in, so a reader's font size follows them between devices
+// without every component having to know about sync.
+const PREF_KEYS = [
+  "reader_font", "reader_width", "reader_theme", "reader_lineheight",
+  "reader-fontsize", "reader_justify", "default_sites", "sidebar_w",
+] as const
+
 function readLocal(key: SyncKey): any {
   try {
-    const raw = localStorage.getItem(LS(key))
+    if (key === "settings") {
+      const prefs: Record<string, string> = {}
+      for (const k of PREF_KEYS) {
+        const v = localStorage.getItem(LS(k))
+        if (v != null) prefs[k] = v
+      }
+      return Object.keys(prefs).length ? prefs : null
+    }
+    const raw = localStorage.getItem(LS(STORAGE_KEY[key]))
     return raw == null ? null : JSON.parse(raw)
   } catch { return null }
 }
@@ -39,7 +71,17 @@ function readLocal(key: SyncKey): any {
 function writeLocal(key: SyncKey, value: any) {
   try {
     // Write WITHOUT triggering our own setItem hook re-sync (use the raw original)
-    _rawSetItem(LS(key), JSON.stringify(value))
+    if (key === "settings") {
+      if (value && typeof value === "object") {
+        for (const [k, v] of Object.entries(value as Record<string, string>)) {
+          if ((PREF_KEYS as readonly string[]).includes(k) && typeof v === "string") {
+            _rawSetItem(LS(k), v)
+          }
+        }
+      }
+      return
+    }
+    _rawSetItem(LS(STORAGE_KEY[key]), JSON.stringify(value))
   } catch {}
 }
 
@@ -59,8 +101,14 @@ function hookLocalStorage(onLocalChange: (key: SyncKey) => void) {
     _rawSetItem(key, value)
     const m = key.match(/^ficatlas:(.+)$/)
     if (!m) return
-    const k = m[1] as SyncKey
-    if (SYNC_KEYS.includes(k)) onLocalChange(k)
+    const raw = m[1]
+    // Map the storage key back to the sync key it belongs to — a write to
+    // "recent-searches" or "reader_theme" has to mark "recents"/"settings"
+    // dirty, or the change is never sent.
+    const owner = (Object.keys(STORAGE_KEY) as SyncKey[])
+      .find(sk => STORAGE_KEY[sk] === raw)
+      ?? ((PREF_KEYS as readonly string[]).includes(raw) ? "settings" as SyncKey : undefined)
+    if (owner && SYNC_KEYS.includes(owner)) onLocalChange(owner)
   }
 }
 

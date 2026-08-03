@@ -317,7 +317,7 @@ function StoryCard({ story }: { story: StoryCard }) {
     && (story.site === "ao3" || story.site === "ffnet")
 
   return (
-    <article className={`card ${story.is_live ? "card--live" : ""}`}>
+    <article className="card">
       <div className="card__top">
         <div className="card__title-row">
           <Link href={`/story/${story.id}`} className="card__title">{story.title}</Link>
@@ -333,7 +333,6 @@ function StoryCard({ story }: { story: StoryCard }) {
             {story.status === "complete" && <span className="badge badge--complete">Complete</span>}
             {story.tags?.includes("dlp_library") && <span className="badge badge--dlp" title="Curated by DarkLordPotter">DLP</span>}
             {dlpRating(story.tags) != null && <DlpStars value={dlpRating(story.tags)!} />}
-            {story.is_live && <span className="badge badge--live">Live</span>}
           </div>
         </div>
         <p className="card__byline">
@@ -462,6 +461,64 @@ function StoryCard({ story }: { story: StoryCard }) {
   )
 }
 
+
+// Recent searches, revealed by focusing an empty search box.
+//
+// First attempt put these in a permanent row under the bar, which is just
+// clutter on every page load for something you want occasionally. They lived
+// behind a Library tab before that, which was two clicks from the only place
+// they are useful.
+//
+// Focus-triggered is how every search box on the web behaves, so it needs no
+// explaining: click into an empty box and your recent searches are there;
+// start typing and they get out of the way.
+function RecentSearches(
+  { open, onPick, onDismiss }:
+  { open: boolean; onPick: (q: string) => void; onDismiss: () => void },
+) {
+  const [recents, setRecents] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!open) return
+    try {
+      const raw = JSON.parse(localStorage.getItem("ficatlas:recent-searches") ?? "[]")
+      setRecents(Array.isArray(raw) ? raw.filter(x => typeof x === "string").slice(0, 8) : [])
+    } catch { setRecents([]) }
+  }, [open])
+
+  const clear = () => {
+    setRecents([])
+    try { localStorage.setItem("ficatlas:recent-searches", "[]") } catch {}
+    onDismiss()
+  }
+
+  if (!open || !recents.length) return null
+  return (
+    <div className="recent-drop" role="listbox" aria-label="Recent searches">
+      <div className="recent-drop__head">
+        <span className="recent-drop__label">Recent searches</span>
+        <button className="recent-drop__clear" onMouseDown={e => e.preventDefault()}
+          onClick={clear}>Clear</button>
+      </div>
+      {recents.map(q => (
+        <button
+          key={q}
+          role="option"
+          aria-selected={false}
+          className="recent-drop__item"
+          // mousedown, not click: the input's blur fires first and would close
+          // the dropdown out from under the pointer before click ever lands.
+          onMouseDown={e => { e.preventDefault(); onPick(q) }}
+          title={q}
+        >
+          <span className="recent-drop__icon" aria-hidden="true">↻</span>
+          <span className="recent-drop__text">{q}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 // ── Empty / loading states ────────────────────────────────────────────────────
 // The example queries that used to sit here now live in the syntax panel under
 // the search bar, where they are clickable and next to the box they fill in.
@@ -471,7 +528,14 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
   return (
     <div className="empty">
       <p className="empty__title">Search the fanfiction internet</p>
-      <p className="empty__sub">AO3 · FF.net · FicAlley · and more — fresh AO3 results pulled in as you search</p>
+      {/* Accurate about what the live fetch does. It runs AFTER the response is
+          sent — indexed results come back in milliseconds and the fresh works
+          land in the index for next time — so "pulled in as you search" was
+          promising something the reader never sees in that search. */}
+      <p className="empty__sub">
+        19.6M works across AO3, FanFiction.net and FicAlley, in one index —
+        searched locally, so results come back instantly
+      </p>
       <p className="empty__nudge">
         Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
       </p>
@@ -563,6 +627,7 @@ function SearchPageInner() {
 
   // Search bar
   const [query,   setQuery]   = useState(get("q") ?? "")
+  const [searchFocused, setSearchFocused] = useState(false)
   const [sites,   setSites]   = useState<string[]>(csv(get("sites") ?? "ao3,ffnet,fictionalley"))
   const [explicit, setExplicit] = useState(get("explicit") === "true")
   // Most bulk-imported rows carry no ship/character data at all. Off by default so
@@ -609,7 +674,6 @@ function SearchPageInner() {
   const [results,      setResults]      = useState<SearchResponse | null>(null)
   const [error,        setError]        = useState<string | null>(null)
   const [loading,      setLoading]      = useState(false)
-  const [liveCount,    setLiveCount]    = useState(0)
   const [parsedTokens, setParsedTokens] = useState<ParsedToken[]>([])
   const [refreshing,   setRefreshing]   = useState(false)
   // Tracks which query we've already auto-deepened for, so a thin-result search
@@ -823,7 +887,6 @@ function SearchPageInner() {
         data = await searchStories({ ...p, live: false } as any)
       }
       setResults(data)
-      setLiveCount((data as any).live_count ?? 0)
       setParsedTokens((data as any).parsed_tokens ?? [])
       // Scroll to top of results on page change for a clean reading position
       if (explicitPage && explicitPage > 1) {
@@ -1273,13 +1336,22 @@ function SearchPageInner() {
                   placeholder="fandom: Harry Potter  ship:Draco/Hermione  >100k  complete"
                   value={query}
                   onChange={e => setQuery(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && doSearch()} />
+                  onKeyDown={e => {
+                    if (e.key === "Enter") { setSearchFocused(false); doSearch() }
+                    if (e.key === "Escape") setSearchFocused(false)
+                  }}
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => setSearchFocused(false)} />
                 {query && (
                   <button className="search-clear" aria-label="Clear search text"
                     title="Clear the search box (keeps your filters)"
                     onClick={() => { setQuery(""); setTimeout(() => doSearch(), 0) }}>✕</button>
                 )}
                 <SyntaxHelp onInsert={insertSyntax} />
+                <RecentSearches
+                  open={searchFocused && !query.trim()}
+                  onPick={q => { setSearchFocused(false); setQuery(q); setTimeout(() => doSearch(), 0) }}
+                  onDismiss={() => setSearchFocused(false)} />
               </div>
               <button className="search-btn" onClick={() => doSearch()} disabled={loading}>
                 {loading ? <span className="search-btn__spinner" /> : "Search"}
@@ -1334,7 +1406,7 @@ function SearchPageInner() {
                     </span>
                   )}
                   {results.sites_searched.length > 0 && ` · ${results.sites_searched.map(s => SITE_LABELS[s] ?? s).join(" + ")}`}
-                  {liveCount > 0 && <span className="results-bar__live"> +{liveCount} live</span>}
+
                   {/* Without this it looks like the filters are broken: results
                       appear that have no value for the field being filtered. */}
                   {includeUnknown && (

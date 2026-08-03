@@ -43,7 +43,9 @@ function UserMenu() {
       {open && (
         <div className="user-menu__dropdown">
           <p className="user-menu__hint">
-            {syncing ? "⟳ Syncing your data…" : "Bookmarks, progress & settings sync to this account."}
+            {syncing
+              ? "⟳ Syncing your data…"
+              : "Bookmarks, reading progress, recent searches and reader settings sync to this account."}
           </p>
           <Link href="/account" className="user-menu__link" onClick={() => setOpen(false)}>Account &amp; sync</Link>
           <OfflineLink href="/library" className="user-menu__link" onClick={() => setOpen(false)}>My library</OfflineLink>
