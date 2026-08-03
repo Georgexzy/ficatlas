@@ -104,9 +104,21 @@ class RateLimiter:
 
     MIN_INTERVAL = 0.5
     MAX_INTERVAL = 30.0
-    BACKOFF = 2.0          # multiply on 429
-    RECOVER = 0.98         # shrink per clean request, i.e. ~2% at a time
-    RECOVER_AFTER = 25     # consecutive clean requests before easing off
+    BACKOFF = 2.0          # multiply on 429 — fast, because being over costs AO3
+    RECOVER = 0.90         # shrink 10% per recovery step
+    RECOVER_AFTER = 10     # consecutive clean requests per step
+
+    # Recovery has to be fast enough to actually happen inside one pass.
+    # The first version eased off 2% per 25 clean requests, which sounds
+    # cautious and is really just broken: climbing back from a single 429
+    # (2.0s -> 4.0s) would have taken ~875 clean requests, so one transient
+    # throttle in a 300-work pass cost the ENTIRE pass half its throughput and
+    # never recovered. Measured: 0.23 req/s after one 429, no better than the
+    # serial version it replaced.
+    #
+    # 10% per 10 clean requests gets back from 4.0s to 2.0s in ~70 requests —
+    # slow enough to stay well under the limit, fast enough that one blip does
+    # not write off the pass.
 
     def __init__(self, min_interval: float):
         self.interval = min_interval
