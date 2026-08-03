@@ -212,6 +212,32 @@ curl -s -b "$J" -X POST -d "password=smokepw123" "$B/api/auth/delete-account" >/
 chk "account deleted, session dead" "$(curl -s -b "$J" "$B/api/auth/me" | python3 -c 'import sys,json;print(json.load(sys.stdin)["user"])')" "None"
 rm -f "$J" "$K"
 
+head_ "Public deployment hardening"
+# stories.id is a uuid column, so a non-uuid path segment used to reach Postgres
+# and raise InvalidTextRepresentation — a 500, plus a full stack trace and the
+# whole SELECT in the logs, for any request to /story/1. Scanners do that
+# constantly once a site is public.
+chk "non-uuid story id is 404, not 500"  "$(code "$B/api/stories/1")"   404
+chk "garbage story id is 404, not 500"   "$(code "$B/api/stories/abc")" 404
+chk "unknown uuid is 404"                "$(code "$B/api/stories/00000000-0000-0000-0000-000000000000")" 404
+
+# The signup form has to know whether to render an invite box, and finding out
+# must not itself be rate-limited into failure.
+chk "signup policy is public"            "$(code "$B/api/auth/signup-policy")" 200
+
+# The per-IP limiter. Auth is the tightest class (10/min) because it is the one
+# an open internet actually attacks; login already had a per-USERNAME lockout,
+# which does nothing against one password tried against a thousand usernames.
+# Runs last: it deliberately exhausts this IP's auth budget for the window.
+for i in $(seq 1 11); do
+  rl=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+       -d "username=rlprobe$i&password=xxxxxx" "$B/api/auth/login")
+done
+chk "auth rate limit trips"              "$rl" 429
+# Search must keep working while auth is throttled — they are separate buckets,
+# so a login flood cannot take the site's actual purpose down with it.
+chk "search unaffected by auth limit"    "$(code "$B/api/search?q=harry&per_page=1")" 200
+
 printf "\n\033[1mRESULT\033[0m  passed=%d failed=%d\n" "$pass" "$fail"
 if [ "$fail" -gt 0 ]; then
   printf "Failed:\n"; printf "  - %s\n" "${failed_names[@]}"; exit 1

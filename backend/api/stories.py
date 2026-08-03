@@ -1,6 +1,7 @@
 """Story detail + chapter reading endpoints"""
 import html
 import io
+import uuid
 import re
 import zipfile
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -15,6 +16,22 @@ from html_sanitize import sanitize_html, strip_chapter_heading, tidy_chapter_htm
 from provenance import content_tags, source_labels
 
 router = APIRouter()
+
+
+def valid_story_id(story_id: str) -> str:
+    """404 on a story id that is not a UUID, rather than letting Postgres raise.
+
+    stories.id is a uuid column, so comparing it against something like "1"
+    raises InvalidTextRepresentation — which surfaces as a 500 and logs a full
+    stack trace and the entire SELECT. That is the wrong answer to a URL that
+    simply does not name a story, and once the site is public, scanners and
+    stale links will request paths like /story/1 continuously.
+    """
+    try:
+        uuid.UUID(story_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(404, "Story not found")
+    return story_id
 
 
 class ChapterMeta(BaseModel):
@@ -73,7 +90,7 @@ class StoryDetail(BaseModel):
 
 
 @router.get("/{story_id}", response_model=StoryDetail)
-async def get_story(story_id: str, db: Session = Depends(get_db)):
+async def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db)):
     story = db.query(Story).filter(Story.id == story_id).first()
     if not story:
         raise HTTPException(404, "Story not found")
@@ -126,7 +143,7 @@ async def get_story(story_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{story_id}/chapters/{number}", response_model=ChapterFull)
-async def get_chapter(story_id: str, number: int, db: Session = Depends(get_db)):
+async def get_chapter(number: int, story_id: str = Depends(valid_story_id), db: Session = Depends(get_db)):
     chapter = (db.query(Chapter)
                .filter(Chapter.story_id == story_id, Chapter.number == number)
                .first())
@@ -179,7 +196,7 @@ class SimilarCard(BaseModel):
 
 @router.get("/{story_id}/similar", response_model=List[SimilarCard])
 async def similar_stories(
-    story_id: str,
+    story_id: str = Depends(valid_story_id),
     count: int = Query(6, ge=1, le=20),
     db: Session = Depends(get_db),
 ):
@@ -320,7 +337,7 @@ def _clean_chapter_html(raw: str) -> str:
 
 
 @router.get("/{story_id}/export.epub")
-async def export_epub(story_id: str, db: Session = Depends(get_db)):
+async def export_epub(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db)):
     """Build an EPUB 2 of a hosted story on the fly. Standard library only —
     an EPUB is a ZIP with a fixed set of XML files, so no dependency is needed."""
     story = db.query(Story).filter(Story.id == story_id).first()

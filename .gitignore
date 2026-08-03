@@ -13,3 +13,6 @@ backups/
 # Superseded the moment the change is committed, and they accumulate.
 *.bak
 *.bak.[0-9]*
+
+# Production secrets (see .env.example)
+.env

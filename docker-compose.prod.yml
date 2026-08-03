@@ -1,0 +1,113 @@
+# Production overlay — apply on top of docker-compose.yml:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# The base file is the development setup that runs over Tailscale: code is
+# bind-mounted, uvicorn reloads on every save, Postgres has a known password and
+# the frontend is bound to every interface. All of that is right for a machine
+# only trusted clients can reach and wrong the moment the site is on the
+# internet. This overlay changes exactly those things and nothing else, so the
+# two configurations cannot drift apart the way an edited copy would.
+#
+# Why an overlay rather than apply-prod-frontend.sh: that script rewrites
+# docker-compose.yml in place and keeps timestamped backups, which means the
+# committed file no longer describes what is running and going back is a manual
+# merge. Overlays compose instead of mutate.
+#
+# Everything secret comes from .env (see .env.example). Nothing in this file is
+# a credential.
+
+services:
+  db:
+    environment:
+      # No default. If POSTGRES_PASSWORD is unset the stack must fail to start
+      # rather than quietly come up with the development password, which is in
+      # the git history and therefore public the moment the repo is.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    # Postgres is reachable on the compose network by the backend and worker.
+    # Dropping the published port removes it from the host entirely; use
+    # `docker compose exec db psql -U ficatlas` for admin access.
+    ports: !reset []
+    mem_limit: 5g
+    cpus: 4.0
+
+  backend:
+    # --reload watches the filesystem and restarts on any change. In production
+    # there is nothing to watch (no bind mount), it costs a file-watcher thread,
+    # and a stray write would restart the API under live traffic.
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    # The code comes from the image. Bind-mounting the working tree means a
+    # half-saved file is instantly live, and an attacker who can write to the
+    # host directory can execute code in the container.
+    volumes: !reset []
+    ports: !reset []
+    environment:
+      DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:?}@db:5432/ficatlas
+      # Session cookies are HTTPS-only here — the tunnel always terminates TLS.
+      COOKIE_SECURE: "true"
+      # Cloudflare overwrites CF-Connecting-IP on every proxied request and
+      # strips any inbound copy, so it is safe to believe. Without the tunnel in
+      # front this must stay false: the header is trivially forged, and trusting
+      # it would let one client wear a new identity per request and bypass the
+      # rate limiter entirely.
+      TRUST_PROXY_HEADER: "true"
+      RATE_LIMIT: "true"
+      # open | invite | closed — see api/auth.py. Defaults to invite here
+      # because opening registration is a decision worth making explicitly.
+      SIGNUP_MODE: ${SIGNUP_MODE:-invite}
+      SIGNUP_CODE: ${SIGNUP_CODE:-}
+    mem_limit: 2g
+    cpus: 3.0
+
+  frontend:
+    # Loopback only. cloudflared reaches it over the compose network, so
+    # publishing 3000 on every interface would just be a second, unprotected way
+    # in that bypasses Cloudflare completely.
+    # !override, not !reset: reset would drop the mapping entirely (compose
+    # merges list entries, and reset clears rather than replaces), leaving the
+    # frontend reachable only from inside the compose network — no local access
+    # at all. This replaces the 0.0.0.0 binding with a loopback one.
+    ports: !override
+      - "127.0.0.1:3000:3000"
+    mem_limit: 768m
+    cpus: 2.0
+
+  worker:
+    volumes: !reset []
+    environment:
+      DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:?}@db:5432/ficatlas
+      RUN_SCHEDULER: "true"
+      RECENT_WORKS: "true"
+      ENRICH_FFNET: "true"
+      DEDUP_CROSSPOSTS: "true"
+      REFRESH_STALE: "true"
+      TITLE_REPAIR: "true"
+      WAYBACK_HARVEST: "true"
+    # The worker runs the long backfills and is the process most likely to grow
+    # unboundedly on a bad batch. Capping it means a runaway job gets OOM-killed
+    # and restarted instead of taking the database down with it.
+    mem_limit: 2g
+    cpus: 2.0
+
+  # ── Cloudflare Tunnel ──────────────────────────────────────────────────────
+  # Makes the site reachable without opening a single inbound port. cloudflared
+  # dials OUT to Cloudflare and traffic returns down that connection, so the
+  # home IP is never published in DNS and the router needs no port forward —
+  # which is the whole requirement here.
+  #
+  # Free on every Cloudflare plan, no card. Uses a dashboard-issued token rather
+  # than `cloudflared tunnel login`, so there is no interactive browser step and
+  # no certificate to keep on the host: create the tunnel at
+  # one.dash.cloudflare.com > Networks > Tunnels, point its public hostname at
+  # http://frontend:3000, and put the token in .env.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      - frontend
+    mem_limit: 256m
+    # No ports and no volumes by design: this container only makes outbound
+    # connections, which is what makes the arrangement safe.

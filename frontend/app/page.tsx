@@ -262,6 +262,7 @@ function TokenStrip({ tokens, onRemove }: { tokens: ParsedToken[]; onRemove: (ra
 
 // ── Result card ───────────────────────────────────────────────────────────────
 function StoryCard({ story }: { story: StoryCard }) {
+  const { user } = useAuth()
   // Tags that are not already shown as a ship or a character above, and not the
   // internal dlp_stars marker (rendered as stars in the badge row).
   const freeformTags = useMemo(() => {
@@ -328,7 +329,12 @@ function StoryCard({ story }: { story: StoryCard }) {
 
   // Can we one-click import? Only sites FicHub handles, not already hosted, and
   // not a metadata-only seed row — there is no real page for FicHub to fetch.
-  const canImport = !story.is_hosted && !isSeedUrl(story.url)
+  //
+  // Also gated on the viewer's role. /api/library/import-url requires admin, so
+  // showing this to a logged-out visitor offered a button whose only possible
+  // outcome was a 401 alert. They get Details instead, which works for everyone.
+  const canImport = user?.can_import
+    && !story.is_hosted && !isSeedUrl(story.url)
     && (story.site === "ao3" || story.site === "ffnet")
 
   return (
@@ -667,6 +673,7 @@ function SearchPageInner() {
   const router     = useRouter()
   const pathname   = usePathname()
   const rawParams  = useSearchParams()
+  const { user }   = useAuth()
   const [, startTransition] = useTransition()
   const { sidebarWidth, startResize, onResizeKey, resetWidth } = useSidebarResize()
 
@@ -788,11 +795,16 @@ function SearchPageInner() {
   const parsedLive = parseQuery(query)
   const fromSearch = (key: string) => parsedLive.tokens.filter(t => t.key === key && !t.exclude).map(t => t.value)
 
-  // Fire an AO3 feed poll on page load (server debounces to once / 10 min)
+  // Fire an AO3 feed poll on page load (server debounces to once / 10 min).
+  //
+  // Admins only: the endpoint requires admin, so for everyone else this was a
+  // guaranteed 401 on every single page load — a wasted round trip per visitor,
+  // a red error in their console, and rate-limit budget spent on nothing.
   useEffect(() => {
+    if (!user?.can_manage) return
     const API_BASE = ""  // relative — handled by Next.js rewrite to backend
     fetch(`${API_BASE}/api/library/autopoll`, { method: "POST" }).catch(() => {})
-  }, [])
+  }, [user?.can_manage])
 
   // Run the search when the URL already describes one.
   //
@@ -989,7 +1001,10 @@ function SearchPageInner() {
       const indexedCount = (data as any).total ?? 0
       const thin = indexedCount < 5
       const hasQuery = (pg === 1) && (query.trim().length > 0 || (p as any).fandoms)
-      if (thin && hasQuery && sites.includes("ao3")
+      // Admin-gated server-side, so for a logged-out visitor this fired a 401
+      // on every thin result set — and they saw no benefit either way, since
+      // the deepened results only appear after the re-search it triggers.
+      if (thin && hasQuery && sites.includes("ao3") && user?.can_manage
           && autoDeepenedRef.current !== query && !refreshing) {
         autoDeepenedRef.current = query
         refreshFromAO3()   // pulls 5 pages from AO3, persists, then re-searches
@@ -1406,7 +1421,10 @@ function SearchPageInner() {
         <main className="main">
           {/* Search bar */}
           <div className="search-wrap">
-            {detectedUrl && (
+            {/* Import needs admin (see StoryCard), and this banner promises to
+                fetch and add the story — a promise we cannot keep for a visitor
+                whose click would 401. They can still paste the URL and search. */}
+            {detectedUrl && user?.can_import && (
               <div className="url-detected">
                 <span className="url-detected__icon">↓</span>
                 <div className="url-detected__text">
@@ -1507,7 +1525,7 @@ function SearchPageInner() {
                   )}
                 </span>
                 <span className="results-bar__actions">
-                  {sites.includes("ao3") && (
+                  {sites.includes("ao3") && user?.can_manage && (
                     <button className="page-btn page-btn--refresh" onClick={refreshFromAO3} disabled={refreshing} title="Pull fresh AO3 results and add them to the index">
                       {refreshing ? "Refreshing…" : "↻ Refresh from AO3"}
                     </button>
@@ -1543,7 +1561,7 @@ function SearchPageInner() {
                         Try removing a filter, broadening the word count, or checking a different site.
                       </p>
                     )}
-                    {sites.includes("ao3") && (
+                    {sites.includes("ao3") && user?.can_manage && (
                       <button className="btn btn--primary no-results__fetch"
                         onClick={refreshFromAO3} disabled={refreshing}>
                         {refreshing ? "Searching AO3…" : "🔍 Search AO3 directly for this"}
