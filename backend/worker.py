@@ -386,6 +386,58 @@ def _dlp_import_missing(items: list[tuple[str, list[str]]], provenance: str) -> 
         return persist_live_results(db, rows)
 
 
+async def _dlp_ratings(entries: list[dict]) -> None:
+    """Attach DLP's community star rating to curated works we already hold."""
+    import httpx
+    from db.session import db_session
+    from models.story import Story
+    from api.library import _find_indexed_story
+    from live_fetch.dlp_scraper import fetch_dlp_rating
+
+    batch = int(_num("DLP_RATING_BATCH", 12))
+    delay = _num("DLP_RATING_DELAY", 3.0)
+
+    todo: list[tuple] = []
+    with db_session() as db:
+        for e in entries:
+            thread = e.get("dlp_thread")
+            cand = [v for k, v in (e.get("urls") or {}).items() if k in ("ffn", "ao3")]
+            if not thread or not cand:
+                continue
+            hit = _find_indexed_story(db, cand)
+            if hit is None:
+                continue
+            if any(str(t).startswith("dlp_stars:") for t in (hit.tags or [])):
+                continue        # already rated
+            todo.append((hit.id, thread))
+            if len(todo) >= batch:
+                break
+    if not todo:
+        return
+
+    rated = 0
+    async with httpx.AsyncClient(
+        headers={"User-Agent": "FicAtlas/1.0 (personal fanfiction index)"},
+        follow_redirects=True, timeout=60,
+    ) as client:
+        for story_id, thread in todo:
+            value = await fetch_dlp_rating(client, thread)
+            if value is not None:
+                def _write():
+                    with db_session() as db:
+                        story = db.query(Story).filter(Story.id == story_id).first()
+                        if story:
+                            tags = list(story.tags or [])
+                            tags = [t for t in tags if not str(t).startswith("dlp_stars:")]
+                            tags.append(f"dlp_stars:{value:.2f}")
+                            story.tags = tags
+                            db.commit()
+                await asyncio.to_thread(_write)
+                rated += 1
+            await asyncio.sleep(delay)
+    log.info(f"dlp ratings: {rated}/{len(todo)} threads rated")
+
+
 async def _dlp_pass() -> None:
     """Merge DLP's curation onto stories already in the index, both corpora.
 
@@ -444,6 +496,12 @@ async def _dlp_pass() -> None:
             added = await asyncio.to_thread(_dlp_import_missing, missing[:batch], provenance="dlp_library")
             log.info(f"dlp {corpus}: {len(missing)} not indexed, {added} added this pass")
         log.info(f"dlp {corpus}: {len(entries)} curated, {tagged} newly tagged")
+
+        # Star ratings live on the thread page, one request each, so they are
+        # fetched a few per pass and only for works we hold and have not rated
+        # yet. Stored as a tag rather than a column because the tag filter does
+        # substring matching, which makes "dlp_stars:4" mean 4.00-4.99 for free.
+        await _dlp_ratings(entries)
         await asyncio.sleep(5)
 
 
