@@ -61,3 +61,13 @@ if (!sw.includes("__PRECACHE_MANIFEST__")) {
 sw = sw.split("__PRECACHE_MANIFEST__").join(JSON.stringify(manifest))
 fs.writeFileSync(OUT, sw)
 console.log(`gen-sw-precache: wrote ${OUT} with ${manifest.length} precached URLs`)
+
+// A build stamp the running app can show. Without one there is no way to tell a
+// stale cached bundle from a genuine bug — a fix can be live on the server while
+// an installed PWA still runs the JS and CSS it cached days ago, and the two are
+// indistinguishable from the outside.
+fs.writeFileSync(
+  path.join("public", "build.json"),
+  JSON.stringify({ built: new Date().toISOString() }) + "\n",
+)
+console.log("gen-sw-precache: wrote public/build.json")

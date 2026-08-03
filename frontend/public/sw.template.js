@@ -16,7 +16,7 @@
 
 // Bump on any change to the precache set or fetch strategy: `activate` deletes
 // every cache whose name differs, which is what evicts the previous shell.
-const CACHE = "ficatlas-shell-v6"
+const CACHE = "ficatlas-shell-v7"
 const PRECACHE = __PRECACHE_MANIFEST__
 
 self.addEventListener("install", (event) => {
@@ -72,6 +72,8 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url)
 
   if (url.pathname.startsWith("/api/")) return
+  // Never cache the build stamp — it exists precisely to reveal a stale cache.
+  if (url.pathname === "/build.json") return
   if (request.method !== "GET" || url.origin !== self.location.origin) return
 
   // Immutable hashed assets → cache-first.

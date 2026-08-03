@@ -14,6 +14,7 @@ const SITE_LABELS: Record<string, string> = {
 export default function IndexStatus() {
   const [open, setOpen] = useState(false)
   const [sites, setSites] = useState<SiteStat[]>([])
+  const [built, setBuilt] = useState<string | null>(null)
   const [totals, setTotals] = useState<Totals | null>(null)
 
   useEffect(() => {
@@ -23,6 +24,11 @@ export default function IndexStatus() {
   useEffect(() => {
     if (!open) return
     fetch(`${API_BASE}/api/stats/sites`).then(r => r.json()).then(setSites).catch(() => {})
+    // cache: "no-store" so this reports the BUILD THIS PAGE IS RUNNING, not
+    // whatever the service worker has cached — the whole point is to tell a
+    // stale bundle apart from a real bug.
+    fetch("/build.json", { cache: "no-store" })
+      .then(r => r.json()).then(d => setBuilt(d.built)).catch(() => {})
   }, [open])
 
   useEffect(() => {
@@ -107,6 +113,13 @@ export default function IndexStatus() {
                 )
               })}
             </div>
+
+            {built && (
+              <p className="index-status__build">
+                app build {new Date(built).toLocaleString(undefined,
+                  { dateStyle: "medium", timeStyle: "short" })}
+              </p>
+            )}
 
             <p className="index-status__hint">
               {newestIndexed

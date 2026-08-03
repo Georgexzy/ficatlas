@@ -2056,3 +2056,11 @@ html, body { overflow-x: hidden; max-width: 100%; }
 .match-mode__btn:hover { color: var(--text); }
 .match-mode__btn--on { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
 .match-mode__hint { font-size: 11px; color: var(--text-faint); margin-top: 5px; line-height: 1.35; }
+
+/* Which build the page is actually running. A fix can be live on the server
+   while an installed PWA still runs a bundle it cached days ago, and from the
+   outside those look identical. */
+.index-status__build {
+  margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
+}

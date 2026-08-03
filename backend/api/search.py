@@ -12,6 +12,7 @@ from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 from query_parser import parse_query, parsed_to_search_params
 import re
 from character_aliases import character_variants, relationship_variants
+from language_aliases import language_variants
 from provenance import content_tags, source_labels
 
 router = APIRouter()
@@ -506,7 +507,17 @@ async def search(
                                        Story.status == StatusEnum.unknown))
 
     if language:
-        filters.append(_or_unknown(Story.language.ilike(language), Story.language.is_(None)))
+        # Match every spelling of the language, not just the one typed. AO3
+        # records a work's language in that language while FF.net uses the
+        # English name, so an exact match found a fraction of what exists —
+        # "Chinese" returned 740 works of roughly 546,000, because the rest are
+        # tagged 中文-普通话 國語.
+        variants = language_variants(language)
+        if variants:
+            lang_match = or_(*[Story.language.ilike(v) for v in variants])
+        else:
+            lang_match = Story.language.ilike(language)
+        filters.append(_or_unknown(lang_match, Story.language.is_(None)))
     if word_count_min:
         # NULL is unknown metadata, but a literal 0-word story is art/placeholder
         # and must always be excluded by a min-words filter.
