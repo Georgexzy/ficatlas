@@ -1,6 +1,6 @@
 "use client"
 export const dynamic = "force-dynamic"
-import { useState, useCallback, useTransition, useEffect, useRef, Suspense } from "react"
+import { useState, useCallback, useMemo, useTransition, useEffect, useRef, Suspense } from "react"
 import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import Link from "next/link"
 import OfflineLink from "./OfflineLink"
@@ -87,8 +87,10 @@ function Summary({ text }: { text: string }) {
 }
 
 // ── Tag list with expand/collapse ─────────────────────────────────────────────
-function TagList({ tags, className, kind = "tags" }: {
-  tags: string[]; className?: string; kind?: "tags" | "fandoms" | "relationships" | "characters"
+function TagList({ tags, className, kind = "tags", tagClass = "" }: {
+  tags: string[]; className?: string
+  kind?: "tags" | "fandoms" | "relationships" | "characters"
+  tagClass?: string
 }) {
   const [expanded, setExpanded] = useState(false)
   const shown = expanded ? tags : tags.slice(0, 5)
@@ -96,7 +98,8 @@ function TagList({ tags, className, kind = "tags" }: {
   return (
     <div className={`tag-list ${className ?? ""}`}>
       {shown.map(t => (
-        <Link key={t} href={`/?${kind}=${encodeURIComponent(t)}`} className="tag tag--clickable">{t}</Link>
+        <Link key={t} href={`/?${kind}=${encodeURIComponent(t)}`}
+          className={`tag tag--clickable ${tagClass}`}>{t}</Link>
       ))}
       {!expanded && extra > 0 && <button onClick={() => setExpanded(true)} className="tag tag--more">+{extra}</button>}
       {expanded  && extra > 0 && <button onClick={() => setExpanded(false)} className="tag tag--more">less</button>}
@@ -259,6 +262,18 @@ function TokenStrip({ tokens, onRemove }: { tokens: ParsedToken[]; onRemove: (ra
 
 // ── Result card ───────────────────────────────────────────────────────────────
 function StoryCard({ story }: { story: StoryCard }) {
+  // Tags that are not already shown as a ship or a character above, and not the
+  // internal dlp_stars marker (rendered as stars in the badge row).
+  const freeformTags = useMemo(() => {
+    const shown = new Set(
+      [...(story.relationships ?? []), ...(story.characters ?? [])]
+        .map(v => v.toLowerCase()),
+    )
+    return (story.tags ?? []).filter(
+      t => !t.startsWith("dlp_stars:") && !shown.has(t.toLowerCase()),
+    )
+  }, [story.tags, story.relationships, story.characters])
+
   const [bookmarked, setBookmarked] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importedId, setImportedId] = useState<string | null>(null)
@@ -403,12 +418,13 @@ function StoryCard({ story }: { story: StoryCard }) {
         )}
       </div>
 
+      {/* Capped like every other tag row. This mapped ALL relationships, and on
+          a phone each one is a full-width line — a work with twenty ships
+          printed twenty rows before the reader reached anything else. TagList
+          shows five and expands on demand. */}
       {story.relationships.length > 0 && (
-        <div className="card__ships">
-          {story.relationships.map(r => (
-            <Link key={r} href={`/?relationships=${encodeURIComponent(r)}`} className="tag tag--ship tag--clickable">{r}</Link>
-          ))}
-        </div>
+        <TagList tags={story.relationships} kind="relationships"
+          className="card__ships" tagClass="tag--ship" />
       )}
       {/* dlp_stars is rendered as stars in the badge row above, so it must not
           also appear here as a literal "dlp_stars:4.67" chip. */}
@@ -419,8 +435,14 @@ function StoryCard({ story }: { story: StoryCard }) {
       {story.characters.length > 0 && (
         <TagList tags={story.characters} kind="characters" className="card__chars" />
       )}
-      {story.tags.filter(t => !t.startsWith("dlp_stars:")).length > 0 && (
-        <TagList tags={story.tags.filter(t => !t.startsWith("dlp_stars:"))} className="card__tags" />
+      {/* Freeform tags only.
+          `tags` is stored as relationships + characters + freeforms, so
+          rendering it whole alongside the dedicated ship and character rows
+          printed every pairing and every character TWICE — a card for a
+          well-tagged work was three-quarters duplicate text. Subtract what is
+          already shown above and only the genuine freeform tags remain. */}
+      {freeformTags.length > 0 && (
+        <TagList tags={freeformTags} className="card__tags" />
       )}
       {story.warnings.filter(w => w !== "No Archive Warnings Apply").length > 0 && (
         <div className="card__warnings">
@@ -745,6 +767,31 @@ function SearchPageInner() {
   useEffect(() => {
     const API_BASE = ""  // relative — handled by Next.js rewrite to backend
     fetch(`${API_BASE}/api/library/autopoll`, { method: "POST" }).catch(() => {})
+  }, [])
+
+  // Run the search when the URL already describes one.
+  //
+  // There was no on-mount search at all: doSearch fired only from a keypress,
+  // the Search button or a filter change. So arriving at /?fandoms=Harry+Potter
+  // — which is what every clickable fandom, character, tag, warning and author
+  // link on a card produces, and what any shared or bookmarked search URL looks
+  // like — filled the controls in and then showed the empty landing state until
+  // you pressed Search yourself.
+  //
+  // Runs once on mount only. Later navigations within the app set state
+  // directly and search through their own handlers.
+  useEffect(() => {
+    if (!rawParams.toString()) return
+    const SEARCH_PARAMS = [
+      "q", "fandoms", "relationships", "characters", "tags", "author",
+      "ratings", "warnings", "categories", "status", "language",
+      "word_count_min", "word_count_max", "updated_after", "sites",
+      "dlp_min_rating", "exclude_fandoms", "exclude_tags",
+    ]
+    if (!SEARCH_PARAMS.some(k => rawParams.get(k))) return
+    hasSearchedRef.current = true    // filter tweaks auto-search from here on
+    doSearch()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Apply saved default sites / sort from settings on a fresh landing (no URL params)

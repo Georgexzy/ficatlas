@@ -107,6 +107,8 @@ export default function LibraryPage() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [progress, setProgress] = useState<Record<string, ProgressEntry>>({})
   const [hosted, setHosted] = useState<HostedStory[]>([])
+  const [hostedTotal, setHostedTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [tab, setTab] = useState<Tab>("hosted")
   const [offlineStories, setOfflineStories] = useState<any[]>([])
   useEffect(() => {
@@ -225,7 +227,12 @@ export default function LibraryPage() {
   }
 
   const loadHosted = () => {
-    fetch(`${API_BASE}/api/library/hosted`).then(r => r.json()).then(setHosted).catch(() => {})
+    // The endpoint now returns {total, items}; it used to return a bare list,
+    // so the tab showed the page size (100) as though it were the whole shelf.
+    fetch(`${API_BASE}/api/library/hosted?limit=100`).then(r => r.json()).then(d => {
+      setHosted(Array.isArray(d) ? d : (d.items ?? []))
+      setHostedTotal(Array.isArray(d) ? d.length : (d.total ?? 0))
+    }).catch(() => {})
   }
 
   const deleteHosted = async (id: string, title: string) => {
@@ -651,7 +658,7 @@ export default function LibraryPage() {
 
       <div className="library-tabs">
         <button className={`library-tab ${tab === "hosted" ? "library-tab--on" : ""}`} onClick={() => setTab("hosted")}>
-          Hosted <span className="library-tab__count">{hosted.length}</span>
+          Hosted <span className="library-tab__count">{hostedTotal || hosted.length}</span>
         </button>
         <button className={`library-tab ${tab === "bookmarks" ? "library-tab--on" : ""}`} onClick={() => setTab("bookmarks")}>
           Bookmarks <span className="library-tab__count">{bookmarks.length}</span>
@@ -672,10 +679,29 @@ export default function LibraryPage() {
           {hosted.length === 0
             ? <p className="library-empty">No hosted stories yet. Import a URL or upload an EPUB in the Import tab — those become readable here.</p>
             : (
-              <div className="books-grid">
-                {hosted.map(s => <BookCover key={s.id} story={s} onDelete={deleteHosted}
-                  progress={progress[s.id]} />)}
-              </div>
+              <>
+                <div className="books-grid">
+                  {hosted.map(s => <BookCover key={s.id} story={s} onDelete={deleteHosted}
+                    progress={progress[s.id]} />)}
+                </div>
+                {hosted.length < hostedTotal && (
+                  <div className="library-more">
+                    <button className="btn btn--ghost" disabled={loadingMore}
+                      onClick={async () => {
+                        setLoadingMore(true)
+                        try {
+                          const r = await fetch(
+                            `${API_BASE}/api/library/hosted?limit=100&offset=${hosted.length}`)
+                          const d = await r.json()
+                          setHosted(h => [...h, ...(d.items ?? [])])
+                          if (d.total) setHostedTotal(d.total)
+                        } catch {} finally { setLoadingMore(false) }
+                      }}>
+                      {loadingMore ? "Loading…" : `Load more (${hosted.length} of ${hostedTotal.toLocaleString()})`}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
         </div>
       )}
