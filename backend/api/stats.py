@@ -236,30 +236,20 @@ async def suggest_canonical(
     except Exception:
         pass
 
-    # 2) If we have few index hits, top up with AO3 canonical tags
-    if len(out) < limit:
-        try:
-            import httpx
-            from live_fetch.ao3_feeds import HEADERS, AO3_LIVE_TIMEOUT
-            # AO3's public autocomplete endpoint, e.g.
-            # /autocomplete/fandom?term=harry  → [{id, name}, ...]
-            ao3_kind = {"fandom": "fandom", "relationship": "relationship",
-                        "character": "character", "tag": "freeform"}.get(kind, "fandom")
-            url = f"https://archiveofourown.org/autocomplete/{ao3_kind}?term={ql}"
-            async with httpx.AsyncClient(headers=HEADERS, timeout=AO3_LIVE_TIMEOUT,
-                                         follow_redirects=True) as client:
-                r = await client.get(url)
-                if r.status_code == 200:
-                    for item in r.json():
-                        name = (item.get("name") or "").strip()
-                        if name and name.lower() not in seen:
-                            seen.add(name.lower())
-                            out.append({"value": name, "count": None, "source": "ao3"})
-                        if len(out) >= limit:
-                            break
-        except Exception:
-            # AO3 slow/unreachable — index suggestions are still useful on their own
-            pass
+    # There used to be a step 2 here that topped up thin results by proxying
+    # AO3's /autocomplete/<kind>?term=... endpoint. That is removed, because
+    # AO3's robots.txt disallows it for every user agent:
+    #
+    #     Disallow: /autocomplete/
+    #
+    # and this is the worst possible place to ignore that — the suggestion box
+    # calls it as someone types, so a single search session fired a burst of
+    # requests at an endpoint they have asked automated clients to leave alone.
+    #
+    # The facets table is built from the whole index, so suggestions still come
+    # from millions of real works. What is lost is canonical tags AO3 has minted
+    # that we have not indexed yet; those arrive on the next refresh-facets, and
+    # a tag nobody has written in is not much of a suggestion anyway.
 
     return out[:limit]
 
