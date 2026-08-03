@@ -568,6 +568,74 @@ async def _archives_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _listing_harvest_loop() -> None:
+    """Fill AO3 metadata from tag-works listings, 20 works per request.
+
+    See ao3_listing_harvest.py for why this exists: the work-page harvest costs
+    one request per work, and a listing carries twenty. Same data, 20x fewer
+    requests — which is both the only way the 13M-row summary gap is reachable
+    and a straight reduction in load on AO3.
+
+    Enrichment happens through persist_live_results, which fills gaps on rows we
+    already hold and inserts anything new, so a pass both back-fills summaries
+    and picks up works published since the dump.
+    """
+    from db.session import db_session
+    from ao3_listing_harvest import next_fandoms, get_cursor, set_cursor, PAGES_PER_VISIT
+    from live_fetch.ao3_works_scraper import scrape_tag_works
+    from live_fetch.persist import persist_live_results
+
+    interval = _num("LISTING_INTERVAL_MIN", 3) * 60
+
+    while True:
+        try:
+            with db_session() as db:
+                fandoms = next_fandoms(db, limit=int(_num("LISTING_FANDOMS", 40)))
+            if not fandoms:
+                log.info("listing harvest: no canonical fandoms yet "
+                         "(run ao3_canonical_fandoms.py)")
+                await asyncio.sleep(interval)
+                continue
+
+            # One fandom per pass, rotating by how far behind each one is, so a
+            # 25,000-page fandom cannot monopolise the queue.
+            with db_session() as db:
+                pending = sorted(
+                    ((f, n, get_cursor(db, f)) for f, n in fandoms),
+                    key=lambda t: (t[2], -t[1]),      # least-walked, then biggest
+                )
+            fandom, works, start = pending[0]
+
+            result = await scrape_tag_works(
+                tag=fandom, max_pages=PAGES_PER_VISIT, start_page=start,
+                sort="revised_at",
+            )
+            entries = result.get("entries") or []
+
+            if result.get("pages_ok", 0) == 0 and result.get("pages_failed", 0) > 0:
+                log.warning(f"listing {fandom[:40]}: all pages failed, cursor held")
+                await asyncio.sleep(interval)
+                continue
+
+            saved = 0
+            if entries:
+                with db_session() as db:
+                    saved = persist_live_results(db, entries)
+
+            with db_session() as db:
+                # Exhausted means we walked off the end; go round again next time
+                # rather than stopping, since fandoms gain works continuously.
+                set_cursor(db, fandom, 1 if result.get("exhausted")
+                           else int(result.get("next_page", start + PAGES_PER_VISIT)))
+
+            log.info(f"listing {fandom[:44]!r} ({works:,} works): pages {start}-"
+                     f"{result.get('next_page', start) - 1}, {len(entries)} works, "
+                     f"{saved} new")
+        except Exception as e:
+            log.warning(f"listing harvest failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _title_repair_loop() -> None:
     """Repair AO3 titles the bulk dump truncated mid-phrase.
 
@@ -656,6 +724,10 @@ async def main() -> None:
     if _flag("ARCHIVES_IMPORT", "true"):
         tasks.append(asyncio.create_task(_archives_loop()))
         log.info("alternative-archive full import enabled (HPFFA + HexFiles)")
+
+    if _flag("LISTING_HARVEST", "true"):
+        tasks.append(asyncio.create_task(_listing_harvest_loop()))
+        log.info("AO3 listing harvest enabled (20 works per request)")
 
     if _flag("TITLE_REPAIR", "true"):
         tasks.append(asyncio.create_task(_title_repair_loop()))
