@@ -285,6 +285,34 @@ def _cursor_put(name: str, page: int, done: bool) -> None:
             put_setting(db, f"archive_done:{name}", "true")
 
 
+
+def _dlp_import_missing(items: list[tuple[str, list[str]]], provenance: str) -> int:
+    """Resolve DLP URLs we do not hold through FicHub and index them."""
+    import httpx
+    from db.session import db_session
+    from fichub_meta import fetch_meta, HEADERS
+    from live_fetch.persist import persist_live_results
+
+    rows: list[dict] = []
+    with httpx.Client(headers=HEADERS, follow_redirects=True) as client:
+        for url, dlp_tags in items:
+            meta = fetch_meta(client, url)
+            if not meta:
+                continue
+            meta.setdefault("tags", [])
+            # DLP's own curation tags are the point of the list — they are what
+            # makes "recommended by DLP, tagged Time Travel" answerable.
+            for t in list(dlp_tags) + [provenance]:
+                if t and t not in meta["tags"]:
+                    meta["tags"].append(t)
+            rows.append(meta)
+
+    if not rows:
+        return 0
+    with db_session() as db:
+        return persist_live_results(db, rows)
+
+
 async def _dlp_pass() -> None:
     """Merge DLP's curation onto stories already in the index, both corpora.
 
@@ -325,6 +353,23 @@ async def _dlp_pass() -> None:
                 if set(hit.tags or []) != before:
                     tagged += 1
             db.commit()
+        # Then ADD the curated works we do not hold at all.
+        #
+        # Metadata only, via FicHub's /api/v0/meta — which resolves FFN URLs we
+        # cannot reach ourselves, and produces no download. Full text is a
+        # separate matter: /api/v0/epub hands back a /cache/epub/... URL and
+        # FicHub's robots.txt disallows that path, so EPUB fetching stays on the
+        # Library page's explicit button rather than running unattended here.
+        missing = []
+        with db_session() as db:
+            for e in entries:
+                cand = [v for k, v in (e.get("urls") or {}).items() if k in ("ffn", "ao3")]
+                if cand and _find_indexed_story(db, cand) is None:
+                    missing.append((cand[0], e.get("dlp_tags") or []))
+        if missing:
+            batch = int(_num("DLP_IMPORT_BATCH", 25))
+            added = await asyncio.to_thread(_dlp_import_missing, missing[:batch], provenance="dlp_library")
+            log.info(f"dlp {corpus}: {len(missing)} not indexed, {added} added this pass")
         log.info(f"dlp {corpus}: {len(entries)} curated, {tagged} newly tagged")
         await asyncio.sleep(5)
 
