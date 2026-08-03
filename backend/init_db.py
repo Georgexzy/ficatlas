@@ -257,6 +257,21 @@ CREATE TABLE IF NOT EXISTS facets (
 );
 CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm ON facets USING gin (value gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC);
+
+-- AO3 work IDs discovered in the Wayback Machine's CDX index, waiting to have
+-- their archived page fetched and parsed. See wayback_harvest.py: this is how
+-- the 13M-row summary gap gets filled without any of it landing on AO3.
+CREATE TABLE IF NOT EXISTS wayback_queue (
+    work_id     BIGINT PRIMARY KEY,
+    snapshot_ts VARCHAR(20) NOT NULL,   -- 14-digit Wayback capture timestamp
+    done_at     TIMESTAMPTZ,
+    ok          BOOLEAN
+);
+-- The claim query filters on done_at IS NULL and orders by work_id; once most
+-- of the table is processed a full scan to find the unprocessed tail would
+-- dominate, so index exactly that predicate.
+CREATE INDEX IF NOT EXISTS ix_wayback_pending ON wayback_queue (work_id)
+    WHERE done_at IS NULL;
 """
 
 def _split_statements(sql: str) -> list[str]:

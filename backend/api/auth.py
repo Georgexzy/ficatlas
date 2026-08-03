@@ -1,4 +1,5 @@
 """Auth — signup/login/logout/me with bcrypt + httponly cookie sessions."""
+import os
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional
@@ -81,12 +82,21 @@ def _create_session(db: Session, user: User, user_agent: str | None = None) -> s
     return token
 
 
+# Marking the session cookie Secure stops it ever being sent over plain HTTP,
+# which is what we want the moment the site is reachable from the internet
+# behind TLS (Cloudflare Tunnel terminates HTTPS, so it always is there). It
+# cannot be hardcoded on, because over Tailscale the site is served plain http
+# and a Secure cookie would simply never come back — logging in would appear to
+# succeed and then every request would read as logged out.
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         key=SESSION_COOKIE, value=token,
         max_age=SESSION_DAYS * 86400,
         httponly=True, samesite="lax",
-        secure=False,           # site is served plain http over Tailscale; flip when behind TLS
+        secure=COOKIE_SECURE,
         path="/",
     )
 
@@ -211,14 +221,42 @@ def require_owner(
     return _require_role(user, db, ROLE_OWNER)
 
 
+# Who may create an account, once the site is reachable from the internet:
+#
+#   open    anyone (the default, and what a public search engine wants)
+#   invite  only with the shared code in SIGNUP_CODE
+#   closed  nobody; accounts are made by hand
+#
+# The first account still becomes owner regardless (see init_db), so "closed" is
+# safe to set before the owner exists only if that account is created directly.
+SIGNUP_MODE = os.getenv("SIGNUP_MODE", "open").lower()
+SIGNUP_CODE = os.getenv("SIGNUP_CODE", "")
+
+
 # ── endpoints ───────────────────────────────────────────────────────────────
+
+@router.get("/signup-policy")
+async def signup_policy():
+    """What the signup form should render. Public: it exposes no secret, only
+    whether a code box is needed, and the frontend cannot guess that."""
+    return {"mode": SIGNUP_MODE, "needs_code": SIGNUP_MODE == "invite"}
+
 
 @router.post("/signup")
 async def signup(
     response: Response, request: Request,
     username: str = Form(...), password: str = Form(...),
+    invite: str = Form(""),
     db: Session = Depends(get_db),
 ):
+    if SIGNUP_MODE == "closed":
+        raise HTTPException(403, "This site is not accepting new accounts")
+    if SIGNUP_MODE == "invite":
+        # compare_digest so a wrong code cannot be recovered a character at a
+        # time from response timing.
+        if not SIGNUP_CODE or not secrets.compare_digest(invite.strip(), SIGNUP_CODE):
+            raise HTTPException(403, "That invite code is not valid")
+
     username = username.strip().lower()
     if not (3 <= len(username) <= 30):
         raise HTTPException(400, "Username must be 3–30 characters")

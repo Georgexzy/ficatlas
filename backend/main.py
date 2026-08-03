@@ -52,6 +52,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FicAtlas API", version="0.1.0", lifespan=lifespan)
 
+# ── Rate limiting ────────────────────────────────────────────────────────────
+# Only matters once this is reachable from outside the tailnet; see ratelimit.py
+# for why it is per-IP-and-path-class rather than one global bucket.
+from ratelimit import rate_limit_middleware  # noqa: E402
+
+app.middleware("http")(rate_limit_middleware)
+
 # ── CORS ─────────────────────────────────────────────────────────────────────
 # The browser never talks to this port directly: the Next.js frontend declares a
 # rewrite for /api/* (see frontend/next.config.ts), so every request the browser

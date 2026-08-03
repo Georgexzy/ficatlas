@@ -65,11 +65,15 @@ def _as_datetime(value):
         return None
 
 
-def persist_live_results(db: Session, live_results: list[dict]) -> int:
+def persist_live_results(db: Session, live_results: list[dict],
+                         stats: dict | None = None) -> int:
     """
     Save live-fetched stories to the DB if they aren't already there.
     Commits each row individually so a single bad row doesn't roll back the batch.
     Returns the count of rows that actually committed.
+
+    Pass `stats` to also receive the enriched/skipped/failed breakdown, which the
+    return value alone cannot express.
     """
     if not live_results:
         return 0
@@ -247,6 +251,14 @@ def persist_live_results(db: Session, live_results: list[dict]) -> int:
             f"already_indexed={skipped_existing} cross_post_merged={merged_crosspost} "
             f"failed={failed} (of {len(live_results)} candidates)"
         )
+
+    # The return stays `saved` because three callers count new rows with it.
+    # Enrichment needs reporting too — for the Wayback harvest it is the entire
+    # point, since 81% of what it finds is works we hold but cannot summarise —
+    # so callers that care pass a dict and read the rest out of it.
+    if stats is not None:
+        stats.update(saved=saved, enriched=enriched, failed=failed,
+                     already_indexed=skipped_existing, cross_post_merged=merged_crosspost)
 
     return saved
 

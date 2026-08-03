@@ -643,6 +643,119 @@ async def _listing_harvest_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _wayback_cdx_loop() -> None:
+    """Walk archive.org's CDX index for AO3 work URLs and queue what it finds.
+
+    Discovery only — no work pages are fetched here. The walk is fast (one
+    request yields tens of thousands of snapshot rows) and the fetch is slow, so
+    keeping them in one loop would mean discovery finishing in hours and then
+    sitting idle for months. See wayback_harvest.
+    """
+    from sqlalchemy import text as sql_text
+
+    from db.session import db_session
+    from api.settings import get_setting, put_setting
+    from wayback_harvest import cdx_page, queue_ids
+
+    KEY = "wayback_cdx_resume"
+    interval = _num("WAYBACK_CDX_INTERVAL_SEC", 90)
+    # Stop discovering once the queue is deep enough to keep the fetch loop busy
+    # for weeks; there is no point holding 10M rows we will not reach this year,
+    # and the CDX index is still there when we want more.
+    high_water = int(_num("WAYBACK_QUEUE_MAX", 500_000))
+
+    while True:
+        try:
+            with db_session() as db:
+                pending = db.execute(sql_text(
+                    "SELECT count(*) FROM wayback_queue WHERE done_at IS NULL")).scalar() or 0
+                resume = get_setting(db, KEY) or None
+
+            if pending >= high_water:
+                await asyncio.sleep(interval * 20)
+                continue
+
+            pairs, next_key = await asyncio.to_thread(cdx_page, resume)
+
+            with db_session() as db:
+                added = queue_ids(db, pairs) if pairs else 0
+                # No resume key means the walk reached the end of the index.
+                # Start over: archive.org keeps capturing AO3, so a later pass
+                # finds works that did not exist during the first.
+                put_setting(db, KEY, next_key or "")
+                if not next_key:
+                    log.info("wayback cdx: index walked to the end, restarting")
+
+            log.info(f"wayback cdx: {len(pairs):,} works in slice, "
+                     f"{added:,} newly queued (pending {pending + added:,})")
+        except Exception as e:
+            log.warning(f"wayback cdx walk failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
+async def _wayback_fetch_loop() -> None:
+    """Fetch queued AO3 work pages from the Wayback Machine and persist them.
+
+    This is the one AO3 enrichment path that puts no load on AO3 at all, so it
+    is not gated by ao3_budget — pacing it against AO3's limiter would throw
+    away the entire reason for using an archive mirror.
+    """
+    from db.session import db_session
+    from live_fetch.persist import persist_live_results
+    from wayback_harvest import (Transient, next_batch, mark_done, fetch_snapshot,
+                                 queue_stats)
+
+    batch = int(_num("WAYBACK_BATCH", 20))
+    interval = _num("WAYBACK_INTERVAL_SEC", 15)
+
+    while True:
+        try:
+            with db_session() as db:
+                pending = next_batch(db, batch)
+            if not pending:
+                await asyncio.sleep(interval * 10)
+                continue
+
+            entries, results = [], []
+            stalled = 0
+            for work_id, ts in pending:
+                try:
+                    entry = await asyncio.to_thread(fetch_snapshot, work_id, ts)
+                except Transient as e:
+                    # Leave it queued — the work is fine, archive.org is busy.
+                    # Abandon the rest of the batch too rather than grinding
+                    # through 20 more failures while it recovers; the budget has
+                    # already widened the interval.
+                    stalled += 1
+                    log.info(f"wayback: backing off ({e})")
+                    break
+                results.append((work_id, entry is not None))
+                if entry:
+                    entries.append(entry)
+
+            counts: dict = {}
+            if entries:
+                with db_session() as db:
+                    persist_live_results(db, entries, counts)
+            # Mark outside the persist session: a row that fails to save is
+            # still a snapshot we successfully read, and re-fetching it would
+            # only fail the same way.
+            with db_session() as db:
+                for work_id, ok in results:
+                    mark_done(db, work_id, ok)
+                stats = queue_stats(db)
+
+            log.info(f"wayback: {len(entries)}/{len(results)} parsed, "
+                     f"{counts.get('saved', 0)} new, "
+                     f"{counts.get('enriched', 0)} enriched, "
+                     f"{stats['pending']:,} pending, "
+                     f"interval {stats['budget']['interval']}s"
+                     + (f" (backed off, {stalled} requeued)" if stalled else ""))
+        except Exception as e:
+            log.warning(f"wayback fetch failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _title_repair_loop() -> None:
     """Repair AO3 titles the bulk dump truncated mid-phrase.
 
@@ -739,6 +852,11 @@ async def main() -> None:
     if _flag("TITLE_REPAIR", "true"):
         tasks.append(asyncio.create_task(_title_repair_loop()))
         log.info("AO3 title repair enabled")
+
+    if _flag("WAYBACK_HARVEST", "true"):
+        tasks.append(asyncio.create_task(_wayback_cdx_loop()))
+        tasks.append(asyncio.create_task(_wayback_fetch_loop()))
+        log.info("Wayback harvest enabled (AO3 metadata at zero cost to AO3)")
 
     log.info("worker ready")
     # Idle forever; the scheduler runs on its own timers.
