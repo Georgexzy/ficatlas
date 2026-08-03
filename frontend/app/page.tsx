@@ -7,7 +7,7 @@ import OfflineLink from "./OfflineLink"
 import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
-         SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS,
+         SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
          DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
@@ -372,8 +372,36 @@ function StoryCard({ story }: { story: StoryCard }) {
         {story.kudos > 0 && <><span className="dot">·</span><span title="Kudos">♥ {formatNumber(story.kudos)}</span></>}
         {story.hits > 0 && <><span className="dot">·</span><span title="Hits">👁 {formatNumber(story.hits)}</span></>}
         {story.comments > 0 && <><span className="dot">·</span><span title="Comments">💬 {formatNumber(story.comments)}</span></>}
+        {story.bookmarks > 0 && <><span className="dot">·</span><span title="Bookmarks">🔖 {formatNumber(story.bookmarks)}</span></>}
         {story.language && story.language !== "English" && <><span className="dot">·</span><span>{story.language}</span></>}
-        {story.updated_at && <><span className="dot">·</span><span title="Last updated">{story.updated_at.split("T")[0]}</span></>}
+
+        {/* Say WHICH date it is. A bare "2026-01-11" does not distinguish when a
+            story appeared from when it last changed, and those mean very
+            different things when deciding whether to start a WIP. Fall back to
+            the published date so a work we have a date for never shows none. */}
+        {story.updated_at ? (
+          <><span className="dot">·</span>
+            <span title={`Last updated ${story.updated_at.split("T")[0]}`}>
+              Updated {formatStoryDate(story.updated_at)}
+            </span></>
+        ) : story.published_at ? (
+          <><span className="dot">·</span>
+            <span title={`Published ${story.published_at.split("T")[0]}`}>
+              Published {formatStoryDate(story.published_at)}
+            </span></>
+        ) : null}
+
+        {/* Both dates are worth showing when a work has actually been revised —
+            "published 2015, updated last month" is the shape of a long-running
+            WIP and is invisible if you only ever see one of them. */}
+        {story.updated_at && story.published_at
+          && story.published_at.split("T")[0] !== story.updated_at.split("T")[0] && (
+          <><span className="dot">·</span>
+            <span className="card__meta-muted"
+              title={`First published ${story.published_at.split("T")[0]}`}>
+              pub. {new Date(story.published_at).getFullYear()}
+            </span></>
+        )}
       </div>
 
       {story.relationships.length > 0 && (

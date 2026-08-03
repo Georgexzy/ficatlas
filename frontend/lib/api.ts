@@ -195,3 +195,28 @@ export const LANGUAGE_OPTIONS: { value: string; label: string; count: number }[]
   { value: "Bulgarian", label: "Bulgarian", count: 196 },
   { value: "Serbian", label: "Serbian", count: 99 },
 ]
+
+// Dates on a result card.
+//
+// The card used to print a bare "2026-01-11" with no label, which does not say
+// whether that is when the story appeared or when it last changed — and those
+// mean very different things when you are deciding whether to start a WIP. It
+// also never showed published_at at all, so a work with no update date showed
+// no date whatsoever even when we knew exactly when it was posted.
+//
+// Recent dates read better relative ("3 days ago" carries more than the date
+// itself); anything older gets the actual date, because "412 days ago" does
+// not.
+export function formatStoryDate(iso?: string | null): string | null {
+  if (!iso) return null
+  const then = new Date(iso)
+  if (Number.isNaN(then.getTime())) return null
+  const days = Math.floor((Date.now() - then.getTime()) / 86_400_000)
+  if (days < 0) return then.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
+  if (days === 0) return "today"
+  if (days === 1) return "yesterday"
+  if (days < 30) return `${days} days ago`
+  if (days < 60) return "last month"
+  if (days < 365) return `${Math.round(days / 30)} months ago`
+  return then.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
+}

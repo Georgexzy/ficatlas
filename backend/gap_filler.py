@@ -10,7 +10,10 @@ empty in others, so no single one closes the gaps:
     HF FFN dump          6.6M rows   NO dates, NO characters/ships,
                                      NO engagement counts
     FicAlley dump         30k rows   near complete
-    AO3 work pages         live      everything, ~0.4 req/s, rate limited
+    AO3 tag LISTINGS       live      20 works per request — the bulk route
+    AO3 work pages         live      1 work per request; only for defects a
+                                     listing cannot show, e.g. a title the dump
+                                     truncated
     Wayback (FFN)          live      ~69% hit rate, 2 requests each
     FicHub /api/v0/meta    live      FFN + AO3, 1 request, no downloads
 
@@ -21,14 +24,26 @@ is most likely to have it".
 
 This picks per row instead:
 
-  * AO3     -> the work page. Authoritative, and already being fetched to
-               repair truncated titles, so the marginal cost is zero.
+  * AO3     -> a tag LISTING, not the work page. A listing carries the same
+               fields for twenty works at once (measured: 19/20 with a summary,
+               20/20 with word count and date), so the same coverage costs
+               650k requests instead of 13M — and 20x less load on AO3 for
+               identical data. See ao3_listing_harvest.py.
+
+               Work pages are still fetched, but only for what a listing cannot
+               fix: a title the dump truncated is wrong in the listing too,
+               because the listing is generated from the same field.
   * FF.net  -> Wayback first (built for bulk), FicHub only where Wayback has
                no capture. FicHub is one volunteer's server.
   * others  -> FicHub, which resolves anything it can reach.
 
 and it ranks the queue by what a reader will actually see, so effort lands on
 works people open rather than on the long tail.
+
+A correction worth recording, since it was believed for a while and shaped
+several decisions: the 13M-row summary gap was called structurally unfixable
+on the arithmetic of one-work-per-request. That arithmetic was right and the
+premise was wrong. Nothing about the volume changed; the request shape did.
 
 Gaps are scored, not merely counted: a missing summary matters more than a
 missing language, because a result with no description is the one that looks
