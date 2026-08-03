@@ -51,7 +51,19 @@ MIN_FANDOM_WORKS = int(os.getenv("LISTING_MIN_FANDOM", "200"))
 # 25,000-page fandom cannot monopolise the queue while everything else waits.
 PAGES_PER_VISIT = int(os.getenv("LISTING_PAGES_PER_VISIT", "5"))
 
-FANDOM_QUEUE_SQL = sql_text("""
+# Two queues, alternated, because "fill in what we hold" and "find what we do
+# not" are different jobs and ranking by one starves the other.
+#
+# DISCOVER walks AO3's biggest fandoms. Those turn out to be ones the bulk dump
+# barely covered — RPF, K-pop, Marvel — so a pass there is nearly all new works
+# and closes the post-2024 gap the dump cannot.
+#
+# BACKFILL walks the fandoms WE hold the most of, which is where the missing
+# summaries actually are: 100% of AO3 rows arrived without one, so "most of our
+# works" is also "most of our gaps". Restricted to names that exist as canonical
+# AO3 tags, since that is what the tag URL needs — our own facet list contains
+# FF.net spellings like "Harry Potter" that AO3 has no tag page for.
+DISCOVER_SQL = sql_text("""
     SELECT value, count
     FROM facets
     WHERE kind = 'fandom_ao3' AND count >= :min_works
@@ -59,30 +71,41 @@ FANDOM_QUEUE_SQL = sql_text("""
     LIMIT :lim
 """)
 
+BACKFILL_SQL = sql_text("""
+    SELECT f.value, f.count
+    FROM facets f
+    JOIN facets a ON a.kind = 'fandom_ao3' AND a.value = f.value
+    WHERE f.kind = 'fandom' AND f.count >= :min_works
+    ORDER BY f.count DESC
+    LIMIT :lim
+""")
 
-def next_fandoms(db, limit: int = 50) -> list[tuple[str, int]]:
-    """Canonical fandoms worth walking, largest first."""
-    rows = db.execute(FANDOM_QUEUE_SQL,
-                      {"min_works": MIN_FANDOM_WORKS, "lim": limit}).fetchall()
+
+def next_fandoms(db, limit: int = 50, mode: str = "discover") -> list[tuple[str, int]]:
+    """Canonical fandoms worth walking. `mode` picks which queue."""
+    sql = BACKFILL_SQL if mode == "backfill" else DISCOVER_SQL
+    rows = db.execute(sql, {"min_works": MIN_FANDOM_WORKS, "lim": limit}).fetchall()
     return [(r[0], r[1]) for r in rows]
 
 
-def cursor_key(fandom: str) -> str:
+def cursor_key(fandom: str, mode: str = "discover") -> str:
     # Fandom names contain everything including slashes and quotes; hash to keep
     # the settings key short and safe rather than storing the name itself.
     import hashlib
-    return "listing_page:" + hashlib.sha1(fandom.encode("utf-8")).hexdigest()[:16]
+    # Mode is part of the key: the two queues walk the same fandom from
+    # different ends of the same list and must not share a page cursor.
+    return f"listing_page:{mode}:" + hashlib.sha1(fandom.encode("utf-8")).hexdigest()[:16]
 
 
-def get_cursor(db, fandom: str) -> int:
+def get_cursor(db, fandom: str, mode: str = "discover") -> int:
     from api.settings import get_setting
-    raw = get_setting(db, cursor_key(fandom))
+    raw = get_setting(db, cursor_key(fandom, mode))
     try:
         return max(1, int(raw))
     except (TypeError, ValueError):
         return 1
 
 
-def set_cursor(db, fandom: str, page: int) -> None:
+def set_cursor(db, fandom: str, page: int, mode: str = "discover") -> None:
     from api.settings import put_setting
-    put_setting(db, cursor_key(fandom), str(page))
+    put_setting(db, cursor_key(fandom, mode), str(page))

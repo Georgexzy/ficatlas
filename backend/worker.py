@@ -586,14 +586,20 @@ async def _listing_harvest_loop() -> None:
     from live_fetch.persist import persist_live_results
 
     interval = _num("LISTING_INTERVAL_MIN", 3) * 60
+    # Alternate the two queues so neither starves the other. Backfill fills in
+    # the works we already hold (where every missing summary is); discover finds
+    # the works we do not (the post-2024 gap the dump cannot cover). Ranking by
+    # either alone does one job well and the other not at all.
+    mode = "backfill"
 
     while True:
         try:
+            mode = "discover" if mode == "backfill" else "backfill"
             with db_session() as db:
-                fandoms = next_fandoms(db, limit=int(_num("LISTING_FANDOMS", 40)))
+                fandoms = next_fandoms(db, limit=int(_num("LISTING_FANDOMS", 40)), mode=mode)
             if not fandoms:
-                log.info("listing harvest: no canonical fandoms yet "
-                         "(run ao3_canonical_fandoms.py)")
+                log.info(f"listing[{mode}]: no fandoms in this queue yet "
+                         "(run ao3_canonical_fandoms.py / refresh-facets)")
                 await asyncio.sleep(interval)
                 continue
 
@@ -601,7 +607,7 @@ async def _listing_harvest_loop() -> None:
             # 25,000-page fandom cannot monopolise the queue.
             with db_session() as db:
                 pending = sorted(
-                    ((f, n, get_cursor(db, f)) for f, n in fandoms),
+                    ((f, n, get_cursor(db, f, mode)) for f, n in fandoms),
                     key=lambda t: (t[2], -t[1]),      # least-walked, then biggest
                 )
             fandom, works, start = pending[0]
@@ -626,11 +632,12 @@ async def _listing_harvest_loop() -> None:
                 # Exhausted means we walked off the end; go round again next time
                 # rather than stopping, since fandoms gain works continuously.
                 set_cursor(db, fandom, 1 if result.get("exhausted")
-                           else int(result.get("next_page", start + PAGES_PER_VISIT)))
+                           else int(result.get("next_page", start + PAGES_PER_VISIT)),
+                           mode)
 
-            log.info(f"listing {fandom[:44]!r} ({works:,} works): pages {start}-"
-                     f"{result.get('next_page', start) - 1}, {len(entries)} works, "
-                     f"{saved} new")
+            log.info(f"listing[{mode}] {fandom[:40]!r} ({works:,} works): pages "
+                     f"{start}-{result.get('next_page', start) - 1}, "
+                     f"{len(entries)} works, {saved} new")
         except Exception as e:
             log.warning(f"listing harvest failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
