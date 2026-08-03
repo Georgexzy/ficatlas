@@ -56,6 +56,7 @@ export default function ChapterPage() {
   const [theme, setTheme] = useState<"default" | "sepia" | "dark">("default")
   const [justify, setJustify] = useState(false)
   const [scrollPct, setScrollPct] = useState(0)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const headingRef = useRef<HTMLHeadingElement | null>(null)
 
   useEffect(() => {
@@ -262,6 +263,9 @@ export default function ChapterPage() {
       const t = e.target as HTMLElement | null
       if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
       if (e.ctrlKey || e.metaKey || e.altKey) return
+      // Escape closes the settings sheet rather than falling through to the
+      // chapter shortcuts underneath it.
+      if (e.key === "Escape") { setSettingsOpen(false); return }
       if (e.key === "ArrowLeft" && num > 1) goChapter(num - 1)
       if (e.key === "ArrowRight" && story && num < story.chapter_count) goChapter(num + 1)
       if (e.key === "+" || e.key === "=") setFontSize(s => Math.min(s + 1, 24))
@@ -297,33 +301,110 @@ export default function ChapterPage() {
         aria-valuenow={Math.round(scrollPct)} aria-valuemin={0} aria-valuemax={100} />
       <div className="reader-topbar reader-topbar--sticky">
         <Link href={`/story/${storyId}`} className="back-link">← {story.title}</Link>
+        {/* One "Aa" button instead of eight controls, the way Apple Books does
+            it. On a 390px phone the inline toolbar wrapped to THREE rows, so
+            eight buttons stood between the reader and the first line of prose.
+            The panel below holds the same settings and is a bottom sheet on a
+            phone, a popover on a desktop. */}
         <div className="reader-controls">
-          {/* aria-label states what the control DOES; the visible glyph states
-              the current value, which a screen reader would otherwise announce
-              as the action ("Sepia" reads as if pressing it were already done). */}
-          <button className="reader-ctrl" onClick={() => setTheme(t => t === "default" ? "sepia" : t === "sepia" ? "dark" : "default")}
-            title="Cycle theme (t)" aria-label={`Change colour theme, currently ${theme === "default" ? "light" : theme}`}
-          >{theme === "default" ? "◐ Light" : theme === "sepia" ? "◖ Sepia" : "◑ Dark"}</button>
-          <button className="reader-ctrl" onClick={() => setFontFamily(f => f === "serif" ? "sans" : "serif")}
-            title="Toggle serif / sans" aria-pressed={fontFamily === "sans"}
-            aria-label={`Sans-serif type, currently ${fontFamily}`}
-          >{fontFamily === "serif" ? "Serif" : "Sans"}</button>
-          <button className="reader-ctrl" onClick={() => setWidth(w => w === "narrow" ? "wide" : "narrow")}
-            title="Toggle column width" aria-pressed={width === "wide"}
-            aria-label={`Wide column, currently ${width}`}
-          >{width === "narrow" ? "↔ Wide" : "↔ Narrow"}</button>
-          <button className="reader-ctrl" onClick={() => setJustify(j => !j)}
-            title="Justify text (j)" aria-pressed={justify}
-            aria-label={`Justify text, currently ${justify ? "on" : "off"}`}
-          >{justify ? "≡ Justified" : "≡ Ragged"}</button>
-          <button className="reader-ctrl" onClick={() => setLineHeight(l => Math.max(1.3, +(l - 0.1).toFixed(1)))}
-            title="Tighter line spacing" aria-label="Tighter lines">↕−</button>
-          <button className="reader-ctrl" onClick={() => setLineHeight(l => Math.min(2.4, +(l + 0.1).toFixed(1)))}
-            title="Looser line spacing" aria-label="Looser lines">↕+</button>
-          <button className="reader-ctrl" onClick={() => setFontSize(s => Math.max(s - 1, 13))} aria-label="Smaller">A-</button>
-          <button className="reader-ctrl" onClick={() => setFontSize(s => Math.min(s + 1, 24))} aria-label="Larger">A+</button>
+          <button
+            className={`reader-ctrl reader-ctrl--aa ${settingsOpen ? "is-on" : ""}`}
+            onClick={() => setSettingsOpen(o => !o)}
+            aria-expanded={settingsOpen}
+            aria-label="Reading settings: type, size, spacing and colour"
+            title="Reading settings"
+          >Aa</button>
         </div>
       </div>
+
+      {settingsOpen && (
+        <>
+          <div className="reader-sheet__backdrop" onClick={() => setSettingsOpen(false)} />
+          <div className="reader-sheet" role="dialog" aria-label="Reading settings">
+            <div className="reader-sheet__head">
+              <p className="reader-sheet__title">Reading settings</p>
+              <button className="reader-sheet__close" onClick={() => setSettingsOpen(false)}
+                aria-label="Close reading settings">✕</button>
+            </div>
+
+            <div className="reader-sheet__row">
+              <span className="reader-sheet__label">Text size</span>
+              <div className="reader-seg">
+                <button onClick={() => setFontSize(v => Math.max(v - 1, 13))}
+                  aria-label="Smaller text">A−</button>
+                <span className="reader-seg__value">{fontSize}px</span>
+                <button onClick={() => setFontSize(v => Math.min(v + 1, 24))}
+                  aria-label="Larger text">A+</button>
+              </div>
+            </div>
+
+            <div className="reader-sheet__row">
+              <span className="reader-sheet__label">Line spacing</span>
+              <div className="reader-seg">
+                <button onClick={() => setLineHeight(l => Math.max(1.3, +(l - 0.1).toFixed(1)))}
+                  aria-label="Tighter line spacing">↕−</button>
+                <span className="reader-seg__value">{lineHeight.toFixed(1)}</span>
+                <button onClick={() => setLineHeight(l => Math.min(2.4, +(l + 0.1).toFixed(1)))}
+                  aria-label="Looser line spacing">↕+</button>
+              </div>
+            </div>
+
+            <div className="reader-sheet__row">
+              <span className="reader-sheet__label">Typeface</span>
+              <div className="reader-seg reader-seg--choice">
+                {(["serif", "sans"] as const).map(f => (
+                  <button key={f} onClick={() => setFontFamily(f)}
+                    className={fontFamily === f ? "is-on" : ""}
+                    aria-pressed={fontFamily === f}>
+                    {f === "serif" ? "Serif" : "Sans"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="reader-sheet__row">
+              <span className="reader-sheet__label">Theme</span>
+              <div className="reader-seg reader-seg--choice">
+                {(["default", "sepia", "dark"] as const).map(t => (
+                  <button key={t} onClick={() => setTheme(t)}
+                    className={theme === t ? "is-on" : ""}
+                    aria-pressed={theme === t}>
+                    {t === "default" ? "Light" : t === "sepia" ? "Sepia" : "Dark"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="reader-sheet__row">
+              <span className="reader-sheet__label">Column</span>
+              <div className="reader-seg reader-seg--choice">
+                {(["narrow", "wide"] as const).map(w => (
+                  <button key={w} onClick={() => setWidth(w)}
+                    className={width === w ? "is-on" : ""}
+                    aria-pressed={width === w}>
+                    {w === "narrow" ? "Narrow" : "Wide"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="reader-sheet__row">
+              <span className="reader-sheet__label">Alignment</span>
+              <div className="reader-seg reader-seg--choice">
+                <button onClick={() => setJustify(false)} className={!justify ? "is-on" : ""}
+                  aria-pressed={!justify}>Ragged</button>
+                <button onClick={() => setJustify(true)} className={justify ? "is-on" : ""}
+                  aria-pressed={justify}>Justified</button>
+              </div>
+            </div>
+
+            <p className="reader-sheet__hint">
+              Keys: <kbd>←</kbd> <kbd>→</kbd> chapters · <kbd>+</kbd> <kbd>−</kbd> size ·
+              <kbd>t</kbd> theme · <kbd>j</kbd> justify
+            </p>
+          </div>
+        </>
+      )}
 
       {/* Floating exit button — exit reader from anywhere without scrolling up */}
       <Link href={`/story/${storyId}`} className="reader-fab" title="Back to story page" aria-label="Exit reader">
