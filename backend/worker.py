@@ -587,7 +587,10 @@ async def _listing_harvest_loop() -> None:
     from live_fetch.ao3_works_scraper import scrape_tag_works
     from live_fetch.persist import persist_live_results
 
-    interval = _num("LISTING_INTERVAL_MIN", 3) * 60
+    # ao3_budget already paces every request; this only decides how long the
+    # loop idles between batches, and idling is pure waste. Short, because
+    # the batch is small now — the pacing lives in the budget.
+    interval = _num("LISTING_INTERVAL_SEC", 20)
     # Alternate the two queues so neither starves the other. Backfill fills in
     # the works we already hold (where every missing summary is); discover finds
     # the works we do not (the post-2024 gap the dump cannot cover). Ranking by
