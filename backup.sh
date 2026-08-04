@@ -147,9 +147,48 @@ harmless and existing rows win:
     curl -X POST 'http://localhost:8000/api/stats/refresh-facets?min_count=2'
 DOC
 
-# Retention: keep the newest $KEEP of this mode.
-ls -1t "$DEST"/ficatlas-"$MODE"-*.dump 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r old; do
-  echo "  pruning $(basename "$old")"; rm -f "$old"
+# Retention. Two limits, because a count alone does not bound disk use: these
+# dumps grow as more stories get hosted, so "keep 7" quietly turns into whatever
+# 7 × today's size happens to be. The size cap is what actually protects the
+# machine; the count is the everyday rule.
+#
+# Never prunes below MIN_KEEP, even under disk pressure. A backup policy that
+# can delete its way to zero is worse than none — the moment you need it most
+# (a failing disk) is exactly when the free-space rule would fire.
+MIN_KEEP="${MIN_KEEP:-2}"
+MAX_TOTAL_MB="${MAX_TOTAL_MB:-6000}"     # ceiling for all dumps of this mode
+MIN_FREE_MB="${MIN_FREE_MB:-15000}"      # start pruning early if the disk is tight
+
+prune_one() {
+  local victim
+  victim=$(ls -1t "$DEST"/ficatlas-"$MODE"-*.dump 2>/dev/null | tail -n 1)
+  [ -n "$victim" ] || return 1
+  echo "  pruning $(basename "$victim") ($(du -h "$victim" | cut -f1)) — $1"
+  rm -f "$victim"
+}
+count_dumps() { ls -1 "$DEST"/ficatlas-"$MODE"-*.dump 2>/dev/null | wc -l; }
+total_mb()    { du -cm "$DEST"/ficatlas-"$MODE"-*.dump 2>/dev/null | tail -1 | cut -f1; }
+free_mb()     { df -Pm "$DEST" | tail -1 | awk '{print $4}'; }
+
+# 1. The ordinary rule: keep the newest $KEEP.
+while [ "$(count_dumps)" -gt "$KEEP" ]; do prune_one "over keep=$KEEP" || break; done
+
+# 2. Size ceiling, so growing dumps cannot silently fill the disk.
+while [ "$(count_dumps)" -gt "$MIN_KEEP" ] && [ "$(total_mb)" -gt "$MAX_TOTAL_MB" ]; do
+  prune_one "over ${MAX_TOTAL_MB}MB total" || break
 done
+
+# 3. Disk pressure, regardless of how few dumps that leaves (above MIN_KEEP).
+while [ "$(count_dumps)" -gt "$MIN_KEEP" ] && [ "$(free_mb)" -lt "$MIN_FREE_MB" ]; do
+  prune_one "only $(free_mb)MB free, want ${MIN_FREE_MB}MB" || break
+done
+
+echo "  retained $(count_dumps) dump(s), $(total_mb)MB total, $(free_mb)MB free on disk"
+if [ "$(free_mb)" -lt "$MIN_FREE_MB" ]; then
+  echo "  WARNING: still below ${MIN_FREE_MB}MB free after pruning — the database" \
+       "itself is $(docker compose exec -T db psql -U "$USER" -d "$DB" -tAc \
+       "SELECT pg_size_pretty(pg_database_size('$DB'))" 2>/dev/null | tr -d ' ')." \
+       "Consider backing up to another disk: ./backup.sh $MODE /mnt/somewhere"
+fi
 
 echo "Done. Restore instructions: $DEST/RESTORE.md"

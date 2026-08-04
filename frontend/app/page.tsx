@@ -585,9 +585,9 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
           19.7M on the same screen — and it only ever grows, so any literal here
           starts going stale the moment the workers add a row. */}
       <p className="empty__sub">
-        {total ? `${fmtCount(total)} works` : "Millions of works"} across AO3,
-        FanFiction.net and FicAlley, in one index — searched locally, so results
-        come back instantly
+        {total ? `${fmtCount(total)} works` : "Millions of works"} from AO3,
+        FanFiction.net and FicAlley — one search across all three, instead of
+        three searches that each miss two.
       </p>
       <p className="empty__nudge">
         Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
@@ -1146,8 +1146,8 @@ function SearchPageInner() {
 
           <div className="sidebar__group">
             <label className="sidebar__label">
-              Match multiple values
-              <HelpTip label="About matching multiple values">
+              Picking several
+              <HelpTip label="How picking more than one filter works">
                 When you pick two or more fandoms, ships or tags:
                 <strong> All of them</strong> needs a story to carry every one —
                 that is how you find crossovers.
@@ -1170,8 +1170,8 @@ function SearchPageInner() {
             </div>
             <p className="match-mode__hint">
               {matchMode === "all"
-                ? "Stories carrying every value you pick — finds crossovers."
-                : "Stories carrying any one value — combines split or variant tags."}
+                ? "Story must have all of them — this is how you find crossovers."
+                : "Story needs any one of them — useful when a fandom has several tag spellings."}
             </p>
           </div>
 
@@ -1179,9 +1179,9 @@ function SearchPageInner() {
             <label className="checkbox-row">
               <input type="checkbox" checked={includeUnknown}
                 onChange={e => setIncludeUnknown(e.target.checked)} />
-              <span>Include stories with missing info</span>
+              <span>Include stories with no tags</span>
             </label>
-            <HelpTip label="About stories with missing info">
+            <HelpTip label="About stories with no tags">
               Most bulk-imported stories carry no ship or character tags at all.
               They are normally left out of those filters, so a ship filter
               returns only stories that genuinely match it. Tick this to widen
@@ -1520,7 +1520,7 @@ function SearchPageInner() {
                     <button className="results-bar__loose"
                       onClick={() => setIncludeUnknown(false)}
                       title="Results include stories with no data for the fields you filtered on. Click to show only confirmed matches.">
-                      · incl. missing info ✕
+                      · incl. untagged ✕
                     </button>
                   )}
                 </span>
@@ -1553,7 +1553,7 @@ function SearchPageInner() {
                         </p>
                         <button className="btn btn--primary no-results__fetch"
                           onClick={() => setIncludeUnknown(true)}>
-                          Include stories with missing info
+                          Include stories with no tags
                         </button>
                       </>
                     ) : (
