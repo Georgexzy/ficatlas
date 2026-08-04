@@ -87,6 +87,43 @@ _TOTALS_TTL_SECONDS = 300
 _totals_cache: dict | None = None
 _totals_cached_at: float = 0.0
 
+# Where the last computed totals are kept between restarts.
+#
+# Stale-while-revalidate only helps once a value EXISTS. In memory it does not
+# survive a restart, so the first visitor after every deploy paid the full scan
+# inline — measured at 10s on a quiet index and 17-45s while the background jobs
+# are running, which is past the point where a browser gives up. Every page load
+# calls this, so a restart briefly made the whole site look broken.
+#
+# Persisting the numbers turns that into: serve last known figures instantly,
+# recompute behind the response. They are counts of a 19.7M-row index shown in a
+# status widget — being a few minutes stale is invisible, and being absent is not.
+_TOTALS_SETTING = "cached_totals_v1"
+
+
+def _persist_totals(payload: dict) -> None:
+    try:
+        from db.session import db_session
+        from api.settings import put_setting
+        import json
+        with db_session() as db:
+            put_setting(db, _TOTALS_SETTING, json.dumps(payload))
+    except Exception:
+        pass  # a cache that fails to persist is slow later, not broken now
+
+
+def _load_persisted_totals() -> dict | None:
+    try:
+        from db.session import db_session
+        from api.settings import get_setting
+        import json
+        with db_session() as db:
+            raw = get_setting(db, _TOTALS_SETTING)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
 def _recompute_totals() -> None:
     """Refresh the cached totals off the request path."""
     global _totals_cache, _totals_cached_at
@@ -103,6 +140,7 @@ def _recompute_totals() -> None:
             "indexed_last_day": row["indexed_last_day"],
         }
         _totals_cached_at = time.monotonic()
+        _persist_totals(_totals_cache)
     except Exception:
         pass  # keep serving the previous numbers
 
@@ -132,6 +170,18 @@ async def total_stats(
     global _totals_cache, _totals_cached_at
     import time
     now = time.monotonic()
+
+    # Cold process: adopt the numbers from before the restart so this request
+    # can be answered now, and let the recompute happen behind it.
+    if _totals_cache is None and not refresh:
+        stored = _load_persisted_totals()
+        if stored:
+            _totals_cache = stored
+            # Deliberately backdated past the TTL so it counts as stale and a
+            # refresh is scheduled immediately — this is a starting point, not
+            # a fresh reading.
+            _totals_cached_at = now - _TOTALS_TTL_SECONDS - 1
+
     fresh = _totals_cache is not None and (now - _totals_cached_at) < _TOTALS_TTL_SECONDS
     if not refresh and fresh:
         return _totals_cache
@@ -152,6 +202,7 @@ async def total_stats(
         "indexed_last_day": row["indexed_last_day"],
     }
     _totals_cached_at = now
+    _persist_totals(_totals_cache)
     return _totals_cache
 
 

@@ -2726,3 +2726,17 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .auth-hint--forgot { text-align: center; margin-top: 12px; }
 .auth-hint--forgot a { color: var(--accent); text-decoration: none; }
 .auth-hint--forgot a:hover { text-decoration: underline; }
+
+/* Inline form used in account sections (email, etc.) — wraps to a column on
+   narrow screens rather than squeezing three controls onto one line. */
+.account-form {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;
+}
+.account-form input {
+  flex: 1 1 200px; min-width: 0;
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 9px 11px;
+  color: var(--text); font-family: var(--font-sans); font-size: 14px;
+}
+.account-form input:focus { outline: none; border-color: var(--accent-dim); }
+.account-form .card-btn { flex: 0 0 auto; }

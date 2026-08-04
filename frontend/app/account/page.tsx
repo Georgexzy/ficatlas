@@ -46,6 +46,27 @@ export default function AccountPage() {
   const router = useRouter()
 
   const [sessions, setSessions] = useState<Session[]>([])
+  const [email, setEmail] = useState("")
+  const [emailPw, setEmailPw] = useState("")
+  const [emailMsg, setEmailMsg] = useState<string | null>(null)
+  const [emailBusy, setEmailBusy] = useState(false)
+
+  // Changing the address requires the current password: without that, anyone
+  // holding a stolen session could repoint it at themselves and then use the
+  // reset flow to take the account outright.
+  const saveEmail = async (e: React.FormEvent) => {
+    e.preventDefault(); setEmailBusy(true); setEmailMsg(null)
+    try {
+      const fd = new FormData()
+      fd.append("password", emailPw); fd.append("email", email)
+      const r = await fetch("/api/auth/email", { method: "POST", body: fd, credentials: "include" })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.detail || "Could not save that.")
+      setEmailMsg(d.email ? `Saved — resets will go to ${d.email}.` : "Address removed.")
+      setEmailPw("")
+    } catch (err: any) { setEmailMsg(err.message) }
+    finally { setEmailBusy(false) }
+  }
   const [curPw, setCurPw] = useState("")
   const [newPw, setNewPw] = useState("")
   const [pwMsg, setPwMsg] = useState<string | null>(null)
@@ -66,6 +87,7 @@ export default function AccountPage() {
     } catch {}
   }
   useEffect(() => { if (user) loadSessions() }, [user])
+  useEffect(() => { setEmail((user as any)?.email ?? "") }, [user])
 
   const onChangePw = async () => {
     setPwMsg(null); setPwErr(null)
@@ -152,6 +174,27 @@ export default function AccountPage() {
             from this machine&rsquo;s IP address.
           </p>
         )}
+      </section>
+
+      {/* Contact address — the only route back into a locked-out account */}
+      <section className="settings-group">
+        <h2 className="settings-group__title">Email address</h2>
+        <p className="account-help">
+          {user?.email
+            ? <>Password resets will be sent to <strong>{user.email}</strong>.</>
+            : <>Optional. Without one, resetting a forgotten password means asking
+               whoever runs this site to issue you a code by hand.</>}
+        </p>
+        <form className="account-form" onSubmit={saveEmail}>
+          <input type="email" placeholder="you@example.com" value={email}
+            onChange={e => setEmail(e.target.value)} autoComplete="email" />
+          <input type="password" placeholder="Your current password" value={emailPw}
+            onChange={e => setEmailPw(e.target.value)} autoComplete="current-password" />
+          <button type="submit" className="card-btn" disabled={emailBusy}>
+            {emailBusy ? "Saving…" : user?.email ? "Update" : "Add address"}
+          </button>
+        </form>
+        {emailMsg && <p className="account-help account-help--muted">{emailMsg}</p>}
       </section>
 
       {/* Active sessions */}
