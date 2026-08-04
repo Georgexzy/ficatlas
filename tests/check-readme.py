@@ -32,6 +32,7 @@ QUERIES = {
     "fictionalley": "SELECT count(*) FROM stories WHERE site='fictionalley'",
     "hosted":       "SELECT count(*) FROM stories WHERE is_hosted",
     "hexfiles":     "SELECT count(*) FROM stories WHERE tags @> ARRAY['hexfiles_archive']",
+    "janelle":      "SELECT count(*) FROM stories WHERE tags @> ARRAY['janelleshane_seed']",
     "dlp":          "SELECT count(*) FROM stories WHERE tags @> ARRAY['dlp_library']",
     "hpffa":        "SELECT count(*) FROM stories WHERE tags @> ARRAY['hpffa_archive']",
     "fandoms_ao3":  "SELECT count(*) FROM facets WHERE kind='fandom_ao3'",
@@ -52,6 +53,7 @@ CLAIMS = [
     ("HexFiles imported","hexfiles",  r"hexfiles_archive`\) \| ([\d,]+) ", 1, 0.30),
     ("HPFFA imported",   "hpffa",     r"hpffa_archive`\) \| ([\d,]+) ",    1, 0.30),
     ("DLP imported",     "dlp",       r"dlp_library`\) \| ([\d,]+) ",      1, 0.30),
+    ("janelleshane",     "janelle",   r"janelleshane_seed`\) \| ([\d,]+) ", 1, 0.05),
     ("total works",      "total",     r"\*\*([\d.]+)M works\*\* indexed", 1e6, 0.05),
 ]
 
