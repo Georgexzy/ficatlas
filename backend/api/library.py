@@ -3,12 +3,14 @@ import os, re, uuid, zipfile, io, logging
 import httpx
 from typing import Optional
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form
-from sqlalchemy import func
+from sqlalchemy import func, text as sql_text
 from sqlalchemy.orm import Session
 from datetime import datetime
 
 from db.session import get_db
-from api.auth import require_admin, require_owner
+from api.auth import (require_admin, require_owner, get_current_user,
+                      _require_role)
+from models.user import User, ROLE_ADMIN
 from models.story import Story, Chapter, SiteEnum, RatingEnum, StatusEnum
 
 log = logging.getLogger(__name__)
@@ -391,11 +393,50 @@ async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depend
     }
 
 
+# How many private imports one reader may hold. Not a licensing position — a
+# reader importing a work they could read on AO3 anyway is not obviously worse
+# than the browser cache — but an unbounded per-user import button is a way for
+# anyone to fill this disk and this bandwidth, and the answer to "how many is
+# reasonable for personal reading" is not "unlimited".
+PRIVATE_IMPORT_QUOTA = int(os.getenv("PRIVATE_IMPORT_QUOTA", "50"))
+
+
 @router.post("/import-url")
-async def import_url(url: str = Form(...), db: Session = Depends(get_db),
-    _admin=Depends(require_admin),
+async def import_url(url: str = Form(...), private: bool = Form(False),
+    db: Session = Depends(get_db),
+    viewer: Optional[User] = Depends(get_current_user),
 ):
-    """Fetch a story from AO3/FFnet via FicHub and import it as a hosted story."""
+    """Fetch a story from AO3/FFnet via FicHub and import it.
+
+    Two quite different operations behind one endpoint, separated by `private`:
+
+      private=false  Admin only. Adds the story to the SHARED index, readable by
+                     everyone. This is publishing someone else's work under this
+                     site's name, which is why it stays restricted.
+
+      private=true   Any signed-in reader. The story and its chapters go into
+                     the same shared tables — so dedup and cross-post matching
+                     still see them — but `is_hosted` stays false and the reader
+                     gets a row in `user_hosted`. Only they can read it.
+
+    The distinction is the whole point of allowing reader imports at all: the
+    risk was never "is this fanfiction", it was "did the author agree to it
+    being republished here". A private import republishes nothing.
+    """
+    if private:
+        if viewer is None:
+            raise HTTPException(401, "Sign in to import a story to your own library.")
+        held = db.execute(sql_text(
+            "SELECT count(*) FROM user_hosted WHERE user_id = :u"
+        ), {"u": str(viewer.id)}).scalar() or 0
+        if held >= PRIVATE_IMPORT_QUOTA:
+            raise HTTPException(
+                429,
+                f"You have {held} stories in your library, which is the limit "
+                f"of {PRIVATE_IMPORT_QUOTA}. Remove one to import another.",
+            )
+    else:
+        _require_role(viewer, db, ROLE_ADMIN)
     # Metadata-only seed rows carry a synthetic seed:// URL with no page behind it.
     # The UI hides the import button for these, but reject them here too so a stale
     # client can't send FicHub a URL it will only fail on.
@@ -431,7 +472,10 @@ async def import_url(url: str = Form(...), db: Session = Depends(get_db),
 
     # If story already exists in DB (just metadata, not hosted), upgrade it
     if existing:
-        existing.is_hosted = True
+        # A private import must never flip a story onto the public shelf: that
+        # would publish it for everybody on one reader's action.
+        if not private:
+            existing.is_hosted = True
         existing.summary = existing.summary or parsed["summary"]
         story = existing
         # Clear old chapters if any
@@ -463,7 +507,10 @@ async def import_url(url: str = Form(...), db: Session = Depends(get_db),
             chapter_count_total=len(parsed["chapters"]),
             fandoms=[], characters=[], relationships=[], tags=["imported"],
             warnings=[], categories=[], genres=[],
-            is_hosted=True,
+            # A private import is not on the public shelf. The row and its
+            # chapters exist in the shared tables so dedup and cross-post
+            # matching still see them; only the grant below opens the text.
+            is_hosted=not private,
             published_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
@@ -475,8 +522,16 @@ async def import_url(url: str = Form(...), db: Session = Depends(get_db),
             story_id=story.id, number=ch["number"], title=ch["title"],
             content=ch["content"], word_count=ch["word_count"],
         ))
+    if private and viewer is not None:
+        db.flush()   # story.id must exist before the grant references it
+        db.execute(sql_text("""
+            INSERT INTO user_hosted (user_id, story_id) VALUES (:u, :s)
+            ON CONFLICT DO NOTHING
+        """), {"u": str(viewer.id), "s": str(story.id)})
+
     db.commit()
-    return {"id": str(story.id), "title": story.title, "chapters": len(parsed["chapters"])}
+    return {"id": str(story.id), "title": story.title,
+            "chapters": len(parsed["chapters"]), "private": bool(private)}
 
 
 # ── Refresh / discovery ──────────────────────────────────────────────────────

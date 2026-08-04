@@ -25,6 +25,35 @@ router = APIRouter()
 REQUIRE_LOGIN_TO_READ = os.getenv("REQUIRE_LOGIN_TO_READ", "false").lower() in ("1", "true", "yes")
 
 
+def may_read_text(db: Session, story: "Story | None", viewer) -> bool:
+    """Is this viewer allowed the full text of this story?
+
+    Three ways in, and they are checked in this order deliberately:
+
+      1. The story is on the public shelf (`is_hosted`). Anyone may read it,
+         subject to REQUIRE_LOGIN_TO_READ.
+      2. The viewer privately imported it — a row in `user_hosted`. Their own
+         import, readable only by them, invisible to everyone else.
+      3. Nobody else. Admins included: a private import is the user's, and an
+         admin account is not a reason to read someone else's library.
+
+    One helper rather than the check written out at each call site, because the
+    reader and the EPUB export hand over the same bytes and drifting apart would
+    mean a login wall on one and an open door on the other. That has already
+    happened once here.
+    """
+    if story is None:
+        return False
+    if story.is_hosted:
+        return True
+    if viewer is None:
+        return False
+    from sqlalchemy import text as _sql
+    return bool(db.execute(_sql(
+        "SELECT 1 FROM user_hosted WHERE user_id = :u AND story_id = :s"
+    ), {"u": str(viewer.id), "s": str(story.id)}).first())
+
+
 def valid_story_id(story_id: str) -> str:
     """404 on a story id that is not a UUID, rather than letting Postgres raise.
 
@@ -181,6 +210,13 @@ async def get_chapter(number: int, story_id: str = Depends(valid_story_id),
         raise HTTPException(
             401,
             "Please sign in to read stories here. Searching does not need an account.",
+        )
+
+    # A story that is not on the public shelf is readable only by whoever
+    # privately imported it.
+    if story is not None and not story.is_hosted and not may_read_text(db, story, viewer):
+        raise HTTPException(
+            404, "Chapter not found",
         )
 
     chapter = (db.query(Chapter)
@@ -389,6 +425,10 @@ async def export_epub(story_id: str = Depends(valid_story_id), db: Session = Dep
         raise HTTPException(451, "The author of this story asked for it not to be hosted here.")
     if REQUIRE_LOGIN_TO_READ and viewer is None:
         raise HTTPException(401, "Please sign in to download stories.")
+    if story is not None and not may_read_text(db, story, viewer):
+        # 404 rather than 403: whether a private import exists is itself the
+        # user's business, and a 403 would confirm the story is hosted here.
+        raise HTTPException(404, "Story not found")
     if not story:
         raise HTTPException(404, "Story not found")
 
