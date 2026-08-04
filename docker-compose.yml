@@ -8,7 +8,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ficatlas
-      POSTGRES_PASSWORD: ficatlas
+      # Single source of truth for the password, so changing it in .env cannot
+      # leave the backend and worker still holding the old one. Defaults to the
+      # development value, so this file behaves exactly as before without .env.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ficatlas}
       POSTGRES_DB: ficatlas
     # Postgres ships with defaults sized for a tiny machine (shared_buffers 128MB,
     # work_mem 4MB, random_page_cost 4.0). The stories table alone is ~3.7GB, so
@@ -68,14 +71,16 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     # Loopback only, matching the architecture in the README: clients reach the API
     # through the frontend's /api/* rewrite on port 3000, so 8000 never needs to be
-    # externally reachable. It matters because api/library.py has no auth on any of
-    # its endpoints — including DELETE /api/library/hosted/{id} and the scrape
-    # triggers — so an open port 8000 let anyone on the network delete hosted
-    # stories. http://localhost:8000/docs still works on this host.
+    # externally reachable. http://localhost:8000/docs still works on this host.
+    #
+    # This comment used to say api/library.py had no auth on any endpoint. That
+    # was true when it was written and is not any more — every destructive
+    # endpoint requires admin, enforced server-side. Keeping the port on loopback
+    # regardless: defence in depth, and nothing outside this host needs it.
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      DATABASE_URL: postgresql://ficatlas:ficatlas@db:5432/ficatlas
+      DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:-ficatlas}@db:5432/ficatlas
     depends_on:
       db:
         condition: service_healthy
@@ -105,7 +110,7 @@ services:
     restart: unless-stopped
     command: python worker.py
     environment:
-      DATABASE_URL: postgresql://ficatlas:ficatlas@db:5432/ficatlas
+      DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:-ficatlas}@db:5432/ficatlas
       RUN_SCHEDULER: "true"
       # The bulk AO3 dump stops at work id 63,178,258 (~mid-2024) while AO3 is
       # now issuing ~89.7M, so everything recent can only come from crawling.
