@@ -176,6 +176,26 @@ export default function AccountPage() {
         )}
       </section>
 
+      {/* Role preview — owners/admins only */}
+      {user?.can_import && !user?.previewing && (
+        <section className="settings-group">
+          <h2 className="settings-group__title">See the site as a reader</h2>
+          <p className="account-help">
+            Loads the site with your own permissions reduced, so you can check
+            what an ordinary reader sees. It does not sign you in as anybody
+            else and touches no other account — only what this session may do
+            changes. Leave it from the banner at any time.
+          </p>
+          <div className="account-danger-actions">
+            <button className="card-btn" onClick={async () => {
+              const fd = new FormData(); fd.append("role", "reader")
+              await fetch("/api/auth/view-as", { method: "POST", body: fd, credentials: "include" })
+              window.location.href = "/"
+            }}>Preview as reader</button>
+          </div>
+        </section>
+      )}
+
       {/* Contact address — the only route back into a locked-out account */}
       <section className="settings-group">
         <h2 className="settings-group__title">Email address</h2>

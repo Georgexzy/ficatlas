@@ -155,6 +155,20 @@ def get_current_user(
 
     if dirty:
         db.commit()
+
+    # Role preview. If this session asked to be seen as a lesser role, apply it
+    # to the in-memory object only — never written back to the user row, so it
+    # cannot outlive the session or leak into anyone else's view.
+    #
+    # min() of the two ranks, so this can only ever LOWER what you can do. An
+    # attacker with a stolen session gains nothing from it, and a mistake in the
+    # UI cannot escalate anybody.
+    if s.view_as:
+        from models.user import ROLE_RANK
+        if ROLE_RANK.get(s.view_as, 99) < ROLE_RANK.get(user.role, 0):
+            user.role = s.view_as
+            user._previewing = True
+
     return user
 
 
@@ -335,6 +349,9 @@ async def me(user: Optional[User] = Depends(get_current_user)):
         "role": user.role,
         "can_import": user.at_least(ROLE_ADMIN),
         "can_manage": user.at_least(ROLE_OWNER),
+        # So the UI can show an unmissable banner. Forgetting you are in preview
+        # and concluding a feature is broken is the obvious failure mode.
+        "previewing": bool(getattr(user, "_previewing", False)),
     }}
 
 
@@ -362,6 +379,49 @@ async def change_password(
     q.delete(synchronize_session=False)
     db.commit()
     return {"ok": True, "message": "Password changed. Other devices were signed out."}
+
+
+@router.post("/view-as")
+async def set_view_as(role: str = Form(""), sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+                      db: Session = Depends(get_db)):
+    """Preview the site as a lesser role, or clear the preview with an empty value.
+
+    Not impersonation, and the difference matters. Impersonation adopts another
+    person's account: their bookmarks, their reading history, their settings,
+    with no read-only mode — which is why the standard advice is to treat it as
+    a last resort. None of that is required to answer "what does a reader
+    actually see?", which is the real question when checking that a role gate
+    works.
+
+    So this downgrades your OWN role for your OWN session. No other account is
+    touched, no private data is exposed, and there is nothing to audit beyond
+    your own session because nobody else is involved.
+    """
+    from models.user import ROLE_RANK, ROLE_READER, ROLE_ADMIN, ROLE_OWNER
+
+    sess = db.query(UserSession).filter(UserSession.token == sat).first() if sat else None
+    if not sess:
+        raise HTTPException(401, "Not authenticated")
+    user = db.query(User).filter(User.id == sess.user_id).first()
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+
+    role = (role or "").strip().lower()
+    if not role:
+        sess.view_as = None
+        db.commit()
+        return {"view_as": None, "role": user.role}
+
+    if role not in (ROLE_READER, ROLE_ADMIN, ROLE_OWNER):
+        raise HTTPException(400, "Unknown role")
+    # Downgrade only. Enforced here as well as at read time, so neither path
+    # alone is load-bearing.
+    if ROLE_RANK.get(role, 99) >= ROLE_RANK.get(user.role, 0):
+        raise HTTPException(400, "Preview can only show a role with fewer permissions than your own")
+
+    sess.view_as = role
+    db.commit()
+    return {"view_as": role, "real_role": user.role}
 
 
 @router.post("/email")

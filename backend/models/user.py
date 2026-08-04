@@ -59,6 +59,9 @@ class UserSession(Base):
     expires_at  = Column(DateTime, nullable=False)
     last_used   = Column(DateTime, default=datetime.utcnow)
     user_agent  = Column(String(255))
+    # Temporary self-downgrade for previewing the site as a lesser role.
+    # Never an upgrade — see auth.get_current_user.
+    view_as     = Column(String(16))
 
 
 class UserData(Base):

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next"
 import { AuthProvider } from "@/lib/auth"
 import ServiceWorkerRegistration from "./ServiceWorkerRegistration"
 import SiteFooter from "./SiteFooter"
+import PreviewBanner from "./PreviewBanner"
 import "./globals.css"
 
 export const metadata: Metadata = {
@@ -25,6 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ServiceWorkerRegistration />
         <AuthProvider>
+          <PreviewBanner />
           {children}
           <SiteFooter />
         </AuthProvider>
