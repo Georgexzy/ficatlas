@@ -13,6 +13,8 @@ export default function SiteFooter() {
       <Link href="/takedown">Remove my story</Link>
       <span className="site-footer__sep">·</span>
       <a href="/robots.txt">Crawler policy</a>
+      <span className="site-footer__sep">·</span>
+      <a href="https://github.com/Georgexzy/ficatlas" target="_blank" rel="noopener noreferrer">Source</a>
     </footer>
   )
 }

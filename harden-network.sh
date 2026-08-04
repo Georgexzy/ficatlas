@@ -72,11 +72,14 @@ docker_subnets() {
 }
 
 flush_rules() {
-  # Delete by comment so we only ever remove our own rules.
-  while iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | grep -q "$COMMENT"; do
-    local n
-    n=$(iptables -L DOCKER-USER --line-numbers -n | grep "$COMMENT" | head -1 | awk '{print $1}')
-    iptables -D DOCKER-USER "$n" || break
+  # Delete by comment so we only ever remove our own rules. Both chains:
+  # DOCKER-USER for traffic routed onward, INPUT for traffic aimed at this host.
+  local chain n
+  for chain in DOCKER-USER INPUT; do
+    while iptables -L "$chain" --line-numbers -n 2>/dev/null | grep -q "$COMMENT"; do
+      n=$(iptables -L "$chain" --line-numbers -n | grep "$COMMENT" | head -1 | awk '{print $1}')
+      iptables -D "$chain" "$n" || break
+    done
   done
 }
 
@@ -116,6 +119,32 @@ while read -r sub; do
     -m comment --comment "$COMMENT" && echo "    allow container-to-container $sub"
 done < <(docker_subnets)
 
+# ── The host itself ─────────────────────────────────────────────────────────
+# DOCKER-USER lives in the FORWARD chain, which only sees traffic being routed
+# THROUGH the host to somewhere else. Traffic from a container to one of the
+# host's OWN addresses terminates locally and goes to INPUT instead, so none of
+# the rules above touch it.
+#
+# Measured after the first version of this script: the router was correctly
+# blocked and 192.168.1.250:22 — SSH on this machine — was still wide open from
+# inside the container. That is the more valuable target of the two, so the
+# script was giving a false sense of security.
+#
+# Containers need nothing from the host: Docker gives them their own resolver
+# inside the container namespace, and they reach Postgres over the bridge
+# network, not via a host address.
+echo "==> blocking container -> this host"
+while read -r sub; do
+  [ -n "$sub" ] || continue
+  # Allow the bridge gateway only, which is the container's default route and
+  # the path to the internet; everything else on the host is refused.
+  iptables -D INPUT -s "$sub" -j DROP -m comment --comment "$COMMENT" 2>/dev/null
+  iptables -A INPUT -s "$sub" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT \
+    -m comment --comment "$COMMENT" 2>/dev/null
+  iptables -A INPUT -s "$sub" -j DROP -m comment --comment "$COMMENT" \
+    && echo "    deny  $sub -> host services"
+done < <(docker_subnets)
+
 # Boot-time re-apply: the rules are installed above, and at boot the containers
 # may not be up yet, so verifying against them would fail spuriously and roll
 # back the very rules we are trying to restore.
@@ -141,6 +170,17 @@ s=socket.socket(); s.settimeout(8)
 try: s.connect(('1.1.1.1',443)); print('    internet from container: OK')
 except Exception as e: print('    internet from container: FAILED', type(e).__name__); sys.exit(1)
 " 2>/dev/null; then :; else FAIL=1; fi
+
+# The host itself — the case the first version of this script missed entirely.
+if docker compose exec -T backend python -c "
+import socket,sys
+s=socket.socket(); s.settimeout(5)
+try:
+    s.connect(('192.168.1.250',22)); print('    host SSH from container: STILL REACHABLE'); sys.exit(1)
+except Exception: print('    host SSH from container: blocked')
+" 2>/dev/null; then :; else
+  echo "    (host still reachable — INPUT rules did not take effect)"; FAIL=1
+fi
 
 # And the LAN must now be unreachable — the entire point.
 if docker compose exec -T backend python -c "

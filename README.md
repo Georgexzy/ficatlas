@@ -411,3 +411,17 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 ## Status
 
 Personal project, not a finished product. Things listed under "What works today" do work; everything else is aspirational.
+
+## Licence
+
+[PolyForm Noncommercial 1.0.0](LICENSE) — read it, run it, change it, share your
+changes, for any non-commercial purpose. Not for sale, paid hosting, or
+ad-supported services.
+
+The restriction is deliberate and it is not about the code. FicAtlas indexes —
+and for roughly 30,000 works, stores — writing that fan authors published for
+free on archives that promised not to profit from it. A permissive licence would
+let anyone put that work behind adverts without asking them.
+
+The licence covers the software only. The fanfiction belongs to whoever wrote
+it, is not licensed here, and has its own takedown route on the site.
