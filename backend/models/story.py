@@ -77,6 +77,10 @@ class Story(Base):
 
     # New: hosted content
     is_hosted = Column(Boolean, default=False, index=True)   # we have the full text
+    # Set when an author asks for their text not to be hosted here. The row
+    # stays — only the full text stops being served. See api/takedown.py.
+    text_withdrawn_at = Column(DateTime(timezone=True))
+    text_withdrawn_reason = Column(Text)
     wayback_url = Column(Text)                                # archive.org fallback
     # URLs where this same story is cross-posted on other sites (FFN/AO3/etc).
     # Populated when a curator (DLP, manual) tells us "these point to the same work".

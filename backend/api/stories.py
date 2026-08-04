@@ -3,6 +3,7 @@ import html
 import io
 import uuid
 import re
+import os
 import zipfile
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import Text, bindparam, text as sql_text
@@ -12,10 +13,16 @@ from typing import Optional, List
 from pydantic import BaseModel
 from db.session import get_db
 from models.story import Story, Chapter
+from models.user import User
+from api.auth import get_current_user
 from html_sanitize import sanitize_html, strip_chapter_heading, tidy_chapter_html
 from provenance import content_tags, source_labels
 
 router = APIRouter()
+
+# Gate reading behind an account without touching search. Off by default so
+# the tailnet deployment is unchanged; docker-compose.prod.yml turns it on.
+REQUIRE_LOGIN_TO_READ = os.getenv("REQUIRE_LOGIN_TO_READ", "false").lower() in ("1", "true", "yes")
 
 
 def valid_story_id(story_id: str) -> str:
@@ -143,7 +150,39 @@ async def get_story(story_id: str = Depends(valid_story_id), db: Session = Depen
 
 
 @router.get("/{story_id}/chapters/{number}", response_model=ChapterFull)
-async def get_chapter(number: int, story_id: str = Depends(valid_story_id), db: Session = Depends(get_db)):
+async def get_chapter(number: int, story_id: str = Depends(valid_story_id),
+                      db: Session = Depends(get_db),
+                      viewer: Optional[User] = Depends(get_current_user)):
+    """Serve one chapter's text.
+
+    Two gates here, and they guard different things.
+
+    text_withdrawn_at is the takedown flag: an author asked for their story not
+    to be readable here. That is absolute — 451 regardless of who is asking,
+    including admins, because "we took it down except for us" is not taking it
+    down. The metadata entry survives so the work stays findable at its source.
+
+    REQUIRE_LOGIN_TO_READ is the deployment posture. Searching 19.7M works is
+    what this site is for and stays public; serving the complete text of ~30,000
+    rehosted stories to anonymous visitors is the part with real exposure. An
+    account requirement does not make that legitimate, but it does mean the text
+    is not simply published to the open internet, and it gives every read a name
+    against it.
+    """
+    story = db.query(Story).filter(Story.id == story_id).first()
+    if story is not None and story.text_withdrawn_at is not None:
+        raise HTTPException(
+            451,
+            "The author of this story asked for it not to be hosted here. "
+            "It is still listed, and you can read it at the original archive.",
+        )
+
+    if REQUIRE_LOGIN_TO_READ and viewer is None:
+        raise HTTPException(
+            401,
+            "Please sign in to read stories here. Searching does not need an account.",
+        )
+
     chapter = (db.query(Chapter)
                .filter(Chapter.story_id == story_id, Chapter.number == number)
                .first())
@@ -162,7 +201,6 @@ async def get_chapter(number: int, story_id: str = Depends(valid_story_id), db: 
     # The story title is passed in because chapters routinely repeat it as the
     # first line of the body; without it that line is indistinguishable from a
     # chapter title and would be promoted into the heading.
-    story = db.query(Story).filter(Story.id == story_id).first()
     body, better_title = strip_chapter_heading(body, chapter.title,
                                                story.title if story else None)
 
@@ -337,10 +375,20 @@ def _clean_chapter_html(raw: str) -> str:
 
 
 @router.get("/{story_id}/export.epub")
-async def export_epub(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db)):
+async def export_epub(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db),
+                      viewer: Optional[User] = Depends(get_current_user)):
     """Build an EPUB 2 of a hosted story on the fly. Standard library only —
-    an EPUB is a ZIP with a fixed set of XML files, so no dependency is needed."""
+    an EPUB is a ZIP with a fixed set of XML files, so no dependency is needed.
+
+    Gated identically to the reader. This endpoint hands over the ENTIRE story
+    in one file, so leaving it open while gating the chapter view would be a
+    login wall with the door propped open beside it.
+    """
     story = db.query(Story).filter(Story.id == story_id).first()
+    if story is not None and story.text_withdrawn_at is not None:
+        raise HTTPException(451, "The author of this story asked for it not to be hosted here.")
+    if REQUIRE_LOGIN_TO_READ and viewer is None:
+        raise HTTPException(401, "Please sign in to download stories.")
     if not story:
         raise HTTPException(404, "Story not found")
 
