@@ -103,9 +103,19 @@ flush_rules
 # Inserted in reverse order because -I puts each at the top: the LAST insert
 # ends up FIRST, and the allow rules must be evaluated before the drops.
 echo "==> installing egress rules"
+# --ctstate NEW is the whole correction. The first version dropped ANY packet to
+# a private range and relied on a generic ESTABLISHED rule sitting above it to
+# save reply traffic. That ordering did not hold in practice: it silently killed
+# Tailscale access to the site — a phone on 100.x could no longer load anything,
+# because the container's replies were being dropped on their way back out.
+#
+# Matching only NEW states the intent directly: containers may not START a
+# connection into a private network. A reply to a connection somebody else
+# opened is not NEW, so it passes no matter where the rule sits, and inbound
+# access over Tailscale or the LAN keeps working.
 for net in 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 169.254.0.0/16 100.64.0.0/10; do
-  iptables -I DOCKER-USER 1 -d "$net" -j DROP -m comment --comment "$COMMENT" \
-    && echo "    deny  -> $net"
+  iptables -I DOCKER-USER 1 -d "$net" -m conntrack --ctstate NEW -j DROP \
+    -m comment --comment "$COMMENT" && echo "    deny new -> $net"
 done
 
 # Established replies, so outbound internet connections still function.
@@ -145,10 +155,12 @@ while read -r sub; do
   #
   # Inserted in reverse so the final order is ACCEPT-established then DROP:
   # -I always goes to position 1, so whatever is inserted LAST ends up FIRST.
-  iptables -I INPUT 1 -s "$sub" -j DROP -m comment --comment "$COMMENT"
-  iptables -I INPUT 1 -s "$sub" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT \
+  # Same correction: only connections the container itself opens. Replies to
+  # something the host started (docker-proxy forwarding a visitor's request into
+  # the container) must not be caught.
+  iptables -I INPUT 1 -s "$sub" -m conntrack --ctstate NEW -j DROP \
     -m comment --comment "$COMMENT" \
-    && echo "    deny  $sub -> host services"
+    && echo "    deny new $sub -> host services"
 done < <(docker_subnets)
 
 # Boot-time re-apply: the rules are installed above, and at boot the containers
@@ -186,6 +198,15 @@ try:
 except Exception: print('    host SSH from container: blocked')
 " 2>/dev/null; then :; else
   echo "    (host still reachable — INPUT rules did not take effect)"; FAIL=1
+fi
+
+# Inbound access must survive. This is the check that was missing when the first
+# version "passed" and had in fact cut off every Tailscale client.
+TS_IP=$(tailscale ip -4 2>/dev/null | head -1)
+if [ -n "$TS_IP" ]; then
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "http://$TS_IP:3000/")
+  echo "    site over Tailscale ($TS_IP:3000) -> ${code:-none}"
+  [ "$code" = "200" ] || FAIL=1
 fi
 
 # And the LAN must now be unreachable — the entire point.

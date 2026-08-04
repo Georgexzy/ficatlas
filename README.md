@@ -23,31 +23,35 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Cross-site filter correctness** — fandom is matched strictly while secondary facets (character/ship/tag) and missing metadata (word count, status, rating, language) are matched permissively, so dump rows with sparse metadata surface correctly without flooding fandom searches
 - **Cross-post de-duplication** — the same fic posted on AO3, FF.net, SquidgeWorld etc. is collapsed into a single result. New imports are deduped automatically (conservative title + author matching); a one-shot batch (`dedup-crossposts`) cleans up already-indexed data. The canonical copy keeps every site's link and hosts the most recently updated full text. Cards show a "+N copies" badge; detail pages list "Also on X" links for each version
 - **AO3 deep filtered scrape** — paginated tag-works listing with full filter support, run as an async job with live progress. AO3's heavy endpoints are slow (5–20s) but reachable from a normal connection; the app uses generous granular timeouts (patient read, quick connect) and retries 525s on the same host before giving up
-- **Importers for five Harry Potter archives** (AO3 Open Doors / Otwarchive). These
-  run slowly in the background and are nowhere near complete — the figure in
-  brackets is what is **actually in this index today**, not the size of the
-  upstream archive, which is the number that matters when judging coverage:
+- **Importers for five Harry Potter archives** (AO3 Open Doors / Otwarchive).
+  "Available" below is what can actually be imported, which for an Open Doors
+  collection is **only the works whose authors opted in** — usually a small
+  fraction of what the original site held. Quoting the original site's size next
+  to an import count makes complete work look like a rounding error:
 
-  | source | imported | upstream | status |
-  |---|---:|---:|---|
-  | **HexFiles** (`hexfiles_archive`) | 831 | ~18k | running |
-  | **DLP library** (`dlp_library`) | 746 | ~1,000 | close to complete |
-  | **HPFFA** (`hpffa_archive`) | 37 | ~85k | barely started |
-  | **janelleshane seed** (`janelleshane_seed`) | 111,699 | 112k | complete |
-  | **SquidgeWorld** (`squidgeworld_archive`) | 0 | ~30k | importer written, not yet scheduled |
+  | source | imported | available | original site | status |
+  |---|---:|---:|---:|---|
+  | **janelleshane seed** (`janelleshane_seed`) | 111,699 | 111,953 | — | complete |
+  | **HexFiles** (`hexfiles_archive`) | 831 | 834 | ~18k | complete |
+  | **DLP library** (`dlp_library`) | 746 | ~1,000 | — | near complete |
+  | **HPFFA** (`hpffa_archive`) | 37 | 37 | ~85k | complete |
+  | **SquidgeWorld** (`squidgeworld_archive`) | 0 | — | ~30k | not scrapable, see below |
 
-  Verify with `python3 tests/check-readme.py`. An earlier version of this section
-  listed only the upstream sizes, which read as though ~245,000 works had come
-  from these when the real total was 1,614, with two of the five at zero.
+  Verify with `python3 tests/check-readme.py`.
 
-  The janelleshane seed has since been run: 79,932 new rows, and 31,848 records
-  that the cross-post detector matched onto works already indexed rather than
-  duplicating — which is the useful half of a metadata-only seed. SquidgeWorld
-  remains unscheduled on purpose: it is a small volunteer-run archive on its own
-  server, and until recently the scraper paced only AO3, so pointing the
-  background loop at it would have meant an unthrottled crawler. It now has its
-  own per-host budget (`ao3_budget.for_host`), so scheduling it is safe when
-  wanted.
+  This table has been wrong twice, in opposite directions, which is why it now
+  carries three columns. It first listed only the original sites' sizes, reading
+  as though ~245,000 works had been imported when the real figure was 1,614. The
+  correction then implied HPFFA was "barely started" at 37 of ~85k — but AO3's
+  collection contains exactly 37 works, so 37 **is** complete. Both framings
+  misled; only the available column settles it.
+
+  **SquidgeWorld cannot be imported server-side.** It sits behind an interactive
+  bot challenge that returns a JavaScript gate rather than a works listing —
+  verified again: HTTP 200, zero work blurbs on the page. No amount of paging or
+  patience changes that, so putting it on a timer would be pure load on a small
+  volunteer-run archive in exchange for nothing. The Library page button remains
+  for a human to try from a real browser.
 - **AO3 Atom feeds** — per-canonical-tag feeds, polled on a 6h schedule plus on-load with auto-mirror fallback
 - **Live AO3 fetch** on every search (3 pages = ~60 stories), results persisted so the index grows passively
 - **FF.net discovery via Wayback Machine CDX** — FFN is Cloudflare-walled from VPS IPs, but archive.org's index isn't; we enumerate FFN URLs from Wayback and import on-demand
