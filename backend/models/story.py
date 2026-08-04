@@ -74,6 +74,9 @@ class Story(Base):
 
     ao3_archive_warnings = Column(ARRAY(Text), default=list)
     ffnet_category = Column(String(128))
+    # Which section of a multi-part archive this came from — FictionAlley's
+    # Schnoogle / Dark Arts / Astronomy Tower / Riddikulus, and equivalents.
+    archive_section = Column(String(64))
 
     # New: hosted content
     is_hosted = Column(Boolean, default=False, index=True)   # we have the full text

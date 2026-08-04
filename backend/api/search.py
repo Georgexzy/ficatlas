@@ -183,6 +183,9 @@ class StoryCard(BaseModel):
     updated_at: Optional[str] = None
     is_live: bool = False          # true = came from live fetch, not index
     is_hosted: bool = False        # true = full text stored locally, one-click reader
+    # Which section of a multi-part archive this came from — FictionAlley's
+    # Schnoogle / The Dark Arts / Astronomy Tower / Riddikulus / essays.
+    archive_section: Optional[str] = None
     cross_post_urls: List[str] = []  # same work on other sites (deduped result)
     sources: List[str] = []          # which import(s) this row came from
 
@@ -341,6 +344,8 @@ async def search(
     exclude_warnings:      Optional[str] = Query(None),
     exclude_categories:    Optional[str] = Query(None),
     status:                Optional[str] = Query(None),
+    # Comma-separated archive sections, e.g. "Schnoogle,The Dark Arts".
+    sections:              Optional[str] = Query(None),
     language:              Optional[str] = Query(None),
     word_count_min:        Optional[int] = Query(None, ge=0),
     word_count_max:        Optional[int] = Query(None),
@@ -657,6 +662,16 @@ async def search(
     # Counting all matching rows on a multi-million table is the slowest part of
     # search. We only need an exact count up to a ceiling; beyond that "5000+" is
     # fine for pagination UI. This caps the count subquery for big result sets.
+    # Archive sections. FictionAlley was five archives behind one banner and
+    # readers navigated by them — "a Schnoogle fic" meant novel-length, "Dark
+    # Arts" meant horror — so this restores a distinction the original import
+    # dropped. Exact match against the stored label, since these come from a
+    # closed vocabulary rather than free text.
+    if sections:
+        wanted = [v.strip() for v in sections.split(",") if v.strip()]
+        if wanted:
+            db_query = db_query.filter(Story.archive_section.in_(wanted))
+
     COUNT_CEILING = 5000
 
     # Order over a BOUNDED candidate set rather than the whole match set.
@@ -846,6 +861,7 @@ def _to_card(s: Story) -> StoryCard:
         updated_at=s.updated_at.isoformat() if s.updated_at else None,
         is_live=False,
         is_hosted=bool(s.is_hosted),
+        archive_section=s.archive_section,
         cross_post_urls=s.cross_post_urls or [],
     )
 

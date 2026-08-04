@@ -35,6 +35,8 @@ export interface StoryCard {
   updated_at?: string
   is_live?: boolean
   is_hosted?: boolean
+  /** FictionAlley section: Schnoogle, The Dark Arts, Astronomy Tower, Riddikulus. */
+  archive_section?: string | null
   cross_post_urls?: string[]
   /** Which bulk import this row came from (not a content tag). */
   sources?: string[]
@@ -54,6 +56,8 @@ export interface SearchResponse {
 export interface SearchParams {
   q?: string
   sites?: string             // "ao3,ffnet"
+  /** FictionAlley sections, comma-separated. */
+  sections?: string
   // Include
   fandoms?: string
   characters?: string
