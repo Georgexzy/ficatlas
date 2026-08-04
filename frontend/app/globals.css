@@ -355,9 +355,33 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .alert--error { background: var(--red-bg); border: 1px solid rgba(220,80,80,0.3); color: var(--red); }
 
 /* ── Empty state ───────────────────────────────────────────────────────────── */
-.empty { text-align: center; padding: 80px 20px; }
-.empty__title { font-family: var(--font-serif); font-size: 28px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
-.empty__sub { font-size: 13px; color: var(--text-faint); font-family: var(--font-mono); margin-bottom: 32px; }
+/* The landing hero. Three changes from the original, each for a reason:
+ *
+ * 1. The subtitle was monospace. Mono is right for the operator syntax and for
+ *    tabular result metadata — it signals "this is a literal string you can
+ *    type". It is wrong for a sentence: no proportional spacing, so it sets
+ *    long and even, and on a phone this one paragraph ran to four dense lines.
+ *    Sans for prose, mono kept where it means something.
+ *
+ * 2. The title was a flat 28px, which on a 390px screen wrapped mid-phrase into
+ *    two enormous lines and pushed everything below the fold. clamp() lets it
+ *    stay large on a desktop and behave on a phone.
+ *
+ * 3. 80px of symmetric padding on a page whose content is one sentence and a
+ *    button left ~300px of dead space above the hero on mobile. Weighted so the
+ *    hero sits nearer the search bar it belongs to.
+ */
+.empty { text-align: center; padding: clamp(28px, 6vw, 72px) 20px 64px; }
+.empty__title {
+  font-family: var(--font-serif); font-weight: 600; color: var(--text);
+  font-size: clamp(24px, 5.2vw, 32px); line-height: 1.15;
+  margin-bottom: 12px; text-wrap: balance;
+}
+.empty__sub {
+  font-size: 14.5px; line-height: 1.6; color: var(--text-dim);
+  /* ~62 characters, the readable measure for a single paragraph. */
+  max-width: 46ch; margin: 0 auto 28px;
+}
 
 /* ── Syntax help ───────────────────────────────────────────────────────────── */
 .syntax-help { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); z-index: 10; }
