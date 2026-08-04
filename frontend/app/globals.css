@@ -2812,17 +2812,24 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 
 /* Inline form used in account sections (email, etc.) — wraps to a column on
    narrow screens rather than squeezing three controls onto one line. */
-.account-form {
-  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;
-}
+/* .account-form already existed as a COLUMN layout further up this file. I added
+ * a second block here assuming a row, which left flex-direction: column in force
+ * from the first rule and flex-wrap/gap from this one — and in a column
+ * container `flex: 1 1 200px` applies its basis to HEIGHT, so every email and
+ * password field rendered 200px tall.
+ *
+ * Same failure as the duplicate .library-empty blocks: two rules for one class,
+ * where which properties win depends on source order rather than intent. Styling
+ * the inputs only, and letting the original layout rule own the layout.
+ */
 .account-form input {
-  flex: 1 1 200px; min-width: 0;
+  width: 100%; min-width: 0;
   background: var(--surface2); border: 1px solid var(--border2);
   border-radius: var(--radius); padding: 9px 11px;
   color: var(--text); font-family: var(--font-sans); font-size: 14px;
 }
 .account-form input:focus { outline: none; border-color: var(--accent-dim); }
-.account-form .card-btn { flex: 0 0 auto; }
+.account-form .card-btn { align-self: flex-start; }
 
 /* ── Mobile: stop iOS zooming the page on input focus ──────────────────────
    Safari on iOS zooms the whole viewport when a focused input has a font-size
@@ -2873,3 +2880,27 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
     content: ""; position: absolute; inset: -10px;
   }
 }
+
+/* ── Landing trust line ────────────────────────────────────────────────────
+   Quiet by design: it should reassure a first-time visitor without competing
+   with the search bar, which is what they came for. Set in mono at small size
+   so it reads as a factual footnote rather than marketing — the claims are
+   verifiable (PolyForm Noncommercial licence, no analytics in the bundle,
+   robots.txt refusing training crawlers), and overselling them would undercut
+   the very trust they exist to establish. */
+.empty__promises {
+  list-style: none; padding: 0;
+  /* Wider than the paragraph above it on purpose. At 46ch these four short
+     items stacked into four lines, which reads as a list of terms and
+     conditions; on one or two rows they read as a single reassurance and stay
+     subordinate to the search bar. */
+  margin: 40px auto 0; max-width: 620px;
+  display: flex; flex-wrap: wrap; justify-content: center;
+  gap: 8px 18px;
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-faint);
+}
+.empty__promises li { display: flex; align-items: center; gap: 6px; }
+.empty__promises li::before { content: "✓"; color: var(--green); }
+.empty__promises a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.empty__promises a:hover { color: var(--accent); }
