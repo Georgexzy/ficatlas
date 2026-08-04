@@ -125,6 +125,22 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full walkthrough, the recommended Cloudflare settings, and the pre-launch checks.
 
+Two things about that overlay worth knowing, because both were wrong in an earlier version and both fail silently:
+
+- **Tailscale keeps working**, but only because the frontend binds the tailnet address as well as loopback. Set `TAILSCALE_IP` in `.env` (`tailscale ip -4`). Loopback alone means your phone connects to `100.x:3000` and finds nothing listening. It is the *same app and same database* over the tailnet — not a separate admin panel — so roles are identical and admin actions there change the public site.
+- **`upgrade-insecure-requests` is opt-in** (`FORCE_HTTPS=true`, set only in the overlay). Sending it without real TLS makes the browser rewrite every asset URL to `https://`, and over plain-HTTP Tailscale every script fails with `ERR_SSL_PROTOCOL_ERROR` — the page shell loads and nothing else does.
+
+### Hardening scripts
+
+Two one-off scripts, both reversible, both to be **run as files** — do not paste their contents into a terminal, because they call `exit` and that closes your shell:
+
+```bash
+sudo bash harden-network.sh        # stop containers reaching your LAN and this host
+sudo bash setup-windows-share.sh   # SMB backup target: credentials out of fstab, correct SMB version
+```
+
+`harden-network.sh` is the significant one. By default a container can reach your router's admin page and this machine's SSH port, so any flaw that lets an attacker make requests from inside a container reaches the home network. The tunnel does not help — it protects inbound, this is outbound.
+
 To access from your phone over Tailscale:
 1. Install Tailscale on both the host and the phone, both signed into the same tailnet
 2. On the phone, open `http://<server-tailscale-hostname>:3000`

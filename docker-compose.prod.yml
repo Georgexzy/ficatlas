@@ -99,6 +99,11 @@ services:
       - /tmp:size=256m
 
   frontend:
+    environment:
+      # Only behind the tunnel, where TLS actually exists. See next.config.ts:
+      # setting this without TLS rewrites every asset URL to https:// and the
+      # app then fails to load a single script.
+      FORCE_HTTPS: "true"
     # Loopback only. cloudflared reaches it over the compose network, so
     # publishing 3000 on every interface would just be a second, unprotected way
     # in that bypasses Cloudflare completely.

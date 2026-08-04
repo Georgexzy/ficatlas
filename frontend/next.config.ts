@@ -40,11 +40,23 @@ const CSP = [
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
-  "upgrade-insecure-requests",
-].join("; ")
+]
+
+// upgrade-insecure-requests rewrites every http:// subresource to https://.
+// Behind Cloudflare that is correct and free. Over Tailscale it is fatal: the
+// site is served as plain http on port 3000, so the browser rewrites every JS
+// chunk to https://<tailnet-ip>:3000 and gets ERR_SSL_PROTOCOL_ERROR, because
+// nothing is listening for TLS there. The page shell loads and not one script
+// does — which is exactly how it looked: the PWA on the phone stopped working
+// entirely while the server was serving 200s to everything.
+//
+// So it is opt-in, and set only in the production overlay where TLS is real.
+if (process.env.FORCE_HTTPS === "true") CSP.push("upgrade-insecure-requests")
+
+const CSP_HEADER = CSP.join("; ")
 
 const SECURITY_HEADERS = [
-  { key: "Content-Security-Policy", value: CSP },
+  { key: "Content-Security-Policy", value: CSP_HEADER },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
