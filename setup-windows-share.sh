@@ -31,12 +31,17 @@ REAL_USER="${SUDO_USER:-george}"
 UID_N=$(id -u "$REAL_USER"); GID_N=$(id -g "$REAL_USER")
 
 # Take the existing credentials out of fstab rather than asking for them again.
-SMB_USER=$(grep -oP 'username=\K[^,\s]+' /etc/fstab | head -1)
-SMB_PASS=$(grep -oP 'password=\K[^,\s]+' /etc/fstab | head -1)
+SMB_USER="${SMB_USER:-$(grep -oP 'username=\K[^,\s]+' /etc/fstab | head -1)}"
+SMB_PASS="${SMB_PASS:-$(grep -oP 'password=\K[^,\s]+' /etc/fstab | head -1)}"
+# Deliberately NOT interactive. `read` consumes stdin, so if this script is
+# pasted into a terminal rather than run from a file, a prompt here would
+# swallow the remaining lines of the script as its answer and execute nothing.
+# Being non-interactive is what makes copy-paste safe.
 if [ -z "${SMB_USER:-}" ] || [ -z "${SMB_PASS:-}" ]; then
-  echo "Could not read username/password from /etc/fstab."
-  read -rp  "SMB username: " SMB_USER
-  read -rsp "SMB password: " SMB_PASS; echo
+  echo "Could not find username=/password= in /etc/fstab."
+  echo "Pass them instead:"
+  echo "    sudo SMB_USER=someone SMB_PASS='secret' bash $0"
+  exit 1
 fi
 
 echo "==> backing up /etc/fstab"

@@ -284,7 +284,7 @@ export default function StoryPage() {
         {story.tags?.includes("dlp_library") && (
           <div className="dlp-banner">
             <span className="dlp-banner__icon">⚜</span>
-            <span><strong>Curated by DarkLordPotter.</strong> This story is on DLP&apos;s recommended library list, with their curated tags applied.</span>
+            <span><strong>Recommended by Dark Lord Potter.</strong> A long-running Harry Potter community that reviews and rates stories; this one is on their recommended list, and their ratings are shown above.</span>
           </div>
         )}
 

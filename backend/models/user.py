@@ -37,6 +37,9 @@ class User(Base):
     # see init_db, which also promotes the oldest existing account when this
     # column is added to an instance that predates it.
     role          = Column(String(16), nullable=False, server_default=ROLE_READER)
+    # Optional. Existing accounts predate it, and a home-hosted site cannot
+    # promise mail delivery, so nothing may depend on it being present.
+    email         = Column(String(200))
 
     @property
     def rank(self) -> int:

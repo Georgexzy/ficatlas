@@ -63,7 +63,10 @@ def client_ip(request: Request) -> str:
 # Exact paths, not prefixes: "/api/auth/signup" as a prefix also swallows
 # /api/auth/signup-policy, a harmless GET the login page needs to render. Ten
 # failed logins would then leave the login form unable to load at all.
-AUTH_PATHS = {"/api/auth/login", "/api/auth/signup"}
+AUTH_PATHS = {"/api/auth/login", "/api/auth/signup",
+              # /forgot can be used to spam someone's inbox; /reset is a
+              # code-guessing target. Both belong in the tight bucket.
+              "/api/auth/forgot", "/api/auth/reset"}
 # Submitting a takedown hides a story's text immediately and without review, so
 # it is the one public endpoint whose abuse has an editorial effect rather than
 # just a cost. Shares the tight "auth" budget deliberately — a real author files

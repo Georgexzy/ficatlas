@@ -66,6 +66,12 @@ function LoginPageInner() {
           {busy ? "Working…" : (mode === "login" ? "Sign in" : "Create account")}
         </button>
 
+        {mode === "login" && (
+          <p className="auth-hint auth-hint--forgot">
+            <a href="/forgot">Forgotten your password?</a>
+          </p>
+        )}
+
         <p className="auth-hint">
           {mode === "login"
             ? "Stays signed in for 90 days on this device."
