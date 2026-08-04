@@ -62,6 +62,22 @@ export default function About() {
         well, email <strong>admin@ficatlas.app</strong> and say so.
       </p>
 
+      <h2>Source code</h2>
+      <p>
+        FicAtlas is open source. You can read every line, run your own copy, or
+        send a fix:{" "}
+        <a href="https://github.com/Georgexzy/ficatlas" target="_blank" rel="noopener noreferrer">
+          github.com/Georgexzy/ficatlas
+        </a>.
+      </p>
+      <p className="page-prose__muted">
+        Licensed for non-commercial use. You are welcome to run it for yourself
+        or your corner of fandom; you may not sell it or run it with adverts.
+        That restriction exists for the authors whose work it indexes, not for
+        me — they published for free, on archives that promised not to profit
+        from them.
+      </p>
+
       <h2>Crawling and AI</h2>
       <p>
         FicAtlas gathers metadata slowly and politely, and reads archived copies
