@@ -96,7 +96,34 @@ def fandom_base(value: str) -> str:
 # facets table has never seen behaves exactly as before.
 _FACET_KIND = {"fandoms": "fandom", "tags": "tag",
                "characters": "character", "relationships": "relationship"}
-FACET_VARIANT_CAP = int(os.getenv("FACET_VARIANT_CAP", "8"))
+
+# The cap has to differ by kind, because the two behave nothing alike.
+#
+# FANDOMS are a bounded, curated vocabulary and readers expect umbrella
+# behaviour — searching "Batman" should return the comics, the Nolan films and
+# DCU, which is exactly what AO3's "All Media Types" parent tags provide and
+# what r/FanFiction defends fiercely ("I don't want to have to sort through
+# every single comics series, TV show, and movie"). Measured coverage of the
+# works behind each term:
+#
+#            cap 8    cap 25   cap 60
+#   Star Wars 80.9%    94.4%    98.2%   (480 variants)
+#   Batman    88.3%    98.3%    99.6%   (184 variants)
+#
+# At 8 a Star Wars search silently missed one work in five. 60 also turned out
+# to be FASTER — 1,676ms against 2,400ms — because a larger set gives the
+# planner a truer picture of selectivity than a handful of keys does.
+#
+# FREEFORM TAGS are unbounded and must stay small: "Fluff" is a substring of
+# 10,550 distinct tags ("Fluffy", "Angst with a Fluffy Ending"), and an overlap
+# against that many keys is slower than the trigram scan it replaced. A reader
+# choosing "Fluff" also means the Fluff tag, not everything containing the word.
+FACET_VARIANT_CAP = {
+    "fandom": int(os.getenv("FACET_VARIANT_CAP_FANDOM", "60")),
+    "relationship": int(os.getenv("FACET_VARIANT_CAP_SHIP", "25")),
+    "character": int(os.getenv("FACET_VARIANT_CAP_CHAR", "25")),
+    "tag": int(os.getenv("FACET_VARIANT_CAP_TAG", "8")),
+}
 
 _VARIANT_SQL = sql_text("""
     SELECT value FROM facets
@@ -111,8 +138,9 @@ def _facet_variants(db, col_name: str, term: str) -> list[str]:
     if not kind:
         return []
     try:
+        cap = FACET_VARIANT_CAP.get(kind, 8)
         rows = db.execute(_VARIANT_SQL, {"kind": kind, "pat": f"%{term}%",
-                                         "cap": FACET_VARIANT_CAP}).fetchall()
+                                         "cap": cap}).fetchall()
         return [r[0] for r in rows]
     except Exception:
         return []       # vocabulary unavailable -> caller falls back to trigram
