@@ -138,10 +138,16 @@ while read -r sub; do
   [ -n "$sub" ] || continue
   # Allow the bridge gateway only, which is the container's default route and
   # the path to the internet; everything else on the host is refused.
-  iptables -D INPUT -s "$sub" -j DROP -m comment --comment "$COMMENT" 2>/dev/null
-  iptables -A INPUT -s "$sub" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT \
-    -m comment --comment "$COMMENT" 2>/dev/null
-  iptables -A INPUT -s "$sub" -j DROP -m comment --comment "$COMMENT" \
+  # -I, not -A. Appending puts these at the BOTTOM of INPUT, and on this host
+  # an earlier ACCEPT matched first — the rules were installed, reported success
+  # and did nothing, which the verification step caught: "host SSH from
+  # container: STILL REACHABLE".
+  #
+  # Inserted in reverse so the final order is ACCEPT-established then DROP:
+  # -I always goes to position 1, so whatever is inserted LAST ends up FIRST.
+  iptables -I INPUT 1 -s "$sub" -j DROP -m comment --comment "$COMMENT"
+  iptables -I INPUT 1 -s "$sub" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT \
+    -m comment --comment "$COMMENT" \
     && echo "    deny  $sub -> host services"
 done < <(docker_subnets)
 
