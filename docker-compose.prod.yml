@@ -104,10 +104,20 @@ services:
     # in that bypasses Cloudflare completely.
     # !override, not !reset: reset would drop the mapping entirely (compose
     # merges list entries, and reset clears rather than replaces), leaving the
-    # frontend reachable only from inside the compose network — no local access
-    # at all. This replaces the 0.0.0.0 binding with a loopback one.
+    # frontend reachable only from inside the compose network.
+    #
+    # TWO bindings, and the second one matters. Loopback alone does NOT keep
+    # Tailscale working: a tailnet peer connects to this host's 100.x address,
+    # and nothing would be listening there. An earlier version of this file bound
+    # only 127.0.0.1 and would have silently cut off phone access the moment it
+    # was deployed.
+    #
+    # Set TAILSCALE_IP in .env to this machine's tailnet address (`tailscale ip
+    # -4`). The default is a loopback address, so leaving it unset is harmless
+    # and simply means no tailnet access — never an accidental 0.0.0.0 exposure.
     ports: !override
       - "127.0.0.1:3000:3000"
+      - "${TAILSCALE_IP:-127.0.0.2}:3000:3000"
     mem_limit: 768m
     cpus: 2.0
     user: "1000:1000"
