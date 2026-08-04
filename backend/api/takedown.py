@@ -150,6 +150,48 @@ async def submit_takedown(
     }
 
 
+@router.get("/check")
+async def check_author(author: str = "", db: Session = Depends(get_db)):
+    """Let an author see, without asking anyone, whether their work is hosted here.
+
+    Takedown alone is a reactive remedy: it only helps someone who has already
+    discovered the site, found the form and decided to act. For metadata that is
+    proportionate — indexing a title and linking to the original is what a search
+    engine does. For the ~30,000 works whose full TEXT is served here it is
+    weaker, because the burden of discovery sits entirely with the author.
+
+    What r/FanFiction objects to, in its own words, is work "being stolen en
+    masse... for profit, no less" — the trigger is redistribution of full text
+    for money. FicAtlas takes no money, but it does hold the text, and "we would
+    have removed it if only you had known to ask" is a poor answer to someone
+    who never knew.
+
+    So: search by pen name, see exactly what is readable here, remove it in one
+    step. Deliberately public and unauthenticated — requiring an account to find
+    out whether your own work is being hosted would defeat the purpose.
+
+    Returns only works whose TEXT we hold. Metadata-only rows are not listed,
+    because those are a link to the author's own copy, not a copy of it.
+    """
+    author = (author or "").strip()
+    if len(author) < 2:
+        return {"author": author, "hosted": [], "searched": False}
+
+    rows = db.execute(sql_text("""
+        SELECT id, title, url, site, text_withdrawn_at IS NOT NULL AS withdrawn
+        FROM stories
+        WHERE is_hosted AND lower(author) = lower(:a)
+        ORDER BY title LIMIT 200
+    """), {"a": author}).fetchall()
+
+    return {
+        "author": author,
+        "searched": True,
+        "hosted": [{"id": str(r[0]), "title": r[1], "url": r[2],
+                    "site": r[3], "withdrawn": r[4]} for r in rows],
+    }
+
+
 # ── admin ───────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=list[TakedownOut])

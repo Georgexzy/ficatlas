@@ -2871,3 +2871,23 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   font: inherit; font-weight: 600; cursor: pointer;
 }
 .preview-banner__exit:hover { background: rgba(0,0,0,0.34); }
+
+/* ── Author self-check ─────────────────────────────────────────────────────
+   Sits above the takedown form because checking should come before asking. */
+.author-check {
+  border: 1px solid var(--border2); border-radius: var(--radius);
+  background: var(--surface); padding: 16px 18px; margin: 24px 0 8px;
+}
+.author-check__lead { margin: 0 0 12px; font-size: 14px; line-height: 1.6; }
+.author-check__row { display: flex; gap: 8px; flex-wrap: wrap; }
+.author-check__row input {
+  flex: 1 1 220px; min-width: 0;
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 10px 12px;
+  color: var(--text); font-family: var(--font-sans); font-size: 14px;
+}
+.author-check__row input:focus { outline: none; border-color: var(--accent-dim); }
+.author-check__result { margin-top: 14px; font-size: 14px; line-height: 1.6; }
+.author-check__result ul { margin: 8px 0 0; padding-left: 20px; }
+.author-check__result li { margin-bottom: 4px; }
+.author-check__result em { color: var(--text-faint); font-style: normal; }
