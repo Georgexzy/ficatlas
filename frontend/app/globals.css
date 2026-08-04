@@ -2031,6 +2031,19 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
     padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
   }
 
+  /* The footer was added after this clearance rule and never listed in it, so
+     the fixed tab bar sat on top of it: About, Remove my story and Crawler
+     policy were visible but not tappable. Those are the links a reader needs
+     most when something is wrong — the takedown route in particular — so being
+     unreachable on a phone is worse than being missing.
+
+     Padding on the footer itself rather than the body, because the body is a
+     flex column that pins the footer with margin-top:auto; padding on the body
+     would leave a gap below the bar instead of above it. */
+  body:has(.tabbar) .site-footer {
+    padding-bottom: calc(84px + env(safe-area-inset-bottom));
+  }
+
   /* Float the reader's exit button above the bar rather than under it. */
   body:has(.tabbar) .reader-fab {
     bottom: calc(64px + env(safe-area-inset-bottom));
