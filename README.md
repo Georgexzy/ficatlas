@@ -33,12 +33,21 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   | **HexFiles** (`hexfiles_archive`) | 831 | ~18k | running |
   | **DLP library** (`dlp_library`) | 746 | ~1,000 | close to complete |
   | **HPFFA** (`hpffa_archive`) | 37 | ~85k | barely started |
-  | **SquidgeWorld** (`squidgeworld_archive`) | 0 | ~30k | importer written, never run |
-  | **janelleshane seed** (`janelleshane_seed`) | 0 | 112k | importer written, never run |
+  | **janelleshane seed** (`janelleshane_seed`) | 111,699 | 112k | complete |
+  | **SquidgeWorld** (`squidgeworld_archive`) | 0 | ~30k | importer written, not yet scheduled |
 
   Verify with `python3 tests/check-readme.py`. An earlier version of this section
   listed only the upstream sizes, which read as though ~245,000 works had come
-  from these — the real total is 1,614, and two of the five are zero.
+  from these when the real total was 1,614, with two of the five at zero.
+
+  The janelleshane seed has since been run: 79,932 new rows, and 31,848 records
+  that the cross-post detector matched onto works already indexed rather than
+  duplicating — which is the useful half of a metadata-only seed. SquidgeWorld
+  remains unscheduled on purpose: it is a small volunteer-run archive on its own
+  server, and until recently the scraper paced only AO3, so pointing the
+  background loop at it would have meant an unthrottled crawler. It now has its
+  own per-host budget (`ao3_budget.for_host`), so scheduling it is safe when
+  wanted.
 - **AO3 Atom feeds** — per-canonical-tag feeds, polled on a 6h schedule plus on-load with auto-mirror fallback
 - **Live AO3 fetch** on every search (3 pages = ~60 stories), results persisted so the index grows passively
 - **FF.net discovery via Wayback Machine CDX** — FFN is Cloudflare-walled from VPS IPs, but archive.org's index isn't; we enumerate FFN URLs from Wayback and import on-demand
