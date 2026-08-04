@@ -1,0 +1,61 @@
+# FicAtlas — crawler policy
+#
+# This matters more here than on a typical site, for two reasons.
+#
+# 1. Search URLs are an infinite space. Every combination of q, fandoms, tags,
+#    ratings, sort and page is a distinct URL backed by a query over 19.7M rows.
+#    A crawler that follows filter links will generate unbounded work against a
+#    database running on a home connection. That is the classic crawler trap and
+#    it is the single most likely way this site falls over.
+#
+# 2. The reader serves other people's fanfiction in full. Those authors posted
+#    to AO3 and FFN, not here, and did not agree to their work appearing under
+#    this domain in Google results. Keeping /story/*/chapter/* out of the index
+#    is a courtesy that costs nothing — people who want to read arrive through
+#    search on this site, not through a search engine landing mid-chapter.
+#
+# Story detail pages are allowed: they are metadata plus a link to the original,
+# which is the part worth being findable and is also what makes the index useful
+# to someone who has not heard of it.
+
+User-agent: *
+
+# Private and app-only routes.
+Disallow: /account
+Disallow: /library
+Disallow: /login
+Disallow: /settings
+Disallow: /api/
+
+# Full text of works hosted here. See note 2 above.
+Disallow: /story/*/chapter/
+
+# The infinite space. `/?q=` and friends are search results, not content.
+Disallow: /*?
+Allow: /$
+Allow: /story/
+
+# Politeness. Google ignores this; most other crawlers honour it, and those are
+# the ones most likely to crawl without restraint.
+Crawl-delay: 10
+
+# Training crawlers get nothing. The index is assembled from other archives, and
+# the works in it are not ours to hand over in bulk — the same position the OTW
+# takes for AO3.
+User-agent: GPTBot
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
