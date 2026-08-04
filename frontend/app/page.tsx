@@ -590,6 +590,24 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
         Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
       </p>
       <button className="empty__surprise" onClick={onSurprise}>🎲 Surprise me</button>
+
+      {/* Says the quiet part out loud, because for this audience it is not
+          quiet at all. Fanfiction readers tie an archive's trustworthiness to
+          exactly these properties: AO3's standing rests on being noncommercial,
+          ad-free and volunteer-run, and FanFiction.net's decline is widely
+          attributed in part to "rampant advertisements". A new fanfic site with
+          no visible answer to "what's the catch" reads as one with a catch.
+
+          Every claim here is enforced somewhere real rather than asserted: the
+          licence is PolyForm Noncommercial, robots.txt refuses the AI training
+          crawlers, and there is no analytics script in the bundle. */}
+      <ul className="empty__promises">
+        <li>No adverts, ever</li>
+        <li>No tracking, no analytics</li>
+        <li>Non-commercial &amp; <a href="https://github.com/Georgexzy/ficatlas"
+              target="_blank" rel="noopener noreferrer">open source</a></li>
+        <li>Links out to the original archive</li>
+      </ul>
     </div>
   )
 }
