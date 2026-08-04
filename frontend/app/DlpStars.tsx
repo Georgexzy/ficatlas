@@ -28,7 +28,7 @@ export default function DlpStars({ value }: { value: number }) {
   return (
     <span className="dlp-stars"
       title={`DarkLordPotter community rating: ${value.toFixed(2)} out of 5`}
-      aria-label={`DLP rating ${value.toFixed(2)} out of 5`}>
+      aria-label={`Dark Lord Potter rating ${value.toFixed(2)} out of 5`}>
       <span className="dlp-stars__row" aria-hidden="true">
         {stars.map((kind, i) => (
           <span key={i} className={`dlp-stars__star dlp-stars__star--${kind}`}>

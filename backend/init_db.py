@@ -258,6 +258,30 @@ CREATE TABLE IF NOT EXISTS facets (
 CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm ON facets USING gin (value gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC);
 
+-- Optional contact address. Optional because the first accounts here were made
+-- without one and requiring it retroactively would lock those users out; and
+-- because a site that cannot reliably send mail (a home IP is poor at
+-- deliverability) should not pretend an address is load-bearing.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(200);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email_lower ON users (lower(email))
+    WHERE email IS NOT NULL;
+
+-- Password reset tokens. Only the HASH is stored: this table is in every
+-- backup, and a plaintext token in a backup is a live key to an account.
+CREATE TABLE IF NOT EXISTS password_resets (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at    TIMESTAMPTZ,
+    -- Set when there is no mail transport and an admin has to read the code out
+    -- to the user by whatever channel they actually share.
+    delivered  BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS ix_password_resets_open ON password_resets (created_at DESC)
+    WHERE used_at IS NULL;
+
 -- Takedown requests, and the flag that acts on them.
 --
 -- text_withdrawn hides the FULL TEXT only; the story stays in the index as

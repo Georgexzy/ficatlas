@@ -99,10 +99,10 @@ export default function IndexStatus() {
                   <div><dt>Added past 24h</dt><dd>+{fmt(totals.indexed_last_day)}</dd></div>
                 )}
                 {totals.dlp != null && totals.dlp > 0 && (
-                  <div><dt>DLP curated</dt><dd>{totals.dlp.toLocaleString()}</dd></div>
+                  <div><dt>Dark Lord Potter picks</dt><dd>{totals.dlp.toLocaleString()}</dd></div>
                 )}
                 {totals.hpffa != null && totals.hpffa > 0 && (
-                  <div><dt>HPFFA archive</dt><dd>{totals.hpffa.toLocaleString()}</dd></div>
+                  <div><dt>HP FanFiction Archive</dt><dd>{totals.hpffa.toLocaleString()}</dd></div>
                 )}
               </dl>
             )}
@@ -141,7 +141,7 @@ export default function IndexStatus() {
               {newestIndexed
                 ? <>Last new story indexed <strong>{ago(newestIndexed)}</strong>. Updates to
                    tracked fandoms are picked up automatically.</>
-                : <>Bulk-imported from official archives. Live results pulled on-demand.</>}
+                : <>Built from public archive releases, and topped up from the archives as people search.</>}
             </p>
           </div>
         </>
