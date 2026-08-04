@@ -231,3 +231,76 @@ export function formatStoryDate(iso?: string | null): string | null {
   if (days < 365) return `${Math.round(days / 30)} months ago`
   return then.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
 }
+
+
+// ── Shared index totals ─────────────────────────────────────────────────────
+//
+// Two components want this number — the header pill and the landing hero — and
+// a page load was making FOUR requests for it. Each call site fires twice,
+// because React re-invokes effects and the search page is deliberately keyed on
+// its URL params so it remounts when a facet link is clicked.
+//
+// Chasing those remounts would be the wrong fix: the remount is intentional and
+// the double-invoke is by design. What is wrong is that two callers wanting the
+// same immutable-for-five-minutes number produce two requests. So the promise is
+// shared: whoever asks first starts the fetch, everyone else awaits the same one,
+// and the resolved value is reused until it goes stale.
+//
+// The server already caches this (it is a whole-table aggregate over 19.7M rows),
+// so the cost was small — but it was four round trips on every single page view,
+// and it made the network panel misleading when diagnosing anything else.
+export interface IndexTotals {
+  stories: number
+  hosted: number
+  total_words: number
+  dlp?: number
+  hpffa?: number
+  indexed_last_hour?: number
+  indexed_last_day?: number
+}
+
+const TOTALS_TTL_MS = 5 * 60 * 1000   // matches the server-side cache window
+
+// The cache hangs off `window` rather than module scope. Module scope would in
+// fact have been sufficient — I moved it here on a theory about code splitting
+// that turned out to be wrong, and the note is kept because the measurement that
+// disproved it is the useful part:
+//
+//   before dedup            4 fetch() calls, 4 network events
+//   after dedup             1 fetch() call,  2 network events
+//
+// The stubborn "2" was not a second request. It is the service worker passing
+// the request through to the network, which DevTools and Playwright both count
+// as an event of its own. Counting network events was measuring the wrong
+// thing; wrapping window.fetch and counting actual calls settled it.
+//
+// window scope is kept anyway: it is no more complex and it survives any future
+// bundling change, whereas module scope quietly would not.
+interface TotalsCache {
+  value: IndexTotals | null
+  at: number
+  inflight: Promise<IndexTotals | null> | null
+}
+
+function cache(): TotalsCache {
+  const w = globalThis as any
+  if (!w.__ficatlasTotals) w.__ficatlasTotals = { value: null, at: 0, inflight: null }
+  return w.__ficatlasTotals as TotalsCache
+}
+
+export function getIndexTotals(): Promise<IndexTotals | null> {
+  const c = cache()
+  if (c.value && Date.now() - c.at < TOTALS_TTL_MS) return Promise.resolve(c.value)
+  if (c.inflight) return c.inflight        // someone else is already asking
+
+  c.inflight = fetch("/api/stats/totals")
+    .then(r => (r.ok ? r.json() : null))
+    .then((d: IndexTotals | null) => {
+      if (d) { c.value = d; c.at = Date.now() }
+      return c.value
+    })
+    .catch(() => c.value)                  // keep the last good value on failure
+    .finally(() => { c.inflight = null })
+
+  return c.inflight
+}

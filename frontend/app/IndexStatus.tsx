@@ -11,7 +11,7 @@ interface Totals   {
   indexed_last_day?: number
 }
 
-import { SITE_LABELS } from "@/lib/api"
+import { SITE_LABELS, getIndexTotals } from "@/lib/api"
 
 export default function IndexStatus() {
   const [open, setOpen] = useState(false)
@@ -20,7 +20,7 @@ export default function IndexStatus() {
   const [totals, setTotals] = useState<Totals | null>(null)
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/stats/totals`).then(r => r.json()).then(setTotals).catch(() => {})
+    getIndexTotals().then(d => { if (d) setTotals(d) })
   }, [])
 
   useEffect(() => {
