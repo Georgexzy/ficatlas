@@ -64,10 +64,15 @@ def client_ip(request: Request) -> str:
 # /api/auth/signup-policy, a harmless GET the login page needs to render. Ten
 # failed logins would then leave the login form unable to load at all.
 AUTH_PATHS = {"/api/auth/login", "/api/auth/signup"}
+# Submitting a takedown hides a story's text immediately and without review, so
+# it is the one public endpoint whose abuse has an editorial effect rather than
+# just a cost. Shares the tight "auth" budget deliberately — a real author files
+# one request, not ten a minute.
+TAKEDOWN_PATH = "/api/takedown"
 
 
 def path_class(path: str) -> str:
-    if path.rstrip("/") in AUTH_PATHS:
+    if path.rstrip("/") in AUTH_PATHS or path.rstrip("/") == TAKEDOWN_PATH:
         return "auth"
     if path.startswith("/api/search"):
         return "search"

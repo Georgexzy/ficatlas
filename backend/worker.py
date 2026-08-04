@@ -766,6 +766,30 @@ async def _wayback_fetch_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _withdraw_deleted_loop() -> None:
+    """Withdraw hosted text for works their author has deleted at the source.
+
+    See withdraw_deleted.py: this is the only takedown decision that can be made
+    without a human, because only the posting account could have deleted the
+    work upstream. Slow and small by design — it is checking, not crawling.
+    """
+    from db.session import db_session
+    from withdraw_deleted import run_pass, BATCH
+
+    interval = _num("WITHDRAW_INTERVAL_MIN", 90) * 60
+    while True:
+        try:
+            with db_session() as db:
+                r = await asyncio.to_thread(run_pass, db, BATCH, False)
+            if r["checked"]:
+                log.info(f"source check: {r['checked']} checked, "
+                         f"{r['withdrawn']} withdrawn, {r['cleared']} back, "
+                         f"{r['unknown']} unclear")
+        except Exception as e:
+            log.warning(f"source check failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _title_repair_loop() -> None:
     """Repair AO3 titles the bulk dump truncated mid-phrase.
 
@@ -862,6 +886,10 @@ async def main() -> None:
     if _flag("TITLE_REPAIR", "true"):
         tasks.append(asyncio.create_task(_title_repair_loop()))
         log.info("AO3 title repair enabled")
+
+    if _flag("WITHDRAW_DELETED", "true"):
+        tasks.append(asyncio.create_task(_withdraw_deleted_loop()))
+        log.info("source-deletion check enabled (auto-withdraw text authors removed)")
 
     if _flag("WAYBACK_HARVEST", "true"):
         tasks.append(asyncio.create_task(_wayback_cdx_loop()))

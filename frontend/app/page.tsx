@@ -669,11 +669,43 @@ function useSidebarResize() {
 }
 
 
+// The search bar's example was hardcoded to "fandom: Harry Potter
+// ship:Draco/Hermione". That is fine if you read Harry Potter and faintly
+// alienating if you do not — it makes a general-purpose index look like one
+// person's shelf. Drawing it from the index's own biggest fandoms keeps the
+// example honest as the data changes, and means the site never advertises a
+// fandom it barely holds.
+function useExampleQuery(): string {
+  const [fandom, setFandom] = useState<string | null>(null)
+  useEffect(() => {
+    let live = true
+    fetch("/api/stats/suggest?kind=fandom&q=&limit=8")
+      .then(r => r.json())
+      .then((rows: { value: string }[]) => {
+        if (!live || !Array.isArray(rows) || !rows.length) return
+        // Skip AO3's disambiguated forms ("X - J. K. Rowling") — correct, but
+        // long and noisy as a hint.
+        const clean = rows.map(r => r.value).filter(v => !v.includes(" - ") && v.length < 26)
+        const pick = (clean.length ? clean : rows.map(r => r.value))[
+          Math.floor(Math.random() * (clean.length || rows.length))
+        ]
+        setFandom(pick ?? null)
+      })
+      .catch(() => {})
+    return () => { live = false }
+  }, [])
+  return fandom
+    ? `fandom: ${fandom}  >100k  complete`
+    : "try a fandom, a ship, or just words from the summary"
+}
+
+
 function SearchPageInner() {
   const router     = useRouter()
   const pathname   = usePathname()
   const rawParams  = useSearchParams()
   const { user }   = useAuth()
+  const exampleQuery = useExampleQuery()
   const [, startTransition] = useTransition()
   const { sidebarWidth, startResize, onResizeKey, resetWidth } = useSidebarResize()
 
@@ -1440,7 +1472,7 @@ function SearchPageInner() {
             <div className="search-bar">
               <div className="search-input-wrap">
                 <input type="text" className="search-input"
-                  placeholder="fandom: Harry Potter  ship:Draco/Hermione  >100k  complete"
+                  placeholder={exampleQuery}
                   value={query}
                   onChange={e => setQuery(e.target.value)}
                   onKeyDown={e => {

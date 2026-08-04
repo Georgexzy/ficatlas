@@ -52,6 +52,11 @@ services:
       # rate limiter entirely.
       TRUST_PROXY_HEADER: "true"
       RATE_LIMIT: "true"
+      # Searching 19.7M works stays public — that is what the site is for.
+      # Serving the complete text of ~30,000 rehosted stories to anonymous
+      # visitors is the part with real exposure, so reading (and the EPUB
+      # export, which is the same text in one file) needs an account.
+      REQUIRE_LOGIN_TO_READ: "true"
       # open | invite | closed — see api/auth.py. Defaults to invite here
       # because opening registration is a decision worth making explicitly.
       SIGNUP_MODE: ${SIGNUP_MODE:-invite}

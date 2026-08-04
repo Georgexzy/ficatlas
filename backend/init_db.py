@@ -258,6 +258,46 @@ CREATE TABLE IF NOT EXISTS facets (
 CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm ON facets USING gin (value gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC);
 
+-- Takedown requests, and the flag that acts on them.
+--
+-- text_withdrawn hides the FULL TEXT only; the story stays in the index as
+-- metadata plus a link to the original. That distinction is the whole point: an
+-- author objecting to their work being rehosted here is not asking to be erased
+-- from a search engine, and removing the row entirely would also mean the next
+-- crawl happily re-imports it.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS text_withdrawn_at TIMESTAMPTZ;
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS text_withdrawn_reason TEXT;
+CREATE INDEX IF NOT EXISTS ix_stories_text_withdrawn ON stories (id)
+    WHERE text_withdrawn_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS takedowns (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    story_id     UUID REFERENCES stories(id) ON DELETE SET NULL,
+    story_url    TEXT NOT NULL,          -- kept even if the story row goes
+    claimant     TEXT NOT NULL,
+    email        TEXT NOT NULL,
+    relationship TEXT NOT NULL,          -- author | agent | other
+    detail       TEXT,
+    source_ip    TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- pending -> upheld (text stays withdrawn) | rejected (text restored)
+    state        VARCHAR(12) NOT NULL DEFAULT 'pending',
+    resolved_at  TIMESTAMPTZ,
+    resolved_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+    note         TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_takedowns_state ON takedowns (state, created_at DESC);
+
+-- Strike record for withdraw_deleted.py. A single 404 during an AO3 deploy must
+-- not withdraw thousands of stories, so a work has to be confirmed gone twice on
+-- separate passes before its text is hidden.
+CREATE TABLE IF NOT EXISTS source_gone (
+    story_id       UUID PRIMARY KEY REFERENCES stories(id) ON DELETE CASCADE,
+    strikes        INTEGER NOT NULL DEFAULT 0,
+    last_checked   TIMESTAMPTZ,
+    last_seen_gone TIMESTAMPTZ
+);
+
 -- AO3 work IDs discovered in the Wayback Machine's CDX index, waiting to have
 -- their archived page fetched and parsed. See wayback_harvest.py: this is how
 -- the 13M-row summary gap gets filled without any of it landing on AO3.
