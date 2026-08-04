@@ -157,6 +157,22 @@ CREATE INDEX IF NOT EXISTS ix_stories_tags_trgm          ON stories USING gin (f
 -- sequential scan — 9,995ms versus 6.4ms here, once per incoming story.
 CREATE INDEX IF NOT EXISTS ix_stories_author_lower ON stories (lower(author));
 
+-- Expression indexes get the default 100 statistics buckets on their expression,
+-- which is far too coarse for trigram selectivity over 19.7M rows. Measured
+-- before raising it: the planner estimated 1,038,590 rows for
+-- fic_arr(fandoms) ILIKE '%Harry Potter%' against an actual 1,206,312, and
+-- similar for the others.
+--
+-- This does NOT fix the remaining misestimate, and it is worth being clear about
+-- that: the BitmapAnd of three such predicates is still costed at ~6,500 rows
+-- when the real intersection is tens of thousands, because Postgres assumes the
+-- filters are independent and "Harry Potter", "Fluff" and the word "harry" are
+-- anything but. Extended statistics cannot express that for ILIKE-on-expression
+-- predicates. Better per-index estimates are still worth having.
+ALTER INDEX ix_stories_fandoms_trgm ALTER COLUMN 1 SET STATISTICS 2000;
+ALTER INDEX ix_stories_tags_trgm    ALTER COLUMN 1 SET STATISTICS 2000;
+ALTER INDEX ix_stories_doc_fts      ALTER COLUMN 1 SET STATISTICS 2000;
+
 -- Date filtering and the "recently updated" sort both use
 -- coalesce(updated_at, published_at): updated_at alone is set for 0.17% of rows,
 -- so filtering or sorting on it returned essentially nothing.
@@ -257,6 +273,27 @@ CREATE TABLE IF NOT EXISTS facets (
 );
 CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm ON facets USING gin (value gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC);
+
+-- Private imports: a story whose text this ONE user may read.
+--
+-- The alternative was a per-user copy of the text, which would be wrong twice
+-- over: the same fic imported by ten people would be stored ten times, and the
+-- dedup and cross-post machinery works on `stories` rows, so parallel copies
+-- would be invisible to it. Instead the story and its chapters live in the
+-- shared tables exactly as they always have, `stories.is_hosted` stays FALSE so
+-- it never enters the public shelf or the hosted counts, and this table is the
+-- grant that lets one account read it.
+--
+-- Consequence worth stating: if two users import the same work, they share one
+-- copy of the text and each holds their own grant. Neither can tell, and the
+-- index does not grow twice.
+CREATE TABLE IF NOT EXISTS user_hosted (
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    story_id   UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, story_id)
+);
+CREATE INDEX IF NOT EXISTS ix_user_hosted_user ON user_hosted (user_id, created_at DESC);
 
 -- Optional contact address. Optional because the first accounts here were made
 -- without one and requiring it retroactively would lock those users out; and
