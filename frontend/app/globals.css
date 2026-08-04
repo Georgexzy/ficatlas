@@ -2740,3 +2740,53 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 .account-form input:focus { outline: none; border-color: var(--accent-dim); }
 .account-form .card-btn { flex: 0 0 auto; }
+
+/* ── Mobile: stop iOS zooming the page on input focus ──────────────────────
+   Safari on iOS zooms the whole viewport when a focused input has a font-size
+   below 16px, and then leaves you scrolled sideways. Measured across the app:
+   search, login, takedown and reset inputs were all 14–15px, so tapping any of
+   them threw the layout. This is the single most disruptive mobile bug in the
+   app and it is invisible on desktop.
+
+   Scoped to coarse pointers so the desktop keeps its denser 14/15px type — the
+   zoom behaviour only exists on touch Safari, so the compromise only needs to
+   be made there. */
+@media (pointer: coarse) {
+  /* !important is deliberate and is the right tool exactly once: this is not a
+     style preference competing with other styles, it is a workaround for
+     platform behaviour that must hold everywhere. Several existing rules
+     (.sidebar input[type=number], the auth fields) legitimately set 14-15px and
+     out-rank a bare `input` selector on specificity, so without this the fix
+     silently applied to some inputs and not others — which is what the first
+     attempt did. */
+  input, select, textarea, .tag-input__field {
+    font-size: 16px !important;
+  }
+}
+
+/* ── Mobile: touch targets ─────────────────────────────────────────────────
+   WCAG 2.5.5 asks for 44x44 CSS px on things you deliberately tap. It exempts
+   inline links in flowing text, which is why the tag chips on result cards are
+   deliberately NOT padded out — there are hundreds per screen and forcing each
+   to 44px would destroy the density that makes the cards scannable, in exchange
+   for a rule the spec does not apply to them.
+
+   What IS fixed here: the controls you aim at rather than read — buttons, the
+   header actions, close/clear affordances and form submits. */
+@media (pointer: coarse) {
+  .card-btn, .btn, .auth-submit, .page-btn, .match-mode__btn,
+  .takedown-form button, .account-form .card-btn, .empty__surprise,
+  .auth-tabs button, .library-tabs button, .reader-sheet button {
+    min-height: 44px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  /* Small icon affordances (clear-search, help, close) get their tap area
+     extended without growing visually, so the layout is unchanged. */
+  .tag-input__clear, .helptip__btn, .index-status__btn,
+  .site-header a, .site-header button {
+    position: relative;
+  }
+  .tag-input__clear::after, .helptip__btn::after {
+    content: ""; position: absolute; inset: -10px;
+  }
+}
