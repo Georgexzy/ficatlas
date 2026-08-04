@@ -8,7 +8,7 @@ import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
-         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS } from "@/lib/api"
+         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
@@ -565,12 +565,9 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
   const [total, setTotal] = useState<number | null>(null)
 
   useEffect(() => {
-    // Same cached endpoint the header widget uses (5-minute TTL server-side),
-    // so this is a cheap read rather than a second scan of 19M rows.
-    fetch("/api/stats/totals")
-      .then(r => r.json())
-      .then(d => { if (typeof d?.stories === "number") setTotal(d.stories) })
-      .catch(() => {})
+    // Shared with the header widget — see getIndexTotals. Both wanting the same
+    // number used to mean four requests per page load between them.
+    getIndexTotals().then(d => { if (typeof d?.stories === "number") setTotal(d.stories) })
   }, [])
 
   return (
