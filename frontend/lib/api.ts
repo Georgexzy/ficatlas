@@ -86,9 +86,20 @@ export function chapterDisplay(count: number, total?: number | null): string {
   return `${count}/?`
 }
 
+// The one place site names are spelled. Three copies of this existed — here and
+// in IndexStatus and the story page — and they drifted: the two components had
+// `fictionalley`, this one did not, so the results bar rendered the raw key and
+// read "AO3 + FF.net + fictionalley" next to two properly branded names.
+//
+// Only ao3, ffnet and fictionalley appear in the data today; the rest are
+// crawlers that exist but have imported nothing yet.
 export const SITE_LABELS: Record<string, string> = {
   ao3: "AO3",
   ffnet: "FF.net",
+  fictionalley: "FicAlley",
+  hpffa: "HPFFA",
+  hexfiles: "HexFiles",
+  squidgeworld: "SquidgeWorld",
   wattpad: "Wattpad",
   royalroad: "Royal Road",
   spacebattles: "SpaceBattles",

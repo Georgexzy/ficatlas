@@ -11,10 +11,7 @@ interface Totals   {
   indexed_last_day?: number
 }
 
-const SITE_LABELS: Record<string, string> = {
-  ao3: "AO3", ffnet: "FF.net", fictionalley: "FicAlley",
-  royalroad: "Royal Road", spacebattles: "SpaceBattles",
-}
+import { SITE_LABELS } from "@/lib/api"
 
 export default function IndexStatus() {
   const [open, setOpen] = useState(false)

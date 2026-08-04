@@ -20,10 +20,7 @@ interface StoryDetail {
   is_hosted: boolean; wayback_url?: string; cross_post_urls?: string[]; chapters: ChapterMeta[]
 }
 
-const SITE_LABELS: Record<string, string> = {
-  ao3: "AO3", ffnet: "FF.net", fictionalley: "FicAlley",
-  royalroad: "Royal Road", spacebattles: "SpaceBattles",
-}
+import { SITE_LABELS } from "@/lib/api"
 
 // This used to be `status === "complete" ? "Complete" : "In Progress"`, which
 // states "In Progress" for anything that is not explicitly finished. Most of
