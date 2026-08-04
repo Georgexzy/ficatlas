@@ -724,7 +724,22 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
    themselves to a readable measure inside it (see .library-list below). At the
    old flat 720px a 140px-minimum grid fitted about four covers and left half a
    desktop empty. */
-.library-shell { max-width: 1180px; margin: 0 auto; padding: 24px 24px 80px; }
+/* min-width:0 matters here and its absence was a real bug.
+ *
+ * A block element defaults to min-width:auto, meaning it refuses to shrink
+ * below its content. On a 390px phone the library shell measured 486px, and
+ * because it contains the header, the header went with it — putting the index
+ * button at x=331..458, past the viewport edge, with no horizontal scroll to
+ * reach it. The control was not merely awkward, it was gone, and nothing about
+ * the page looked wrong.
+ *
+ * The overlap harness found this; no screenshot review would have. */
+.library-shell {
+  max-width: min(1180px, 100%);
+  min-width: 0;
+  margin: 0 auto;
+  padding: 24px 24px 80px;
+}
 .library-title {
   font-family: var(--font-serif); font-size: 28px; font-weight: 600;
   margin-bottom: 20px;
@@ -809,7 +824,21 @@ kbd {
   width: 100%;
   padding-right: 70px;   /* room for clear (✕) + help (?) buttons */
 }
-.search-input-wrap .syntax-help {
+/* Target the element the component actually renders.
+ *
+ * These rules named `.syntax-help`, a wrapper SyntaxHelp does not produce — it
+ * renders `.syntax-help__btn` directly. So the positioning never applied: the
+ * button stayed a static flex sibling, the input's flex:1 shrank to make room,
+ * and the two ended up flush against each other with the button overhanging the
+ * input's right border by 20px. That is the "? touching the search bar".
+ *
+ * The input already reserves 70px of right padding "for clear (✕) + help (?)",
+ * which only makes sense if both overlay the input — so absolute positioning was
+ * always the intent, and the selector was simply wrong. Measured after: the
+ * button sits inside the field with a 10px inset instead of hanging off it.
+ */
+.search-input-wrap .syntax-help,
+.search-input-wrap .syntax-help__btn {
   position: absolute;
   right: 10px;
   top: 50%;
@@ -2018,8 +2047,25 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   .header {
     padding: 10px 14px;
     padding-top: max(10px, env(safe-area-inset-top));
+    /* The header is a flex row whose children could not shrink, so on the
+       library page its contents forced it to 458px inside a 390px viewport —
+       and because the page itself does not scroll horizontally, the last 68px
+       (the index button) were simply clipped and unreachable. Nothing looked
+       broken; the control was just gone.
+       min-width:0 lets the groups shrink, and wrapping gives them somewhere to
+       go when they genuinely cannot. */
+    flex-wrap: wrap;
+    row-gap: 8px;
+    max-width: 100%;
   }
-  .header__right { gap: 10px; }
+  .header > *, .header__right, .header__left { min-width: 0; }
+  .header__right { gap: 10px; flex-shrink: 1; }
+  /* The index pill is the widest single item and the least essential text, so
+     it is the one allowed to truncate rather than push the row over. */
+  .index-status__btn {
+    max-width: 46vw;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
 
   .tabbar {
     display: flex;

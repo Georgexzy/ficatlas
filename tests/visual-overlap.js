@@ -34,10 +34,29 @@ async function audit(page, label) {
       if (st.visibility === 'hidden' || st.display === 'none' || st.opacity === '0') continue;
       const name = (el.className || '').toString().split(' ')[0] || el.tagName;
 
-      if (r.left < -2 || r.right > vw + 2) {
+      // Two legitimate reasons an element sits outside the viewport, both of
+      // which the first version reported as faults:
+      //
+      //   - it lives in an off-canvas panel (the mobile filter drawer) that is
+      //     translated away until opened;
+      //   - it lives in a deliberately horizontal scroller (the library tabs,
+      //     the tag rows), where overflowing IS the design.
+      //
+      // Checking for a scrollable ancestor and for a transform on the way up
+      // distinguishes those from something genuinely stranded off-screen.
+      const inScroller = (() => {
+        for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+          const cs = getComputedStyle(n);
+          if (/auto|scroll/.test(cs.overflowX) && n.scrollWidth > n.clientWidth + 2) return true;
+          if (cs.transform && cs.transform !== 'none') return true;
+        }
+        return false;
+      })();
+      if (!inScroller && (r.left < -2 || r.right > vw + 2)) {
         out.push(`OFFSCREEN ${name} [${Math.round(r.left)}..${Math.round(r.right)}] vw=${vw}`);
         continue;
       }
+      if (inScroller) continue;
       // Only test elements whose centre is actually in view.
       const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
       if (cy < 0 || cy > window.innerHeight) continue;
