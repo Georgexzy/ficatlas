@@ -31,6 +31,28 @@ services:
     mem_limit: 5g
     cpus: 4.0
 
+
+# ── Container hardening ─────────────────────────────────────────────────────
+# Everything ran as root, which matters more here than on a rented VPS: this is
+# a personal machine on a home network with a tailnet attached, so a container
+# escape reaches things that have nothing to do with FicAtlas.
+#
+# Three settings, applied per service below:
+#
+#   user               Drop to an unprivileged uid. Verified by running both
+#                      images as 1000:1000 — the API reaches Postgres and the
+#                      frontend serves 200.
+#   cap_drop: [ALL]    None of these need a Linux capability. Web apps do not
+#                      bind low ports here (3000/8000), do not change ownership
+#                      and do not load modules.
+#   no-new-privileges  Stops a setuid binary inside the container regaining
+#                      privilege, which is what turns a small bug into a root
+#                      shell.
+#
+# Postgres is deliberately left alone: the official image starts as root only to
+# fix data-directory ownership and then drops to the postgres user itself, so
+# forcing `user:` here breaks initialisation for no gain.
+
   backend:
     # --reload watches the filesystem and restarts on any change. In production
     # there is nothing to watch (no bind mount), it costs a file-watcher thread,
@@ -63,6 +85,18 @@ services:
       SIGNUP_CODE: ${SIGNUP_CODE:-}
     mem_limit: 2g
     cpus: 3.0
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # read_only is deliberately NOT set here, unlike the frontend. I could not
+    # verify it: the API runs init_db() at startup, which under lock contention
+    # takes long enough that a short probe cannot tell "blocked by a read-only
+    # filesystem" apart from "still initialising". Shipping it on a guess would
+    # risk the API failing to start on the one day that matters. The protections
+    # that ARE proven — unprivileged user, no capabilities, no privilege
+    # escalation — carry most of the benefit anyway.
+    tmpfs:
+      - /tmp:size=256m
 
   frontend:
     # Loopback only. cloudflared reaches it over the compose network, so
@@ -76,9 +110,16 @@ services:
       - "127.0.0.1:3000:3000"
     mem_limit: 768m
     cpus: 2.0
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    # Next writes its image cache and any server-render scratch under .next/cache.
+    tmpfs:
+      - /tmp:size=128m
+      - /app/.next/cache:size=256m
 
   worker:
-    volumes: !reset []
     environment:
       DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:?}@db:5432/ficatlas
       RUN_SCHEDULER: "true"
@@ -93,6 +134,14 @@ services:
     # and restarted instead of taking the database down with it.
     mem_limit: 2g
     cpus: 2.0
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # NOT read_only, unlike the other two: the bulk importers stream multi-GB
+    # dumps to /app/data, and a named volume keeps that off the image and
+    # writable by the unprivileged user.
+    volumes: !override
+      - workerdata:/app/data
 
   # ── Cloudflare Tunnel ──────────────────────────────────────────────────────
   # Makes the site reachable without opening a single inbound port. cloudflared
@@ -114,5 +163,12 @@ services:
     depends_on:
       - frontend
     mem_limit: 256m
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
     # No ports and no volumes by design: this container only makes outbound
     # connections, which is what makes the arrangement safe.
+
+volumes:
+  workerdata:
