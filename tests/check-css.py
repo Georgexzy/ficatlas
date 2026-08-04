@@ -27,9 +27,10 @@ import re
 import sys
 
 CSS = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "app" / "globals.css"
-# Selectors already known to collide, so the check can be adopted now and the
-# backlog burnt down without the test being permanently red. Never add to this.
-BASELINE = 36
+# Remaining known collision. Was 36; a 50-line block had been pasted twice
+# byte-for-byte, and the other 15 were earlier rules whose duplicated
+# properties were already dead because a later rule won. Never raise this.
+BASELINE = 1
 
 
 def rules(src: str):

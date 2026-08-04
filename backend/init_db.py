@@ -274,6 +274,18 @@ CREATE TABLE IF NOT EXISTS facets (
 CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm ON facets USING gin (value gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC);
 
+-- Role preview: an admin temporarily seeing the site as a lesser role.
+--
+-- Deliberately NOT user impersonation. The guidance on impersonation is that it
+-- is a last resort — you inherit all of someone's confidential data and can act
+-- as them, with no read-only mode — and none of that is needed to answer "what
+-- does a reader see?". This downgrades your OWN effective role and touches
+-- nobody else's account or data.
+--
+-- Enforced as a DOWNGRADE only (see auth.get_current_user): it can never raise
+-- a role, so a stolen session cannot use it to gain anything.
+ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS view_as VARCHAR(16);
+
 -- Private imports: a story whose text this ONE user may read.
 --
 -- The alternative was a per-user copy of the text, which would be wrong twice

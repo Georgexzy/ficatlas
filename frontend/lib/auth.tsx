@@ -10,6 +10,8 @@ export interface User {
   role?: string
   /** Optional contact address; drives whether a password reset can be emailed. */
   email?: string | null
+  /** True while this session is previewing a lesser role. */
+  previewing?: boolean
   /** Server-computed so the UI never has to encode the role hierarchy itself —
       and so what is SHOWN matches what the API will actually allow. Rendering
       an Import tab whose every button 403s teaches a reader the app is broken
