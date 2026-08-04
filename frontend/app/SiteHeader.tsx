@@ -1,5 +1,6 @@
 "use client"
 import Link from "next/link"
+import ThemeToggle from "./ThemeToggle"
 import { useEffect, useState } from "react"
 import OfflineLink from "./OfflineLink"
 import IndexStatus from "./IndexStatus"
@@ -97,6 +98,7 @@ export default function SiteHeader(
           Fic<em>Atlas</em>
         </Link>
         <nav className="header__right">
+          <ThemeToggle compact />
           <span className="header__nav-links">
             {link("search", "/", "Search")}
             {link("library", "/library", "Library", true)}
