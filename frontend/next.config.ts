@@ -72,7 +72,24 @@ const nextConfig: NextConfig = {
   // a CVE list.
   poweredByHeader: false,
   async headers() {
-    return [{ source: "/:path*", headers: SECURITY_HEADERS }]
+    return [
+      { source: "/:path*", headers: SECURITY_HEADERS },
+      // Documents must always revalidate.
+      //
+      // Next sends s-maxage for HTML, which governs shared caches only, leaving
+      // browsers to cache heuristically off the ETag. That made a bad response
+      // sticky: when the CSP briefly carried upgrade-insecure-requests, phones
+      // kept serving that HTML — and its header — from their own cache long
+      // after the server was fixed. A response carrying a CSP is a response
+      // whose mistakes must be correctable by reloading.
+      //
+      // Costs nothing: the ETag still yields a 304 when nothing changed, so
+      // this is a conditional request, not a re-download.
+      {
+        source: "/((?!_next/static|_next/image|icon-|manifest.json).*)",
+        headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }],
+      },
+    ]
   },
   // Proxy all /api/* requests from the frontend (port 3000) through to the
   // backend container. This means:
