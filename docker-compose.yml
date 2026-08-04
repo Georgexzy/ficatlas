@@ -31,8 +31,8 @@ services:
     # index pages resident, which is where fandom/tag browsing spends its time.
     command: >
       postgres
-      -c shared_buffers=2GB
-      -c effective_cache_size=6GB
+      -c shared_buffers=1GB
+      -c effective_cache_size=4GB
       -c work_mem=32MB
       -c maintenance_work_mem=512MB
       -c random_page_cost=1.1
@@ -48,6 +48,19 @@ services:
     # sort=word_count_desc) were failing outright with
     #   DiskFull: could not resize shared memory segment ... No space left on device
     # which surfaces as a 500, not a slow query.
+    # Memory limits on the DEVELOPMENT stack too, which had none.
+    #
+    # This is not a server that owns its RAM: it runs a desktop, a browser, and
+    # other projects' containers alongside FicAtlas on 15GB. Measured while
+    # stuttering — load average 11 with every container near-idle CPU, 4GB in
+    # swap and 91% iowait. Nothing was busy; the machine was thrashing.
+    #
+    # Unlimited containers make that possible: a full-index aggregate or a bulk
+    # import can take whatever it likes and push the desktop into swap, and the
+    # symptom lands on whoever is using the machine rather than on FicAtlas.
+    # shared_buffers also came down from 2GB, which was sized for a box that
+    # owns its memory.
+    mem_limit: 4g
     shm_size: "1gb"
     ports:
       - "127.0.0.1:5432:5432"
@@ -86,6 +99,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+    mem_limit: 1500m
 
   frontend:
     build: ./frontend
@@ -94,6 +108,7 @@ services:
       - "3000:3000"
     depends_on:
       - backend
+    mem_limit: 600m
 
   # ── Background worker ──────────────────────────────────────────────────────
   # Scheduled feed polls, crawls and long backfills used to run inside the API
@@ -105,6 +120,7 @@ services:
   # The worker owns all recurring background work. Only it runs the scheduler
   # (RUN_SCHEDULER), so the API never double-polls, and its restarts are
   # independent of the API's.
+
   worker:
     image: ficatlas-backend    # same image as the API; built by the backend service
     restart: unless-stopped
@@ -133,6 +149,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+    mem_limit: 1500m
 
 volumes:
   pgdata:
