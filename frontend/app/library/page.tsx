@@ -691,7 +691,19 @@ export default function LibraryPage() {
       {tab === "hosted" && (
         <div className="books-shelf">
           {hosted.length === 0
-            ? <p className="library-empty">No hosted stories yet. Import a URL or upload an EPUB in the Import tab — those become readable here.</p>
+            ? (user?.can_import
+                ? <p className="library-empty">
+                    No stories readable here yet. Use the <strong>Import</strong> tab to
+                    add one from a URL or an EPUB.
+                  </p>
+                : <div className="library-empty">
+                    <p>Most stories on FicAtlas are read at the archive that hosts them.</p>
+                    <p className="library-empty__hint">
+                      A small number can be read here directly — search and look for
+                      the <strong>Read here</strong> button.
+                    </p>
+                    <Link href="/" className="card-btn card-btn--primary">Search stories</Link>
+                  </div>)
             : (
               <>
                 <div className="books-grid">
@@ -723,7 +735,11 @@ export default function LibraryPage() {
       {tab === "bookmarks" && (
         <div className="library-list">
           {bookmarks.length === 0
-            ? <p className="library-empty">No bookmarks yet. Click ☆ on any story to save it.</p>
+            ? <div className="library-empty">
+                <p>No bookmarks yet.</p>
+                <p className="library-empty__hint">Tap ☆ on any story to keep it here.</p>
+                <Link href="/" className="card-btn card-btn--primary">Find something to read</Link>
+              </div>
             : bookmarks.map(b => (
                 <div key={b.id} className="library-item">
                   <Link href={`/story/${b.id}`} className="library-item__main">
@@ -739,7 +755,13 @@ export default function LibraryPage() {
       {tab === "reading" && (
         <div className="library-list">
           {Object.keys(progress).length === 0
-            ? <p className="library-empty">No reading in progress.</p>
+            ? <div className="library-empty">
+                <p>Nothing in progress.</p>
+                <p className="library-empty__hint">
+                  Stories you start reading here appear in this tab, with your place kept.
+                </p>
+                <Link href="/" className="card-btn card-btn--primary">Find something to read</Link>
+              </div>
             : Object.entries(progress).map(([id, p]) => (
                 <div key={id} className="library-item">
                   <Link href={`/story/${id}/chapter/${p.chapter}`} className="library-item__main">

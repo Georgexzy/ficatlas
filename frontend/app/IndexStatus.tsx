@@ -70,7 +70,7 @@ export default function IndexStatus() {
     <div className="index-status">
       <button className="index-status__btn" onClick={() => setOpen(o => !o)}>
         <span className="index-status__dot" />
-        {totals ? `${fmt(totals.stories)} indexed` : "—"}
+        {totals ? `${fmt(totals.stories)} indexed` : "Index"}
       </button>
 
       {open && (

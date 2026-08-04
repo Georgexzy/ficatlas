@@ -751,10 +751,8 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   font-size: 14px; padding: 4px 8px;
 }
 .library-item__remove:hover { color: var(--red); }
-.library-empty {
-  text-align: center; padding: 60px 20px; color: var(--text-faint);
-  font-size: 14px;
-}
+/* .library-empty is defined once, further down — this duplicate had drifted
+   to different padding and colour, so which one won depended on source order. */
 .library-clear {
   background: var(--surface2); border: 1px solid var(--border2);
   border-radius: var(--radius); padding: 4px 10px; font-size: 11px;
@@ -2538,9 +2536,14 @@ body.is-resizing * { cursor: col-resize !important; }
 /* Library empty states: centred, with room to breathe rather than a bare line
    of text pinned to the top-left of an otherwise blank tab. */
 .library-empty {
-  max-width: 460px; margin: 40px auto; text-align: center;
-  font-size: 13px; line-height: 1.65; color: var(--text-faint);
+  max-width: 460px; margin: 56px auto; text-align: center;
+  font-size: 14px; line-height: 1.65; color: var(--text-dim);
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
 }
+.library-empty p { margin: 0; }
+.library-empty strong { color: var(--text); font-weight: 600; }
+.library-empty__hint { font-size: 13px; color: var(--text-faint); }
+.library-empty .card-btn { margin-top: 8px; text-decoration: none; }
 
 @media (max-width: 700px) {
   /* The header is not sticky on phones, so the tabs sit at the top instead. */
@@ -2694,3 +2697,21 @@ body.is-resizing * { cursor: col-resize !important; }
 .site-footer a { color: var(--text-faint); text-decoration: none; }
 .site-footer a:hover { color: var(--accent); text-decoration: underline; }
 .site-footer__sep { opacity: 0.4; }
+
+
+/* ── Page frame ────────────────────────────────────────────────────────────
+   Short pages (an empty library, the 404, the about page) left the footer
+   stranded mid-screen with a void beneath it, which reads as a broken layout
+   rather than a quiet one. Make the body a full-height column so the footer is
+   pushed to the bottom of the viewport and content grows above it. */
+body {
+  min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+body > *:not(.site-footer) { flex: 0 0 auto; }
+.site-footer { margin-top: auto; }
+
+/* Pinning the footer fixes it floating mid-page, but on a nearly-empty page it
+   just moves the void: content clings to the top and ~500px of nothing sits
+   under it. Give empty states room to sit in that space instead of above it. */
+.library-empty { margin-block: clamp(56px, 14vh, 140px); }
