@@ -8,6 +8,8 @@ export interface User {
   last_login?: string | null
   /** "reader" | "admin" | "owner". */
   role?: string
+  /** Optional contact address; drives whether a password reset can be emailed. */
+  email?: string | null
   /** Server-computed so the UI never has to encode the role hierarchy itself —
       and so what is SHOWN matches what the API will actually allow. Rendering
       an Import tab whose every button 403s teaches a reader the app is broken

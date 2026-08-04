@@ -1,10 +1,12 @@
 """Auth — signup/login/logout/me with bcrypt + httponly cookie sessions."""
 import os
+import re
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Response, Cookie, Form, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from db.session import get_db
@@ -322,6 +324,10 @@ async def me(user: Optional[User] = Depends(get_current_user)):
         "id": str(user.id),
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "last_login": user.last_login.isoformat() if user.last_login else None,
+        # Needed so the account page can show whether a reset could ever reach
+        # this person by email, rather than leaving them to find out at the
+        # moment they are locked out.
+        "email": user.email,
         # The UI needs these to decide what to SHOW, not just what to allow.
         # Rendering an Import tab that 403s on every button is worse than not
         # rendering it: the reader learns the app is broken rather than that
@@ -356,6 +362,38 @@ async def change_password(
     q.delete(synchronize_session=False)
     db.commit()
     return {"ok": True, "message": "Password changed. Other devices were signed out."}
+
+
+@router.post("/email")
+async def set_email(password: str = Form(...), email: str = Form(""),
+                    user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """Add, change or clear the account's contact address.
+
+    Requires the current password. Without that, anyone who got hold of a
+    session could point the address at themselves and then use the reset flow to
+    take the account permanently — turning a stolen session into a stolen
+    account.
+
+    An empty value clears it, which has to stay possible: the address is
+    optional, and someone who added one should be able to take it back.
+    """
+    if not check_password(password, user.password_hash):
+        raise HTTPException(403, "That password is not correct")
+
+    email = email.strip().lower()
+    if email:
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+            raise HTTPException(400, "That does not look like an email address")
+        clash = (db.query(User)
+                 .filter(func.lower(User.email) == email, User.id != user.id)
+                 .first())
+        if clash:
+            raise HTTPException(400, "Another account already uses that address")
+        user.email = email
+    else:
+        user.email = None
+    db.commit()
+    return {"ok": True, "email": user.email}
 
 
 @router.get("/sessions")

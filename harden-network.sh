@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+#
+# ⚠ DO NOT PASTE THE CONTENTS OF THIS FILE INTO A TERMINAL.
+#
+# This script calls `exit`. Pasted into an interactive shell, that `exit` runs
+# in YOUR shell and closes the window — which is exactly what happens, and it
+# looks like a crash. Removing the interactive prompts was not enough; any
+# script with `exit` in it has this property.
+#
+# Run the FILE instead. This single line is safe to paste, because it is one
+# command that runs the script in its own subshell:
+#
+#     sudo bash /home/george/ficatlas/harden-network.sh
+#
 # Stop FicAtlas containers from reaching the rest of your home network.
 #
 #     sudo bash /home/george/ficatlas/harden-network.sh
