@@ -274,6 +274,22 @@ CREATE TABLE IF NOT EXISTS facets (
 CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm ON facets USING gin (value gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC);
 
+-- Which section of a multi-part archive a work came from.
+--
+-- FictionAlley was not one archive but five, and readers navigated by them:
+-- Schnoogle for novel-length work, The Dark Arts for horror, the Astronomy
+-- Tower for romance, Riddikulus for humour, and a smaller essays-and-meta
+-- section. The source dump carries this in a `site` column; the original import
+-- read every other field and dropped that one, so 29,949 works arrived with the
+-- distinction that organised the whole archive missing.
+--
+-- Generic rather than fictionalley-specific: SquidgeWorld and other Otwarchive
+-- installs have collections, and FFN has categories, so the column is named for
+-- what it means rather than for the first archive to need it.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS archive_section VARCHAR(64);
+CREATE INDEX IF NOT EXISTS ix_stories_archive_section ON stories (archive_section)
+    WHERE archive_section IS NOT NULL;
+
 -- Role preview: an admin temporarily seeing the site as a lesser role.
 --
 -- Deliberately NOT user impersonation. The guidance on impersonation is that it

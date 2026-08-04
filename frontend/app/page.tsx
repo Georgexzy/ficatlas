@@ -8,7 +8,7 @@ import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
-         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals } from "@/lib/api"
+         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, FICALLEY_SECTIONS } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
@@ -344,6 +344,16 @@ function StoryCard({ story }: { story: StoryCard }) {
           <Link href={`/story/${story.id}`} className="card__title">{story.title}</Link>
           <div className="card__badges">
             <span className={`badge badge--site-${story.site}`}>{SITE_LABELS[story.site] ?? story.site}</span>
+            {/* FictionAlley was five archives behind one banner and readers
+                navigated by them, so the section is as identifying as the
+                site name. Clickable, like every other facet on a card. */}
+            {story.archive_section && (
+              <Link href={`/?sections=${encodeURIComponent(story.archive_section)}&sites=fictionalley`}
+                className="badge badge--section"
+                title={`Browse the ${story.archive_section} section of FictionAlley`}>
+                {story.archive_section}
+              </Link>
+            )}
             {story.cross_post_urls && story.cross_post_urls.length > 0 && (
               <span className="badge badge--crosspost"
                 title={`Also posted on:\n${story.cross_post_urls.join("\n")}`}>
@@ -721,6 +731,34 @@ function SearchPageInner() {
   const rawParams  = useSearchParams()
   const { user }   = useAuth()
   const exampleQuery = useExampleQuery()
+
+  // FictionAlley sections, and the state behind their contextual help.
+  // rawParams directly, not the get() helper: that is declared further down,
+  // and reading it here put the component in the temporal dead zone —
+  // "Cannot access 'ea' before initialization", which took the whole results
+  // list out rather than failing visibly at the thing that caused it.
+  const [sections, setSections] = useState<string[]>(
+    (rawParams.get("sections") ?? "").split(",").filter(Boolean))
+  const [hoveredSection, setHoveredSection] = useState<string | null>(null)
+
+  // The help bubble describes whichever section you are pointing at, falling
+  // back to the ones you have selected, then to an overview. A single static
+  // paragraph could only have said "FictionAlley had five sections", which is
+  // the one thing the labels already tell you.
+  const focusSection =
+    hoveredSection ??
+    (sections.length === 1 ? sections[0] : null)
+  const focusMeta = FICALLEY_SECTIONS.find(x => x.value === focusSection)
+  const sectionHelpLabel = focusMeta
+    ? `About ${focusMeta.label}`
+    : "About FicAlley sections"
+  const sectionHelpBody = focusMeta ? (
+    <><strong>{focusMeta.label}.</strong> {focusMeta.help}</>
+  ) : (
+    <>FictionAlley was five archives behind one banner, and readers navigated by
+    them — asking for a <strong>Schnoogle</strong> fic meant novel-length, the{" "}
+    <strong>Dark Arts</strong> meant horror. Point at one for what it held.</>
+  )
   const [, startTransition] = useTransition()
   const { sidebarWidth, startResize, onResizeKey, resetWidth } = useSidebarResize()
 
@@ -961,6 +999,7 @@ function SearchPageInner() {
       [...new Set([...sidebar, ...parsed.filter(v => !sidebar.includes(v))])]
 
     return {
+      sections: sections.length ? sections.join(",") : undefined,
       q:                     pq.cleanText || undefined,
       sites:                 joinCsv(sites),
       fandoms:               joinCsv(merge(incFandoms, pq.fandoms)),
@@ -1193,6 +1232,32 @@ function SearchPageInner() {
               onToggle={id => tog(sites, setSites, id)}
               highlighted={fromSearch("sites")} />
           </div>
+
+          {/* FictionAlley sections. Only shown when FicAlley is among the
+              selected sites, because for an AO3-only search the control would
+              filter nothing and just add noise to an already dense sidebar. */}
+          {sites.includes("fictionalley") && (
+            <div className="sidebar__group">
+              <label className="sidebar__label">
+                FicAlley section
+                <HelpTip label={sectionHelpLabel}>{sectionHelpBody}</HelpTip>
+              </label>
+              <div className="pill-row">
+                {FICALLEY_SECTIONS.map(sec => (
+                  <button key={sec.value}
+                    className={`pill ${sections.includes(sec.value) ? "pill--on" : ""}`}
+                    onMouseEnter={() => setHoveredSection(sec.value)}
+                    onMouseLeave={() => setHoveredSection(null)}
+                    onClick={() => setSections(
+                      sections.includes(sec.value)
+                        ? sections.filter(v => v !== sec.value)
+                        : [...sections, sec.value])}>
+                    {sec.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="sidebar__group">
             <label className="sidebar__label">

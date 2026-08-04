@@ -2901,3 +2901,37 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .takedown-note p { margin: 0 0 10px; }
 .takedown-note p:last-child { margin-bottom: 0; }
 .takedown-note strong { color: var(--text); }
+
+/* ── FictionAlley section badges ───────────────────────────────────────────
+   The hues are FictionAlley's own, lifted from its stylesheet as archived in
+   2008 (web.archive.org, /shared/css/FA.css):
+
+       .tda, a.TDA   #0000CC     .at,  a.AT    #CC0000
+       .sch, a.Sch   #008800     .rid, a.Rid   #CC9900
+
+   Used as-is they would be unreadable here: those were chosen for a white page,
+   and against our --surface they measure 1.58:1 (Dark Arts), 3.01 (Astronomy
+   Tower) and 3.82 (Schnoogle) — all below the 4.5:1 that small text needs.
+
+   So each is lightened along its own hue until it clears AA, which keeps the
+   colour recognisable to anyone who used the archive while making it legible
+   on a dark background. Riddikulus's gold already passed at 6.86 and is
+   untouched. Resulting ratios: 4.60, 4.53, 4.69, 6.86. */
+.badge--section { text-decoration: none; }
+.badge--section:hover { filter: brightness(1.15); }
+
+.badge--section[title*="Dark Arts"] {
+  color: #7070FF; background: rgba(0,0,204,0.16); border: 1px solid rgba(112,112,255,0.32);
+}
+.badge--section[title*="Astronomy"] {
+  color: #FF1414; background: rgba(204,0,0,0.16); border: 1px solid rgba(255,20,20,0.32);
+}
+.badge--section[title*="Schnoogle"] {
+  color: #009900; background: rgba(0,136,0,0.16); border: 1px solid rgba(0,153,0,0.34);
+}
+.badge--section[title*="Riddikulus"] {
+  color: #CC9900; background: rgba(204,153,0,0.16); border: 1px solid rgba(204,153,0,0.32);
+}
+.badge--section[title*="Essays"] {
+  color: var(--text-dim); background: var(--surface3); border: 1px solid var(--border2);
+}

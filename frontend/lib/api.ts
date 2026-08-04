@@ -319,3 +319,24 @@ export function getIndexTotals(): Promise<IndexTotals | null> {
 
   return c.inflight
 }
+
+
+// FictionAlley's five sections, with what each one actually meant to readers.
+//
+// The archive was not one library but five, and "a Schnoogle fic" carried real
+// information — novel-length, plot-driven — in a way "a FictionAlley fic" did
+// not. The help text differs per section for the same reason the sort help
+// does: a single paragraph covering all five could only say something generic,
+// and the useful part is what distinguishes them.
+export const FICALLEY_SECTIONS = [
+  { value: "Schnoogle", label: "Schnoogle",
+    help: "Novel-length work. FictionAlley's flagship section, for long multi-chapter stories rather than one-shots — the closest thing the archive had to a bookshelf of novels." },
+  { value: "The Dark Arts", label: "The Dark Arts",
+    help: "Horror, darkfic and the grimmer end of the archive. The largest section by some way, at nearly 12,000 works." },
+  { value: "Astronomy Tower", label: "Astronomy Tower",
+    help: "Romance and adult work. Named for where students were traditionally caught doing exactly that, and second only to The Dark Arts in size." },
+  { value: "Riddikulus", label: "Riddikulus",
+    help: "Humour and parody — named for the spell that turns a boggart into something laughable." },
+  { value: "Essays & Meta", label: "Essays & Meta",
+    help: "Analysis and discussion rather than fiction: essays on the books, character studies, arguments about canon. The smallest section, at 66 pieces." },
+]
