@@ -1147,11 +1147,14 @@ function SearchPageInner() {
           <div className="sidebar__top">
             <label className="sidebar__label">
               Sort
-              <HelpTip label="About sorting">
-                <strong>Relevance</strong> ranks by how well a story matches
-                your words. The date sorts fall back to the published date when
-                a work has no update date recorded, which is common in the bulk
-                imports.
+              {/* Explains the sort that is CURRENTLY selected, not all nine.
+                  The caveat worth reading differs per option — engagement
+                  counts are missing for most of the index, word counts are not
+                  — and a single paragraph cannot say that at the moment it
+                  applies. */}
+              <HelpTip label={`About the ${(SORT_OPTIONS.find(o => o.value === sort)?.label ?? "current").toLowerCase()} sort`}>
+                <strong>{SORT_OPTIONS.find(o => o.value === sort)?.label}</strong>{" "}
+                {SORT_OPTIONS.find(o => o.value === sort)?.help}
               </HelpTip>
             </label>
             <select value={sort} onChange={e => setSort(e.target.value)} className="select">
