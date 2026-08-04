@@ -31,6 +31,7 @@ QUERIES = {
     "ffnet":        "SELECT count(*) FROM stories WHERE site='ffnet'",
     "fictionalley": "SELECT count(*) FROM stories WHERE site='fictionalley'",
     "hosted":       "SELECT count(*) FROM stories WHERE is_hosted",
+    "hexfiles":     "SELECT count(*) FROM stories WHERE tags @> ARRAY['hexfiles_archive']",
     "dlp":          "SELECT count(*) FROM stories WHERE tags @> ARRAY['dlp_library']",
     "hpffa":        "SELECT count(*) FROM stories WHERE tags @> ARRAY['hpffa_archive']",
     "fandoms_ao3":  "SELECT count(*) FROM facets WHERE kind='fandom_ao3'",
@@ -44,6 +45,14 @@ CLAIMS = [
     ("DLP curated list", "dlp",          r"recommended list \((\d+) works\)", 1,   0.25),
     ("HPFFA",            "hpffa",        r"HP FanFiction Archive \((\d+)\)", 1,    0.25),
     ("canonical fandoms","fandoms_ao3",  r"([\d,]+) canonical names",       1,    0.05),
+    # The archive-coverage table. These were the worst offenders: the README
+    # listed upstream archive sizes where a reader would take them for imported
+    # counts, implying ~245,000 works from sources that had actually produced
+    # 1,614 between them, two of them zero.
+    ("HexFiles imported","hexfiles",  r"hexfiles_archive`\) \| ([\d,]+) ", 1, 0.30),
+    ("HPFFA imported",   "hpffa",     r"hpffa_archive`\) \| ([\d,]+) ",    1, 0.30),
+    ("DLP imported",     "dlp",       r"dlp_library`\) \| ([\d,]+) ",      1, 0.30),
+    ("total works",      "total",     r"\*\*([\d.]+)M works\*\* indexed", 1e6, 0.05),
 ]
 
 

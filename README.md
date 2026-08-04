@@ -1,6 +1,9 @@
 # FicAtlas
 
-A unified search engine for fanfiction across multiple archives — AO3, FanFiction.net, FicAlley, and any user-supplied EPUB.
+A unified search engine for fanfiction. **19.7M works** indexed across AO3 (13.1M),
+FanFiction.net (6.6M) and FicAlley (30k), plus smaller curated sets and any
+user-supplied EPUB. About 30,000 of those can be read in the app; the rest link
+out to the archive that hosts them.
 
 One search bar over a single index spanning multiple sites, with AO3-parity filters, a clean reader for stories hosted directly, and one-click import for fresh stories from any URL.
 
@@ -20,12 +23,22 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Cross-site filter correctness** — fandom is matched strictly while secondary facets (character/ship/tag) and missing metadata (word count, status, rating, language) are matched permissively, so dump rows with sparse metadata surface correctly without flooding fandom searches
 - **Cross-post de-duplication** — the same fic posted on AO3, FF.net, SquidgeWorld etc. is collapsed into a single result. New imports are deduped automatically (conservative title + author matching); a one-shot batch (`dedup-crossposts`) cleans up already-indexed data. The canonical copy keeps every site's link and hosts the most recently updated full text. Cards show a "+N copies" badge; detail pages list "Also on X" links for each version
 - **AO3 deep filtered scrape** — paginated tag-works listing with full filter support, run as an async job with live progress. AO3's heavy endpoints are slow (5–20s) but reachable from a normal connection; the app uses generous granular timeouts (patient read, quick connect) and retries 525s on the same host before giving up
-- **Five Harry Potter archives via AO3 Open Doors / Otwarchive**:
-  - **HPFFA** — the ~85k-story HarryPotterFanfiction.com archive (collection `hpfanfiction_hpff`), tagged `hpffa_archive`
-  - **HexFiles** — the separate ~18k-member Harry Potter FanFic Archive (collection `harrypotterfanficarchive`), tagged `hexfiles_archive`
-  - **SquidgeWorld** — ~30k mostly-HP works; runs the same Otwarchive software as AO3, scraped directly from squidgeworld.org, tagged `squidgeworld_archive`
-  - **DLP library** — DarkLordPotter's curated catalog of ~1000+ vetted HP fanfics, with DLP's curated tags merged on
-  - **janelleshane seed** — a 112k-row metadata-only seed (titles/authors/summaries scraped with permission from AO3), imported from the command line as a broad discovery layer, tagged `janelleshane_seed`
+- **Importers for five Harry Potter archives** (AO3 Open Doors / Otwarchive). These
+  run slowly in the background and are nowhere near complete — the figure in
+  brackets is what is **actually in this index today**, not the size of the
+  upstream archive, which is the number that matters when judging coverage:
+
+  | source | imported | upstream | status |
+  |---|---:|---:|---|
+  | **HexFiles** (`hexfiles_archive`) | 831 | ~18k | running |
+  | **DLP library** (`dlp_library`) | 746 | ~1,000 | close to complete |
+  | **HPFFA** (`hpffa_archive`) | 37 | ~85k | barely started |
+  | **SquidgeWorld** (`squidgeworld_archive`) | 0 | ~30k | importer written, never run |
+  | **janelleshane seed** (`janelleshane_seed`) | 0 | 112k | importer written, never run |
+
+  Verify with `python3 tests/check-readme.py`. An earlier version of this section
+  listed only the upstream sizes, which read as though ~245,000 works had come
+  from these — the real total is 1,614, and two of the five are zero.
 - **AO3 Atom feeds** — per-canonical-tag feeds, polled on a 6h schedule plus on-load with auto-mirror fallback
 - **Live AO3 fetch** on every search (3 pages = ~60 stories), results persisted so the index grows passively
 - **FF.net discovery via Wayback Machine CDX** — FFN is Cloudflare-walled from VPS IPs, but archive.org's index isn't; we enumerate FFN URLs from Wayback and import on-demand
