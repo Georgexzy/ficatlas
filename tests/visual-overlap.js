@@ -18,7 +18,12 @@ const PAGES = [
 ];
 
 // Some things are meant to cover the page.
-const INTENTIONAL = /backdrop|overlay|modal|sheet|drawer|scrim|tabbar|site-header|header/i;
+// Things that are SUPPOSED to cover the page. A popover covering what is
+// beneath it is the entire point of a popover — the harness opens tooltips
+// deliberately to reach post-interaction states, so without this it reports
+// its own probing as a defect.
+const INTENTIONAL =
+  /backdrop|overlay|modal|sheet|drawer|scrim|tabbar|site-header|header|helptip__bubble|syntax-panel|tooltip|popover/i;
 
 async function audit(page, label) {
   return await page.evaluate((INT) => {

@@ -113,16 +113,31 @@ export const RATING_LABELS: Record<string, string> = {
   NR: "Not Rated",
 }
 
+// Each sort carries its own explanation rather than one paragraph covering all
+// nine. Generic help gets ignored — the note that matters here is which sorts
+// are unreliable on THIS index, and that differs per option: engagement counts
+// are absent from the bulk dumps for the overwhelming majority of works, so
+// "Most kudos" quietly means "most kudos among the ~0.01% that have any". A
+// single blob of text cannot say that at the moment it is relevant.
 export const SORT_OPTIONS = [
-  { value: "relevance", label: "Relevance" },
-  { value: "updated_desc", label: "Recently updated" },
-  { value: "published_desc", label: "Newest" },
-  { value: "kudos_desc", label: "Most kudos" },
-  { value: "hits_desc", label: "Most hits" },
-  { value: "bookmarks_desc", label: "Most bookmarks" },
-  { value: "comments_desc", label: "Most comments" },
-  { value: "word_count_desc", label: "Longest" },
-  { value: "word_count_asc", label: "Shortest" },
+  { value: "relevance", label: "Relevance",
+    help: "Ranks by how well a story matches the words you typed — title, summary, author and tags all count. With no search text this falls back to the most recently updated." },
+  { value: "updated_desc", label: "Recently updated",
+    help: "Newest changes first. Where a work has no recorded update date — common in the bulk imports — its published date is used instead, so it is not pushed to the bottom." },
+  { value: "published_desc", label: "Newest",
+    help: "Most recently posted first. Reliable for AO3; a large share of FanFiction.net rows arrived without dates and will sort last." },
+  { value: "kudos_desc", label: "Most kudos",
+    help: "Most-liked first. Worth knowing: kudos counts were not included in the bulk imports, so this ranks the small minority of works whose counts have since been filled in — it is not a view of the whole index." },
+  { value: "hits_desc", label: "Most hits",
+    help: "Most-read first. Same caveat as kudos — hit counts come from re-reading a work's page, so most of the index has none and sorts below those that do." },
+  { value: "bookmarks_desc", label: "Most bookmarks",
+    help: "Most-saved first. Bookmarks are a stronger signal of quality than hits, because someone chose to keep the work — but only a fraction of the index has the figure." },
+  { value: "comments_desc", label: "Most comments",
+    help: "Most-discussed first. Tends to favour long multi-chapter works, where readers comment per chapter." },
+  { value: "word_count_desc", label: "Longest",
+    help: "Longest first. Word counts are present for nearly every work, so unlike the engagement sorts this one covers the whole index." },
+  { value: "word_count_asc", label: "Shortest",
+    help: "Shortest first — useful for finding one-shots and drabbles. Pair it with a minimum word count to skip the very shortest." },
 ]
 
 export const AO3_WARNINGS = [
