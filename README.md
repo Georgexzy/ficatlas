@@ -7,7 +7,10 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 ## What works today
 
 ### Search & discovery
-- **Unified search** across AO3, FanFiction.net, FicAlley, HPFFA, and DLP-curated picks in one query
+- **Unified search** in one query across AO3 (13.1M works), FanFiction.net (6.6M) and
+  FicAlley (30k), plus small curated sets — Dark Lord Potter's recommended list (746 works)
+  and a handful from the HP FanFiction Archive (37). Those last two are labels on stories,
+  not archives of their own scale, and are listed here so the numbers are not misleading
 - **Operator syntax** in any order: `fandom: Harry Potter ship:Draco/Hermione >100k complete updated:2y -tag:fluff`
 - **Tag autocomplete** — fandom, relationship, character and tag filter inputs suggest real values from the index as you type (with story counts), backed by a precomputed facets table so it's instant even on millions of rows
 - **Search-first discovery** — you don't need the Import tab to get fics: when a search returns few or no indexed results and AO3 is selected, the app auto-pulls a deeper live batch (and the no-results screen has a one-click "Search AO3 directly" button). The Import tab remains the full power-user control panel for bulk scrapes
@@ -70,6 +73,9 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   | AO3 listing harvest (20 works/request) | 3 min | 5 pages of one fandom |
   | Alt archives (HPFFA/HexFiles) + DLP | 12 min | 4 pages; 25 imports; 12 ratings |
   | Recent works (tracked fandoms) | 20 min | 3 pages |
+  | Wayback metadata harvest (costs AO3 nothing) | 15 s fetch / 90 s discovery | 20 works |
+  | Source-deletion check (auto-withdraw) | 90 min | 40 works |
+  | FF.net enrichment via Wayback | 30 min | 200 stories |
   | FF.net enrichment (Wayback → FicHub) | 30 min | 200 works |
   | Stale refresh (update checks) | 30 min | 40 works |
   | Cross-post dedup | 3 h | — |
@@ -185,7 +191,7 @@ docker compose exec -e PGPASSWORD=ficatlas db bash -c '
 docker compose exec backend python fictionalley_importer.py
 ```
 
-### AO3 metadata dump (~14M works) — the richest source
+### AO3 metadata dump (~13M works) — the richest source
 
 `trentmkelly/archiveofourown-meta` on HuggingFace: a 7.4GB ungated JSONL dump of
 AO3 work metadata. This is the most valuable seed in the project, because it is
