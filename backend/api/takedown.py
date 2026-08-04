@@ -40,6 +40,7 @@ without anyone having to ask.
 """
 
 import logging
+import os
 import re
 from datetime import datetime
 
@@ -58,6 +59,31 @@ router = APIRouter()
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 RELATIONSHIPS = {"author", "agent", "other"}
+
+# Site-wide ceiling on AUTOMATIC hiding, per rolling hour.
+#
+# The per-IP rate limit caps one attacker at 10/min. That is fine against
+# hammering and useless against patience: 14,400 a day from a single address,
+# and the whole 30,000-work hosted corpus hidden inside 50 hours — faster from
+# several addresses, which behind Cloudflare is trivial to arrange.
+#
+# The answer cannot be to verify claimants. Fandom is pseudonymous by design —
+# people write under a pen name precisely to keep it apart from their identity —
+# so demanding proof of authorship is both a serious breach of that norm and
+# useless here: most hosted works came from FicAlley, an archive that no longer
+# exists, so there is no account left for anyone to prove control of.
+#
+# So the protection is structural instead. Real takedowns arrive in ones and
+# twos; a burst is abuse by definition. Past this ceiling requests are still
+# RECORDED and still reach an admin, they simply stop hiding anything by
+# themselves. A genuine author in an unlucky hour waits for a human rather than
+# being turned away, and an attacker gets a queue instead of a weapon.
+AUTOHIDE_MAX_PER_HOUR = int(os.getenv("TAKEDOWN_AUTOHIDE_PER_HOUR", "25"))
+
+_RECENT_AUTOHIDES = sql_text("""
+    SELECT count(*) FROM takedowns
+    WHERE created_at > now() - interval '1 hour' AND story_id IS NOT NULL
+""")
 
 
 class TakedownOut(BaseModel):
@@ -113,10 +139,17 @@ async def submit_takedown(
                      .first())
 
     hidden = False
+    throttled = False
     if story is not None and story.is_hosted and story.text_withdrawn_at is None:
-        story.text_withdrawn_at = datetime.utcnow()
-        story.text_withdrawn_reason = "takedown request"
-        hidden = True
+        recent = db.execute(_RECENT_AUTOHIDES).scalar() or 0
+        if recent >= AUTOHIDE_MAX_PER_HOUR:
+            throttled = True
+            log.warning(f"takedown auto-hide ceiling reached ({recent} in the last "
+                        f"hour) — recording without hiding: {story_url[:120]}")
+        else:
+            story.text_withdrawn_at = datetime.utcnow()
+            story.text_withdrawn_reason = "takedown request"
+            hidden = True
 
     db.execute(sql_text("""
         INSERT INTO takedowns (story_id, story_url, claimant, email, relationship,
@@ -145,6 +178,10 @@ async def submit_takedown(
         "message": (
             "The story text has been taken down and is no longer readable here."
             if hidden else
+            "Your request has been recorded and a person will action it shortly. "
+            "An unusual number of removal requests have come in this hour, so "
+            "this one is being checked by hand."
+            if throttled else
             "Your request has been recorded and we will look at it."
         ),
     }

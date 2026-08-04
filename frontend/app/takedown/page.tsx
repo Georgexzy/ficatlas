@@ -78,6 +78,24 @@ export default function TakedownPage() {
         well, say so below.
       </p>
 
+      {/* Says plainly what we do and do not do with this form. Two reasons it
+          is worth the space: an author is entitled to know that nobody will
+          demand they out themselves, and anyone considering abusing the form
+          should know it does not delete anything. */}
+      <div className="takedown-note">
+        <p><strong>We will not ask you to prove it.</strong> Fandom runs on pen
+        names, and asking someone to document their identity to reclaim their own
+        writing gets it backwards. Most of the stories hosted here came from
+        FicAlley, an archive that closed — there is no account left to prove
+        anything with even if we wanted it.</p>
+        <p><strong>Nothing is deleted.</strong> A request hides the text
+        immediately and permanently as far as readers are concerned, but it stays
+        recoverable, so a mistaken or malicious request can be undone. That is
+        also why the form cannot be used to wipe the library: hiding is
+        reversible, and a burst of requests is reviewed by a person instead of
+        acted on automatically.</p>
+      </div>
+
       {/* Check first, ask second.
           A takedown form only helps someone who already knows their work is
           here. For text we host, expecting the author to discover that on their

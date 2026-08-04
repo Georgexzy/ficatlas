@@ -58,6 +58,13 @@ export default function About() {
         </Link>
       </p>
       <p className="page-prose__muted">
+        You will not be asked to prove that the work is yours. Fandom runs on pen
+        names, and most of what is hosted here came from an archive that no
+        longer exists, so there is nothing to prove it against. Nothing is
+        deleted either — the text stops being readable, and stays recoverable in
+        case a request was mistaken.
+      </p>
+      <p className="page-prose__muted">
         If you would rather write to a person, or you want the listing removed as
         well, email <strong>admin@ficatlas.app</strong> and say so.
       </p>
