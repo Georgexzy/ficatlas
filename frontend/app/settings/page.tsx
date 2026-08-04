@@ -1,4 +1,5 @@
 "use client"
+import ThemeToggle from "../ThemeToggle"
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import SiteHeader from "../SiteHeader"
@@ -103,7 +104,18 @@ export default function SettingsPage() {
       <SiteHeader current="settings" />
       <h1 className="settings-title">Settings</h1>
 
-      {/* These are instance-wide settings, not per-user, so saving them needs an
+      
+      {/* Also in the header on desktop; this is the only route to it on a
+          phone, where the header cannot spare the width. */}
+      <section className="settings-group">
+        <h2 className="settings-group__title">Appearance</h2>
+        <p className="account-help">
+          Light, dark, or whatever your device is set to. Reading themes for the
+          story view are set separately, in the reader itself.
+        </p>
+        <div style={{ marginTop: 10 }}><ThemeToggle /></div>
+      </section>
+{/* These are instance-wide settings, not per-user, so saving them needs an
           account — same guard as the library admin actions. */}
       {!authLoading && !user && (
         <p className="library-signin-note">

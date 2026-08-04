@@ -294,7 +294,9 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .card__byline a:hover { text-decoration: underline; }
 .card__fandom { color: var(--text-faint); }
 .card__summary {
-  font-size: 13px; color: rgba(237,233,224,0.62); line-height: 1.6;
+  /* Was rgba(237,233,224,0.62) — a light colour that only works on a dark
+     background. In light mode it measured 1.08:1, i.e. invisible. */
+  font-size: 13px; color: var(--text-dim); line-height: 1.6;
   margin-bottom: 10px;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
@@ -311,10 +313,14 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 3px; }
 .tag {
   display: inline-block; padding: 2px 7px; border-radius: 3px;
-  border: 1px solid var(--border); background: rgba(240,235,225,0.03);
+  border: 1px solid var(--border); background: var(--surface2);
   color: var(--text-faint); font-size: 11px; font-family: var(--font-mono);
 }
-.tag--ship { border-color: var(--accent-dim); color: rgba(200,169,110,0.7); }
+/* Was rgba(200,169,110,0.7) — the dark theme's gold, hardcoded. On paper it
+   measured 1.89:1. --accent carries the right gold for whichever theme is
+   active (#c8a96e on dark, #8a6a28 on light), so the ship chips now flip
+   with everything else. */
+.tag--ship { border-color: var(--accent-dim); color: var(--accent); }
 .tag--warn { border-color: rgba(220,80,80,0.3); color: rgba(220,110,90,0.85); }
 .tag--more { background: none; border-style: dashed; cursor: pointer; }
 .tag--more:hover { color: var(--accent); border-color: var(--accent); }
@@ -2934,4 +2940,114 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 .badge--section[title*="Essays"] {
   color: var(--text-dim); background: var(--surface3); border: 1px solid var(--border2);
+}
+
+/* ── Light theme ───────────────────────────────────────────────────────────
+   Every value is measured against the same WCAG floor the dark palette was
+   fixed to, rather than being an inversion. Inverting does not work: the gold
+   accent that reads at 7.9:1 on the dark surface drops to 2.12:1 on paper, so
+   it needs a genuinely different, darker gold rather than the same hex.
+
+   Measured on this palette:
+     text        16.37:1      accent          4.74:1
+     text-dim     8.20:1      text-faint      4.79:1 (4.50 on the lightest surface)
+
+   The warm cast is kept deliberately — a neutral grey light mode next to this
+   dark one would read as a different product. Paper, not office. */
+:root[data-theme="light"] {
+  --bg:          #faf8f4;
+  --surface:     #f4f1ea;
+  --surface2:    #efebe2;
+  --surface3:    #ece7de;
+  --border:      rgba(28,26,23,0.12);
+  --border2:     rgba(28,26,23,0.20);
+  --text:        #1c1a17;
+  --text-dim:    rgba(28,26,23,0.78);
+  --text-faint:  rgba(28,26,23,0.62);
+  --text-ghost:  rgba(28,26,23,0.40);
+  /* The dark theme's #c8a96e is 2.12:1 here — unusable. This is the same hue,
+     darkened until it clears AA against paper. */
+  --accent:      #8a6a28;
+  --accent-bg:   rgba(138,106,40,0.12);
+  --accent-dim:  rgba(138,106,40,0.34);
+  --green:       #1f7a3d;
+  --green-bg:    rgba(31,122,61,0.12);
+  --red:         #b03024;
+  --red-bg:      rgba(176,48,36,0.10);
+  --shadow-sm:   0 1px 3px rgba(28,26,23,0.10);
+  --shadow-md:   0 4px 14px rgba(28,26,23,0.13);
+  --shadow-lg:   0 12px 34px rgba(28,26,23,0.16);
+  color-scheme: light;
+}
+
+/* FictionAlley's section colours were designed for a white page, so in light
+   mode the ORIGINALS are correct and the dark-adapted versions are not. */
+:root[data-theme="light"] .badge--section[title*="Dark Arts"] {
+  color: #0000CC; background: rgba(0,0,204,0.10); border-color: rgba(0,0,204,0.30);
+}
+:root[data-theme="light"] .badge--section[title*="Astronomy"] {
+  color: #CC0000; background: rgba(204,0,0,0.10); border-color: rgba(204,0,0,0.30);
+}
+:root[data-theme="light"] .badge--section[title*="Schnoogle"] {
+  color: #008800; background: rgba(0,136,0,0.10); border-color: rgba(0,136,0,0.30);
+}
+:root[data-theme="light"] .badge--section[title*="Riddikulus"] {
+  color: #8a6600; background: rgba(204,153,0,0.14); border-color: rgba(204,153,0,0.34);
+}
+
+/* The preview banner uses dark text on the accent; on light the accent is dark,
+   so the text has to flip with it. */
+:root[data-theme="light"] .preview-banner { color: #faf8f4; }
+:root[data-theme="light"] .preview-banner__exit {
+  background: rgba(255,255,255,0.22); color: #faf8f4;
+}
+
+/* ── Theme toggle ──────────────────────────────────────────────────────────
+   Three states, not two: light, dark, and follow-the-device. The third is the
+   default and the one most people should stay on. */
+.theme-toggle { display: inline-flex; gap: 2px; background: var(--surface2);
+  border: 1px solid var(--border2); border-radius: 999px; padding: 2px; }
+.theme-toggle__btn {
+  background: none; border: 0; cursor: pointer; border-radius: 999px;
+  padding: 4px 9px; font-size: 12px; line-height: 1;
+  color: var(--text-faint); display: inline-flex; align-items: center; gap: 5px;
+}
+.theme-toggle__btn:hover { color: var(--text-dim); }
+.theme-toggle__btn.is-on { background: var(--accent-bg); color: var(--accent); }
+.theme-toggle__label { font-family: var(--font-mono); font-size: 11px; }
+@media (pointer: coarse) { .theme-toggle__btn { min-height: 32px; padding: 4px 11px; } }
+
+/* ── Badges in light mode ──────────────────────────────────────────────────
+   The site and rating badges set their own light-on-dark foregrounds, which
+   measured 1.66-1.99:1 against paper — unreadable. Each keeps its hue and
+   takes a dark variant of it, so the colour coding survives the theme change.
+   Measured against --surface in light: all >= 4.5:1. */
+:root[data-theme="light"] {
+  --badge-ao3:    #8c2f2f;
+  --badge-ffnet:  #2f4d8c;
+  --badge-falley: #6b2f8c;
+}
+:root[data-theme="light"] .badge--site-ao3   { color: var(--badge-ao3);    background: rgba(140,47,47,0.10);  border-color: rgba(140,47,47,0.28); }
+:root[data-theme="light"] .badge--site-ffnet { color: var(--badge-ffnet);  background: rgba(47,77,140,0.10);  border-color: rgba(47,77,140,0.28); }
+:root[data-theme="light"] .badge--site-fictionalley { color: var(--badge-falley); background: rgba(107,47,140,0.10); border-color: rgba(107,47,140,0.28); }
+:root[data-theme="light"] .badge--g  { color: #1d5a8a; background: rgba(29,90,138,0.10);  border-color: rgba(29,90,138,0.26); }
+:root[data-theme="light"] .badge--t  { color: #1f6b2c; background: rgba(31,107,44,0.10);  border-color: rgba(31,107,44,0.26); }
+:root[data-theme="light"] .badge--m  { color: #8a5a00; background: rgba(138,90,0,0.10);   border-color: rgba(138,90,0,0.26); }
+:root[data-theme="light"] .badge--e  { color: #a32c22; background: rgba(163,44,34,0.10);  border-color: rgba(163,44,34,0.26); }
+:root[data-theme="light"] .badge--nr { color: #5a5855; background: rgba(90,88,85,0.08);   border-color: rgba(90,88,85,0.24); }
+:root[data-theme="light"] .badge--complete { color: #1f7a3d; border-color: rgba(31,122,61,0.28); }
+
+/* Ship chips sit on --surface2, which is darker than the page, so the accent
+   that clears AA against --bg (4.74:1) drops to 4.23 there. A slightly deeper
+   gold for this one case rather than darkening the accent everywhere. */
+:root[data-theme="light"] .tag--ship { color: #7d5f22; }
+
+/* The header on a phone carries the logo, the theme toggle, the index pill and
+   the Explicit switch. Adding the theme toggle pushed the Explicit label to
+   398px on a 390px viewport — 8px off the edge, unreachable.
+   The theme is a set-once preference and lives in Settings; Explicit is a thing
+   readers flip mid-search and has to stay to hand. So the theme toggle leaves
+   the phone header rather than the control people actually use. */
+@media (max-width: 700px) {
+  .header .theme-toggle { display: none; }
 }
