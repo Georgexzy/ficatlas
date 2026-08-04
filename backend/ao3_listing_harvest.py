@@ -47,9 +47,32 @@ log = logging.getLogger(__name__)
 # goes to die. 73,732 canonical fandoms, but the large ones hold most works.
 MIN_FANDOM_WORKS = int(os.getenv("LISTING_MIN_FANDOM", "200"))
 
-# How many pages of one fandom to take before moving on. Small, so that a
-# 25,000-page fandom cannot monopolise the queue while everything else waits.
-PAGES_PER_VISIT = int(os.getenv("LISTING_PAGES_PER_VISIT", "5"))
+# How many pages of one fandom to take before moving on.
+#
+# This was 5, which throttled the harvest to 8% of the rate AO3 already permits.
+# Measured: the loop did 5 requests and then slept 3 minutes — one request every
+# 36 seconds — while ao3_budget was independently pacing at one every 3 seconds.
+# Two limiters stacked, and the redundant one was 12x tighter.
+#
+# The consequence was not academic: at 2,000 works/hour the 13M missing AO3
+# summaries needed 271 days. Removing the idle sleep takes that to 150.
+#
+# NOT to 23, which is what the budget interval alone would suggest and what I
+# first calculated. Measured afterwards, consecutive listing pages arrive ~20s
+# apart — that is AO3's own generation time for these heavy tag-works pages, not
+# our pacing. So the sequential ceiling is 3,600 works/hour and the 3s budget was
+# never the binding constraint. Going faster would need several requests in
+# flight at once, which raises CONCURRENT load on AO3 even at an unchanged
+# request rate, and that is a decision worth taking deliberately rather than as
+# a side effect of a constant.
+#
+# 60 pages x ~3s is roughly one interval's worth of work, so the loop is busy
+# rather than asleep, and ao3_budget remains the only thing deciding how fast we
+# talk to AO3 — which is the right place for that decision. If AO3 pushes back,
+# the budget widens and a pass simply takes longer; nothing here needs to change.
+#
+# Still bounded per fandom so a 25,000-page fandom cannot monopolise the queue.
+PAGES_PER_VISIT = int(os.getenv("LISTING_PAGES_PER_VISIT", "60"))
 
 # Two queues, alternated, because "fill in what we hold" and "find what we do
 # not" are different jobs and ranking by one starves the other.
