@@ -66,13 +66,28 @@ MIN_FANDOM_WORKS = int(os.getenv("LISTING_MIN_FANDOM", "200"))
 # request rate, and that is a decision worth taking deliberately rather than as
 # a side effect of a constant.
 #
-# 60 pages x ~3s is roughly one interval's worth of work, so the loop is busy
-# rather than asleep, and ao3_budget remains the only thing deciding how fast we
-# talk to AO3 — which is the right place for that decision. If AO3 pushes back,
-# the budget widens and a pass simply takes longer; nothing here needs to change.
+# Then measured again, and 60 turned out to be a regression of its own. AO3's
+# listing latency is not flat — it rises steeply with page depth, because deep
+# pagination is expensive for them to compute:
 #
-# Still bounded per fandom so a 25,000-page fandom cannot monopolise the queue.
-PAGES_PER_VISIT = int(os.getenv("LISTING_PAGES_PER_VISIT", "60"))
+#     page  1   17.8s
+#     page  5   12.3s
+#     page 30   82.4s
+#
+# 60 pages per visit drives the crawler deep into a single fandom, where every
+# page costs four to six times what a shallow one does. Throughput collapsed to
+# roughly 470 rows an hour, and the worker spent whole passes on pages 36-39 of
+# one tag.
+#
+# Small batches across many fandoms keep the crawl in the cheap zone. With
+# 73,732 canonical fandoms there is an enormous amount of shallow surface to
+# cover before depth is forced, and shallow pages are both faster for us and
+# cheaper for AO3 — the polite option again coincides with the quick one.
+#
+# The original problem — the loop sleeping three minutes between five pages —
+# is fixed by the interval, not by the batch size. ao3_budget paces the
+# requests; the loop should not add a second, coarser delay on top.
+PAGES_PER_VISIT = int(os.getenv("LISTING_PAGES_PER_VISIT", "8"))
 
 # Two queues, alternated, because "fill in what we hold" and "find what we do
 # not" are different jobs and ranking by one starves the other.
