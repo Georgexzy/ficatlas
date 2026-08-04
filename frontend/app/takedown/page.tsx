@@ -12,6 +12,21 @@ export default function TakedownPage() {
   const [sent, setSent] = useState<null | { hidden: boolean; message: string }>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [penName, setPenName] = useState("")
+  const [hosted, setHosted] = useState<any[]>([])
+  const [checked, setChecked] = useState(false)
+  const [checking, setChecking] = useState(false)
+
+  async function runCheck() {
+    if (penName.trim().length < 2) return
+    setChecking(true)
+    try {
+      const r = await fetch(`/api/takedown/check?author=${encodeURIComponent(penName.trim())}`)
+      const d = await r.json()
+      setHosted(d.hosted || []); setChecked(true)
+    } catch { setHosted([]); setChecked(true) }
+    finally { setChecking(false) }
+  }
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -62,6 +77,51 @@ export default function TakedownPage() {
         find your work where you publish it now. If you want the listing gone as
         well, say so below.
       </p>
+
+      {/* Check first, ask second.
+          A takedown form only helps someone who already knows their work is
+          here. For text we host, expecting the author to discover that on their
+          own is the weak part of the arrangement — so this looks it up for them
+          before asking them to fill anything in. */}
+      <div className="author-check">
+        <p className="author-check__lead">
+          <strong>Not sure if anything of yours is here?</strong> Type the name
+          you write under. This only lists stories whose full text can be read on
+          FicAtlas — not the millions we merely link to.
+        </p>
+        <div className="author-check__row">
+          <input value={penName} onChange={e => setPenName(e.target.value)}
+            placeholder="Your pen name" aria-label="Your pen name"
+            onKeyDown={e => { if (e.key === "Enter") runCheck() }} />
+          <button type="button" className="card-btn" onClick={runCheck} disabled={checking}>
+            {checking ? "Checking…" : "Check"}
+          </button>
+        </div>
+        {checked && (
+          hosted.length === 0 ? (
+            <p className="author-check__result">
+              Nothing under that name is readable here. If you write under a
+              different name, try that too.
+            </p>
+          ) : (
+            <div className="author-check__result">
+              <p><strong>{hosted.length}</strong> {hosted.length === 1 ? "story" : "stories"} under
+                that name can be read here:</p>
+              <ul>
+                {hosted.map(h => (
+                  <li key={h.id}>
+                    {h.title} {h.withdrawn && <em>— already taken down</em>}
+                  </li>
+                ))}
+              </ul>
+              <p className="page-prose__muted">
+                Fill the form below to have them removed. You can paste any one of
+                the links, or just say &ldquo;all of them&rdquo; in the message.
+              </p>
+            </div>
+          )
+        )}
+      </div>
 
       <form onSubmit={submit} className="takedown-form">
         <label>
