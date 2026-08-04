@@ -103,31 +103,36 @@ flush_rules
 # Inserted in reverse order because -I puts each at the top: the LAST insert
 # ends up FIRST, and the allow rules must be evaluated before the drops.
 echo "==> installing egress rules"
-# --ctstate NEW is the whole correction. The first version dropped ANY packet to
-# a private range and relied on a generic ESTABLISHED rule sitting above it to
-# save reply traffic. That ordering did not hold in practice: it silently killed
-# Tailscale access to the site — a phone on 100.x could no longer load anything,
-# because the container's replies were being dropped on their way back out.
+# Every rule is scoped to -s <docker subnet>. That is the correction, and the
+# reason matters because I got this wrong twice.
 #
-# Matching only NEW states the intent directly: containers may not START a
-# connection into a private network. A reply to a connection somebody else
-# opened is not NEW, so it passes no matter where the rule sits, and inbound
-# access over Tailscale or the LAN keeps working.
-for net in 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 169.254.0.0/16 100.64.0.0/10; do
-  iptables -I DOCKER-USER 1 -d "$net" -m conntrack --ctstate NEW -j DROP \
-    -m comment --comment "$COMMENT" && echo "    deny new -> $net"
-done
-
-# Established replies, so outbound internet connections still function.
-iptables -I DOCKER-USER 1 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN \
-  -m comment --comment "$COMMENT" && echo "    allow established replies"
-
-# Docker's own subnets last, so they sit at the very top and win over the drops.
+# The first version dropped any packet to a private range. The second added
+# --ctstate NEW. Both still had no SOURCE restriction, and Docker's own networks
+# live inside 172.16.0.0/12 — so a phone opening the site matched
+# "-d 172.16.0.0/12, state NEW" and was dropped on the way IN. The rules were
+# blocking inbound traffic to my own containers, which is why Tailscale access
+# died both times while every check I ran from the host still passed.
+#
+# Scoping by source makes that impossible by construction rather than by
+# ordering or state: traffic from a phone is not from a Docker subnet, so it
+# cannot match these rules at all, no matter where they sit in the chain. The
+# only thing they can affect is a connection a CONTAINER opens.
+#
+# --ctstate NEW stays as well, so replies to connections the host or a visitor
+# established are never candidates either.
+echo "==> installing egress rules"
 while read -r sub; do
   [ -n "$sub" ] || continue
+  # Container to container on its own bridge stays allowed.
   iptables -I DOCKER-USER 1 -s "$sub" -d "$sub" -j RETURN \
-    -m comment --comment "$COMMENT" && echo "    allow container-to-container $sub"
+    -m comment --comment "$COMMENT"
+  for net in 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 169.254.0.0/16 100.64.0.0/10; do
+    iptables -A DOCKER-USER -s "$sub" -d "$net" -m conntrack --ctstate NEW -j DROP \
+      -m comment --comment "$COMMENT"
+  done
+  echo "    $sub may not open connections to private networks"
 done < <(docker_subnets)
+
 
 # ── The host itself ─────────────────────────────────────────────────────────
 # DOCKER-USER lives in the FORWARD chain, which only sees traffic being routed
@@ -170,6 +175,27 @@ if [ "${1:-}" = "--apply-only" ]; then
   echo "rules applied (boot mode, verification skipped)"
   exit 0
 fi
+
+# Invariant check, worth more here than any connectivity probe.
+#
+# Both previous failures had the same shape: a DROP rule with no source
+# restriction, which therefore also matched traffic arriving AT the containers.
+# And both times the connectivity checks passed, because a request from this
+# host to its own address never traverses FORWARD — only a real external client
+# does, and there is no way to simulate one from here.
+#
+# So assert the property directly instead: every rule we install must name a
+# source. If one does not, it can affect inbound traffic and must not ship.
+echo "==> checking every rule is source-scoped"
+UNSCOPED=$(iptables -S DOCKER-USER 2>/dev/null | grep -- "--comment $COMMENT" | grep -v -- "-s " | wc -l)
+UNSCOPED=$((UNSCOPED + $(iptables -S INPUT 2>/dev/null | grep -- "--comment $COMMENT" | grep -v -- "-s " | wc -l)))
+if [ "$UNSCOPED" -ne 0 ]; then
+  echo "!! $UNSCOPED rule(s) have no source restriction — these would block traffic"
+  echo "   arriving at containers, not just traffic leaving them. Rolling back."
+  flush_rules
+  exit 1
+fi
+echo "    all rules restricted to container sources"
 
 echo
 echo "==> verifying the stack still works"
