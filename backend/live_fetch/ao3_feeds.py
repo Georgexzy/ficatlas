@@ -201,10 +201,15 @@ async def _get_with_fallback(
                 # each used to pace itself alone, which is not a limit on
                 # anything: together they drew 429s that no individual loop was
                 # responsible for. See ao3_budget.
-                if is_ao3:
-                    await ao3_budget.await_slot()
+                # Every host gets paced now, not only AO3. Gating this on
+                # is_ao3 meant SquidgeWorld — a small volunteer archive running
+                # the same software — was the one host crawled with no limiter.
+                await ao3_budget.await_slot_for(None if is_ao3 else base)
                 r = await client.get(f"{base}{path}", timeout=AO3_TIMEOUT)
                 last_status = r.status_code
+                if not is_ao3:
+                    ao3_budget.note_response_for(
+                        base, r.status_code, r.headers.get("Retry-After"))
                 if is_ao3:
                     ao3_budget.note_response(
                         r.status_code, r.headers.get("retry-after"))

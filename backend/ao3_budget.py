@@ -112,3 +112,52 @@ def note_response(status_code: int, retry_after: str | None = None) -> None:
         BUDGET.penalise(after)
     elif 200 <= status_code < 400:
         BUDGET.reward()
+
+
+# ── Other Otwarchive hosts ──────────────────────────────────────────────────
+#
+# SquidgeWorld runs the same software as AO3, so the same scraper points at it —
+# and because the budget above was gated on `is_ao3`, those requests went out
+# with NO pacing at all. AO3 is a large nonprofit with real infrastructure;
+# SquidgeWorld is a small volunteer-run archive, so it is the one that least
+# deserves an unthrottled crawler, and it was the only one getting one.
+#
+# That is why SquidgeWorld is not in the worker's ARCHIVES list: adding it would
+# have pointed an unpaced loop at it. One budget per host fixes that, and the
+# default is deliberately slower than AO3's since these hosts are smaller.
+_HOST_BUDGETS: dict[str, "_Budget"] = {}
+_HOST_LOCK = threading.Lock()
+OTHER_HOST_INTERVAL = float(os.getenv("OTWARCHIVE_MIN_INTERVAL", "5.0"))
+
+
+def for_host(base_url: str | None) -> "_Budget":
+    """The budget governing one host. AO3 shares the process-wide one."""
+    if not base_url or "archiveofourown.org" in base_url:
+        return BUDGET
+    host = base_url.split("//", 1)[-1].split("/", 1)[0].lower()
+    with _HOST_LOCK:
+        b = _HOST_BUDGETS.get(host)
+        if b is None:
+            b = _Budget()
+            b.interval = OTHER_HOST_INTERVAL
+            _HOST_BUDGETS[host] = b
+            log.info(f"pacing {host} at {OTHER_HOST_INTERVAL}s between requests")
+        return b
+
+
+async def await_slot_for(base_url: str | None) -> None:
+    import asyncio
+    await asyncio.to_thread(for_host(base_url).wait)
+
+
+def note_response_for(base_url: str | None, status_code: int,
+                      retry_after: str | None = None) -> None:
+    b = for_host(base_url)
+    if status_code == 429:
+        try:
+            after = float(retry_after) if retry_after else None
+        except (TypeError, ValueError):
+            after = None
+        b.penalise(after)
+    elif 200 <= status_code < 400:
+        b.reward()
