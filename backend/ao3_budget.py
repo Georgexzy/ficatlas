@@ -1,5 +1,5 @@
 """
-One AO3 request budget, shared by every loop in the process.
+One AO3 request budget, shared by every loop AND every process.
 ============================================================
 
 Five separate loops now talk to AO3 — title repair, the listing harvest, the
@@ -43,9 +43,94 @@ RECOVER = 0.9        # per recovery step — slow, because guessing upward is ru
 RECOVER_AFTER = 10   # consecutive clean requests per step
 
 
+# Cross-process coordination, via the one thing every FicAtlas process already
+# shares: Postgres.
+#
+# The in-memory budget below is per-PROCESS, and the docstring at the top of this
+# file used to say "shared by every loop in the process" without anyone noticing
+# what that implied. The worker runs the harvest, the feed poller and the FF.net
+# enrichment inside one process, so those three do share. But a maintenance
+# script run with `docker compose exec backend python ...` is a SEPARATE process
+# with its own _Budget starting fresh at BASE_INTERVAL — so AO3 saw the sum of
+# two independent limiters, each politely believing it was the only one.
+#
+# A ticket is claimed by advancing a single row: next_at = max(now, next_at) +
+# interval, returned to the caller, committed immediately. The row lock is held
+# for the arithmetic only and never across the sleep, so N processes queue up
+# behind each other instead of serialising on a held transaction.
+_TICKET_SQL = """
+    INSERT INTO crawl_budget (host, next_at, interval_s)
+    VALUES (:host, now(), :interval)
+    ON CONFLICT (host) DO UPDATE
+        SET next_at = GREATEST(crawl_budget.next_at, now())
+                    + make_interval(secs => EXCLUDED.interval_s)
+    RETURNING next_at, interval_s
+"""
+
+_shared_ready = False
+_shared_failed = False
+
+
+def _claim_shared_slot(host: str, interval: float) -> float | None:
+    """Seconds to wait for this process's turn, or None if the shared budget is
+    unavailable (no database, table missing) — in which case the caller falls
+    back to the in-memory limiter rather than hammering unthrottled."""
+    global _shared_ready, _shared_failed
+    if _shared_failed:
+        return None
+    try:
+        from sqlalchemy import text as _t
+        from db.session import db_session
+        with db_session() as db:
+            if not _shared_ready:
+                db.execute(_t("""
+                    CREATE TABLE IF NOT EXISTS crawl_budget (
+                        host       TEXT PRIMARY KEY,
+                        next_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        interval_s DOUBLE PRECISION NOT NULL DEFAULT 5.0
+                    )
+                """))
+                db.commit()
+                _shared_ready = True
+            row = db.execute(_t(_TICKET_SQL),
+                             {"host": host, "interval": interval}).first()
+            db.commit()
+        if not row:
+            return None
+        import datetime as _dt
+        now = _dt.datetime.now(_dt.timezone.utc)
+        return max(0.0, (row[0] - now).total_seconds())
+    except Exception as e:                     # no DB, migration not run, etc.
+        _shared_failed = True
+        log.warning(f"AO3 budget: shared limiter unavailable ({type(e).__name__}) "
+                    f"— falling back to this process only")
+        return None
+
+
+def _publish_penalty(host: str, interval: float, pause: float) -> None:
+    """Push a backoff into the shared row: widen the interval AND push the next
+    slot out, so processes that are mid-sleep do not sail straight through."""
+    if _shared_failed:
+        return
+    try:
+        from sqlalchemy import text as _t
+        from db.session import db_session
+        with db_session() as db:
+            db.execute(_t("""
+                UPDATE crawl_budget
+                   SET interval_s = GREATEST(interval_s, :interval),
+                       next_at    = GREATEST(next_at, now() + make_interval(secs => :pause))
+                 WHERE host = :host
+            """), {"host": host, "interval": interval, "pause": pause})
+            db.commit()
+    except Exception:
+        pass                                   # advisory; never break a crawl
+
+
 class _Budget:
-    def __init__(self) -> None:
+    def __init__(self, host: str = "archiveofourown.org") -> None:
         self.interval = BASE_INTERVAL
+        self.host = host
         self._lock = threading.Lock()
         self._next = 0.0
         self._clean = 0
@@ -53,13 +138,23 @@ class _Budget:
         self.granted = 0
 
     def wait(self) -> None:
-        """Block until this caller may make one AO3 request."""
+        """Block until this caller may make one request against self.host."""
+        # Shared queue first. Every process claims from the same row, so the
+        # rate AO3 sees is the configured one no matter how many are running.
+        shared_delay = _claim_shared_slot(self.host, self.interval)
+
         with self._lock:
             now = time.monotonic()
             start = max(now, self._next)
             self._next = start + self.interval
             self.granted += 1
         delay = start - time.monotonic()
+
+        # Whichever queue says wait longer wins: the in-memory one still carries
+        # this process's own backoff state, which the shared row does not know
+        # about until penalise() writes it.
+        if shared_delay is not None:
+            delay = max(delay, shared_delay)
         if delay > 0:
             time.sleep(delay)
 
@@ -74,6 +169,11 @@ class _Budget:
             # that happened to receive it — the limit is on the process.
             pause = retry_after if retry_after is not None else self.interval
             self._next = max(self._next, time.monotonic() + pause)
+        # Publish the penalty so OTHER processes back off as well. Without this
+        # a script would keep its own optimistic interval while the worker was
+        # being told to slow down, which is the failure the shared row exists to
+        # prevent.
+        _publish_penalty(self.host, self.interval, pause)
         if self.interval != before:
             log.info(f"AO3 budget: 429 -> interval {before:.1f}s to {self.interval:.1f}s")
 
