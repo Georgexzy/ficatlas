@@ -2782,6 +2782,19 @@ body.is-resizing * { cursor: col-resize !important; }
 }
 .series-page__source--explicit { border-left-color: var(--accent); }
 .series-page__list { list-style: none; margin: 0; padding: 0; }
+.series-page__section {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--accent);
+  margin: 26px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.series-page__section span {
+  font-family: var(--font-sans); font-size: 11.5px; text-transform: none;
+  letter-spacing: 0; color: var(--text-faint);
+}
+/* Companions are quieter than the main run — present, not competing with it. */
+.series-page__list--side .series-page__n { font-size: 13px; }
+.series-page__list--side .series-page__title { font-size: 15px; }
 .series-page__item {
   display: flex; gap: 12px; padding: 14px 0;
   border-bottom: 1px solid var(--border);
@@ -2851,6 +2864,7 @@ body.is-resizing * { cursor: col-resize !important; }
   margin-left: 7px; font-size: 10px; font-weight: 600; letter-spacing: .06em;
   text-transform: uppercase; color: var(--accent); white-space: nowrap;
 }
+.series-box__list li.is-side .series-box__n { font-size: 9px; opacity: .7; }
 .series-box__all { margin: 9px 0 0; font-size: 12px; }
 .series-box__all a { color: var(--accent); }
 .series-box__meta {

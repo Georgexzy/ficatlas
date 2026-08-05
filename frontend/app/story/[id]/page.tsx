@@ -172,7 +172,11 @@ export default function StoryPage() {
               <p className="series-box__head">
                 <span className="series-box__name">{sr.name}</span>
                 <span className="series-box__pos">
-                  {sr.position ? `part ${sr.position} of ${sr.work_count}` : `${sr.work_count} works`}
+                  {sr.role === "side"
+                    ? "side story"
+                    : sr.position
+                    ? `part ${sr.position}`
+                    : `${sr.work_count} works`}
                 </span>
               </p>
               {/* Says where the grouping came from. AO3 series are stated by the
@@ -195,8 +199,11 @@ export default function StoryPage() {
                   static table of contents gets read and closed. */}
               <ol className="series-box__list">
                 {sr.works.map((w: any) => (
-                  <li key={w.id} className={w.is_current ? "is-current" : ""}>
-                    <span className="series-box__n">{w.position ?? "•"}</span>
+                  <li key={w.id} className={`${w.is_current ? "is-current " : ""}${
+                    w.role === "side" ? "is-side" : ""}`}>
+                    <span className="series-box__n">
+                      {w.role === "side" ? "◆" : w.position ?? "•"}
+                    </span>
                     {w.is_current
                       ? <span className="series-box__this">
                           {w.title} <span className="series-box__here">you are here</span>

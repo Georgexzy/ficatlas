@@ -256,6 +256,26 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
                 # is AO3's own fallback for a series with no positions set.
                 for m in members:
                     m["pos"] = m.get("cue_pos") or parse_position(m.get("summary"))
+                    # Main sequence or companion piece.
+                    #
+                    # The author stating a position — "third in the Dangerverse"
+                    # — is them placing the work IN the sequence. A work that
+                    # only mentions the series name, or says outright that it is
+                    # a side story, is not part of that run. Measured on the
+                    # Dangerverse: the five with stated ordinals are 215k-520k
+                    # words, the five without are 1.8k-49k.
+                    rels = series_cues.parse_relative(m.get("summary"))
+                    is_side = any(r["kind"] in ("side-story", "companion",
+                                                "companion-piece")
+                                  for r in rels)
+                    m["role"] = "side" if (is_side or m["pos"] is None) else "main"
+                # Publication order only for the main run; a side story has no
+                # place in a numbered sequence it was never part of.
+                mains = [m for m in members if m.get("role") != "side"]
+                if mains and all(m["pos"] is None for m in mains):
+                    members_for_order = mains
+                else:
+                    members_for_order = members
                 if all(m["pos"] is None for m in members):
                     # Site id, not published_at. AO3 and FF.net both assign
                     # increasing work ids, so the id IS publication order and it
@@ -286,11 +306,12 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
                        "w": len(members)}).scalar()
                 for m in members:
                     db.execute(sql_text("""
-                        INSERT INTO series_works (series_id, story_id, position)
-                        VALUES (:s, :w, :p)
+                        INSERT INTO series_works (series_id, story_id, position, role)
+                        VALUES (:s, :w, :p, :r)
                         ON CONFLICT (series_id, story_id) DO UPDATE
-                            SET position = EXCLUDED.position
-                    """), {"s": sid, "w": m["id"], "p": m["pos"]})
+                            SET position = EXCLUDED.position, role = EXCLUDED.role
+                    """), {"s": sid, "w": m["id"], "p": m["pos"],
+                           "r": m.get("role", "main")})
                 stored += 1
 
             if not dry_run and i % 200 == 0:
