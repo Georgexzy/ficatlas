@@ -132,17 +132,71 @@ def _recompute_totals() -> None:
     try:
         with db_session() as db:
             row = db.execute(_TOTALS_SQL).mappings().first()
+            coverage = _compute_coverage(db)
         _totals_cache = {
             "stories": row["stories"], "hosted": row["hosted"],
             "total_words": int(row["total_words"]), "dlp": row["dlp"],
             "hpffa": row["hpffa"],
             "indexed_last_hour": row["indexed_last_hour"],
             "indexed_last_day": row["indexed_last_day"],
+            "coverage": coverage,
         }
         _totals_cached_at = time.monotonic()
         _persist_totals(_totals_cache)
     except Exception:
         pass  # keep serving the previous numbers
+
+
+# Field coverage, sampled. Served publicly because the search UI explains its
+# own filters with these numbers, and a hard-coded explanation goes stale
+# silently: the ship/character help claimed FictionAlley was "18% ships, 82%
+# characters" while the live figures were 14% and 94%. A number written into
+# prose is a number nobody updates.
+_COVERAGE_SQL = text("""
+    SELECT site,
+           count(*)                                                      AS n,
+           count(*) FILTER (WHERE relationships <> '{}' AND relationships IS NOT NULL) AS ships,
+           count(*) FILTER (WHERE characters    <> '{}' AND characters    IS NOT NULL) AS chars
+    FROM stories TABLESAMPLE SYSTEM_ROWS(60000)
+    GROUP BY site
+""")
+
+
+def _compute_coverage(db) -> dict:
+    try:
+        rows = db.execute(_COVERAGE_SQL).mappings().all()
+    except Exception:
+        return {}
+    out = {}
+    for r in rows:
+        n = r["n"] or 0
+        site = r["site"].value if hasattr(r["site"], "value") else str(r["site"])
+        # A block sample gives a small site a handful of rows — FictionAlley is
+        # 0.15% of the index, so 60,000 sampled rows contain about ninety of it,
+        # and a percentage from ninety rows swings by double digits run to run.
+        # Small sites are counted exactly instead; at 30k rows it is a fast
+        # index scan, and the alternative is quoting a number that is wrong.
+        if n < 500:
+            continue
+        out[site] = {"ships": round(100 * r["ships"] / n),
+                     "characters": round(100 * r["chars"] / n)}
+
+    for site in ("fictionalley",):
+        if site in out:
+            continue
+        try:
+            e = db.execute(text("""
+                SELECT count(*) AS n,
+                       count(*) FILTER (WHERE relationships <> '{}' AND relationships IS NOT NULL) AS ships,
+                       count(*) FILTER (WHERE characters    <> '{}' AND characters    IS NOT NULL) AS chars
+                FROM stories WHERE site = :s
+            """), {"s": site}).mappings().first()
+            if e and e["n"]:
+                out[site] = {"ships": round(100 * e["ships"] / e["n"]),
+                             "characters": round(100 * e["chars"] / e["n"])}
+        except Exception:
+            pass
+    return out
 
 
 _TOTALS_SQL = text("""

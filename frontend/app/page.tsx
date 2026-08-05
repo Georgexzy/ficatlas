@@ -833,6 +833,12 @@ function SearchPageInner() {
   const [includeUnknown, setIncludeUnknown] = useState(get("include_unknown") === "true")
   // "", "yes" or "no" — three states, because "no preference" is the common one
   // and a checkbox cannot express it without meaning "standalones only".
+  // Shared cache with the header widget, so this costs no extra request.
+  // Used by the filter help to quote LIVE coverage instead of prose that goes
+  // stale — see the ship/character bubble below.
+  const [totals, setTotals] = useState<Awaited<ReturnType<typeof getIndexTotals>>>(null)
+  useEffect(() => { getIndexTotals().then(setTotals).catch(() => {}) }, [])
+
   const [inSeries, setInSeries] = useState(get("in_series") === "true" ? "yes"
                                          : get("in_series") === "false" ? "no" : "")
   // Set by clicking an author's name: browse their whole catalogue across archives.
@@ -1570,13 +1576,24 @@ function SearchPageInner() {
               &ldquo;might be&rdquo;. This widens it to stories where we have no
               such data either way.</p>
               <p>How much that helps depends entirely on the archive:</p>
+              {/* Read from the index rather than written into the prose. The
+                  hard-coded version said FictionAlley was "18% ships, 82%
+                  characters" long after the real figures had moved — a number
+                  in a sentence is a number nobody updates. */}
               <ul className="helptip__list">
-                <li><strong>AO3</strong> — 59% list a ship and 65% a character,
-                  so the filter already works well and this adds mostly noise.</li>
-                <li><strong>FanFiction.net</strong> — 1.3% and 1.7%. FF.net does
-                  not publish either as a field, so a ship filter finds almost
-                  nothing there unless you tick this.</li>
-                <li><strong>FictionAlley</strong> — 18% ships but 82% characters.</li>
+                {(["ao3", "ffnet", "fictionalley"] as const).map(site => {
+                  const c = totals?.coverage?.[site]
+                  if (!c) return null
+                  return (
+                    <li key={site}>
+                      <strong>{SITE_LABELS[site] ?? site}</strong> — {c.ships}% list a
+                      ship and {c.characters}% a character.
+                      {c.ships < 10
+                        ? " A ship filter finds almost nothing here unless you tick this."
+                        : " The filter already works well here; this mostly adds noise."}
+                    </li>
+                  )
+                })}
               </ul>
               <p className="helptip__aside">
                 Every story has freeform tags; this is only about ships and
