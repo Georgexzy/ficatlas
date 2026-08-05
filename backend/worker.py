@@ -91,6 +91,48 @@ async def _enrich_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _series_loop() -> None:
+    """Group works into series, a slice of authors at a time, for ever.
+
+    Series are derived, not imported: no bulk dump carries the field, and new
+    works arrive constantly from the listing harvest — so this is not a one-off
+    migration but a standing job, like the FF.net enrichment beside it.
+
+    It walks the author list with a persisted cursor rather than re-running the
+    whole thing each pass. A full sweep at these settings is a few hours; the
+    cursor means a restart resumes rather than starting over, and that every
+    author is reached in bounded time instead of the same few being redone.
+
+    Bounded by wall clock as well as by author count, for the reason the FF.net
+    loop had to learn: a pass that outlives its own interval means the loop never
+    comes round, and the symptom is indistinguishable from working.
+    """
+    interval = _num("SERIES_INTERVAL_MIN", 180) * 60
+    batch = int(_num("SERIES_AUTHORS_PER_PASS", 20000))
+    from db.session import db_session
+    from api.settings import get_setting, put_setting
+    from series_detect import run as series_run
+
+    while True:
+        try:
+            with db_session() as db:
+                try:
+                    cursor = int(get_setting(db, "series_author_cursor") or 0)
+                except (TypeError, ValueError):
+                    cursor = 0
+            log.info(f"series pass: {batch:,} authors from offset {cursor:,}")
+            seen = await asyncio.to_thread(series_run, False, None, batch, cursor)
+            # Fewer authors than asked for means the end of the list: wrap.
+            nxt = 0 if (seen or 0) < batch else cursor + batch
+            with db_session() as db:
+                put_setting(db, "series_author_cursor", str(nxt))
+            if nxt == 0:
+                log.info("series pass: reached the end of the author list, wrapping")
+        except Exception as e:
+            log.warning(f"series pass failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _dedup_loop() -> None:
     """Merge cross-posted duplicates that arrive with new imports.
 
@@ -921,6 +963,10 @@ async def main() -> None:
     if _flag("ENRICH_FFNET"):
         tasks.append(asyncio.create_task(_enrich_loop()))
         log.info("FF.net enrichment backfill enabled")
+
+    if _flag("DETECT_SERIES", "true"):
+        tasks.append(asyncio.create_task(_series_loop()))
+        log.info("series detection enabled")
 
     if _flag("DEDUP_CROSSPOSTS"):
         tasks.append(asyncio.create_task(_dedup_loop()))

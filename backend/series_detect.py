@@ -235,7 +235,8 @@ def series_name(token: str, members: list[dict]) -> str:
     return f"{token.title()} series"
 
 
-def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
+def run(dry_run: bool, only_author: str | None, limit_authors: int,
+        offset: int = 0) -> int:
     with db_session() as db:
         log.info("measuring how ordinary each title word is…")
         idf = build_idf(db)
@@ -265,8 +266,13 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
                 SELECT lower(author) FROM stories
                 WHERE author IS NOT NULL AND author <> '' AND author <> 'Unknown'
                 GROUP BY lower(author) HAVING count(*) BETWEEN 2 AND 400
-                LIMIT :lim
-            """), {"lim": limit_authors}).fetchall()]
+                -- Ordered so OFFSET means something across runs. Grouping is
+                -- already an index-only scan, and ordering its output is cheap
+                -- next to it — without this the background loop would re-walk
+                -- an arbitrary slice every pass and never reach the tail.
+                ORDER BY lower(author)
+                OFFSET :off LIMIT :lim
+            """), {"lim": limit_authors, "off": offset}).fetchall()]
 
         log.info(f"examining {len(authors):,} authors")
         found = stored = 0
@@ -434,7 +440,7 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
             if gone:
                 log.info(f"  dropped {gone:,} inferred series superseded by a stated one")
         log.info(f"DONE — {found:,} candidate series, {stored:,} stored")
-    return 0
+    return len(authors)
 
 
 def main() -> int:
@@ -442,8 +448,10 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--author", default=None)
     ap.add_argument("--limit-authors", type=int, default=20000)
+    ap.add_argument("--offset", type=int, default=0,
+                    help="skip the first N authors (the background loop walks these)")
     args = ap.parse_args()
-    return run(args.dry_run, args.author, args.limit_authors)
+    return run(args.dry_run, args.author, args.limit_authors, args.offset)
 
 
 if __name__ == "__main__":

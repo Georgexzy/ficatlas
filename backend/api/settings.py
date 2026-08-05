@@ -26,6 +26,9 @@ DEFAULTS = {
     "crawl_rotate_count":  "3",
     # How far through the rotation we are. Advanced by the worker, not by hand.
     "crawl_rotate_cursor": "0",
+    # How far the background series pass has walked the author list. Advanced by
+    # the worker; a restart resumes rather than redoing the first slice for ever.
+    "series_author_cursor": "0",
     # Rotation is drawn from the top N fandoms by indexed works. Beyond a few
     # hundred the tail is long and thin, and revisiting a fandom with 40 works
     # every cycle costs the same request as one with 600,000.
