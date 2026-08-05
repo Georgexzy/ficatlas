@@ -5,6 +5,7 @@ import { useEffect, useState } from "react"
 import OfflineLink from "./OfflineLink"
 import IndexStatus from "./IndexStatus"
 import { useAuth } from "@/lib/auth"
+import { lastSearchHref } from "@/lib/lastSearch"
 
 // The one header every page shares.
 //
@@ -60,12 +61,20 @@ function UserMenu() {
 export default function SiteHeader(
   { current, children }: { current?: NavKey; children?: React.ReactNode },
 ) {
-  const link = (key: NavKey, href: string, label: string, offline = false) => {
+  // Resolved after mount, never during render: sessionStorage does not exist on
+  // the server, so reading it inline would make the server and client disagree
+  // about the href and React would discard the whole tree to fix it.
+  const [searchHref, setSearchHref] = useState("/")
+  useEffect(() => { setSearchHref(lastSearchHref()) }, [current])
+  const backToResults = searchHref !== "/"
+
+  const link = (key: NavKey, href: string, label: string, offline = false,
+                title?: string) => {
     const cls = `header__link ${current === key ? "header__link--current" : ""}`
     if (current === key) return <span className={cls} aria-current="page">{label}</span>
     return offline
       ? <OfflineLink href={href} className={cls}>{label}</OfflineLink>
-      : <Link href={href} className={cls}>{label}</Link>
+      : <Link href={href} className={cls} title={title} prefetch>{label}</Link>
   }
 
   // Phone navigation is a bottom tab bar rather than more items in the header.
@@ -86,7 +95,7 @@ export default function SiteHeader(
     }
     return offline
       ? <OfflineLink href={href} className={cls}>{inner}</OfflineLink>
-      : <Link href={href} className={cls}>{inner}</Link>
+      : <Link href={href} className={cls} prefetch>{inner}</Link>
   }
 
   return (
@@ -94,13 +103,18 @@ export default function SiteHeader(
       <header className="header">
         {/* The wordmark is the way home from everywhere — the convention people
             already expect, and it was previously not a link at all. */}
-        <Link href="/" className="logo logo--link" aria-label="FicAtlas home">
+        {/* The wordmark stays a clean slate even when "Search" beside it goes
+            back to your results — logo-means-home is the older convention and
+            people use it to start over. */}
+        <Link href="/" className="logo logo--link" aria-label="FicAtlas home"
+          title={backToResults ? "Start a fresh search" : "FicAtlas home"}>
           Fic<em>Atlas</em>
         </Link>
         <nav className="header__right">
           <ThemeToggle compact />
           <span className="header__nav-links">
-            {link("search", "/", "Search")}
+            {link("search", searchHref, "Search",
+                  false, backToResults ? "Back to your results" : undefined)}
             {link("library", "/library", "Library", true)}
             {link("settings", "/settings", "Settings")}
           </span>
@@ -112,7 +126,7 @@ export default function SiteHeader(
       </header>
 
       <nav className="tabbar" aria-label="Primary">
-        {tab("search", "/", "Search", "⌕")}
+        {tab("search", searchHref, "Search", "⌕")}
         {tab("library", "/library", "Library", "▤", true)}
         {tab("settings", "/settings", "Settings", "⚙")}
       </nav>

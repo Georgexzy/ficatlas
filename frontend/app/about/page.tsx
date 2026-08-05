@@ -1,4 +1,5 @@
 import Link from "next/link"
+import SiteHeader from "../SiteHeader"
 
 export const metadata = {
   title: "About & contact — FicAtlas",
@@ -12,7 +13,11 @@ export const metadata = {
 export default function About() {
   return (
     <div className="page-prose">
-      <p className="page-prose__back"><Link href="/">← Back to search</Link></p>
+      {/* Was a lone "← Back to search" pointing at "/", which threw away
+          whatever you had searched. The shared header instead: same one click
+          home, plus Library and Settings, and its Search remembers your
+          results. */}
+      <SiteHeader />
 
       <h1>About FicAtlas</h1>
       <p>

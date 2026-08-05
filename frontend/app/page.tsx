@@ -12,6 +12,8 @@ import { searchStories, formatWordCount, formatNumber, chapterDisplay,
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
+import { rememberSearch } from "@/lib/lastSearch"
+import { readAllPrefs, type Prefs } from "@/lib/prefs"
 import WordCountSlider from "./WordCountSlider"
 import DlpStars, { dlpRating } from "./DlpStars"
 import SiteHeader from "./SiteHeader"
@@ -797,6 +799,13 @@ function SearchPageInner() {
   const [searchFocused, setSearchFocused] = useState(false)
   const [sites,   setSites]   = useState<string[]>(csv(get("sites") ?? "ao3,ffnet,fictionalley"))
   const [explicit, setExplicit] = useState(get("explicit") === "true")
+  // Was hard-coded to 20, so the Results-per-page setting had never once had an
+  // effect. Seeded from the URL first — a shared link should show what the
+  // sender saw, not what the recipient prefers.
+  const [perPage, setPerPage] = useState(() => {
+    const n = Number(get("per_page"))
+    return Number.isFinite(n) && n > 0 && n <= 100 ? n : 20
+  })
   // Most bulk-imported rows carry no ship/character data at all. Off by default so
   // a ship filter returns stories that actually have that ship; on, it widens the
   // net to include stories whose metadata we simply never captured.
@@ -962,11 +971,22 @@ function SearchPageInner() {
   useEffect(() => {
     if (rawParams.toString()) return  // user arrived with explicit params; respect them
     const API_BASE = ""  // relative — handled by Next.js rewrite to backend
-    fetch(`${API_BASE}/api/settings`).then(r => r.json()).then(s => {
-      if (s.default_sites) setSites(s.default_sites.split(",").filter(Boolean))
-      if (s.default_sort) setSort(s.default_sort)
-      if (s.show_explicit === "true") setExplicit(true)
-    }).catch(() => {})
+    // This reader's own defaults win over the instance's. The server value is
+    // what a first-time visitor gets; anything they have since chosen in
+    // Settings is on the device and takes precedence. Applied without waiting
+    // for the fetch, so a slow API cannot delay your own preference.
+    const mine = readAllPrefs()
+    const apply = (v: Partial<Prefs>) => {
+      if (v.default_sites) setSites(v.default_sites.split(",").filter(Boolean))
+      if (v.default_sort) setSort(v.default_sort)
+      if (v.show_explicit !== undefined) setExplicit(v.show_explicit === "true")
+      const n = Number(v.results_per_page)
+      if (Number.isFinite(n) && n > 0 && n <= 100) setPerPage(n)
+    }
+    apply(mine)
+    fetch(`${API_BASE}/api/settings`).then(r => r.json())
+      .then(s => apply({ ...s, ...mine }))
+      .catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1090,9 +1110,9 @@ function SearchPageInner() {
       search_within:         searchWithin || undefined,
       sort,
       page:                  pg,
-      per_page:              20,
+      per_page:              perPage,
     }
-  }, [query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
+  }, [perPage, query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
       status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort,
       // sections was missing here, so buildParams closed over the empty array it
@@ -1126,6 +1146,11 @@ function SearchPageInner() {
     for (const [k, v] of Object.entries(p)) {
       if (v !== undefined && v !== null && v !== "") qs.set(k, String(v))
     }
+    // Remember where to come back to. Recorded here rather than in an effect
+    // watching the URL, because this is the one place a search is deliberately
+    // performed — the URL also changes on remount and on Back, and neither is a
+    // new search worth overwriting the memory with.
+    rememberSearch(qs.toString())
     startTransition(() => router.push(`${pathname}?${qs.toString()}`, { scroll: false }))
 
     setLoading(true)

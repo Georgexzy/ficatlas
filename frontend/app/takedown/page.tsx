@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useState } from "react"
+import SiteHeader from "../SiteHeader"
 
 // The person filling this in is an author who has found their work somewhere
 // they did not put it. They may be upset, they are not necessarily technical,
@@ -46,6 +47,7 @@ export default function TakedownPage() {
   if (sent) {
     return (
       <div className="page-prose">
+        <SiteHeader />
         <h1>{sent.hidden ? "The story has been taken down" : "Your request has been sent"}</h1>
         <p>{sent.message}</p>
         {!sent.hidden && (
@@ -63,6 +65,7 @@ export default function TakedownPage() {
 
   return (
     <div className="page-prose">
+      <SiteHeader />
       <p className="page-prose__back"><Link href="/about">← About FicAtlas</Link></p>
 
       <h1>Request a takedown</h1>
