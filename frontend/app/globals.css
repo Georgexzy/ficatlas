@@ -911,10 +911,6 @@ kbd {
   color: var(--text); outline: none;
 }
 .import-input:focus { border-color: var(--accent); }
-.import-drop { cursor: pointer; border-radius: 6px; text-align: center; color: var(--text-dim);
-}
-.import-drop:hover { color: var(--accent); background: var(--accent-bg);
-}
 .alert--success {
   background: var(--green-bg); border: 1px solid rgba(90,185,120,0.3);
   color: var(--green); padding: 10px 14px; border-radius: var(--radius); font-size: 13px;
@@ -957,16 +953,20 @@ kbd {
 }
 
 /* ── EPUB drag/drop ───────────────────────────────────────────────────────── */
+/* One definition, not two. An earlier block set cursor, border-radius and
+   text-align here as well and was silently overridden by this one — the only
+   thing it contributed that survived was the colour, folded in below. */
 .import-drop {
   display: block;
   cursor: pointer;
+  color: var(--text-dim);
   border: 1.5px dashed var(--border2);
   border-radius: 8px;
   padding: 32px 20px;
   text-align: center;
   transition: all 0.18s;
 }
-.import-drop:hover { border-color: var(--accent); background: var(--accent-bg); }
+.import-drop:hover { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
 .import-drop--over {
   border-color: var(--accent) !important;
   border-style: solid !important;

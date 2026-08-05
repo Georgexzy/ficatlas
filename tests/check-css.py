@@ -30,7 +30,7 @@ CSS = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "app" / "glo
 # Remaining known collision. Was 36; a 50-line block had been pasted twice
 # byte-for-byte, and the other 15 were earlier rules whose duplicated
 # properties were already dead because a later rule won. Never raise this.
-BASELINE = 1
+BASELINE = 0
 
 
 def rules(src: str):
