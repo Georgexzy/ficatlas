@@ -1529,12 +1529,17 @@ function SearchPageInner() {
             </p>
           </div>
 
-          <div className="sidebar__group">
-            <label className="sidebar__label">
-              Series
+          {/* Collapsible like every other facet. It was the one group left as
+              an always-open block, which made it the loudest thing in a sidebar
+              of quiet headings while being the filter most people never touch.
+              Counted in the header and opened on its own when a choice is
+              already active, so a filter set from a URL is never hidden. */}
+          <FilterSection label="Series" count={inSeries ? 1 : 0}
+            defaultOpen={!!inSeries}>
+            <p className="filter-note">
+              Part of a longer sequence, or complete in itself.{" "}
               <HelpTip label="About series">
-                <p>Some works are one part of a longer sequence. Filtering here
-                is really two different searches: something to sink into for a
+                <p>Two quite different searches: something to sink into for a
                 month, or something you can finish tonight without acquiring a
                 reading list.</p>
                 <p className="helptip__aside">
@@ -1543,7 +1548,7 @@ function SearchPageInner() {
                   their titles and summaries.
                 </p>
               </HelpTip>
-            </label>
+            </p>
             <div className="pill-row">
               {[["", "Either"], ["yes", "In a series"], ["no", "Standalone"]].map(([v, label]) => (
                 <button key={v} aria-pressed={inSeries === v}
@@ -1551,7 +1556,7 @@ function SearchPageInner() {
                   onClick={() => setInSeries(v)}>{label}</button>
               ))}
             </div>
-          </div>
+          </FilterSection>
 
           <div className="sidebar__group">
             <label className="checkbox-row">
