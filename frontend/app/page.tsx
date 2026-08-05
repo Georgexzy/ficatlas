@@ -909,6 +909,10 @@ function SearchPageInner() {
       "ratings", "warnings", "categories", "status", "language",
       "word_count_min", "word_count_max", "updated_after", "sites",
       "dlp_min_rating", "exclude_fandoms", "exclude_tags",
+      // Without this, a link like /?sections=Schnoogle&sites=fictionalley — which
+      // is exactly what the section badges on result cards produce — landed on
+      // the page and ran no search at all.
+      "sections",
     ]
     if (!SEARCH_PARAMS.some(k => rawParams.get(k))) return
     hasSearchedRef.current = true    // filter tweaks auto-search from here on
@@ -1036,7 +1040,11 @@ function SearchPageInner() {
   }, [query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
       status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort,
-      dlpMinRating])
+      // sections was missing here, so buildParams closed over the empty array it
+      // was created with: clicking a section updated the state, re-rendered the
+      // pill as selected, and sent a search that still said nothing about it.
+      // The control looked like it worked and changed no results.
+      dlpMinRating, sections])
 
   const doSearch = useCallback(async (resetPage = true, explicitPage?: number) => {
     // explicitPage lets pagination pass the target page directly, avoiding the
@@ -1123,7 +1131,10 @@ function SearchPageInner() {
   }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
       incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
       language, wordMin, wordMax, updatedAfter, explicit, includeUnknown, authorFilter,
-      matchMode, sort, dlpMinRating])
+      // sections belongs here too: this is the effect that re-runs the search
+      // when a filter changes, so leaving it out meant a section click updated
+      // the pill and then sat there.
+      matchMode, sort, dlpMinRating, sections])
 
   // Append a syntax fragment from the help panel and put the caret after it, so
   // an operator like "fandom:" is ready to be typed into rather than merely

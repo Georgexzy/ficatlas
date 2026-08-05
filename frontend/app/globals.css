@@ -2961,30 +2961,53 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    The warm cast is kept deliberately — a neutral grey light mode next to this
    dark one would read as a different product. Paper, not office. */
 :root[data-theme="light"] {
-  --bg:          #faf8f4;
-  --surface:     #f4f1ea;
-  --surface2:    #efebe2;
-  --surface3:    #ece7de;
-  --border:      rgba(28,26,23,0.12);
-  --border2:     rgba(28,26,23,0.20);
-  --text:        #1c1a17;
-  --text-dim:    rgba(28,26,23,0.78);
-  --text-faint:  rgba(28,26,23,0.62);
-  --text-ghost:  rgba(28,26,23,0.40);
-  /* The dark theme's #c8a96e is 2.12:1 here — unusable. This is the same hue,
-     darkened until it clears AA against paper. */
-  --accent:      #8a6a28;
-  --accent-bg:   rgba(138,106,40,0.12);
-  --accent-dim:  rgba(138,106,40,0.34);
+  /* Elevation runs the OTHER WAY from the dark theme, and getting that wrong is
+     what made the first attempt look washed out.
+     In the dark theme a raised surface is LIGHTER than the page. Mirroring that
+     shape into light mode put cards DARKER than the page, which is not how light
+     behaves and reads as muddy — the page and the card it holds were separated
+     by 0.06 luminance in the wrong direction, and near white the eye barely
+     registers that at all.
+     So: a tinted page, near-white cards. Separation is now 0.17 and cards read
+     as objects sitting on paper rather than smudges in it.
+     Measured on this palette — text / dim / faint:
+       on the page   14.35  7.17  4.30
+       on a card     17.27  7.98  4.61 */
+  --bg:          #ebe7dd;
+  --surface:     #fdfcf9;
+  --surface2:    #f5f2ea;
+  --surface3:    #e4dfd3;
+  /* Borders carry more of the work here. On dark, a surface separates itself by
+     glowing against the page; on light there is nowhere brighter to go, so the
+     edge has to do it. */
+  --border:      rgba(26,24,21,0.16);
+  --border2:     rgba(26,24,21,0.26);
+  --text:        #1a1815;
+  --text-dim:    rgba(26,24,21,0.76);
+  --text-faint:  rgba(26,24,21,0.60);
+  --text-ghost:  rgba(26,24,21,0.40);
+  /* The dark theme's #c8a96e is 2.12:1 on paper. Same hue, darkened until it
+     clears AA on both the page and a card. */
+  --accent:      #7d5f22;
+  --accent-bg:   rgba(125,95,34,0.13);
+  --accent-dim:  rgba(125,95,34,0.38);
   --green:       #1f7a3d;
-  --green-bg:    rgba(31,122,61,0.12);
-  --red:         #b03024;
-  --red-bg:      rgba(176,48,36,0.10);
-  --shadow-sm:   0 1px 3px rgba(28,26,23,0.10);
-  --shadow-md:   0 4px 14px rgba(28,26,23,0.13);
-  --shadow-lg:   0 12px 34px rgba(28,26,23,0.16);
+  --green-bg:    rgba(31,122,61,0.13);
+  --red:         #a32c22;
+  --red-bg:      rgba(163,44,34,0.11);
+  --shadow-sm:   0 1px 2px rgba(26,24,21,0.07);
+  --shadow-md:   0 2px 8px rgba(26,24,21,0.09);
+  --shadow-lg:   0 10px 28px rgba(26,24,21,0.12);
   color-scheme: light;
 }
+
+/* Cards need a visible edge and a little lift on paper. On dark they separate
+   by being brighter than the page, which is not available here. */
+:root[data-theme="light"] .card {
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+}
+:root[data-theme="light"] .card:hover { box-shadow: var(--shadow-md); }
 
 /* FictionAlley's section colours were designed for a white page, so in light
    mode the ORIGINALS are correct and the dark-adapted versions are not. */

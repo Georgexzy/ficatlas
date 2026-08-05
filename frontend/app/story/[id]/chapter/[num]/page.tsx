@@ -53,7 +53,26 @@ export default function ChapterPage() {
   const [fontFamily, setFontFamily] = useState<"serif" | "sans">("serif")
   const [width, setWidth] = useState<"narrow" | "wide">("narrow")
   const [lineHeight, setLineHeight] = useState(1.7)
-  const [theme, setTheme] = useState<"default" | "sepia" | "dark">("default")
+  // "site" follows whatever the site theme is set to, and is the default.
+  //
+  // The reader used to keep an entirely separate theme, so someone who set the
+  // site to dark still opened a story onto a white page — the one screen where
+  // that matters most, at the one time of day people read. Sepia stays, because
+  // it is a reading preference rather than a lighting one and has no site-wide
+  // equivalent.
+  const [theme, setTheme] = useState<"site" | "default" | "sepia" | "dark">("site")
+  // Mirrors the <html data-theme> the site toggle writes, so choosing "site"
+  // tracks a later change without a reload.
+  const [siteTheme, setSiteTheme] = useState<"default" | "dark">("dark")
+  useEffect(() => {
+    const read = () =>
+      setSiteTheme(document.documentElement.getAttribute("data-theme") === "light"
+        ? "default" : "dark")
+    read()
+    const obs = new MutationObserver(read)
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
+    return () => obs.disconnect()
+  }, [])
   const [justify, setJustify] = useState(false)
   const [scrollPct, setScrollPct] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -292,7 +311,8 @@ export default function ChapterPage() {
   const minutes = Math.max(1, Math.round((chapter.word_count || 0) / WORDS_PER_MINUTE))
 
   return (
-    <div className="reader-shell" data-width={width} data-font={fontFamily} data-theme={theme}>
+    <div className="reader-shell" data-width={width} data-font={fontFamily}
+      data-theme={theme === "site" ? siteTheme : theme}>
       {/* Keyboard users land on the toolbar first and would otherwise tab through
           every control before reaching a word of the story. */}
       <a href="#reader-body" className="skip-link">Skip to chapter text</a>
@@ -365,11 +385,13 @@ export default function ChapterPage() {
             <div className="reader-sheet__row">
               <span className="reader-sheet__label">Theme</span>
               <div className="reader-seg reader-seg--choice">
-                {(["default", "sepia", "dark"] as const).map(t => (
+                {(["site", "default", "sepia", "dark"] as const).map(t => (
                   <button key={t} onClick={() => setTheme(t)}
                     className={theme === t ? "is-on" : ""}
-                    aria-pressed={theme === t}>
-                    {t === "default" ? "Light" : t === "sepia" ? "Sepia" : "Dark"}
+                    aria-pressed={theme === t}
+                    title={t === "site" ? "Follow the site theme" : undefined}>
+                    {t === "site" ? "Site" : t === "default" ? "Light"
+                      : t === "sepia" ? "Sepia" : "Dark"}
                   </button>
                 ))}
               </div>
