@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, aliased
 import os
-from sqlalchemy import and_, or_, func, literal_column, cast, Text, text as sql_text
+from sqlalchemy import and_, or_, func, literal_column, cast, case, Text, text as sql_text
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from typing import Optional, List
 from pydantic import BaseModel
@@ -733,10 +733,42 @@ async def search(
     if sort_expr is not None:
         ordered = ordered.order_by(sort_expr)
     elif q:
-        # "Relevance" now means actual text relevance. It previously meant kudos,
-        # which is meaningless on this data: 99.99% of indexed stories have kudos
-        # 0, because the bulk metadata dumps carry no engagement counts at all.
+        # "Relevance" means text relevance — it used to mean kudos, which is
+        # meaningless here because 99.99% of indexed rows have kudos 0.
+        #
+        # But ts_rank alone got title searches badly wrong. The tsvector is one
+        # undifferentiated document — fic_doc() concatenates title, summary,
+        # author and every facet array — so a word in the title counts for
+        # exactly as much as the same word buried in a tag list. Searching
+        # "all the young dudes" put "Symphony in My Soul All" first and did not
+        # return the work of that name anywhere on the first page.
+        #
+        # Postgres can weight fields with setweight(), but that means rebuilding
+        # the tsvector definition and reindexing 19.7M rows. These expressions
+        # cost nothing instead: ordering runs over the materialised candidate set
+        # of at most 5,001 rows, so a per-row lower()/similarity() is trivial and
+        # needs no index at all.
+        #
+        # Order of the tiers is the order a person means them:
+        #   1  the title IS what you typed
+        #   2  the title STARTS with what you typed  (…: Bootleg Tapes)
+        #   3  the title contains it
+        #   4  how close the whole title is, by trigram
+        # then engagement, then the old text rank as the final tiebreak. Kudos
+        # only ever separates rows that are already equal on title, so it cannot
+        # drag a popular unrelated work above an exact match.
+        q_norm = q.strip().lower()
+        title_l = func.lower(S.title)
+        title_rank = case(
+            (title_l == q_norm, 0),
+            (title_l.like(q_norm + "%"), 1),
+            (title_l.like("%" + q_norm + "%"), 2),
+            else_=3,
+        )
         ordered = ordered.order_by(
+            title_rank.asc(),
+            func.similarity(func.coalesce(S.title, ""), q_norm).desc(),
+            S.kudos.desc().nullslast(),
             func.ts_rank(_story_tsv(S), func.websearch_to_tsquery(_REGCONFIG, q)).desc(),
             S.word_count.desc().nullslast(),
         )

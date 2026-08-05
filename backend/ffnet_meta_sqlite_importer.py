@@ -25,6 +25,12 @@ is from 2019 and ours has been enriched since from Wayback captures; letting a
 six-year-old row overwrite a fresher one would be a downgrade dressed as an
 import. Nothing here can reduce what the index already knows.
 
+Summaries are deliberately NOT imported. Ours are 99.998% complete (131 rows
+short of 6.57M), and carrying 20,000 summaries per batch to fill a hundred rows
+was most of the payload — big enough that the UPDATE's hash join OOM-killed the
+Postgres backend on a 14GB host and took the database down with it. The 131 are
+not worth a gigabyte of churn.
+
 Genres arrive as FF.net writes them — "Romance/Angst", at most two — so they are
 split on "/" into our array.
 
@@ -92,7 +98,8 @@ def parse_date(raw: str | None) -> datetime | None:
     return None
 
 
-def run(dry_run: bool, batch: int = 20000, limit: int | None = None) -> int:
+def run(dry_run: bool, batch: int = 5000, limit: int | None = None,
+        skip: int = 0) -> int:
     if not os.path.exists(DB_PATH):
         log.error(f"{DB_PATH} not found — download it first "
                   f"(archive.org/details/fanfic-meta-sqlite)")
@@ -100,8 +107,8 @@ def run(dry_run: bool, batch: int = 20000, limit: int | None = None) -> int:
 
     con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
-    cur = con.execute('SELECT "Story URL" AS url, Genre, Published, Updated, '
-                      'Summary FROM metadata_full')
+    cur = con.execute('SELECT "Story URL" AS url, Genre, Published, Updated '
+                      'FROM metadata_full')
 
     seen = matched = filled_genres = filled_dates = written = 0
     pending: list[tuple] = []
@@ -118,9 +125,7 @@ def run(dry_run: bool, batch: int = 20000, limit: int | None = None) -> int:
                     genres = CASE WHEN (s.genres IS NULL OR s.genres = '{}')
                                   THEN COALESCE(v.genres, s.genres) ELSE s.genres END,
                     published_at = COALESCE(s.published_at, v.pub),
-                    updated_at   = COALESCE(s.updated_at, v.upd),
-                    -- nullif so an existing empty string counts as absent too.
-                    summary      = COALESCE(nullif(s.summary, ''), v.summary)
+                    updated_at   = COALESCE(s.updated_at, v.upd)
                 FROM (
                     -- Every column cast explicitly. Postgres cannot infer the
                     -- type of an empty array, and most source rows have no
@@ -135,36 +140,38 @@ def run(dry_run: bool, batch: int = 20000, limit: int | None = None) -> int:
                            string_to_array(
                              nullif(unnest(CAST(:genres AS text[])), ''), '|') AS genres,
                            unnest(CAST(:pubs AS timestamptz[])) AS pub,
-                           unnest(CAST(:upds AS timestamptz[])) AS upd,
-                           unnest(CAST(:summaries AS text[])) AS summary
+                           unnest(CAST(:upds AS timestamptz[])) AS upd
                 ) AS v
                 WHERE s.site = 'ffnet' AND s.site_id = v.site_id
                   AND (s.genres IS NULL OR s.genres = '{}'
-                       OR s.published_at IS NULL OR s.updated_at IS NULL
-                       OR nullif(s.summary, '') IS NULL)
+                       OR s.published_at IS NULL OR s.updated_at IS NULL)
             """), {
                 "ids":       [r[0] for r in rows],
                 "genres":    ["|".join(r[1]) for r in rows],
                 "pubs":      [r[2] for r in rows],
                 "upds":      [r[3] for r in rows],
-                "summaries": [r[4] for r in rows],
             })
             db.commit()
             return res.rowcount or 0
 
     for row in cur:
         seen += 1
+        # SQLite returns rows in a stable order for an unordered scan of the
+        # same file, so counting past the first N is a sound resume. Cheap
+        # enough to be worth it: skipping is a tight loop, redoing the work is
+        # an hour of UPDATEs that all match zero rows.
+        if seen <= skip:
+            continue
         m = _ID_RE.search(row["url"] or "")
         if not m:
             continue
         genres = parse_genres(row["Genre"])
         pub = parse_date(row["Published"])
         upd = parse_date(row["Updated"])
-        summary = (row["Summary"] or "").strip() or None
-        if not genres and not pub and not upd and not summary:
+        if not genres and not pub and not upd:
             continue
         matched += 1
-        pending.append((m.group(1), genres, pub, upd, summary))
+        pending.append((m.group(1), genres, pub, upd))
         if genres:
             filled_genres += 1
         if pub or upd:
@@ -196,8 +203,7 @@ def run(dry_run: bool, batch: int = 20000, limit: int | None = None) -> int:
         with db_session() as db:
             for label, cond in (("no genres", "genres IS NULL OR genres='{}'"),
                                 ("no published date", "published_at IS NULL"),
-                                ("no updated date", "updated_at IS NULL"),
-                                ("no summary", "nullif(summary,'') IS NULL")):
+                                ("no updated date", "updated_at IS NULL")):
                 n = db.execute(sql_text(
                     f"SELECT count(*) FROM stories WHERE site='ffnet' AND ({cond})")).scalar()
                 log.info(f"  remaining {label}: {n:,}")
@@ -208,9 +214,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Fill FF.net genres/dates from the archive.org dump")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=None, help="stop after N source rows")
-    ap.add_argument("--batch", type=int, default=20000)
+    ap.add_argument("--batch", type=int, default=5000)
+    ap.add_argument("--skip", type=int, default=0,
+                    help="skip the first N source rows (to resume)")
     args = ap.parse_args()
-    return run(args.dry_run, args.batch, args.limit)
+    return run(args.dry_run, args.batch, args.limit, args.skip)
 
 
 if __name__ == "__main__":
