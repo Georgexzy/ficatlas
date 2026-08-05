@@ -2816,6 +2816,13 @@ body.is-resizing * { cursor: col-resize !important; }
 .admin-bar--na { opacity: 0.45; }
 .admin-bar--na .admin-bar__track { background: transparent; border: 1px dashed var(--border); height: 7px; box-sizing: border-box; }
 
+.admin-site__note {
+  font-size: 11.5px; line-height: 1.6; color: var(--text-dim);
+  margin: 9px 0 0; padding: 8px 10px; border-radius: 6px;
+  background: var(--surface2);
+}
+.admin-site__note strong { color: var(--text); }
+
 .admin-facts {
   display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px;
   margin: 4px 0 10px; font-size: 13px;

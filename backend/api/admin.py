@@ -139,6 +139,27 @@ def _coverage(db: Session) -> list[dict]:
     for c in out:
         c["total"] = totals.get(c["site"], 0)
         c["na"] = sorted(_NOT_APPLICABLE.get(c["site"], set()))
+
+    # Which route can actually close each site's gaps — the part that turns this
+    # panel from a list of complaints into something you can act on.
+    #
+    # For AO3 the answer is mostly "the listing harvest, already running": it
+    # gets the same fields twenty works per request by walking fandom tag pages.
+    # The exception is the pocket of rows with NO fandom, which a tag-page walk
+    # cannot see by construction and nothing else will ever fix.
+    try:
+        r = db.execute(sql_text("""
+            SELECT count(*) FILTER (WHERE fandoms IS NULL OR cardinality(fandoms) = 0),
+                   count(*)
+            FROM stories TABLESAMPLE SYSTEM_ROWS(50000) WHERE site = 'ao3'
+        """)).first()
+        if r and r[1]:
+            share = r[0] / r[1]
+            out_ao3 = next((c for c in out if c["site"] == "ao3"), None)
+            if out_ao3:
+                out_ao3["unreachable_by_listing"] = int(share * out_ao3["total"])
+    except Exception as e:
+        log.info(f"unreachable estimate failed: {type(e).__name__}")
     out.sort(key=lambda c: -c["total"])
     return out
 

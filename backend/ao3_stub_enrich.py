@@ -17,21 +17,28 @@ That is not only a display problem. It breaks SEARCH BY NAME, and badly:
 Ranking cannot fix that, because there is no signal in the data to rank on. The
 row has to be filled in.
 
-Which stubs first
------------------
-A stub nobody searches for costs nothing; a stub that COLLIDES with other works
-on its title is breaking a search someone is running right now. So collision
-count is what you would like to order by — and it is far too expensive to ask
-for. GROUP BY lower(title) over 13.1M rows took minutes and had to be killed.
-Sorting by title length was no better: with no index on the expression, ORDER BY
-still finds and sorts all 4.1M matches before returning ten.
+Which stubs, and why this route at all
+--------------------------------------
+There is a much cheaper way to fix an AO3 row, and it is already running:
+ao3_listing_harvest walks fandom tag pages and gets the same fields for TWENTY
+works per request. gap_filler is explicit that work pages are only justified for
+what a listing cannot supply. Filling stubs one page at a time would be twenty
+times the load on AO3 for identical data — so this deliberately does not compete
+with it, and takes only the rows the listing route can never reach.
 
-So there is no ORDER BY at all. The title-length bound is a WHERE predicate and
-the LIMIT lets the scan stop as soon as it has enough rows — 311ms instead of
-minutes. Short titles are a good proxy anyway: one short enough to type in full
-("All the Young Dudes", "Home", "Stay") is both the kind that collides and the
-kind someone searches by name. Enriched rows stop matching, so successive runs
-pick up new ones and the queue drains without being ordered.
+Measured: about 30% of our AO3 rows — roughly 3.9M — have NO FANDOM AT ALL, and
+essentially every one of those is also a stub. A harvest that walks fandom tag
+pages cannot see them by construction. Nothing else will ever fix them.
+
+They are also the worst rows in the index to be a reader looking for: no fandom
+to filter by, no summary to judge by, no kudos to rank by. Fetching the work
+page fixes all of that at once AND gives the row its fandoms, after which the
+listing harvest can maintain it like any other.
+
+Within that set, ordering is by gap score — the same weighting gap_filler uses,
+where a missing summary counts for more than a missing language because a result
+with no description is the one that looks broken in a list — and then by
+engagement, so effort lands on works people actually open.
 
 Rate limiting
 -------------
@@ -49,6 +56,7 @@ import argparse
 import asyncio
 import logging
 import os
+import html as _html
 import re
 import sys
 
@@ -82,17 +90,34 @@ _CHAPTERS_RE = re.compile(r'<dd class="chapters">(\d+)\s*/\s*(\d+|\?)</dd>')
 # genuinely empty work exists, and refetching it every run forever would be a
 # slow leak of AO3's goodwill for no gain.
 _CANDIDATES = sql_text("""
-    SELECT id, url, length(title) AS tl
+    SELECT id, url,
+           (CASE WHEN nullif(summary,'') IS NULL          THEN 5 ELSE 0 END
+          + CASE WHEN published_at IS NULL                THEN 3 ELSE 0 END
+          + CASE WHEN COALESCE(word_count,0) = 0          THEN 3 ELSE 0 END
+          + CASE WHEN cardinality(characters) = 0         THEN 2 ELSE 0 END
+          + CASE WHEN cardinality(relationships) = 0      THEN 2 ELSE 0 END
+          + CASE WHEN COALESCE(kudos,0) = 0
+                  AND COALESCE(hits,0) = 0                THEN 1 ELSE 0 END
+           ) AS gap_score
     FROM stories
     WHERE site = 'ao3'
       AND url LIKE 'https://archiveofourown.org/works/%'
+      -- The whole point: rows the fandom-tag harvest cannot reach.
+      AND (fandoms IS NULL OR cardinality(fandoms) = 0)
       AND COALESCE(word_count, 0) = 0
       AND COALESCE(kudos, 0) = 0
       AND COALESCE(hits, 0) = 0
       AND title IS NOT NULL
-      AND length(title) BETWEEN 3 AND :maxlen
+    ORDER BY gap_score DESC, COALESCE(hits,0) DESC, id
     LIMIT :lim
 """)
+
+
+def _unescape(v: str) -> str:
+    """AO3 tag text is HTML-escaped, and ampersands are common in fandom names
+    ("Steven Universe &amp; Related Fandoms"). Storing the escaped form would
+    make the tag fail to match anything already in the index."""
+    return _html.unescape(re.sub(r"<[^>]+>", "", v)).strip()
 
 
 def _int(pattern: re.Pattern, html: str) -> int | None:
@@ -112,6 +137,22 @@ def parse_work(html: str) -> dict:
         # "12/12" means finished, "12/?" still going. Not written: completion
         # lives in `status`, which the bulk importers already set, and guessing
         # it from a chapter count would overwrite better information.
+    # Fandoms, characters and ships. These are the point of the whole exercise
+    # for a fandom-less row: once it HAS a fandom, ao3_listing_harvest can see it
+    # on a tag page and maintain it twenty-at-a-time from then on. Without this
+    # the row would be filled once and then go stale forever, which is the
+    # situation it is already in.
+    for field, css in (("fandoms", "fandom"), ("characters", "character"),
+                       ("relationships", "relationship")):
+        block = re.search(rf'<dd class="{css} tags">(.*?)</dd>', html, re.S)
+        if not block:
+            continue
+        vals = [re.sub(r"\s+", " ", v).strip() for v in
+                re.findall(r'<a[^>]*class="tag"[^>]*>(.*?)</a>', block.group(1), re.S)]
+        vals = [_unescape(v) for v in vals if v.strip()]
+        if vals:
+            out[field] = vals[:60]
+
     m = re.search(r'<blockquote class="userstuff">(.*?)</blockquote>', html, re.S)
     if m:
         text = re.sub(r"<[^>]+>", " ", m.group(1))
@@ -129,19 +170,19 @@ async def enrich(limit: int, dry_run: bool, maxlen: int = 60,
             # background drain, and when a specific search is visibly wrong the
             # fix should not have to wait for it to come round.
             rows = db.execute(sql_text(
-                "SELECT id, url, length(title) FROM stories WHERE url = :u"),
+                "SELECT id, url, 0 AS gap_score FROM stories WHERE url = :u"),
                 {"u": only_url}).fetchall()
             if not rows:
                 log.error(f"no row with url {only_url}")
                 return 2
         else:
-            rows = db.execute(_CANDIDATES,
-                              {"lim": limit, "maxlen": maxlen}).fetchall()
+            rows = db.execute(_CANDIDATES, {"lim": limit}).fetchall()
     if not rows:
         log.info("no stubs left to enrich")
         return 0
 
-    log.info(f"{len(rows):,} stubs queued")
+    log.info(f"{len(rows):,} queued" if only_url else
+             f"{len(rows):,} fandom-less stubs queued (top gap score {rows[0][2]})")
     if dry_run:
         for sid, url, _tl in rows[:10]:
             log.info(f"    would fetch {url}")
@@ -192,6 +233,13 @@ async def enrich(limit: int, dry_run: bool, maxlen: int = 60,
                           "comments", "chapter_count"):
                 if field in data:
                     sets.append(f"{field} = COALESCE(NULLIF({field}, 0), :{field})")
+                    params[field] = data[field]
+            # Arrays are filled only where ours is empty, same additive rule —
+            # a listing harvest may already have given this row better tags.
+            for field in ("fandoms", "characters", "relationships"):
+                if data.get(field):
+                    sets.append(f"{field} = CASE WHEN cardinality({field}) = 0 "
+                                f"THEN CAST(:{field} AS text[]) ELSE {field} END")
                     params[field] = data[field]
             if "summary" in data:
                 sets.append("summary = COALESCE(NULLIF(summary, ''), :summary)")
