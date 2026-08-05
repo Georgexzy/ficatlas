@@ -55,6 +55,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://ficatlas:ficatlas@db:5432/fi
 from sqlalchemy import text as sql_text
 
 import series_cues
+import series_titles
 from db.session import db_session
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -221,6 +222,30 @@ def group_author(works: list[dict], idf: dict[str, float], default_idf: float
     return out
 
 
+def _stem_name(stem: str, members: list[dict]) -> str:
+    """A readable name for a structural group.
+
+    Takes the casing from a real title rather than title-casing the normalised
+    stem, so "dc slashcon opening" comes back as "DC-SlashCon Opening" — the
+    author's own capitalisation, which is what a reader will recognise.
+    """
+    words = stem.split()
+    for m in members:
+        t = (m.get("title") or "")
+        norm = series_titles.normalise(t).split()
+        if norm[:len(words)] == words:
+            # Walk the original string far enough to cover that many words.
+            out, count = [], 0
+            for tok in re.findall(r"\S+", t):
+                out.append(tok)
+                if re.search(r"\w", tok):
+                    count += 1
+                if count >= len(words):
+                    break
+            return series_titles.tidy_name(" ".join(out).strip(" -–—:,."))
+    return series_titles.tidy_name(stem.title())
+
+
 def series_name(token: str, members: list[dict]) -> str:
     """A name a reader would recognise.
 
@@ -334,16 +359,28 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                 groups.append((f"{first['title']} series", chain, 28.0, "stated"))
                 claimed.update(m["id"] for m in chain)
 
-            # 3. Distinctive shared title words, on whatever is left.
+            # 3. STRUCTURE — a shared stem plus a distinct number.
+            #
+            # Replaces grouping by a rare shared word, which was wrong about ten
+            # of every fourteen groups it made: a character name, a ship, a kink
+            # tag and a format label all present as "a rare word these titles
+            # share". What a real series has and those do not is a stem and an
+            # order — "Arthurs Awakening PART 1/2/4" — which is also how the
+            # book-cataloguing literature does it (US 9,244,919 matches common
+            # title strings TOGETHER WITH a book number).
             rest = [w for w in works if w["id"] not in claimed]
-            for token, members, score in group_author(rest, idf, default_idf):
-                # Prefer the name the author uses. The titles are what FOUND the
-                # group; the summaries often say what it is CALLED, and the two
-                # are not the same — "danger" found the Dangerverse, and
-                # "Dangerverse" is its name.
+            for g in series_titles.group_by_structure(rest):
+                members = [m for m, _ in g["members"]]
+                # Position from the structure itself where there is one. A work
+                # the author numbered is IN the sequence; one that merely shares
+                # the stem is a companion — the same distinction as before, now
+                # resting on the same evidence that formed the group.
+                for m, pos in g["members"]:
+                    m["cue_pos"] = m.get("cue_pos") or pos
+                    m["struct_pos"] = pos
                 stated = series_cues.stated_name([m.get("summary") for m in members])
-                groups.append((stated or series_name(token, members),
-                               members, score, "inferred"))
+                name = stated or _stem_name(g["stem"], members)
+                groups.append((name, members, 30.0, "inferred"))
 
             for name, members, score, source in groups:
                 found += 1
@@ -360,10 +397,25 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                     # Dangerverse: the five with stated ordinals are 215k-520k
                     # words, the five without are 1.8k-49k.
                     rels = series_cues.parse_relative(m.get("summary"))
-                    is_side = any(r["kind"] in ("side-story", "companion",
-                                                "companion-piece")
-                                  for r in rels)
-                    m["role"] = "side" if (is_side or m["pos"] is None) else "main"
+                    m["is_side_cue"] = any(
+                        r["kind"] in ("side-story", "companion", "companion-piece")
+                        for r in rels)
+
+                # Side needs EVIDENCE, not merely an absent number.
+                #
+                # Defaulting "no position" to side made 79% of every series a
+                # companion, including flat series where nobody is numbered and
+                # everyone is equally part of it. A work is a side story when it
+                # says so, or when it is the unnumbered one among numbered
+                # siblings — an author who numbered four of five was telling you
+                # which the fifth is. Where nobody is numbered there is no
+                # sequence to be outside of, so nobody is.
+                any_numbered = any(m.get("pos") is not None for m in members)
+                for m in members:
+                    m["role"] = ("side" if (m.get("is_side_cue")
+                                            or (any_numbered and m.get("pos") is None))
+                                 else "main")
+
                 # Publication order only for the main run; a side story has no
                 # place in a numbered sequence it was never part of.
                 mains = [m for m in members if m.get("role") != "side"]
