@@ -996,6 +996,31 @@ function SearchPageInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // How much is currently narrowing the search, and a way out of all of it.
+  //
+  // "Exit" is a navigation to "/", not twenty-odd setState calls. Every filter
+  // is already seeded from the URL and SearchPageKeyed remounts when the URL
+  // changes, so an empty URL IS the clean state — resetting each piece by hand
+  // would be a second definition of "empty" to keep in step with the first, and
+  // the one that silently drifts.
+  const activeFilters =
+    incFandoms.length + incChars.length + incShips.length + incTags.length +
+    incWarnings.length + incCats.length + sections.length + status.length +
+    excFandoms.length + excChars.length + excShips.length + excTags.length +
+    (language ? 1 : 0) + (authorFilter ? 1 : 0) + (wordMin ? 1 : 0) +
+    (wordMax ? 1 : 0) + (updatedAfter ? 1 : 0) + (dlpMinRating ? 1 : 0) +
+    (crossovers !== "include" ? 1 : 0) + (includeUnknown ? 1 : 0) +
+    // Ratings only count as a filter when they are not the default set.
+    (incRatings.length && incRatings.length < (explicit ? 5 : 4) ? 1 : 0) +
+    (sites.length < 3 ? 1 : 0)
+  const searchIsActive = query.trim().length > 0 || activeFilters > 0 || !!results
+
+  const exitSearch = useCallback(() => {
+    // Same target as the wordmark, so the two cannot disagree about what home
+    // means. scroll:true because you are leaving, not paging.
+    startTransition(() => router.push(pathname))
+  }, [router, pathname, startTransition])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1005,6 +1030,15 @@ function SearchPageInner() {
         const el = document.querySelector<HTMLInputElement>(".search-input")
         el?.focus()
       }
+      // Escape is the conventional way out of a mode, and search results ARE a
+      // mode — everything on screen is about a query you have finished with.
+      // Only when nothing is focused, so it never steals Escape from a text
+      // field, the help panel or the mobile filter drawer.
+      if (e.key === "Escape" && searchIsActive) {
+        e.preventDefault()
+        exitSearch()
+        return
+      }
       if (e.key === "?" && e.shiftKey) {
         const btn = document.querySelector<HTMLButtonElement>(".syntax-help__btn")
         btn?.click()
@@ -1012,7 +1046,7 @@ function SearchPageInner() {
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [])
+  }, [searchIsActive, exitSearch])
 
   const tog = (arr: string[], set: (v: string[]) => void, id: string) =>
     set(arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id])
@@ -1142,6 +1176,7 @@ function SearchPageInner() {
     authorFilter, matchMode, sort, dlpMinRating, sections,
   ])
   const filtersDirty = appliedSig !== null && appliedSig !== filterSig
+
 
   const doSearch = useCallback(async (resetPage = true, explicitPage?: number,
                                       explicitQuery?: string) => {
@@ -1781,6 +1816,36 @@ function SearchPageInner() {
                   <div className="skel-line skel-line--meta" />
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* The way out.
+              Sits above the results rather than in the header, because this is
+              about the search you are looking at, not about the site — and it
+              says what it will discard, since "Clear" with no object is the
+              button people hesitate over. Only rendered when there is something
+              to leave. */}
+          {searchIsActive && (
+            <div className="search-exit">
+              <span className="search-exit__what">
+                {query.trim() ? (
+                  <>Searching <strong>{query.trim().length > 44
+                    ? query.trim().slice(0, 44) + "…" : query.trim()}</strong></>
+                ) : activeFilters > 0 ? (
+                  <>Browsing with <strong>{activeFilters}</strong>{" "}
+                    {activeFilters === 1 ? "filter" : "filters"}</>
+                ) : (
+                  <>Showing results</>
+                )}
+                {query.trim() && activeFilters > 0 && (
+                  <> · <strong>{activeFilters}</strong>{" "}
+                    {activeFilters === 1 ? "filter" : "filters"}</>
+                )}
+              </span>
+              <button className="search-exit__btn" onClick={exitSearch}
+                title="Clear the search and every filter, and start again (Esc)">
+                <span aria-hidden="true">✕</span> Start over
+              </button>
             </div>
           )}
 
