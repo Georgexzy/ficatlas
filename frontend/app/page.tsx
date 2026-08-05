@@ -1413,14 +1413,26 @@ function SearchPageInner() {
             <label className="checkbox-row">
               <input type="checkbox" checked={includeUnknown}
                 onChange={e => setIncludeUnknown(e.target.checked)} />
-              <span>Include stories with no tags</span>
+              <span>Include stories with no ship or character data</span>
             </label>
-            <HelpTip label="About stories with no tags">
-              Most bulk-imported stories carry no ship or character tags at all.
-              They are normally left out of those filters, so a ship filter
-              returns only stories that genuinely match it. Tick this to widen
-              the search back to rows whose metadata was never captured — more
-              results, less certainty.
+            <HelpTip label="Stories with no ship or character data">
+              <p>Filtering by a ship or a character normally returns only stories
+              that actually list one, so a Drarry search is Drarry and not
+              &ldquo;might be&rdquo;. This widens it to stories where we have no
+              such data either way.</p>
+              <p>How much that helps depends entirely on the archive:</p>
+              <ul className="helptip__list">
+                <li><strong>AO3</strong> — 59% list a ship and 65% a character,
+                  so the filter already works well and this adds mostly noise.</li>
+                <li><strong>FanFiction.net</strong> — 1.3% and 1.7%. FF.net does
+                  not publish either as a field, so a ship filter finds almost
+                  nothing there unless you tick this.</li>
+                <li><strong>FictionAlley</strong> — 18% ships but 82% characters.</li>
+              </ul>
+              <p className="helptip__aside">
+                Every story has freeform tags; this is only about ships and
+                characters. More results, less certainty.
+              </p>
             </HelpTip>
           </div>
 
@@ -1803,7 +1815,7 @@ function SearchPageInner() {
                         </p>
                         <button className="btn btn--primary no-results__fetch"
                           onClick={() => setIncludeUnknown(true)}>
-                          Include stories with no tags
+                          Include stories with no ship or character data
                         </button>
                       </>
                     ) : (

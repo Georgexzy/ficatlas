@@ -97,6 +97,15 @@ class TakedownOut(BaseModel):
     created_at: str
     story_title: str | None = None
     story_id: str | None = None
+    # What is actually true of the story right now, so the queue shows the
+    # CURRENT state rather than what was asked for. A request can be superseded
+    # — another one for the same work, or an admin acting directly — and an
+    # operator deciding whether to reverse something needs to see where it
+    # stands, not only what the form said when it arrived.
+    text_hidden: bool = False
+    delisted: bool = False
+    is_hosted: bool = False
+    source_url: str | None = None
 
 
 @router.post("")
@@ -262,7 +271,9 @@ async def list_takedowns(state: str = "pending", limit: int = 100,
                          _admin: User = Depends(require_admin)):
     rows = db.execute(sql_text("""
         SELECT t.id, t.story_url, t.claimant, t.email, t.relationship, t.detail,
-               t.state, t.created_at, s.title, t.story_id
+               t.state, t.created_at, s.title, t.story_id,
+               s.text_withdrawn_at IS NOT NULL, s.delisted_at IS NOT NULL,
+               COALESCE(s.is_hosted, false), s.url
         FROM takedowns t
         LEFT JOIN stories s ON s.id = t.story_id
         WHERE (:state = 'all' OR t.state = :state)
@@ -272,7 +283,23 @@ async def list_takedowns(state: str = "pending", limit: int = 100,
         id=str(r[0]), story_url=r[1], claimant=r[2], email=r[3], relationship=r[4],
         detail=r[5], state=r[6], created_at=r[7].isoformat(),
         story_title=r[8], story_id=str(r[9]) if r[9] else None,
+        text_hidden=bool(r[10]), delisted=bool(r[11]),
+        is_hosted=bool(r[12]), source_url=r[13],
     ) for r in rows]
+
+
+@router.get("/pending-count")
+async def pending_count(db: Session = Depends(get_db),
+                        _admin: User = Depends(require_admin)):
+    """How many requests are waiting, for the badge on the admin entry point.
+
+    Auto-hiding means nothing is URGENT — the text is already down before anyone
+    looks — but a queue nobody knows about is a queue nobody empties, and every
+    one of these is a person waiting to be told what happened.
+    """
+    n = db.execute(sql_text(
+        "SELECT count(*) FROM takedowns WHERE state = 'pending'")).scalar() or 0
+    return {"pending": n}
 
 
 @router.post("/{takedown_id}/resolve")
