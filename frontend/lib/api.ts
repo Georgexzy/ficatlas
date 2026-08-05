@@ -328,6 +328,62 @@ export function getIndexTotals(): Promise<IndexTotals | null> {
 // not. The help text differs per section for the same reason the sort help
 // does: a single paragraph covering all five could only say something generic,
 // and the useful part is what distinguishes them.
+// Which sites actually record which field, as a fraction of that site's rows.
+//
+// Measured 2026-08-05 against the live index; see the query in the commit that
+// added this. These are structural rather than incidental, so they do not drift:
+// AO3 has archive warnings and categories as first-class fields with a fixed
+// vocabulary, while the FF.net bulk dump has eight columns and neither is among
+// them — its 1.7% comes from the minority of rows enriched from other sources.
+//
+// Used to warn, NOT to hide or disable. 114,155 FF.net works DO carry warnings,
+// and a filter that finds a hundred thousand stories is not broken. Baymard's
+// finding on filters is that removing an option makes users conclude the site
+// cannot do it at all; the failure being avoided here is subtler — a filter that
+// looks like it works, returns almost nothing, and gives no clue why.
+export const FIELD_COVERAGE: Record<string, Record<string, number>> = {
+  warnings:      { ao3: 0.69, ffnet: 0.017, fictionalley: 0.024 },
+  categories:    { ao3: 0.65, ffnet: 0.016, fictionalley: 0.021 },
+  relationships: { ao3: 0.59, ffnet: 0.013, fictionalley: 0.184 },
+  characters:    { ao3: 0.65, ffnet: 0.017, fictionalley: 0.815 },
+}
+
+const SITE_SIZE: Record<string, number> = {
+  ao3: 13135071, ffnet: 6572234, fictionalley: 29949,
+}
+
+/** A warning for a filter that is mostly inert given the sites now selected,
+ *  or null when it will work well enough to leave unremarked.
+ *
+ *  Weighted by how big each selected site is, because the question a reader
+ *  actually has is "of what I am searching, how much can this even match" —
+ *  selecting AO3 and FF.net together is dominated by AO3, and the filter is
+ *  fine. Selecting FF.net alone is a different situation entirely. */
+export function coverageWarning(field: string, sites: string[]): string | null {
+  const cov = FIELD_COVERAGE[field]
+  if (!cov || sites.length === 0) return null
+  let rows = 0, have = 0
+  for (const s of sites) {
+    const n = SITE_SIZE[s]
+    if (!n) return null                        // unknown site — say nothing
+    rows += n
+    have += n * (cov[s] ?? 0)
+  }
+  if (rows === 0) return null
+  const pct = have / rows
+  if (pct >= 0.15) return null
+  const named = sites.length === 1
+    ? SITE_LABEL[sites[0]] ?? sites[0]
+    : "the sites you have selected"
+  return `Only about ${pct < 0.01 ? "1%" : Math.round(pct * 100) + "%"} of ${named} `
+    + `works record this, so filtering on it will hide most results. `
+    + `It is an AO3 field; other archives rarely publish it.`
+}
+
+const SITE_LABEL: Record<string, string> = {
+  ao3: "AO3", ffnet: "FanFiction.net", fictionalley: "FictionAlley",
+}
+
 export const FICALLEY_SECTIONS = [
   { value: "Schnoogle", label: "Schnoogle",
     help: "Novel-length work. FictionAlley's flagship section, for long multi-chapter stories rather than one-shots — the closest thing the archive had to a bookshelf of novels." },

@@ -51,9 +51,12 @@ const FIELD_ALIASES: Record<string, string> = {
   author: "author", by: "author",
   updated: "updated_after", update: "updated_after", since: "updated_after",
   site: "sites",
-  // FictionAlley sections, so the bar round-trips: the sidebar writes
-  // section:Schnoogle and typing the same thing has to mean the same thing.
-  section: "sections", sections: "sections", subsite: "sections",
+  // FictionAlley subsites, so the bar round-trips: the sidebar writes
+  // subsite:Schnoogle and typing the same thing has to mean the same thing.
+  // `section:` was the spelling the sidebar emitted first and is still accepted
+  // — anyone who bookmarked or shared such a URL keeps a working link.
+  subsite: "sections", subsites: "sections",
+  section: "sections", sections: "sections",
   crossover: "crossovers", xover: "crossovers",
   warn: "warnings", warning: "warnings", warnings: "warnings",
   category: "categories", cat: "categories",

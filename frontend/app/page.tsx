@@ -8,7 +8,7 @@ import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
-         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, FICALLEY_SECTIONS } from "@/lib/api"
+         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, FICALLEY_SECTIONS, coverageWarning } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
@@ -108,8 +108,15 @@ function TagList({ tags, className, kind = "tags", tagClass = "" }: {
 }
 
 // ── Collapsible filter section ────────────────────────────────────────────────
-function FilterSection({ label, children, defaultOpen = false, highlighted = false, count = 0 }: {
-  label: string; children: React.ReactNode; defaultOpen?: boolean; highlighted?: boolean; count?: number
+function FilterSection({ label, children, defaultOpen = false, highlighted = false,
+                        count = 0, note = null }: {
+  label: string; children: React.ReactNode; defaultOpen?: boolean; highlighted?: boolean
+  count?: number
+  /** Shown inside the section when the filter is mostly inert for the current
+   *  site selection. Deliberately inside rather than beside the heading: a
+   *  collapsed section should not shout, and by the time you have opened it you
+   *  are about to use the thing the note is about. */
+  note?: string | null
 }) {
   const [open, setOpen] = useState(defaultOpen || highlighted)
   useEffect(() => { if (highlighted) setOpen(true) }, [highlighted])
@@ -123,7 +130,12 @@ function FilterSection({ label, children, defaultOpen = false, highlighted = fal
         </span>
         <span className={`filter-section__chevron ${open ? "open" : ""}`}>▸</span>
       </button>
-      {open && <div className="filter-section__body">{children}</div>}
+      {open && (
+        <div className="filter-section__body">
+          {note && <p className="filter-section__note">{note}</p>}
+          {children}
+        </div>
+      )}
     </div>
   )
 }
@@ -751,13 +763,29 @@ function SearchPageInner() {
   const focusMeta = FICALLEY_SECTIONS.find(x => x.value === focusSection)
   const sectionHelpLabel = focusMeta
     ? `About ${focusMeta.label}`
-    : "About FicAlley sections"
+    : "What are subsites?"
   const sectionHelpBody = focusMeta ? (
-    <><strong>{focusMeta.label}.</strong> {focusMeta.help}</>
+    <>
+      <p><strong>{focusMeta.label}.</strong> {focusMeta.help}</p>
+      <p className="helptip__aside">
+        Same as typing <code>subsite:{focusMeta.value.includes(" ")
+          ? `"${focusMeta.value}"` : focusMeta.value}</code> in the search bar.
+      </p>
+    </>
   ) : (
-    <>FictionAlley was five archives behind one banner, and readers navigated by
-    them — asking for a <strong>Schnoogle</strong> fic meant novel-length, the{" "}
-    <strong>Dark Arts</strong> meant horror. Point at one for what it held.</>
+    <>
+      <p>FictionAlley was not one archive but <strong>five</strong>, and it
+      shelved by <em>kind of story</em> rather than by tag. Readers asked for
+      each by name: a Schnoogle fic meant novel-length, a Dark Arts fic meant
+      horror.</p>
+      <p>That makes these the nearest thing the archive has to genre tags — and
+      for its 30,000 works, which mostly predate tagging as we know it, often
+      the only such signal there is. Point at one to see what it held.</p>
+      <p className="helptip__aside">
+        Only shown while FictionAlley is one of the sites above. Typing{" "}
+        <code>subsite:Schnoogle</code> in the search bar does the same thing.
+      </p>
+    </>
   )
   const [, startTransition] = useTransition()
   const { sidebarWidth, startResize, onResizeKey, resetWidth } = useSidebarResize()
@@ -983,7 +1011,7 @@ function SearchPageInner() {
     // Sections were missing from the bar, so selecting Schnoogle narrowed the
     // results and the search box carried on claiming the old query — the one
     // place a reader looks to see what they have actually asked for.
-    sections.forEach(v => parts.push(`section:${q(v)}`))
+    sections.forEach(v => parts.push(`subsite:${q(v)}`))
     // Only write ratings into the bar when they are a real narrowing. Having
     // every available rating selected IS the default, and spelling it out put
     // "rating:G rating:T rating:M rating:NR" in front of whatever the reader
@@ -1298,17 +1326,20 @@ function SearchPageInner() {
               selected sites, because for an AO3-only search the control would
               filter nothing and just add noise to an already dense sidebar. */}
           {sites.includes("fictionalley") && (
-            <div className="sidebar__group">
-              <label className="sidebar__label">
-                FicAlley section
+            <FilterSection label="FictionAlley subsites" count={sections.length}
+              defaultOpen={sections.length > 0}>
+              <p className="filter-note">
+                Five archives behind one banner.{" "}
                 <HelpTip label={sectionHelpLabel}>{sectionHelpBody}</HelpTip>
-              </label>
+              </p>
               <div className="pill-row">
                 {FICALLEY_SECTIONS.map(sec => (
                   <button key={sec.value}
                     className={`pill ${sections.includes(sec.value) ? "pill--on" : ""}`}
                     onMouseEnter={() => setHoveredSection(sec.value)}
                     onMouseLeave={() => setHoveredSection(null)}
+                    onFocus={() => setHoveredSection(sec.value)}
+                    onBlur={() => setHoveredSection(null)}
                     onClick={() => setSections(
                       sections.includes(sec.value)
                         ? sections.filter(v => v !== sec.value)
@@ -1317,7 +1348,7 @@ function SearchPageInner() {
                   </button>
                 ))}
               </div>
-            </div>
+            </FilterSection>
           )}
 
           <div className="sidebar__group">
@@ -1377,7 +1408,7 @@ function SearchPageInner() {
               highlighted={fromSearch("ratings")} />
           </FilterSection>
 
-          <FilterSection label="Archive Warnings" highlighted={fromSearch("warnings").length > 0} count={incWarnings.length}>
+          <FilterSection label="Archive Warnings" note={coverageWarning("warnings", sites)} highlighted={fromSearch("warnings").length > 0} count={incWarnings.length}>
             {AO3_WARNINGS.map(w => (
               <label key={w} className={`check-row ${fromSearch("warnings").includes(w) ? "check-row--lit" : ""}`}>
                 <input type="checkbox" checked={incWarnings.includes(w)}
@@ -1387,7 +1418,7 @@ function SearchPageInner() {
             ))}
           </FilterSection>
 
-          <FilterSection label="Categories" highlighted={fromSearch("categories").length > 0} count={incCats.length}>
+          <FilterSection label="Categories" note={coverageWarning("categories", sites)} highlighted={fromSearch("categories").length > 0} count={incCats.length}>
             <Pills options={CATEGORIES.map(c => ({ id: c, label: c }))}
               selected={incCats} onToggle={id => tog(incCats, setIncCats, id)}
               highlighted={fromSearch("categories")} />
@@ -1398,12 +1429,12 @@ function SearchPageInner() {
               placeholder="e.g. Harry Potter" highlighted={parsedLive.fandoms} kind="fandom" />
           </FilterSection>
 
-          <FilterSection label="Relationships" highlighted={parsedLive.relationships.length > 0} count={incShips.length}>
+          <FilterSection label="Relationships" note={coverageWarning("relationships", sites)} highlighted={parsedLive.relationships.length > 0} count={incShips.length}>
             <TagInput value={incShips} onChange={setIncShips}
               placeholder="e.g. Draco/Hermione" highlighted={parsedLive.relationships} kind="relationship" />
           </FilterSection>
 
-          <FilterSection label="Characters" highlighted={parsedLive.characters.length > 0} count={incChars.length}>
+          <FilterSection label="Characters" note={coverageWarning("characters", sites)} highlighted={parsedLive.characters.length > 0} count={incChars.length}>
             <TagInput value={incChars} onChange={setIncChars}
               placeholder="e.g. Hermione Granger" highlighted={parsedLive.characters} kind="character" />
           </FilterSection>

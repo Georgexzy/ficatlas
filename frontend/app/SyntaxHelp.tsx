@@ -36,6 +36,11 @@ const GROUPS: { group: string; rows: Row[] }[] = [
     { syntax: "rating:M", desc: "G / T / M / E / NR", insert: "rating:M" },
     { syntax: "lang:French", desc: "Any language name", insert: "lang:" },
     { syntax: "site:ao3", desc: "ao3 / ffnet / fictionalley", insert: "site:ao3" },
+    // Only meaningful alongside site:fictionalley, and listed anyway: the
+    // sidebar hides the filter until FictionAlley is selected, so this panel is
+    // where someone finds out the subsites exist at all.
+    { syntax: "subsite:Schnoogle", desc: "A FictionAlley subsite — Schnoogle, The Dark Arts, Astronomy Tower, Riddikulus, Essays & Meta",
+      insert: "subsite:" },
   ]},
   { group: "When it was updated", rows: [
     { syntax: "updated:1y", desc: "Within the last year", insert: "updated:1y" },
@@ -49,6 +54,8 @@ const GROUPS: { group: string; rows: Row[] }[] = [
       desc: "Still updating, touched in the last two years" },
     { syntax: "fandom: Harry Potter -tag:fluff rating:M words:>50k",
       desc: "Everything at once — operators in any order" },
+    { syntax: "subsite:Schnoogle >100k complete",
+      desc: "Long finished novels from FictionAlley's novel shelf" },
   ]},
   { group: "Leave things out", rows: [
     { syntax: "-tag:fluff", desc: "Exclude — prefix any operator with a minus", insert: "-tag:" },

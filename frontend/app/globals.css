@@ -2492,6 +2492,28 @@ body.is-resizing * { cursor: col-resize !important; }
   font-size: 11px; color: var(--text-faint); line-height: 1.5; margin-bottom: 7px;
 }
 
+/* A filter that will barely match anything given the sites now selected. Warm
+   rather than red: this is "here is why your results look thin", not an error,
+   and the filter still works. */
+.filter-section__note {
+  font-size: 11px; line-height: 1.5; margin: 0 0 8px;
+  padding: 6px 8px; border-radius: 6px;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--warn, #d08a3a) 12%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--warn, #d08a3a) 55%, transparent);
+}
+
+/* The aside at the foot of a help bubble — where the same thing is said as
+   search syntax, so the bubble teaches the query language in passing. */
+.helptip__aside {
+  margin-top: 8px; padding-top: 7px; font-size: 11px; color: var(--text-faint);
+  border-top: 1px solid var(--border);
+}
+.helptip__aside code {
+  font-size: 11px; padding: 1px 4px; border-radius: 4px;
+  background: var(--surface2); color: var(--text);
+}
+
 /* Live-ish counter in the index panel — the index grows while you use it. */
 .index-status__live { color: var(--accent); }
 
