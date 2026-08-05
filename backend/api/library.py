@@ -40,8 +40,10 @@ def crawl_status(db: Session = Depends(get_db)):
                 "started_at": j.started_at.isoformat() if j.started_at else None,
                 "finished_at": j.finished_at.isoformat() if j.finished_at else None,
             })
-    except Exception:
-        pass
+    except Exception as e:
+        # Job history is decoration on this endpoint; the crawl status below is
+        # the part that matters, so a failure here degrades rather than 500s.
+        log.debug(f"crawl job history unavailable: {type(e).__name__}")
     # Distinguish a site being genuinely blocked from it just being slow. Failures
     # are now tagged "[blocked]"/"[transient]" by the scheduler; fall back to the
     # old keyword check for any legacy rows without a tag.

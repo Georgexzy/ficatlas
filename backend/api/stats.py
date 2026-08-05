@@ -1,4 +1,5 @@
 """Stats endpoint — per-site counts, totals, last-updated info"""
+import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import bindparam, func, text
@@ -6,6 +7,8 @@ from db.session import get_db
 from models.story import Story
 from provenance import PROVENANCE_TAGS
 from api.auth import require_admin
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -194,8 +197,11 @@ def _compute_coverage(db) -> dict:
             if e and e["n"]:
                 out[site] = {"ships": round(100 * e["ships"] / e["n"]),
                              "characters": round(100 * e["chars"] / e["n"])}
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort: a site without an exact count is simply omitted, and
+            # the caller renders what it has. Logged because a `pass` that never
+            # says anything turns a permanent failure into a silent one.
+            log.debug(f"exact coverage for {site} failed: {type(e).__name__}")
     return out
 
 
@@ -293,8 +299,8 @@ def suggest(
             ), {"kind": kind, "lim": limit, "provenance": prov}).fetchall()
         if rows:
             return [{"value": r[0], "count": r[1]} for r in rows]
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"suggest: index lookup failed ({type(e).__name__}); falling back")
 
     # Fallback, used only while the facets table is empty (never refreshed, or a
     # rebuild is in flight). This is a SAMPLE, not a survey: the LIMIT applies to
@@ -350,8 +356,8 @@ def suggest_canonical(
             if key not in seen:
                 seen.add(key)
                 out.append({"value": r[0], "count": r[1], "source": "index"})
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"suggest: index lookup failed ({type(e).__name__}); falling back")
 
     # 2) Top up with AO3's canonical fandom names for anything we do not hold.
     #
@@ -379,8 +385,8 @@ def suggest_canonical(
                 out.append({"value": r[0], "count": r[1], "source": "ao3"})
                 if len(out) >= limit:
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"suggest: source unavailable ({type(e).__name__})")
 
     return out[:limit]
 
