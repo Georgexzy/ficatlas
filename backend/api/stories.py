@@ -138,15 +138,19 @@ def get_series(series_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "No such series")
     works = db.execute(sql_text("""
         SELECT st.id, st.title, st.author, st.site, st.word_count, st.chapter_count,
-               st.kudos, sw.position, st.is_hosted, st.status, st.summary, st.url
+               st.kudos, sw.position, st.is_hosted, st.status, st.summary, st.url,
+               sw.role
         FROM series_works sw JOIN stories st ON st.id = sw.story_id
         WHERE sw.series_id = :i AND st.delisted_at IS NULL
-        ORDER BY sw.position NULLS LAST, st.title
+        -- Main sequence first and in order, companions after. A side story has
+        -- no place in a numbered run it was never part of.
+        ORDER BY (sw.role = 'side'), sw.position NULLS LAST, st.title
     """), {"i": r[0]}).fetchall()
     return {
         "id": str(r[0]), "name": r[1], "author": r[2],
         "site": (r[3].value if hasattr(r[3], "value") else r[3]),
         "source": r[4], "confidence": round(float(r[5]), 2), "work_count": r[6],
+        "main_count": sum(1 for w in works if (w[12] or "main") != "side"),
         "total_words": sum(w[4] or 0 for w in works),
         "works": [{
             "id": str(w[0]), "title": w[1], "author": w[2],
@@ -154,7 +158,7 @@ def get_series(series_id: str, db: Session = Depends(get_db)):
             "word_count": w[4] or 0, "chapter_count": w[5] or 0, "kudos": w[6] or 0,
             "position": w[7], "is_hosted": bool(w[8]),
             "status": (w[9].value if hasattr(w[9], "value") else w[9]),
-            "summary": w[10], "url": w[11],
+            "summary": w[10], "url": w[11], "role": w[12] or "main",
         } for w in works],
     }
 
@@ -170,7 +174,7 @@ def story_series(story_id: str = Depends(valid_story_id),
     """
     rows = db.execute(sql_text("""
         SELECT s.id, s.name, s.author, s.source, s.confidence, s.work_count,
-               sw.position
+               sw.position, sw.role
         FROM series_works sw JOIN series s ON s.id = sw.series_id
         WHERE sw.story_id = :sid
         ORDER BY s.confidence DESC
@@ -183,15 +187,15 @@ def story_series(story_id: str = Depends(valid_story_id),
         works = db.execute(sql_text("""
             SELECT st.id, st.title, st.author, st.site, st.word_count,
                    st.chapter_count, st.kudos, sw.position,
-                   st.is_hosted, st.status
+                   st.is_hosted, st.status, sw.role
             FROM series_works sw JOIN stories st ON st.id = sw.story_id
             WHERE sw.series_id = :id AND st.delisted_at IS NULL
-            ORDER BY sw.position NULLS LAST, st.title
+            ORDER BY (sw.role = 'side'), sw.position NULLS LAST, st.title
         """), {"id": r[0]}).fetchall()
         out.append({
             "id": str(r[0]), "name": r[1], "author": r[2],
             "source": r[3], "confidence": round(float(r[4]), 2),
-            "work_count": r[5], "position": r[6],
+            "work_count": r[5], "position": r[6], "role": r[7] or "main",
             "works": [{
                 "id": str(w[0]), "title": w[1], "author": w[2],
                 "site": (w[3].value if hasattr(w[3], "value") else w[3]),
@@ -199,6 +203,7 @@ def story_series(story_id: str = Depends(valid_story_id),
                 "kudos": w[6] or 0, "position": w[7],
                 "is_hosted": bool(w[8]),
                 "status": (w[9].value if hasattr(w[9], "value") else w[9]),
+                "role": w[10] or "main",
                 "is_current": str(w[0]) == story_id,
             } for w in works],
         })

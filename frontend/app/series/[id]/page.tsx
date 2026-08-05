@@ -22,11 +22,13 @@ interface Work {
   word_count: number; chapter_count: number; kudos: number
   position: number | null; is_hosted: boolean; status: string | null
   summary: string | null; url: string
+  /** "main" — part of the numbered run; "side" — a companion piece. */
+  role: string
 }
 interface Series {
   id: string; name: string; author: string | null; site: string
   source: string; confidence: number; work_count: number
-  total_words: number; works: Work[]
+  total_words: number; main_count: number; works: Work[]
 }
 
 const SITE_LABELS: Record<string, string> = {
@@ -71,7 +73,10 @@ export default function SeriesPage({ params }: { params: Promise<{ id: string }>
         {data.author && (
           <>by <Link href={`/?author=${encodeURIComponent(data.author)}`}>{data.author}</Link> · </>
         )}
-        {data.work_count} {data.work_count === 1 ? "work" : "works"} ·{" "}
+        {data.main_count} in the main sequence
+        {data.work_count > data.main_count &&
+          ` · ${data.work_count - data.main_count} side ${
+            data.work_count - data.main_count === 1 ? "story" : "stories"}`} ·{" "}
         {data.total_words.toLocaleString()} words ·{" "}
         <span className="badge">{SITE_LABELS[data.site] ?? data.site}</span>
       </p>
@@ -84,8 +89,17 @@ export default function SeriesPage({ params }: { params: Promise<{ id: string }>
           : "Grouped by FicAtlas. This archive has no series field, so these were matched on distinctive words in their titles and ordered by publication. It may be wrong."}
       </p>
 
+      {/* Split, because a series is usually not a flat list. Reading the
+          Dangerverse in the order the numbers imply would put a 1,843-word
+          vignette between two 500,000-word novels. The main run is the thing
+          you came for; the companions are worth having and are not a step in
+          it. */}
+      <h2 className="series-page__section">
+        The main sequence
+        <span>{data.main_count} {data.main_count === 1 ? "work" : "works"}, in order</span>
+      </h2>
       <ol className="series-page__list">
-        {data.works.map(w => (
+        {data.works.filter(w => w.role !== "side").map(w => (
           <li key={w.id} className="series-page__item">
             <span className="series-page__n">{w.position ?? "•"}</span>
             <div className="series-page__body">
@@ -106,6 +120,36 @@ export default function SeriesPage({ params }: { params: Promise<{ id: string }>
           </li>
         ))}
       </ol>
+
+      {data.works.some(w => w.role === "side") && (
+        <>
+          <h2 className="series-page__section">
+            Side stories &amp; companions
+            <span>set in the same world — read in any order, or not at all</span>
+          </h2>
+          <ol className="series-page__list series-page__list--side">
+            {data.works.filter(w => w.role === "side").map(w => (
+              <li key={w.id} className="series-page__item">
+                <span className="series-page__n">◆</span>
+                <div className="series-page__body">
+                  <Link href={`/story/${w.id}`} className="series-page__title">{w.title}</Link>
+                  <p className="series-page__meta">
+                    {fmt(w.word_count)} words
+                    {w.chapter_count ? ` · ${w.chapter_count} ch` : ""}
+                    {w.kudos ? ` · ${w.kudos.toLocaleString()} kudos` : ""}
+                    {w.is_hosted && <span className="series-page__read"> · readable here</span>}
+                  </p>
+                  {w.summary && (
+                    <p className="series-page__summary">
+                      {w.summary.length > 200 ? w.summary.slice(0, 200) + "…" : w.summary}
+                    </p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
 
       <p className="series-page__foot">
         <Link href={`/?author=${encodeURIComponent(data.author ?? "")}`}>

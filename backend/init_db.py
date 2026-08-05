@@ -162,6 +162,14 @@ CREATE TABLE IF NOT EXISTS series_works (
     PRIMARY KEY (series_id, story_id)
 );
 CREATE INDEX IF NOT EXISTS ix_series_works_story ON series_works (story_id);
+-- Main sequence or side story.
+--
+-- A series is usually not a flat list. The Dangerverse has five novels of
+-- 215k-520k words that the author numbered "first" through "fifth", and five
+-- companion pieces of 1.8k-49k that simply mention the name. Presenting those
+-- ten as one numbered run tells a reader to read a 1,843-word vignette between
+-- two 500,000-word novels.
+ALTER TABLE series_works ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'main';
 CREATE INDEX IF NOT EXISTS ix_series_works_order ON series_works (series_id, position NULLS LAST);
 
 -- Keep planner statistics fresh on the one table that matters.
