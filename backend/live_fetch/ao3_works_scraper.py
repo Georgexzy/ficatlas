@@ -117,6 +117,21 @@ def _parse_work_blurb(blurb_html: str, host: str = "https://archiveofourown.org"
     if not id_m: return None
     work_id = id_m.group(1)
 
+    # Series, which AO3 puts in the blurb itself when a work is in one:
+    #   <ul class="series"><li>Part 3 of <a href="/series/1027363">Name</a></li>
+    # Free here — this is the bulk route at twenty works per request, so every
+    # series it catches is one nobody has to fetch a work page for.
+    series_out = []
+    ser_block = re.search(r'<ul class="series">(.*?)</ul>', blurb_html, re.S)
+    if ser_block:
+        for m in re.finditer(
+                r'Part\s+(\d+)\s+of\s*<a[^>]*href="/series/(\d+)"[^>]*>(.*?)</a>',
+                ser_block.group(1), re.S | re.I):
+            name = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(3))).strip()
+            if name:
+                series_out.append({"position": int(m.group(1)),
+                                   "ao3_id": m.group(2), "name": name})
+
     # Title + author
     # The work link is NOT always /works/<id>. Inside a collection listing —
     # which is exactly how HPFFA, HexFiles and the other Open Doors imports are
@@ -244,6 +259,7 @@ def _parse_work_blurb(blurb_html: str, host: str = "https://archiveofourown.org"
         "comments":     comments,
         "warnings":     warnings,
         "categories":   categories,
+        "series":       series_out,
     }
 
 

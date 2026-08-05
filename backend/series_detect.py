@@ -242,7 +242,13 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
             # 3. Distinctive shared title words, on whatever is left.
             rest = [w for w in works if w["id"] not in claimed]
             for token, members, score in group_author(rest, idf, default_idf):
-                groups.append((series_name(token, members), members, score, "inferred"))
+                # Prefer the name the author uses. The titles are what FOUND the
+                # group; the summaries often say what it is CALLED, and the two
+                # are not the same — "danger" found the Dangerverse, and
+                # "Dangerverse" is its name.
+                stated = series_cues.stated_name([m.get("summary") for m in members])
+                groups.append((stated or series_name(token, members),
+                               members, score, "inferred"))
 
             for name, members, score, source in groups:
                 found += 1
@@ -293,6 +299,30 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
 
         if not dry_run:
             db.commit()
+            # Better evidence supersedes weaker. Once an author's series is
+            # known from a stated cue or from AO3 itself, an inferred grouping
+            # of the same works is a duplicate under a name we invented —
+            # "Danger series" sitting beside "Dangerverse", describing the
+            # same books. Dropped rather than left for a reader to reconcile.
+            gone = db.execute(sql_text("""
+                DELETE FROM series inf
+                WHERE inf.source = 'inferred'
+                  AND EXISTS (
+                    SELECT 1 FROM series better
+                    WHERE better.source IN ('stated','explicit')
+                      AND lower(coalesce(better.author,'')) = lower(coalesce(inf.author,''))
+                      AND better.id <> inf.id
+                      AND NOT EXISTS (
+                        SELECT 1 FROM series_works iw
+                        WHERE iw.series_id = inf.id
+                          AND NOT EXISTS (
+                            SELECT 1 FROM series_works bw
+                            WHERE bw.series_id = better.id AND bw.story_id = iw.story_id))
+                  )
+            """)).rowcount
+            db.commit()
+            if gone:
+                log.info(f"  dropped {gone:,} inferred series superseded by a stated one")
         log.info(f"DONE — {found:,} candidate series, {stored:,} stored")
     return 0
 

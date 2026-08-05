@@ -188,13 +188,22 @@ export default function StoryPage() {
                   did not publish a series list, so this is our reading of it.
                 </p>
               )}
+              {/* Every other entry is a link to that story, and it has to LOOK
+                  like one. Underlined and accent-coloured rather than styled as
+                  quiet body text: the whole reason someone opens a series list
+                  is to go somewhere else in it, and a list that reads as a
+                  static table of contents gets read and closed. */}
               <ol className="series-box__list">
                 {sr.works.map((w: any) => (
                   <li key={w.id} className={w.is_current ? "is-current" : ""}>
                     <span className="series-box__n">{w.position ?? "•"}</span>
                     {w.is_current
-                      ? <span className="series-box__this">{w.title}</span>
-                      : <Link href={`/story/${w.id}`}>{w.title}</Link>}
+                      ? <span className="series-box__this">
+                          {w.title} <span className="series-box__here">you are here</span>
+                        </span>
+                      : <Link href={`/story/${w.id}`} className="series-box__link">
+                          {w.title}<span className="series-box__go" aria-hidden="true">→</span>
+                        </Link>}
                     <span className="series-box__meta">
                       {w.word_count ? `${Math.round(w.word_count / 1000)}k` : ""}
                       {w.kudos ? ` · ${w.kudos.toLocaleString()} kudos` : ""}
@@ -202,6 +211,9 @@ export default function StoryPage() {
                   </li>
                 ))}
               </ol>
+              <p className="series-box__all">
+                <Link href={`/series/${sr.id}`}>Open the full series →</Link>
+              </p>
             </div>
           ))}
 

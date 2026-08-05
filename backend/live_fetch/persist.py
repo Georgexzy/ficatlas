@@ -233,6 +233,11 @@ def persist_live_results(db: Session, live_results: list[dict],
             )
             db.add(story)
             db.commit()      # commit each row individually
+            # AO3 states its series on the listing blurb, so the bulk route
+            # captures them at twenty works a request rather than leaving them
+            # for the one-at-a-time work-page pass.
+            _save_series(db, story.id, story.author, d)
+            db.commit()
             saved += 1
             # add to existing_urls so duplicates within the same batch are skipped
             existing_urls.add(url)
@@ -261,6 +266,24 @@ def persist_live_results(db: Session, live_results: list[dict],
                      already_indexed=skipped_existing, cross_post_merged=merged_crosspost)
 
     return saved
+
+
+def _save_series(db: Session, story_id: str, author: str | None, d: dict) -> None:
+    """Record AO3's own series for a work the importer just saw.
+
+    Every import route funnels through here, so a series stated on a listing
+    page is captured by the bulk harvest at twenty works a request — not left
+    for the one-at-a-time work-page pass to find later. Explicit AO3 data always
+    wins over anything series_detect infers from titles.
+    """
+    entries = d.get("series") or []
+    if not entries:
+        return
+    try:
+        import ao3_series
+        ao3_series.record(db, str(story_id), author, entries)
+    except Exception as e:
+        log.debug(f"series save failed for {story_id}: {type(e).__name__}: {e}")
 
 
 def _enrich_existing(db: Session, url: str, d: dict) -> bool:
@@ -374,6 +397,9 @@ def _enrich_existing(db: Session, url: str, d: dict) -> bool:
         # way to prioritise what to re-check.
         story.crawled_at = datetime.now(timezone.utc)
 
+        # A work we already had, re-seen with its series stated. Same helper,
+        # so a series arrives whether the work is new to us or not.
+        _save_series(db, story.id, story.author, d)
         db.commit()
         return changed
     except Exception as e:
