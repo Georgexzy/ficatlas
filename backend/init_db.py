@@ -121,6 +121,14 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- it to a fraction of a percent and returns immediately.
 CREATE EXTENSION IF NOT EXISTS tsm_system_rows;
 
+-- Title lookups for search ranking. Without this, guaranteeing that an exact
+-- title match reaches the ranker cost a 24-SECOND sequential scan; with it, the
+-- same lookup is 0.33ms. See api/search.py for why the guarantee is needed.
+CREATE INDEX IF NOT EXISTS ix_stories_title_lower ON stories (lower(title));
+-- Lets search ask "is this query the name of a fandom/ship/tag, or the name of
+-- a work?" per request. 277ms as a sequential scan, 0.1ms with this.
+CREATE INDEX IF NOT EXISTS ix_facets_value_lower ON facets (lower(value), count DESC);
+
 -- Keep planner statistics fresh on the one table that matters.
 --
 -- The default analyze scale factor is 10% of the table, which never converges

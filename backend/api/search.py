@@ -1,5 +1,6 @@
 """Search API — unified search across all indexed sites with hybrid live fetch"""
 import logging
+from functools import lru_cache
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, aliased
 import os
@@ -132,6 +133,41 @@ _VARIANT_SQL = sql_text("""
     WHERE kind = :kind AND value ILIKE :pat
     ORDER BY count DESC LIMIT :cap
 """)
+
+
+@lru_cache(maxsize=4096)
+def _facet_weight_cached(term: str) -> int:
+    return -1        # replaced at runtime; see _query_is_category
+
+
+def _query_is_category(db, term: str) -> int:
+    """How many works carry this exact phrase as a fandom, ship, character or tag.
+
+    The discriminator between "find me the work called X" and "find me works
+    ABOUT X", which need opposite rankings and are indistinguishable from the
+    text alone:
+
+        living with danger   no facet at all      -> a title
+        all the young dudes  tag, 13 works        -> a title
+        dramione             ship, 134 works      -> a category
+        harry potter         fandom, 686k works   -> a category
+
+    Getting this wrong is visible in both directions. Treating "harry potter" as
+    a title returned works literally named that with no readers, above every
+    real Harry Potter story. Treating "living with danger" as a category buried
+    the one work anybody means under everything sharing a word with it.
+
+    A heuristic, and it will be wrong for a work deliberately titled after its
+    own ship. It is wrong less often than having no signal at all, and the
+    ordering degrades rather than breaks — a category query still ranks title
+    matches highly, it just stops ranking them above everything else.
+    """
+    try:
+        return int(db.execute(sql_text(
+            "SELECT COALESCE(max(count), 0) FROM facets WHERE lower(value) = :v"
+        ), {"v": term}).scalar() or 0)
+    except Exception:
+        return 0
 
 
 def _facet_variants(db, col_name: str, term: str) -> list[str]:
@@ -714,6 +750,11 @@ def search(          # NOT async — see below
             db_query = db_query.filter(Story.archive_section.in_(wanted))
 
     COUNT_CEILING = 5000
+    # Enough to hold every work sharing a title — 73 are called "All the Young
+    # Dudes" — without letting a generic prefix flood the ranked set.
+    TITLE_CANDIDATES = 300
+    # Best-read matches for a broad query, so ranking sees them at all.
+    POPULAR_CANDIDATES = 300
 
     # Order over a BOUNDED candidate set rather than the whole match set.
     #
@@ -738,7 +779,61 @@ def search(          # NOT async — see below
     # A window function gives the count over the same bounded candidate set the
     # page is drawn from, so the predicate runs once. The ceiling is +1 so
     # "5000+" can still be distinguished from exactly 5000.
-    candidates = db_query.order_by(None).limit(COUNT_CEILING + 1).subquery()
+    # An exact title match must always be in the candidate set.
+    #
+    # The set is an ARBITRARY 5,001 rows — deliberately unordered, because
+    # ordering the full match set is the expensive thing this design avoids. But
+    # that means for any query matching more than 5,000 works, ranking never
+    # sees most of them, and the best answer can simply be absent.
+    #
+    # Real example: "living with danger" matched 5,000+ and returned "Living in
+    # Danger", "Dancing with Danger" and "Living For Danger" — while the work
+    # actually called Living with Danger, by whydoyouneedtoknow, was nowhere. Add
+    # author=whydoyouneedtoknow and the match set drops to 14, all of them get
+    # ranked, and it comes first. The ranking was right the whole time; it was
+    # being handed the wrong rows.
+    #
+    # So title matches are fetched separately and unioned in. With the
+    # lower(title) index that lookup is 0.33ms, against 24s before it existed.
+    if q and q.strip():
+        q_norm = q.strip().lower()
+        title_pred = or_(
+            func.lower(Story.title) == q_norm,
+            func.lower(Story.title).like(q_norm + "%"),
+        )
+        parts = [
+            db_query.order_by(None).filter(title_pred).limit(TITLE_CANDIDATES),
+            db_query.order_by(None).limit(COUNT_CEILING + 1),
+        ]
+        # For a BROAD query the arbitrary slice is the whole problem. Searching
+        # "harry potter" matches far more than the ceiling, so the 5,001 rows the
+        # ranker sees are an arbitrary sample of 686,000 — and the works everyone
+        # actually means are almost certainly not among them. No amount of
+        # rescoring fixes being handed the wrong rows.
+        #
+        # So the best-read matches are fetched explicitly. This is cheap for
+        # exactly the queries that need it: walking the kudos index and stopping
+        # at 300 terminates almost immediately when a large share of rows match,
+        # which is what "broad" means. It is NOT done for narrow queries, where
+        # that same walk is the pathological case the ceiling exists to avoid.
+        if _query_is_category(db, q_norm) >= 100:
+            # kudos > 0 is not a filter on what may appear — it narrows only
+            # this extra source. Without it the planner had to bitmap the whole
+            # match set and top-N sort 700,000 rows, which cost 6s on "harry
+            # potter". With it, it intersects against the kudos index instead and
+            # the same query is well under a second. Rows with no kudos still
+            # arrive through the other two branches; this one exists purely to
+            # guarantee the best-READ works are present, and a work with zero
+            # recorded kudos is by definition not one of those.
+            parts.append(db_query.filter(Story.kudos > 0)
+                         .order_by(Story.kudos.desc().nullslast())
+                         .limit(POPULAR_CANDIDATES))
+        merged = parts[0]
+        for part in parts[1:]:
+            merged = merged.union(part)
+        candidates = merged.subquery()
+    else:
+        candidates = db_query.order_by(None).limit(COUNT_CEILING + 1).subquery()
     S = aliased(Story, candidates)
     total_over = func.count().over().label("total_matches")
     ordered = db.query(S, total_over)
@@ -773,17 +868,49 @@ def search(          # NOT async — see below
         # drag a popular unrelated work above an exact match.
         q_norm = q.strip().lower()
         title_l = func.lower(S.title)
-        title_rank = case(
-            (title_l == q_norm, 0),
-            (title_l.like(q_norm + "%"), 1),
-            (title_l.like("%" + q_norm + "%"), 2),
-            else_=3,
-        )
+
+        # Is this the name of a thing, or the name of a subject?
+        facet_hits = _query_is_category(db, q_norm)
+        is_category = facet_hits >= 100
+
+        # Weights shift with that answer rather than there being two code paths.
+        # A category query still rewards a matching title; it just stops letting
+        # a title outrank everything else on its own.
+        # A category query leans on readership and subject match; a title query
+        # leans on the title. Same formula, different emphasis.
+        w_title = 0.7 if is_category else 3.0
+        w_exact = 0.6 if is_category else 4.0
+        w_pop = 3.0 if is_category else 1.0
+        w_text = 2.5 if is_category else 1.5
+
+        # A bonus, not a hard tier. As a tier, ANY work whose title contained the
+        # words beat every better overall match, and popularity never got a vote
+        # — which is how a 0-kudos fic called "Harry Potter" ended up above all
+        # 686,000 actual Harry Potter stories.
+        exact_bonus = case((title_l == q_norm, w_exact),
+                           (title_l.like(q_norm + "%"), w_exact * 0.4),
+                           else_=0.0)
+
+        # Log-damped and normalised to 0..1. Raw kudos would swamp everything:
+        # 318,436 against 1,000 is not a 318x better answer, and ln makes it 2x.
+        pop = func.least(
+            func.ln(1 + func.coalesce(S.kudos, 0) + func.coalesce(S.hits, 0) / 20.0)
+            / 13.8, 1.0)
+        title_sim = func.similarity(func.coalesce(S.title, ""), q_norm)
+        # Normalisation flag 1 divides the rank by 1 + log(document length).
+        # Without it ts_rank is raw term frequency, so a work whose entire
+        # indexed document is the two words you searched for scored higher than
+        # one that is genuinely about the subject and says so across a summary
+        # and thirty tags. That is how "Dramione" (the title) outranked every
+        # story actually tagged Dramione.
+        text_rank = func.ts_rank(_story_tsv(S),
+                                 func.websearch_to_tsquery(_REGCONFIG, q), 1)
+
+        relevance = (w_title * title_sim + exact_bonus
+                     + w_text * text_rank + w_pop * pop)
+
         ordered = ordered.order_by(
-            title_rank.asc(),
-            func.similarity(func.coalesce(S.title, ""), q_norm).desc(),
-            S.kudos.desc().nullslast(),
-            func.ts_rank(_story_tsv(S), func.websearch_to_tsquery(_REGCONFIG, q)).desc(),
+            relevance.desc(),
             S.word_count.desc().nullslast(),
         )
     else:
