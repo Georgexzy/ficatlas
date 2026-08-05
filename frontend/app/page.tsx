@@ -883,19 +883,28 @@ function SearchPageInner() {
     setImporting(true); setImportMsg(null)
     try {
       const API_BASE = ""  // relative — handled by Next.js rewrite to backend
-      const fd = new FormData(); fd.append("url", detectedUrl.url)
-      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const fd = new FormData()
+      fd.append("url", detectedUrl.url)
+      // Readers import to their own shelf; only an operator can publish into
+      // the shared index. Sending private=false for everyone meant the button
+      // 403'd for every reader while the label promised them a library.
+      fd.append("private", String(!user?.can_manage))
+      const r = await fetch(`${API_BASE}/api/library/import-url`,
+                            { method: "POST", body: fd, credentials: "include" })
       if (!r.ok) throw new Error(await r.text())
       const data = await r.json()
-      setImportMsg(`Imported \"${data.title}\" — ${data.chapters} chapters`)
-      setQuery(""); doSearch()
+      setImportMsg(user?.can_manage
+        ? `Added "${data.title}" to the index — ${data.chapters} chapters, searchable by everyone.`
+        : `"${data.title}" is on your shelf — ${data.chapters} chapters. Find it in Library › My shelf.`)
+      setQuery("")
+      if (user?.can_manage) doSearch()
     } catch (e: any) {
       setImportMsg(`Import failed: ${e.message}`)
     } finally {
       setImporting(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detectedUrl])
+  }, [detectedUrl, user])
 
   const refreshFromAO3 = useCallback(async () => {
     setRefreshing(true); setRefreshMsg(null)
@@ -1736,16 +1745,36 @@ function SearchPageInner() {
             {/* Import needs admin (see StoryCard), and this banner promises to
                 fetch and add the story — a promise we cannot keep for a visitor
                 whose click would 401. They can still paste the URL and search. */}
-            {detectedUrl && user?.can_import && (
+            {/* Shown to everyone now, not only to operators. The backend has
+                supported private reader imports since the My-shelf work, so
+                gating the whole panel on can_import hid a feature readers have
+                — and left the one visible copy claiming their import would be
+                "fully searchable", which was never true of a private one. */}
+            {detectedUrl && (
               <div className="url-detected">
                 <span className="url-detected__icon">↓</span>
                 <div className="url-detected__text">
                   <strong>{detectedUrl.site === "ao3" ? "AO3" : "FF.net"} story detected</strong>
-                  <span className="url-detected__sub">We'll fetch the full text via FicHub and add it to your library — readable in-app, fully searchable.</span>
+                  {/* This used to say "fully searchable" to everyone, which was
+                      wrong twice: a reader's import is private — deliberately
+                      invisible to search, because it republishes nothing — and
+                      the button sent private=false regardless, so it 403'd for
+                      every reader who pressed it. */}
+                  <span className="url-detected__sub">
+                    {!user
+                      ? "Sign in and we'll fetch the full text so you can read it here. Your copy stays yours — it is not added to the public index."
+                      : user.can_manage
+                      ? "Fetched via FicHub and added to the shared index — readable in-app and searchable by everyone."
+                      : "Fetched via FicHub onto your own shelf — readable in-app, and visible only to you."}
+                  </span>
                 </div>
-                <button onClick={importDetectedUrl} disabled={importing} className="btn btn--primary">
-                  {importing ? "Importing…" : "Import"}
-                </button>
+                {user ? (
+                  <button onClick={importDetectedUrl} disabled={importing} className="btn btn--primary">
+                    {importing ? "Importing…" : user.can_manage ? "Add to index" : "Add to my shelf"}
+                  </button>
+                ) : (
+                  <Link href="/login" className="btn btn--primary">Sign in</Link>
+                )}
               </div>
             )}
             {importMsg && <div className="alert alert--success" style={{marginBottom:8}}>{importMsg}</div>}
