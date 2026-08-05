@@ -753,39 +753,34 @@ function SearchPageInner() {
   // list out rather than failing visibly at the thing that caused it.
   const [sections, setSections] = useState<string[]>(
     (rawParams.get("sections") ?? "").split(",").filter(Boolean))
-  const [hoveredSection, setHoveredSection] = useState<string | null>(null)
 
-  // The help bubble describes whichever section you are pointing at, falling
-  // back to the ones you have selected, then to an overview. A single static
-  // paragraph could only have said "FictionAlley had five sections", which is
-  // the one thing the labels already tell you.
-  const focusSection =
-    hoveredSection ??
-    (sections.length === 1 ? sections[0] : null)
-  const focusMeta = FICALLEY_SECTIONS.find(x => x.value === focusSection)
-  const sectionHelpLabel = focusMeta
-    ? `About ${focusMeta.label}`
-    : "What are subsites?"
-  const sectionHelpBody = focusMeta ? (
-    <>
-      <p><strong>{focusMeta.label}.</strong> {focusMeta.help}</p>
-      <p className="helptip__aside">
-        Same as typing <code>subsite:{focusMeta.value.includes(" ")
-          ? `"${focusMeta.value}"` : focusMeta.value}</code> in the search bar.
-      </p>
-    </>
-  ) : (
+  // One bubble, always saying the same thing.
+  //
+  // It used to rewrite itself to describe whichever pill you were pointing at.
+  // That reads well and is confusing to actually use: the bubble opens on a
+  // click and the content changes on hover, so you point at Schnoogle, move
+  // toward the "?", pass over Riddikulus on the way, and read about the wrong
+  // one. Nothing on screen says the two are connected, and on a touch screen
+  // there is no hover at all, so the feature simply did not exist there.
+  //
+  // Self-contained instead: what a subsite is, then all five with a line each.
+  // Longer to read, but it answers the question on the first try and works the
+  // same under a finger as under a mouse.
+  const sectionHelpBody = (
     <>
       <p>FictionAlley was not one archive but <strong>five</strong>, and it
-      shelved by <em>kind of story</em> rather than by tag. Readers asked for
-      each by name: a Schnoogle fic meant novel-length, a Dark Arts fic meant
-      horror.</p>
-      <p>That makes these the nearest thing the archive has to genre tags — and
-      for its 30,000 works, which mostly predate tagging as we know it, often
-      the only such signal there is. Point at one to see what it held.</p>
+      shelved by <em>kind of story</em> rather than by tag — a Schnoogle fic
+      meant novel-length, a Dark Arts fic meant horror.</p>
+      <p>That makes these the closest thing its 30,000 works have to genre tags,
+      and for most of them, which predate tagging as we know it, the only one.</p>
+      <ul className="helptip__list">
+        {FICALLEY_SECTIONS.map(sec => (
+          <li key={sec.value}><strong>{sec.label}</strong> — {sec.short}</li>
+        ))}
+      </ul>
       <p className="helptip__aside">
-        Only shown while FictionAlley is one of the sites above. Typing{" "}
-        <code>subsite:Schnoogle</code> in the search bar does the same thing.
+        Shown only while FictionAlley is one of the sites above. Typing{" "}
+        <code>subsite:Schnoogle</code> does the same as clicking it.
       </p>
     </>
   )
@@ -1355,16 +1350,13 @@ function SearchPageInner() {
               defaultOpen={sections.length > 0}>
               <p className="filter-note">
                 Five archives behind one banner.{" "}
-                <HelpTip label={sectionHelpLabel}>{sectionHelpBody}</HelpTip>
+                <HelpTip label="What are subsites?">{sectionHelpBody}</HelpTip>
               </p>
               <div className="pill-row">
                 {FICALLEY_SECTIONS.map(sec => (
                   <button key={sec.value}
                     className={`pill ${sections.includes(sec.value) ? "pill--on" : ""}`}
-                    onMouseEnter={() => setHoveredSection(sec.value)}
-                    onMouseLeave={() => setHoveredSection(null)}
-                    onFocus={() => setHoveredSection(sec.value)}
-                    onBlur={() => setHoveredSection(null)}
+                    title={sec.help}
                     onClick={() => setSections(
                       sections.includes(sec.value)
                         ? sections.filter(v => v !== sec.value)

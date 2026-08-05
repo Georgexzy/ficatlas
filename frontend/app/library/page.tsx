@@ -93,7 +93,7 @@ interface ProgressEntry { chapter: number; at: string; title: string }
 interface HostedStory { id: string; title: string; author: string; site: string; word_count: number; chapter_count: number; summary?: string; tags: string[] }
 // "searches" is gone — recent searches now sit under the search bar, which is
 // where you are when you want to re-run one.
-type Tab = "hosted" | "bookmarks" | "reading" | "offline" | "import"
+type Tab = "hosted" | "mine" | "bookmarks" | "reading" | "offline" | "import"
 
 export default function LibraryPage() {
   const { user, loading: authLoading } = useAuth()
@@ -108,12 +108,34 @@ export default function LibraryPage() {
   const [progress, setProgress] = useState<Record<string, ProgressEntry>>({})
   const [hosted, setHosted] = useState<HostedStory[]>([])
   const [hostedTotal, setHostedTotal] = useState(0)
+  // The reader's own shelf. Separate state from `hosted` rather than a filter
+  // over it, because they come from different endpoints and mean different
+  // things: `hosted` is what anyone may read, `mine` is what only you may.
+  const [mine, setMine] = useState<HostedStory[]>([])
+  const [mineTotal, setMineTotal] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
   const [tab, setTab] = useState<Tab>("hosted")
   const [offlineStories, setOfflineStories] = useState<any[]>([])
   useEffect(() => {
     if (tab === "offline") listOfflineStories().then(setOfflineStories).catch(() => {})
   }, [tab])
+
+  // Reloaded whenever the signed-in identity changes, not just on mount: the
+  // shelf is per-account, and a stale list after signing in as someone else
+  // would show one reader another's library.
+  useEffect(() => {
+    if (!user) { setMine([]); setMineTotal(0); return }
+    fetch(`${API_BASE}/api/library/mine?limit=100`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => { setMine(d.items ?? []); setMineTotal(d.total ?? 0) })
+      .catch(() => {})
+  }, [user])
+
+  const removeMine = async (id: string) => {
+    const r = await fetch(`${API_BASE}/api/library/mine/${id}`,
+      { method: "DELETE", credentials: "include" })
+    if (r.ok) { setMine(m => m.filter(x => x.id !== id)); setMineTotal(t => Math.max(0, t - 1)) }
+  }
   const removeOfflineStory = async (id: string) => {
     await deleteOfflineStory(id).catch(() => {})
     setOfflineStories(s => s.filter(x => x.id !== id))
@@ -671,6 +693,12 @@ export default function LibraryPage() {
         <button className={`library-tab ${tab === "hosted" ? "library-tab--on" : ""}`} onClick={() => setTab("hosted")}>
           Hosted <span className="library-tab__count">{hostedTotal || hosted.length}</span>
         </button>
+        {user && (
+          <button className={`library-tab ${tab === "mine" ? "library-tab--on" : ""}`}
+            onClick={() => setTab("mine")} title="Stories only you can read">
+            My shelf <span className="library-tab__count">{mineTotal || mine.length}</span>
+          </button>
+        )}
         <button className={`library-tab ${tab === "bookmarks" ? "library-tab--on" : ""}`} onClick={() => setTab("bookmarks")}>
           Bookmarks <span className="library-tab__count">{bookmarks.length}</span>
         </button>
@@ -729,6 +757,51 @@ export default function LibraryPage() {
                 )}
               </>
             )}
+        </div>
+      )}
+
+      {tab === "mine" && (
+        <div className="books-shelf">
+          <p className="library-note library-note--private">
+            <strong>Only you can read these.</strong> They are not in search, not
+            on the public shelf, and no other account — administrator or
+            otherwise — can open them. Removing one gives up your copy; it does
+            not delete anything anyone else relies on.
+          </p>
+          {mine.length === 0 ? (
+            <div className="library-empty">
+              <p>Nothing on your shelf yet.</p>
+              <p className="library-empty__hint">
+                Import a story to your own library from the <strong>Import</strong> tab,
+                or from any story page, and it will appear here.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="books-grid">
+                {mine.map(s => <BookCover key={s.id} story={s} onDelete={removeMine}
+                  progress={progress[s.id]} />)}
+              </div>
+              {mine.length < mineTotal && (
+                <div className="library-more">
+                  <button className="btn btn--ghost" disabled={loadingMore}
+                    onClick={async () => {
+                      setLoadingMore(true)
+                      try {
+                        const r = await fetch(
+                          `${API_BASE}/api/library/mine?limit=100&offset=${mine.length}`,
+                          { credentials: "include" })
+                        const d = await r.json()
+                        setMine(m => [...m, ...(d.items ?? [])])
+                        if (d.total) setMineTotal(d.total)
+                      } catch {} finally { setLoadingMore(false) }
+                    }}>
+                    {loadingMore ? "Loading…" : `Load more (${mine.length} of ${mineTotal.toLocaleString()})`}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 
