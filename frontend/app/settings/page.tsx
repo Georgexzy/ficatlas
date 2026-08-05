@@ -2,6 +2,7 @@
 import ThemeToggle from "../ThemeToggle"
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import BackLink from "../BackLink"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 import { writePref, mergePrefs, type Prefs } from "@/lib/prefs"
@@ -169,6 +170,7 @@ export default function SettingsPage() {
   if (!prefs) return (
     <div className="settings-shell">
       <SiteHeader current="settings" />
+      <BackLink fallback="/" fallbackLabel="Back to search" />
       <p className="loading">Loading…</p>
     </div>
   )
@@ -186,6 +188,7 @@ export default function SettingsPage() {
   return (
     <div className="settings-shell">
       <SiteHeader current="settings" />
+      <BackLink fallback="/" fallbackLabel="Back to search" />
       <h1 className="settings-title">Settings</h1>
 
       <p className="settings-lede">

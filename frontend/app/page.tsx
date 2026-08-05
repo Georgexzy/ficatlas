@@ -831,6 +831,10 @@ function SearchPageInner() {
   // a ship filter returns stories that actually have that ship; on, it widens the
   // net to include stories whose metadata we simply never captured.
   const [includeUnknown, setIncludeUnknown] = useState(get("include_unknown") === "true")
+  // "", "yes" or "no" — three states, because "no preference" is the common one
+  // and a checkbox cannot express it without meaning "standalones only".
+  const [inSeries, setInSeries] = useState(get("in_series") === "true" ? "yes"
+                                         : get("in_series") === "false" ? "no" : "")
   // Set by clicking an author's name: browse their whole catalogue across archives.
   const [authorFilter, setAuthorFilter] = useState(get("author") ?? "")
   // How multiple values inside one filter combine. "all" finds crossovers and
@@ -1148,6 +1152,7 @@ function SearchPageInner() {
 
     return {
       sections: sections.length ? sections.join(",") : undefined,
+      in_series: inSeries === "yes" ? true : inSeries === "no" ? false : undefined,
       q:                     pq.cleanText || undefined,
       sites:                 joinCsv(sites),
       fandoms:               joinCsv(merge(incFandoms, pq.fandoms)),
@@ -1181,7 +1186,7 @@ function SearchPageInner() {
       page:                  pg,
       per_page:              perPage,
     }
-  }, [perPage, query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
+  }, [perPage, inSeries, query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
       status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort,
       // sections was missing here, so buildParams closed over the empty array it
@@ -1197,7 +1202,7 @@ function SearchPageInner() {
     sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
     incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
     language, wordMin, wordMax, updatedAfter, explicit, includeUnknown,
-    authorFilter, matchMode, sort, dlpMinRating, sections,
+    authorFilter, matchMode, sort, dlpMinRating, sections, inSeries,
   ])
   const filtersDirty = appliedSig !== null && appliedSig !== filterSig
 
@@ -1522,6 +1527,30 @@ function SearchPageInner() {
                 ? "Story must have all of them — this is how you find crossovers."
                 : "Story needs any one of them — useful when a fandom has several tag spellings."}
             </p>
+          </div>
+
+          <div className="sidebar__group">
+            <label className="sidebar__label">
+              Series
+              <HelpTip label="About series">
+                <p>Some works are one part of a longer sequence. Filtering here
+                is really two different searches: something to sink into for a
+                month, or something you can finish tonight without acquiring a
+                reading list.</p>
+                <p className="helptip__aside">
+                  AO3 publishes its series; FanFiction.net and FictionAlley have
+                  no such field, so those are read from what authors wrote in
+                  their titles and summaries.
+                </p>
+              </HelpTip>
+            </label>
+            <div className="pill-row">
+              {[["", "Either"], ["yes", "In a series"], ["no", "Standalone"]].map(([v, label]) => (
+                <button key={v} aria-pressed={inSeries === v}
+                  className={`pill ${inSeries === v ? "pill--on" : ""}`}
+                  onClick={() => setInSeries(v)}>{label}</button>
+              ))}
+            </div>
           </div>
 
           <div className="sidebar__group">

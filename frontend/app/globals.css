@@ -2766,6 +2766,21 @@ body.is-resizing * { cursor: col-resize !important; }
   .search-exit__btn { min-height: 36px; padding: 6px 14px; }
 }
 
+/* Back, on every page where "the page before" is a real place. */
+.back-link { margin: 10px 0 6px; font-size: 12.5px; }
+.back-link a, .back-link button {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: none; padding: 4px 0;
+  font: inherit; font-size: 12.5px; color: var(--text-dim);
+  text-decoration: none; cursor: pointer;
+}
+.back-link a:hover, .back-link button:hover { color: var(--accent); }
+.back-link span { font-size: 14px; line-height: 1; }
+@media (max-width: 700px) {
+  /* A real tap target rather than a line of text. */
+  .back-link a, .back-link button { padding: 8px 0; min-height: 40px; }
+}
+
 /* Series badge on a result card, and the series page itself. */
 .badge--series {
   background: color-mix(in srgb, var(--accent) 14%, transparent);

@@ -1,6 +1,7 @@
 "use client"
 import { useEffect, useState, useRef } from "react"
 import Link from "next/link"
+import BackLink from "../BackLink"
 import OfflineLink from "../OfflineLink"
 import { listOfflineStories, deleteOfflineStory, isStoryOffline, downloadStoryForOffline } from "@/lib/offline"
 import SiteHeader from "../SiteHeader"
@@ -731,6 +732,7 @@ export default function LibraryPage() {
   return (
     <div className="library-shell">
       <SiteHeader current="library" />
+      <BackLink fallback="/" fallbackLabel="Back to search" />
       <h1 className="library-title">My Library</h1>
 
       {/* Importing, uploading and the bulk scrapes modify the shared index, so

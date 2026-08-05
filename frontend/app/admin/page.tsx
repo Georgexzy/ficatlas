@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import BackLink from "../BackLink"
 import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
@@ -114,7 +115,8 @@ export default function AdminPage() {
   }
 
   if (authLoading) return (
-    <div className="settings-shell"><SiteHeader /><p className="loading">Loading…</p></div>
+    <div className="settings-shell"><SiteHeader />
+      <BackLink fallback="/settings" fallbackLabel="Settings" /><p className="loading">Loading…</p></div>
   )
   if (!isAdmin) return (
     <div className="page-prose">
@@ -128,6 +130,7 @@ export default function AdminPage() {
   return (
     <div className="settings-shell">
       <SiteHeader />
+      <BackLink fallback="/settings" fallbackLabel="Settings" />
       <h1 className="settings-title">Index health</h1>
 
       {error && <p className="settings-save-error" role="alert">{error}</p>}
