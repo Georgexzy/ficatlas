@@ -74,6 +74,12 @@ input, select { font-family: inherit; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* space-between alone guarantees nothing when the row is full: on pages where
+     the header sits inside a narrower shell (the library, at 1440px) the logo
+     ended at x=493 and the theme toggle began at x=493 — touching, with the
+     chip visually running into the wordmark. A minimum gap makes the spacing a
+     property of the row rather than a lucky consequence of the space left over. */
+  gap: 24px;
   padding: 12px 24px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
