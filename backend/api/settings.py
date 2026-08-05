@@ -9,6 +9,27 @@ router = APIRouter()
 
 DEFAULTS = {
     "tracked_fandom":      "Harry Potter - J. K. Rowling",
+    # How the recent-works crawler chooses what to fetch.
+    #
+    #   rotate  walk the largest fandoms in the index, in turn. Coverage ends up
+    #           proportional to what the index actually holds rather than to
+    #           whoever set the box up.
+    #   pinned  only tracked_fandom. The original behaviour, and the reason this
+    #           setting exists: the recent-works loop is the ONLY source of works
+    #           published after the bulk dumps end, so a single pinned fandom
+    #           meant everything newer than mid-2024 was Harry Potter and nothing
+    #           else — a site-wide bias, invisible from the outside, produced by
+    #           one operator's taste.
+    #   mixed   tracked_fandom every pass, plus the next few from the rotation.
+    "crawl_mode":          "mixed",
+    # How many rotation fandoms to visit per pass, on top of any pinned ones.
+    "crawl_rotate_count":  "3",
+    # How far through the rotation we are. Advanced by the worker, not by hand.
+    "crawl_rotate_cursor": "0",
+    # Rotation is drawn from the top N fandoms by indexed works. Beyond a few
+    # hundred the tail is long and thin, and revisiting a fandom with 40 works
+    # every cycle costs the same request as one with 600,000.
+    "crawl_rotate_pool":   "250",
     "poll_on_load":        "true",
     "default_sites":       "ao3,ffnet,fictionalley",
     "default_sort":        "relevance",

@@ -29,6 +29,8 @@ const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 // teaches a reader the app is broken rather than that it is not theirs.
 interface AdminSettings {
   tracked_fandom: string
+  crawl_mode: string
+  crawl_rotate_count: string
   poll_on_load: string
   live_fetch: string
   feed_min_words: string
@@ -38,7 +40,7 @@ interface AdminSettings {
 }
 
 const ADMIN_KEYS: (keyof AdminSettings)[] = [
-  "tracked_fandom", "poll_on_load", "live_fetch",
+  "tracked_fandom", "crawl_mode", "crawl_rotate_count", "poll_on_load", "live_fetch",
   "feed_min_words", "feed_max_words", "feed_complete_only", "enable_direct_crawl",
 ]
 
@@ -334,17 +336,81 @@ export default function SettingsPage() {
           </section>
 
           <section className="settings-group">
-            <h2 className="settings-group__title">Fresh content</h2>
-
+            <h2 className="settings-group__title">Index health</h2>
             <div className="setting-row">
               <div className="setting-row__label">
-                <span className="setting-row__name">Tracked fandom</span>
-                <span className="setting-row__hint">Auto-pulled from AO3 feeds on load and every 6h. Comma-separate for multiple.</span>
+                <span className="setting-row__name">Coverage, crawl state and rate limits</span>
+                <span className="setting-row__hint">
+                  What is thin, what the crawler is pointed at next, and whether
+                  AO3 is currently throttling us — previously only visible by
+                  reading container logs.
+                </span>
               </div>
-              <input className="setting-input" value={admin.tracked_fandom}
-                onChange={e => setAdminValue("tracked_fandom", e.target.value)}
-                placeholder="Harry Potter - J. K. Rowling" />
+              <Link href="/admin" className="btn btn--ghost">Open</Link>
             </div>
+          </section>
+
+          <section className="settings-group">
+            <h2 className="settings-group__title">Fresh content</h2>
+
+            {/* This loop is the ONLY source of works published after the bulk
+                dumps end, so whatever it is pointed at decides what the whole
+                fresh end of the index contains. Pinned to one fandom, that
+                meant everything newer than mid-2024 was Harry Potter and
+                nothing else — a site-wide bias produced by one person's taste
+                and invisible from the outside. Hence the mode. */}
+            <div className="setting-row">
+              <div className="setting-row__label">
+                <span className="setting-row__name">What to keep current</span>
+                <span className="setting-row__hint">
+                  New works are found by walking AO3 tag pages. This is the only
+                  route for anything published after the bulk imports, so it
+                  decides which fandoms stay up to date.
+                </span>
+              </div>
+              <div className="setting-pills">
+                {[["rotate", "Rotate"], ["mixed", "Mixed"], ["pinned", "Pinned"]].map(([id, label]) => (
+                  <button key={id} aria-pressed={admin.crawl_mode === id}
+                    className={`pill ${admin.crawl_mode === id ? "pill--on" : ""}`}
+                    onClick={() => setAdminValue("crawl_mode", id)}>{label}</button>
+                ))}
+              </div>
+            </div>
+            <p className="settings-group__hint settings-group__hint--tight">
+              {admin.crawl_mode === "rotate"
+                ? "Walks the largest fandoms in the index in turn, so coverage follows what the index actually holds rather than anyone's preferences."
+                : admin.crawl_mode === "pinned"
+                ? "Only the fandoms listed below. Everything else stops gaining new works — fine for a personal instance, a visible bias on a public one."
+                : "Your fandoms every pass, plus the next few from the rotation. Keeps what you read current without it being the only thing that is."}
+            </p>
+
+            {admin.crawl_mode !== "rotate" && (
+              <div className="setting-row">
+                <div className="setting-row__label">
+                  <span className="setting-row__name">Your fandoms</span>
+                  <span className="setting-row__hint">Comma-separate for several. Use AO3&apos;s own tag name.</span>
+                </div>
+                <input className="setting-input" value={admin.tracked_fandom}
+                  onChange={e => setAdminValue("tracked_fandom", e.target.value)}
+                  placeholder="Harry Potter - J. K. Rowling" />
+              </div>
+            )}
+
+            {admin.crawl_mode !== "pinned" && (
+              <div className="setting-row">
+                <div className="setting-row__label">
+                  <span className="setting-row__name">Fandoms per pass</span>
+                  <span className="setting-row__hint">
+                    How many rotation fandoms each run visits. Higher sweeps the
+                    list faster and spends more of the AO3 rate limit doing it.
+                  </span>
+                </div>
+                <select className="setting-select" value={admin.crawl_rotate_count}
+                  onChange={e => setAdminValue("crawl_rotate_count", e.target.value)}>
+                  {["1", "2", "3", "5", "8"].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+            )}
 
             <div className="setting-row">
               <div className="setting-row__label">
