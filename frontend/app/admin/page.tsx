@@ -18,12 +18,23 @@ import { useAuth } from "@/lib/auth"
 //   what happens next?     the crawler's upcoming targets and its cycle time
 //   why is it slow?        the shared rate-limit state, with the current backoff
 //
-// Coverage is SAMPLED, and says so. Counting stubs exactly means a filtered scan
-// of 13.1M rows at about ten seconds a column; a 200k-row sample is accurate to
-// a fraction of a percent and returns immediately. An admin page that costs a
-// minute of database time is one nobody opens twice.
+// Coverage is EXACT for small sites and SAMPLED for large ones, and each row
+// says which. That split is not fussiness — the first version sampled the whole
+// table and reported FictionAlley from whatever rows happened to fall in the
+// sample, which was 61 to 115 of them, giving 21%, 23% and 34% on three
+// consecutive runs for a field whose real value is 18.5%. It presented that with
+// exactly the same confidence as AO3's 33,000-row estimate.
+//
+// The cause is that TABLESAMPLE draws whole BLOCKS, and rows are clustered on
+// disk by import batch, so a small site lands in a handful of blocks. Sites
+// under 400k rows are now counted properly instead — FictionAlley's exact
+// figures come back in under a second.
 interface Coverage {
-  site: string; sampled: number
+  site: string; sampled: number; total: number
+  /** True when every row was counted, false when this is a block sample. */
+  exact: boolean
+  /** Fields this site does not publish at all — not gaps, just not its vocabulary. */
+  na: string[]
   no_words: number; no_kudos: number; no_chars: number
   no_ships: number; no_genres: number; no_summary: number; no_date: number
 }
@@ -142,21 +153,42 @@ export default function AdminPage() {
           <section className="settings-group">
             <h2 className="settings-group__title">What is thin</h2>
             <p className="settings-group__hint">
-              Share of rows with nothing recorded for each field, from a sample of{" "}
-              {data.coverage_sample.toLocaleString()} — near-instant, and accurate
-              to well under a percent. A gap is not a bug in itself: FF.net&apos;s bulk
-              dump simply has no kudos column. It becomes one when a filter looks
-              like it works and matches almost nothing.
+              Share of rows with nothing recorded for each field. Sites under
+              400,000 works are counted exactly; larger ones are estimated from a
+              sample of {data.coverage_sample.toLocaleString()}, which at that
+              size is accurate to well under a percent.
+              {" "}A gap is not a bug in itself — FF.net&apos;s bulk dump simply has no
+              kudos column. It becomes one when a filter looks like it works and
+              matches almost nothing.
             </p>
             {data.coverage.map(c => (
               <div key={c.site} className="admin-site">
                 <h3 className="admin-site__name">
                   {SITE_LABEL[c.site] ?? c.site}
-                  <span className="admin-site__n">{c.sampled.toLocaleString()} sampled</span>
+                  <span className="admin-site__n">
+                    {c.total.toLocaleString()} works ·{" "}
+                    {c.exact
+                      ? "every row counted"
+                      : `estimated from ${c.sampled.toLocaleString()}`}
+                  </span>
                 </h3>
                 <div className="admin-bars">
                   {FIELDS.map(f => {
+                    // A field the site does not have is not a gap to fix. AO3
+                    // has literally zero rows with a genre, because genres are
+                    // FF.net's vocabulary — showing that as a full red bar said
+                    // "fix this" about something that cannot be fixed, and
+                    // devalued the bars that do mean something.
+                    const na = c.na.includes(f.key as string)
                     const p = pct(c[f.key] as number, c.sampled)
+                    if (na) return (
+                      <div key={f.key} className="admin-bar admin-bar--na"
+                        title={`${SITE_LABEL[c.site] ?? c.site} does not publish this field at all`}>
+                        <span className="admin-bar__label">{f.label}</span>
+                        <span className="admin-bar__track" />
+                        <span className="admin-bar__pct">n/a</span>
+                      </div>
+                    )
                     return (
                       <div key={f.key} className="admin-bar" title={`${p}% missing — ${f.why}`}>
                         <span className="admin-bar__label">{f.label}</span>
