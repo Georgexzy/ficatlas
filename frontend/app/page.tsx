@@ -379,6 +379,16 @@ function StoryCard({ story }: { story: StoryCard }) {
                 {story.archive_section}
               </Link>
             )}
+            {/* Series, where the work is in one. On the card rather than only
+                on the story page, because "part 3 of 5" changes whether you
+                click at all — nobody wants to start in the middle. */}
+            {story.series_name && story.series_id && (
+              <Link href={`/series/${story.series_id}`} className="badge badge--series"
+                title={`${story.series_name} — see the whole series in reading order`}>
+                {story.series_position ? `#${story.series_position} ` : ""}
+                {story.series_name}
+              </Link>
+            )}
             {story.cross_post_urls && story.cross_post_urls.length > 0 && (
               <span className="badge badge--crosspost"
                 title={`Also posted on:\n${story.cross_post_urls.join("\n")}`}>

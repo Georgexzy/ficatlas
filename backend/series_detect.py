@@ -54,6 +54,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://ficatlas:ficatlas@db:5432/fi
 
 from sqlalchemy import text as sql_text
 
+import series_cues
 from db.session import db_session
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -209,13 +210,46 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
             if len(works) < MIN_WORKS:
                 continue
 
-            for token, members, score in group_author(works, idf, default_idf):
+            # Precedence: what the author SAID beats what the titles rhyme
+            # with. Title similarity is the last resort, used only on works no
+            # stated cue has already accounted for.
+            groups: list[tuple[str, list[dict], float, str]] = []
+            claimed: set[str] = set()
+
+            # 1. A named series stated in the summary — "Third in the Facing the
+            #    Future series". Gives the name AND the position; nothing is
+            #    guessed, only parsed.
+            named: dict[str, list[dict]] = defaultdict(list)
+            for w in works:
+                cue = series_cues.parse_named(w.get("summary"))
+                if cue:
+                    w["cue_pos"] = cue["position"]
+                    named[cue["name"]].append(w)
+            for name, members in named.items():
+                if len(members) < 2:
+                    continue
+                groups.append((name, members, 30.0, "stated"))
+                claimed.update(m["id"] for m in members)
+
+            # 2. "Sequel to X" chains, resolved against this author's own works.
+            rest = [w for w in works if w["id"] not in claimed]
+            for chain in series_cues.link_by_relatives(rest):
+                first = min(chain, key=lambda m: (m["numeric_id"] is None,
+                                                  m["numeric_id"]))
+                groups.append((f"{first['title']} series", chain, 28.0, "stated"))
+                claimed.update(m["id"] for m in chain)
+
+            # 3. Distinctive shared title words, on whatever is left.
+            rest = [w for w in works if w["id"] not in claimed]
+            for token, members, score in group_author(rest, idf, default_idf):
+                groups.append((series_name(token, members), members, score, "inferred"))
+
+            for name, members, score, source in groups:
                 found += 1
-                name = series_name(token, members)
                 # Author-stated position wins; otherwise publication order, which
                 # is AO3's own fallback for a series with no positions set.
                 for m in members:
-                    m["pos"] = parse_position(m.get("summary"))
+                    m["pos"] = m.get("cue_pos") or parse_position(m.get("summary"))
                 if all(m["pos"] is None for m in members):
                     # Site id, not published_at. AO3 and FF.net both assign
                     # increasing work ids, so the id IS publication order and it
@@ -236,13 +270,14 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
 
                 sid = db.execute(sql_text("""
                     INSERT INTO series (name, author, site, source, confidence, work_count)
-                    VALUES (:n, :a, :s, 'inferred', :c, :w)
+                    VALUES (:n, :a, :s, :src, :c, :w)
                     ON CONFLICT (lower(coalesce(author,'')), lower(name)) DO UPDATE
                         SET work_count = EXCLUDED.work_count,
                             confidence = EXCLUDED.confidence
                     RETURNING id
                 """), {"n": name, "a": author, "s": members[0]["site"],
-                       "c": min(1.0, score / 30.0), "w": len(members)}).scalar()
+                       "src": source, "c": min(1.0, score / 30.0),
+                       "w": len(members)}).scalar()
                 for m in members:
                     db.execute(sql_text("""
                         INSERT INTO series_works (series_id, story_id, position)

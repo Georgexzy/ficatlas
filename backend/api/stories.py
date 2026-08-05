@@ -127,6 +127,38 @@ class StoryDetail(BaseModel):
 
 # ── Series ──────────────────────────────────────────────────────────────────
 
+@router.get("/series/{series_id}")
+def get_series(series_id: str, db: Session = Depends(get_db)):
+    """One series and its works in reading order — the page a reader lands on."""
+    r = db.execute(sql_text("""
+        SELECT id, name, author, site, source, confidence, work_count
+        FROM series WHERE id = :i
+    """), {"i": valid_story_id(series_id)}).first()
+    if not r:
+        raise HTTPException(404, "No such series")
+    works = db.execute(sql_text("""
+        SELECT st.id, st.title, st.author, st.site, st.word_count, st.chapter_count,
+               st.kudos, sw.position, st.is_hosted, st.status, st.summary, st.url
+        FROM series_works sw JOIN stories st ON st.id = sw.story_id
+        WHERE sw.series_id = :i AND st.delisted_at IS NULL
+        ORDER BY sw.position NULLS LAST, st.title
+    """), {"i": r[0]}).fetchall()
+    return {
+        "id": str(r[0]), "name": r[1], "author": r[2],
+        "site": (r[3].value if hasattr(r[3], "value") else r[3]),
+        "source": r[4], "confidence": round(float(r[5]), 2), "work_count": r[6],
+        "total_words": sum(w[4] or 0 for w in works),
+        "works": [{
+            "id": str(w[0]), "title": w[1], "author": w[2],
+            "site": (w[3].value if hasattr(w[3], "value") else w[3]),
+            "word_count": w[4] or 0, "chapter_count": w[5] or 0, "kudos": w[6] or 0,
+            "position": w[7], "is_hosted": bool(w[8]),
+            "status": (w[9].value if hasattr(w[9], "value") else w[9]),
+            "summary": w[10], "url": w[11],
+        } for w in works],
+    }
+
+
 @router.get("/{story_id}/series")
 def story_series(story_id: str = Depends(valid_story_id),
                  db: Session = Depends(get_db)):
