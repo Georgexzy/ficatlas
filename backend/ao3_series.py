@@ -38,8 +38,11 @@ log = logging.getLogger(__name__)
 # because the block also contains Previous/Next links whose anchors would
 # otherwise be mistaken for the series link.
 _BLOCK_RE = re.compile(r'<dd class="series">(.*?)</dd>', re.S)
+# Tags between every token: AO3 writes the position as
+#   Part <strong>2</strong> of <a href="/series/3418618">Name</a>
 _PART_RE = re.compile(
-    r'Part\s+(\d+)\s+of\s*<a[^>]*href="/series/(\d+)"[^>]*>(.*?)</a>', re.S | re.I)
+    r'Part\s*(?:<[^>]+>\s*)*(\d+)\s*(?:</[^>]+>\s*)*of\s*'
+    r'(?:<[^>]+>\s*)*?<a[^>]*href="/series/(\d+)"[^>]*>(.*?)</a>', re.S | re.I)
 # A work can sit in several series, each its own <span class="position">.
 _POSITION_RE = re.compile(r'<span class="position">(.*?)</span>', re.S)
 
