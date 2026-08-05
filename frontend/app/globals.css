@@ -1067,6 +1067,10 @@ kbd {
   .filter-section__toggle {
     padding: 11px 14px; font-size: 14px; min-height: 44px;
   }
+
+  .takedown-card__head { flex-direction: column; }
+  .takedown-card__buttons { width: 100%; }
+  .takedown-card__buttons .btn { flex: 1 1 auto; }
   .filter-section__chevron { font-size: 17px; opacity: 0.9; }
   .curated-check, .site-check, .filter-check { padding: 6px 0; }
 
@@ -2631,6 +2635,68 @@ body.is-resizing * { cursor: col-resize !important; }
 }
 .takedown-form__check input { margin-top: 3px; accent-color: var(--accent); flex-shrink: 0; }
 .takedown-form__check strong { color: var(--text); }
+
+/* ── Takedown review queue ──────────────────────────────────────────────── */
+.takedown-queue__filters {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 20px; flex-wrap: wrap;
+}
+.takedown-queue__refresh { margin-left: auto; }
+
+.takedown-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px 18px; margin-bottom: 14px;
+}
+.takedown-card--pending { border-left: 3px solid var(--accent); }
+.takedown-card__head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+}
+.takedown-card__title {
+  font-family: var(--font-serif); font-size: 18px; font-weight: 600;
+  color: var(--text); margin: 0 0 4px;
+}
+.takedown-card__meta { font-size: 12.5px; color: var(--text-dim); margin: 0; }
+.takedown-card__state { text-transform: capitalize; flex-shrink: 0; }
+.takedown-card__state--upheld { background: color-mix(in srgb, var(--danger, #d9534f) 16%, transparent); }
+.takedown-card__state--rejected { background: var(--surface2); }
+
+.takedown-card__flags {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin: 12px 0 0; padding: 0; list-style: none;
+}
+.takedown-card__flags li {
+  font-size: 11.5px; padding: 3px 8px; border-radius: 999px;
+  background: var(--surface2); color: var(--text-faint);
+}
+.takedown-card__flags li.is-on {
+  background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
+}
+
+.takedown-card__url {
+  font-size: 12px; color: var(--text-dim); margin: 12px 0 0; word-break: break-word;
+}
+.takedown-card__url code {
+  font-size: 11.5px; padding: 1px 5px; border-radius: 4px; background: var(--surface2);
+}
+.takedown-card__detail {
+  margin: 12px 0 0; padding: 9px 12px; font-size: 13px; line-height: 1.6;
+  color: var(--text); background: var(--surface2);
+  border-left: 3px solid var(--border); border-radius: 0 6px 6px 0;
+}
+.takedown-card__actions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px;
+}
+.takedown-card__note { flex: 1 1 220px; min-width: 0; }
+.takedown-card__buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.takedown-card__resolved {
+  font-size: 12.5px; color: var(--text-dim); margin: 12px 0 0;
+}
+
+/* Count of things waiting, beside the control that opens them. */
+.settings-badge {
+  margin-left: 8px; font-size: 11px; font-weight: 600; padding: 2px 8px;
+  border-radius: 999px; vertical-align: middle;
+  background: var(--accent); color: #fff;
+}
 
 /* Live-ish counter in the index panel — the index grows while you use it. */
 .index-status__live { color: var(--accent); }

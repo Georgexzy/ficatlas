@@ -77,6 +77,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [saveState, setSaveState] = useState<null | { ok: boolean; text: string }>(null)
   const [autoDisabled, setAutoDisabled] = useState<{ ao3: boolean; ffnet: boolean }>({ ao3: false, ffnet: false })
+  const [pendingTakedowns, setPendingTakedowns] = useState(0)
 
   const loadCrawlStatus = () =>
     fetch(`${API_BASE}/api/library/crawl-status`).then(r => r.json())
@@ -96,6 +97,14 @@ export default function SettingsPage() {
     })
     loadCrawlStatus()
   }, [])
+
+  useEffect(() => {
+    if (!isAdmin) return
+    fetch(`${API_BASE}/api/takedown/pending-count`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && setPendingTakedowns(d.pending || 0))
+      .catch(() => {})
+  }, [isAdmin])
 
   // Preferences save the moment you touch them. There is no Save button for
   // this half and no failure mode worth reporting: it is a localStorage write
@@ -300,6 +309,29 @@ export default function SettingsPage() {
             These apply to the whole instance and to every visitor. Readers never
             see this section.
           </p>
+
+          {/* First, because it is the only part of the admin surface where a
+              person is waiting for an answer. Everything below it is a
+              preference that can sit unchanged for months. */}
+          <section className="settings-group">
+            <h2 className="settings-group__title">Requests from authors</h2>
+            <div className="setting-row">
+              <div className="setting-row__label">
+                <span className="setting-row__name">
+                  Takedown requests
+                  {pendingTakedowns > 0 && (
+                    <span className="settings-badge">{pendingTakedowns} waiting</span>
+                  )}
+                </span>
+                <span className="setting-row__hint">
+                  {pendingTakedowns > 0
+                    ? "The text is already down — what is outstanding is your decision, and replying to the person who asked."
+                    : "Nothing waiting. Text comes down automatically when a request arrives; this is where you decide whether it stays down."}
+                </span>
+              </div>
+              <Link href="/takedowns" className="btn btn--ghost">Open queue</Link>
+            </div>
+          </section>
 
           <section className="settings-group">
             <h2 className="settings-group__title">Fresh content</h2>
