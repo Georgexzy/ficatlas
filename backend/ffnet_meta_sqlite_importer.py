@@ -100,42 +100,57 @@ def run(dry_run: bool, batch: int = 20000, limit: int | None = None) -> int:
 
     con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
-    cur = con.execute(
-        'SELECT "Story URL" AS url, Genre, Published, Updated FROM metadata_full')
+    cur = con.execute('SELECT "Story URL" AS url, Genre, Published, Updated, '
+                      'Summary FROM metadata_full')
 
-    seen = matched = filled_genres = filled_dates = 0
+    seen = matched = filled_genres = filled_dates = written = 0
     pending: list[tuple] = []
 
-    def flush(rows: list[tuple]) -> tuple[int, int]:
-        """Apply one batch. Returns (genre_writes, date_writes)."""
+    def flush(rows: list[tuple]) -> int:
+        """Apply one batch. Returns the number of rows the UPDATE actually touched."""
         if not rows or dry_run:
-            return (0, 0)
+            return 0
         with db_session() as db:
             res = db.execute(sql_text("""
                 UPDATE stories AS s SET
-                    -- coalesce/nullif so an existing value always wins: this can
-                    -- only ever add, never replace.
+                    -- Each write is guarded so a field is filled ONLY where ours
+                    -- is empty. This can add, never replace.
                     genres = CASE WHEN (s.genres IS NULL OR s.genres = '{}')
-                                  THEN v.genres ELSE s.genres END,
+                                  THEN COALESCE(v.genres, s.genres) ELSE s.genres END,
                     published_at = COALESCE(s.published_at, v.pub),
-                    updated_at   = COALESCE(s.updated_at, v.upd)
+                    updated_at   = COALESCE(s.updated_at, v.upd),
+                    -- nullif so an existing empty string counts as absent too.
+                    summary      = COALESCE(nullif(s.summary, ''), v.summary)
                 FROM (
-                    SELECT unnest(:ids) AS site_id,
-                           unnest(:genres) AS genres,
-                           unnest(:pubs)::timestamptz AS pub,
-                           unnest(:upds)::timestamptz AS upd
+                    -- Every column cast explicitly. Postgres cannot infer the
+                    -- type of an empty array, and most source rows have no
+                    -- genres — so an untyped parameter failed the whole batch
+                    -- with "cannot determine type of empty array".
+                    --
+                    -- Genres arrive as one delimited string per row rather than
+                    -- a list of lists: Postgres arrays are rectangular, so a
+                    -- ragged list of per-row genre lists is not expressible as
+                    -- text[][] at all.
+                    SELECT unnest(CAST(:ids AS text[])) AS site_id,
+                           string_to_array(
+                             nullif(unnest(CAST(:genres AS text[])), ''), '|') AS genres,
+                           unnest(CAST(:pubs AS timestamptz[])) AS pub,
+                           unnest(CAST(:upds AS timestamptz[])) AS upd,
+                           unnest(CAST(:summaries AS text[])) AS summary
                 ) AS v
                 WHERE s.site = 'ffnet' AND s.site_id = v.site_id
                   AND (s.genres IS NULL OR s.genres = '{}'
-                       OR s.published_at IS NULL OR s.updated_at IS NULL)
+                       OR s.published_at IS NULL OR s.updated_at IS NULL
+                       OR nullif(s.summary, '') IS NULL)
             """), {
-                "ids":    [r[0] for r in rows],
-                "genres": [r[1] for r in rows],
-                "pubs":   [r[2] for r in rows],
-                "upds":   [r[3] for r in rows],
+                "ids":       [r[0] for r in rows],
+                "genres":    ["|".join(r[1]) for r in rows],
+                "pubs":      [r[2] for r in rows],
+                "upds":      [r[3] for r in rows],
+                "summaries": [r[4] for r in rows],
             })
             db.commit()
-            return (res.rowcount or 0, 0)
+            return res.rowcount or 0
 
     for row in cur:
         seen += 1
@@ -145,34 +160,44 @@ def run(dry_run: bool, batch: int = 20000, limit: int | None = None) -> int:
         genres = parse_genres(row["Genre"])
         pub = parse_date(row["Published"])
         upd = parse_date(row["Updated"])
-        if not genres and not pub and not upd:
+        summary = (row["Summary"] or "").strip() or None
+        if not genres and not pub and not upd and not summary:
             continue
         matched += 1
-        pending.append((m.group(1), genres, pub, upd))
+        pending.append((m.group(1), genres, pub, upd, summary))
         if genres:
             filled_genres += 1
         if pub or upd:
             filled_dates += 1
 
         if len(pending) >= batch:
-            flush(pending)
+            written += flush(pending)
             pending.clear()
-            log.info(f"  {seen:,} read, {matched:,} usable "
-                     f"({filled_genres:,} with genres, {filled_dates:,} with dates)")
+            # `written` is rows the UPDATE actually changed. The other two count
+            # what the DUMP offered, which is a much larger number — most source
+            # rows describe stories this index has never heard of. Reporting the
+            # offered figure as though it were the applied one would have
+            # claimed millions of fills on a run that changed nothing.
+            log.info(f"  {seen:,} read · {matched:,} usable · {written:,} rows updated")
         if limit and seen >= limit:
             break
 
-    flush(pending)
+    written += flush(pending)
     con.close()
 
-    verb = "would fill" if dry_run else "filled"
-    log.info(f"DONE — {seen:,} rows read, {matched:,} usable; "
-             f"{verb} genres for {filled_genres:,} and dates for {filled_dates:,}")
+    if dry_run:
+        log.info(f"DRY RUN — {seen:,} rows read, {matched:,} carry something usable; "
+                 f"nothing written")
+    else:
+        log.info(f"DONE — {seen:,} rows read, {matched:,} usable, "
+                 f"{written:,} of our rows updated")
 
     if not dry_run:
         with db_session() as db:
             for label, cond in (("no genres", "genres IS NULL OR genres='{}'"),
-                                ("no published date", "published_at IS NULL")):
+                                ("no published date", "published_at IS NULL"),
+                                ("no updated date", "updated_at IS NULL"),
+                                ("no summary", "nullif(summary,'') IS NULL")):
                 n = db.execute(sql_text(
                     f"SELECT count(*) FROM stories WHERE site='ffnet' AND ({cond})")).scalar()
                 log.info(f"  remaining {label}: {n:,}")

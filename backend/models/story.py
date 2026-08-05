@@ -83,6 +83,9 @@ class Story(Base):
     # Set when an author asks for their text not to be hosted here. The row
     # stays — only the full text stops being served. See api/takedown.py.
     text_withdrawn_at = Column(DateTime(timezone=True))
+    # The listing itself withdrawn, not just the text. See init_db.py.
+    delisted_at       = Column(DateTime(timezone=True))
+    delisted_reason   = Column(Text)
     text_withdrawn_reason = Column(Text)
     wayback_url = Column(Text)                                # archive.org fallback
     # URLs where this same story is cross-posted on other sites (FFN/AO3/etc).

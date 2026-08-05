@@ -13,7 +13,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from db.session import get_db
 from models.story import Story, Chapter
-from models.user import User
+from models.user import User, ROLE_ADMIN
 from api.auth import get_current_user
 from html_sanitize import sanitize_html, strip_chapter_heading, tidy_chapter_html
 from provenance import content_tags, source_labels
@@ -126,9 +126,19 @@ class StoryDetail(BaseModel):
 
 
 @router.get("/{story_id}", response_model=StoryDetail)
-async def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db)):
+async def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db),
+                    viewer=Depends(get_current_user)):
     story = db.query(Story).filter(Story.id == story_id).first()
     if not story:
+        raise HTTPException(404, "Story not found")
+    # A delisted work is gone as far as the public is concerned. 404 rather than
+    # a tombstone: the author asked for the entry removed, and a page saying
+    # "this story was removed at the author's request" still publishes their
+    # title, their pen name and the fact that they withdrew it. An admin can
+    # still open it, because the reversal the policy promises needs someone able
+    # to look at what was removed.
+    if story.delisted_at is not None and not (
+            viewer is not None and viewer.at_least(ROLE_ADMIN)):
         raise HTTPException(404, "Story not found")
 
     chapter_meta = [
@@ -302,6 +312,7 @@ async def similar_stories(
             SELECT id, title, author, word_count, fandoms, relationships, tags, is_hosted
             FROM stories
             WHERE id <> :sid
+              AND delisted_at IS NULL
               AND (
                     (:has_ships   AND relationships && :ships)
                  OR (:has_fandoms AND fandoms       && :fandoms)
