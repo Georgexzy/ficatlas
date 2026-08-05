@@ -37,6 +37,8 @@ interface Coverage {
   na: string[]
   no_words: number; no_kudos: number; no_chars: number
   no_ships: number; no_genres: number; no_summary: number; no_date: number
+  /** AO3 rows with no fandom, which the tag-page harvest cannot see at all. */
+  unreachable_by_listing?: number
 }
 interface Overview {
   tables: Record<string, number>
@@ -201,6 +203,18 @@ export default function AdminPage() {
                     )
                   })}
                 </div>
+                {c.unreachable_by_listing != null && c.unreachable_by_listing > 0 && (
+                  <p className="admin-site__note">
+                    Most of this closes on its own: the listing harvest gets these
+                    same fields <strong>twenty works per request</strong> by walking
+                    fandom tag pages, and it is running now.{" "}
+                    <strong>{c.unreachable_by_listing.toLocaleString()}</strong> of
+                    these rows have no fandom at all, so a tag-page walk cannot see
+                    them by construction — those are the ones the stub pass below
+                    fetches one at a time, worst gaps first. Filling one also gives
+                    it a fandom, after which the cheap route can maintain it.
+                  </p>
+                )}
               </div>
             ))}
           </section>
@@ -277,10 +291,11 @@ export default function AdminPage() {
             {note && <p className="admin-note">{note}</p>}
             <div className="setting-row">
               <div className="setting-row__label">
-                <span className="setting-row__name">Fill AO3 stub rows</span>
+                <span className="setting-row__name">Fill AO3 rows with no fandom</span>
                 <span className="setting-row__hint">
-                  Rows indexed as a bare title. Fetches length, kudos and summary
-                  from the work page, shortest titles first — those collide most.
+                  Only the rows the listing harvest cannot reach, worst gaps first.
+                  One request each, so this is deliberately the small half of the
+                  job — the cheap bulk route handles everything with a fandom.
                 </span>
               </div>
               <button className="btn btn--ghost" disabled={busy === "ao3_stubs"}
