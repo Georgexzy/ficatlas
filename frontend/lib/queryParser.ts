@@ -11,6 +11,8 @@ export interface ParsedToken {
 }
 
 export interface ParsedQuery {
+  /** FictionAlley sections (Schnoogle, The Dark Arts, …). */
+  sections: string[]
   cleanText: string
   fandoms: string[]
   relationships: string[]
@@ -49,6 +51,9 @@ const FIELD_ALIASES: Record<string, string> = {
   author: "author", by: "author",
   updated: "updated_after", update: "updated_after", since: "updated_after",
   site: "sites",
+  // FictionAlley sections, so the bar round-trips: the sidebar writes
+  // section:Schnoogle and typing the same thing has to mean the same thing.
+  section: "sections", sections: "sections", subsite: "sections",
   crossover: "crossovers", xover: "crossovers",
   warn: "warnings", warning: "warnings", warnings: "warnings",
   category: "categories", cat: "categories",
@@ -117,7 +122,8 @@ const KEY_RE = /(-?)(\w+)\s*:\s*/gi
 export function parseQuery(raw: string): ParsedQuery {
   const pq: ParsedQuery = {
     cleanText: "", fandoms: [], relationships: [], characters: [],
-    tags: [], ratings: [], warnings: [], categories: [], sites: [],
+    tags: [],
+    sections: [], ratings: [], warnings: [], categories: [], sites: [],
     excFandoms: [], excRelationships: [], excCharacters: [], excTags: [],
     status: null, language: null, author: null, wordCountMin: null, wordCountMax: null,
     updatedAfter: null, crossovers: null, tokens: [],
@@ -229,6 +235,7 @@ export function parsedToSearchParams(pq: ParsedQuery): Record<string, any> {
     relationships: csv(pq.relationships),
     characters: csv(pq.characters),
     tags: csv(pq.tags),
+    sections: csv(pq.sections),
     ratings: csv(pq.ratings),
     warnings: csv(pq.warnings),
     categories: csv(pq.categories),

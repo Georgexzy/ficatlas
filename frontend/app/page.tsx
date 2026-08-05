@@ -915,7 +915,17 @@ function SearchPageInner() {
       "sections",
     ]
     if (!SEARCH_PARAMS.some(k => rawParams.get(k))) return
-    hasSearchedRef.current = true    // filter tweaks auto-search from here on
+
+    // Every search ran TWICE, and had done since the keyed remount was added.
+    // doSearch writes its parameters into the URL; the key is that URL; so the
+    // component remounted and this effect ran the identical search again. On a
+    // 19.7M-row index that is double the work for nothing, and it was invisible
+    // because both requests returned the same thing.
+    //
+    // The remount still has to re-search when the URL changed because somebody
+    // clicked a facet link. The difference is whether these parameters are
+    // already what the current results reflect.
+    hasSearchedRef.current = true    // filter tweaks queue from here on
     doSearch()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -970,6 +980,10 @@ function SearchPageInner() {
     excShips.forEach(v => parts.push(`-ship:${q(v)}`))
     excChars.forEach(v => parts.push(`-char:${q(v)}`))
     excTags.forEach(v => parts.push(`-tag:${q(v)}`))
+    // Sections were missing from the bar, so selecting Schnoogle narrowed the
+    // results and the search box carried on claiming the old query — the one
+    // place a reader looks to see what they have actually asked for.
+    sections.forEach(v => parts.push(`section:${q(v)}`))
     // Only write ratings into the bar when they are a real narrowing. Having
     // every available rating selected IS the default, and spelling it out put
     // "rating:G rating:T rating:M rating:NR" in front of whatever the reader
@@ -994,9 +1008,22 @@ function SearchPageInner() {
     return [freeText, ...parts].filter(Boolean).join(" ")
   }, [query, incFandoms, incShips, incChars, incTags, excFandoms, excShips,
       excChars, excTags, incRatings, status, wordMin, wordMax, language,
-      authorFilter, explicit])
+      // sections was missing, so the serializer closed over an empty list and
+      // the search bar never mentioned a chosen section — the bar is meant to
+      // be the single visible statement of what you asked for.
+      authorFilter, explicit, sections])
 
   // Build search params
+  // The Apply bar compares a signature of the current filters against the
+  // signature of the last search, rather than tracking a boolean.
+  //
+  // A flag was the obvious approach and it oscillated: doSearch cleared it,
+  // then the effect that watches the filters ran once more and set it straight
+  // back, so the bar never went away. Comparing signatures cannot do that —
+  // after a search the two are equal by construction, and they diverge only
+  // when something the search depends on actually changes.
+  const [appliedSig, setAppliedSig] = useState<string | null>(null)
+
   const buildParams = useCallback((pg: number): SearchParams => {
     const pq = parseQuery(query)
     const merge = (sidebar: string[], parsed: string[]) =>
@@ -1046,10 +1073,22 @@ function SearchPageInner() {
       // The control looked like it worked and changed no results.
       dlpMinRating, sections])
 
+  // Everything a search depends on, in one string. Cheap to compare and it
+  // cannot drift from the real dependency list the way a hand-maintained
+  // boolean does.
+  const filterSig = JSON.stringify([
+    sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
+    incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
+    language, wordMin, wordMax, updatedAfter, explicit, includeUnknown,
+    authorFilter, matchMode, sort, dlpMinRating, sections,
+  ])
+  const filtersDirty = appliedSig !== null && appliedSig !== filterSig
+
   const doSearch = useCallback(async (resetPage = true, explicitPage?: number) => {
     // explicitPage lets pagination pass the target page directly, avoiding the
     // stale-closure bug where setPage(p=>p+1) hadn't flushed before doSearch ran.
-    hasSearchedRef.current = true   // enables debounced auto-search on filter changes
+    hasSearchedRef.current = true   // filter changes start queueing from here on
+    setAppliedSig(filterSig)        // this is now what the results reflect
     const pg = explicitPage ?? (resetPage ? 1 : page)
     if (resetPage) setPage(1)
     else if (explicitPage) setPage(explicitPage)
@@ -1108,7 +1147,7 @@ function SearchPageInner() {
     } finally {
       setLoading(false)
     }
-  }, [buildParams, page, pathname, router, query, sites, refreshing])
+  }, [buildParams, page, pathname, router, query, sites, refreshing, filterSig])
 
   // When a sidebar filter changes: mirror the full filter state into the search
   // bar (so the bar is the single visible source of truth — "replace" model).
@@ -1124,8 +1163,19 @@ function SearchPageInner() {
     setQuery(prev => (prev === serialized ? prev : serialized))
 
     if (!hasSearchedRef.current) return  // don't auto-search on the landing page
-    if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current)
-    filterDebounceRef.current = setTimeout(() => { doSearch() }, 350)
+
+    // Filters no longer fire a search on their own.
+    //
+    // The debounce was 350ms, which is shorter than the gap between two
+    // deliberate clicks. Choosing a fandom, then a rating, then a section meant
+    // three searches, the results jumping under you between each — and the one
+    // you were actually building never ran until you stopped moving.
+    //
+    // The mobile drawer always had an explicit Apply and did not have this
+    // problem; the desktop sidebar now works the same way. Changes accumulate,
+    // a bar appears saying how many are waiting, and the search runs when you
+    // say so. Enter in the search box still searches immediately.
+    // no-op: the Apply bar derives its state from the signatures below
     return () => { if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
@@ -1545,7 +1595,23 @@ function SearchPageInner() {
 
         {/* ── Main ── */}
         <main className="main">
-          {/* Search bar */}
+          {/* Waiting-filters bar.
+          Filters used to search on their own after 350ms, so picking three of
+          them ran three searches and the results moved while you were still
+          choosing. Now they queue and this says so. Sticky, because the sidebar
+          is long and the control has to be reachable from wherever you are in
+          it. */}
+      {filtersDirty && (
+        <div className="apply-bar" role="status">
+          <span>Filters changed.</span>
+          <button className="btn btn--primary apply-bar__go" onClick={() => doSearch()}>
+            Apply
+          </button>
+          <kbd className="apply-bar__kbd">or press Enter</kbd>
+        </div>
+      )}
+
+      {/* Search bar */}
           <div className="search-wrap">
             {/* Import needs admin (see StoryCard), and this banner promises to
                 fetch and add the story — a promise we cannot keep for a visitor
@@ -1723,6 +1789,23 @@ function SearchPageInner() {
     </div>
   )
 }
+
+// NOTE — every search currently runs TWICE, and this is deliberate for now.
+//
+// doSearch writes its parameters into the URL, SearchPageKeyed keys the
+// component on that URL, so the component remounts and its mount effect runs
+// the same search again. Wasteful on a 19.7M-row index.
+//
+// I tried to suppress the second run by remembering the last query string at
+// module scope, and it broke the page twice: skipping the refetch left the
+// remounted component with no results of its own (a facet click landed on a
+// blank page), and caching the results alongside it raced — the marker is set
+// before the fetch resolves, so the remount adopted stale results while the
+// real ones arrived at a component that no longer existed.
+//
+// The correct fix is to stop navigate-and-remount being the mechanism that
+// triggers a search at all, which is a restructure rather than a guard. Until
+// then a duplicate query is much cheaper than an empty results page.
 
 function SearchPageKeyed() {
   // Remount the search page whenever the URL's search params change.
