@@ -412,7 +412,13 @@ async def search(
         q = pq.clean_text or None
 
     # ── Site list ─────────────────────────────────────────────────────────────
-    active_sites = [s.strip() for s in sites.split(",")] if sites else ["ao3", "ffnet"]
+    # Defaults to every site we index, not just the two big ones. The old
+    # default predated FicAlley being a first-class site and silently dropped
+    # it: `?sections=Schnoogle` with no `sites` returned 0, because the only
+    # archive that HAS sections was not among the defaults. The frontend always
+    # sends an explicit list, so nothing in the UI changes.
+    active_sites = ([s.strip() for s in sites.split(",")] if sites
+                    else ["ao3", "ffnet", "fictionalley"])
     site_enums   = [SiteEnum(s) for s in active_sites if s in SiteEnum.__members__]
 
     # ── Build DB query ────────────────────────────────────────────────────────
