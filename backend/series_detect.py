@@ -97,6 +97,20 @@ _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7,
 MIN_SCORE = float(os.getenv("SERIES_MIN_SCORE", "25.0"))
 MIN_WORKS = int(os.getenv("SERIES_MIN_WORKS", "3"))
 
+# The shared word must be distinctive ON ITS OWN, not merely distinctive-times-
+# popular. The score is idf x member count, so an ordinary word clears any
+# threshold once enough works share it — which is precisely the false-positive
+# shape. Sampling the first real run turned up a "Love series" of seven and a
+# "Like series" of six, both nonsense, sitting beside correct ones.
+#
+# Measured idf, from 300k sampled titles:
+#     love 3.60   like 4.70   potter 6.08      <- all wrong
+#     danger 8.22   insomnia 8.25   bodyguard 9.12
+#     holder 11.51   ghostober 12.61           <- all right
+# The floor sits in the gap. "potter" landing on the wrong side is correct too:
+# it is a fandom word, not a series name.
+MIN_TOKEN_IDF = float(os.getenv("SERIES_MIN_TOKEN_IDF", "7.0"))
+
 
 def tokens(title: str) -> set[str]:
     t = re.sub(r"[^a-z0-9 ]", " ", (title or "").lower())
@@ -134,12 +148,41 @@ def build_idf(db, sample: int = 300_000) -> dict[str, float]:
     return {w: math.log(n / c) for w, c in freq.items()}
 
 
+def subject_words(works: list[dict]) -> set[str]:
+    """Words that name what the works are ABOUT rather than which series it is.
+
+    The dominant false positive, found by sampling the first real run: an author
+    who writes several Star Trek stories gets a "Trek series", and one who
+    writes about Aeryn gets an "Aeryn series". The shared word is real and the
+    grouping is wrong — it is the fandom or a character, which every work by
+    that author naturally shares.
+
+    Taken from the works' own fandom, character and relationship tags, so it
+    adapts per author and per fandom with nothing hard-coded. A word is only
+    excluded when it appears in the tags of MORE THAN ONE of the works: a series
+    genuinely named after its protagonist ("the Harry Potter series") would
+    otherwise be thrown away on the strength of one tag.
+    """
+    from collections import Counter
+    seen: Counter = Counter()
+    for w in works:
+        words: set[str] = set()
+        for value in w.get("subject") or []:
+            words |= tokens(value)
+        for word in words:
+            seen[word] += 1
+    return {word for word, n in seen.items() if n > 1}
+
+
 def group_author(works: list[dict], idf: dict[str, float], default_idf: float
                  ) -> list[tuple[str, list[dict], float]]:
     """Series candidates among one author's works: (name, members, score)."""
+    subjects = subject_words(works)
     by_token: dict[str, list[dict]] = defaultdict(list)
     for w in works:
         for tok in tokens(w["title"]):
+            if tok in subjects:
+                continue
             by_token[tok].append(w)
 
     out: list[tuple[str, list[dict], float]] = []
@@ -152,7 +195,10 @@ def group_author(works: list[dict], idf: dict[str, float], default_idf: float
         members = [m for m in members if m["id"] not in used]
         if len(members) < MIN_WORKS:
             continue
-        score = idf.get(tok, default_idf) * len(members)
+        tok_idf = idf.get(tok, default_idf)
+        if tok_idf < MIN_TOKEN_IDF:
+            continue
+        score = tok_idf * len(members)
         if score < MIN_SCORE:
             continue
         for m in members:
@@ -215,7 +261,8 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
             rows = db.execute(sql_text("""
                 SELECT id, title, summary, site, published_at,
                        CASE WHEN site_id ~ '^[0-9]+$'
-                            THEN site_id::bigint ELSE NULL END AS numeric_id
+                            THEN site_id::bigint ELSE NULL END AS numeric_id,
+                       fandoms, characters, relationships
                 FROM stories
                 -- lower(author) = :a, with the PARAMETER already lowercased by
                 -- the caller — not author = :a, and not lower(author) =
@@ -232,7 +279,9 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
             """), {"a": author}).fetchall()
             works = [{"id": str(r[0]), "title": r[1], "summary": r[2],
                       "site": (r[3].value if hasattr(r[3], "value") else str(r[3])),
-                      "published_at": r[4], "numeric_id": r[5]} for r in rows]
+                      "published_at": r[4], "numeric_id": r[5],
+                      "subject": (r[6] or []) + (r[7] or []) + (r[8] or [])}
+                     for r in rows]
             if len(works) < MIN_WORKS:
                 continue
 

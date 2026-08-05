@@ -113,7 +113,18 @@ def _clean_name(raw: str) -> str | None:
     # them produced two entries for the same five books.
     name = re.sub(r"^(?:the|a|an)\s+", "", name, flags=re.I).strip()
     name = re.sub(r"^(?:main|original|core|proper)\s+", "", name, flags=re.I).strip()
-    if len(name) < 3 or len(name) > 60:
+    if len(name) < 3 or len(name) > 45:
+        return None
+    # A series name is a name, not a clause. These came out of real summaries:
+    # "and out of time, like the Fates spinning the universe" was recorded as a
+    # series because the sentence happened to contain "in the ... universe".
+    # A name does not begin with a conjunction, and it does not contain a comma
+    # or a run of small words.
+    if re.match(r"^(and|but|or|so|then|which|that|who|when|where|while)\b", name, re.I):
+        return None
+    if "," in name or ";" in name:
+        return None
+    if len(name.split()) > 6:
         return None
     if name.lower() in _JUNK_NAMES:
         return None
