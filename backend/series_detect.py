@@ -183,14 +183,29 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
         log.info(f"  {len(idf):,} distinct title words sampled")
 
         if only_author:
-            authors = [only_author]
+            # Lowercased to match the query above, which no longer folds it.
+            authors = [only_author.strip().lower()]
         else:
             # Only authors with enough works to have a series at all.
+            # Grouped on lower(author), which is the indexed expression, and
+            # WITHOUT an ORDER BY count DESC.
+            #
+            # The obvious form — GROUP BY author ORDER BY count(*) DESC — has to
+            # aggregate all 19.7M rows and then sort the result, which took 21s
+            # on an idle database and over SIXTY under load. That is the
+            # statement_timeout added for reliability, so the pass died on its
+            # very first query every time it ran, silently, before examining a
+            # single author. Grouping on the indexed expression instead is an
+            # index-only scan: 414ms.
+            #
+            # Losing "biggest authors first" costs nothing here. Every author
+            # gets examined eventually and the order they are examined in does
+            # not change what is found.
             authors = [r[0] for r in db.execute(sql_text("""
-                SELECT author FROM stories
+                SELECT lower(author) FROM stories
                 WHERE author IS NOT NULL AND author <> '' AND author <> 'Unknown'
-                GROUP BY author HAVING count(*) BETWEEN 2 AND 400
-                ORDER BY count(*) DESC LIMIT :lim
+                GROUP BY lower(author) HAVING count(*) BETWEEN 2 AND 400
+                LIMIT :lim
             """), {"lim": limit_authors}).fetchall()]
 
         log.info(f"examining {len(authors):,} authors")
@@ -202,7 +217,18 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int) -> int:
                        CASE WHEN site_id ~ '^[0-9]+$'
                             THEN site_id::bigint ELSE NULL END AS numeric_id
                 FROM stories
-                WHERE author = :a AND title IS NOT NULL AND delisted_at IS NULL
+                -- lower(author) = :a, with the PARAMETER already lowercased by
+                -- the caller — not author = :a, and not lower(author) =
+                -- lower(:a). Three forms, three different outcomes:
+                --   author = :a           misses the index (it is on
+                --                         lower(author)) AND, now that the
+                --                         caller lowercases, matches nothing
+                --                         for any author with a capital letter.
+                --   lower(author)=lower(:a)  Postgres cannot fold lower($1) in a
+                --                         generic prepared plan, so it stops
+                --                         using the index too: ~6s per author.
+                --   lower(author) = :a    an 8ms index scan.
+                WHERE lower(author) = :a AND title IS NOT NULL AND delisted_at IS NULL
             """), {"a": author}).fetchall()
             works = [{"id": str(r[0]), "title": r[1], "summary": r[2],
                       "site": (r[3].value if hasattr(r[3], "value") else str(r[3])),
