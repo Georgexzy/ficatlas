@@ -13,6 +13,7 @@ import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryP
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
 import { rememberSearch } from "@/lib/lastSearch"
+import { describeError, type Failure } from "@/lib/errors"
 import { readAllPrefs, type Prefs } from "@/lib/prefs"
 import WordCountSlider from "./WordCountSlider"
 import DlpStars, { dlpRating } from "./DlpStars"
@@ -853,7 +854,7 @@ function SearchPageInner() {
 
   // Results
   const [results,      setResults]      = useState<SearchResponse | null>(null)
-  const [error,        setError]        = useState<string | null>(null)
+  const [error,        setError]        = useState<Failure | null>(null)
   const [loading,      setLoading]      = useState(false)
   const [parsedTokens, setParsedTokens] = useState<ParsedToken[]>([])
   const [refreshing,   setRefreshing]   = useState(false)
@@ -1184,6 +1185,9 @@ function SearchPageInner() {
         // The live-AO3 augmentation can occasionally make the request fail
         // (e.g. AO3 timing out hard upstream). Fall back to an index-only search
         // so the user still gets indexed results instead of an error screen.
+        // If THAT fails too, the error thrown is the index-only one, which is
+        // the honest thing to report — the live top-up is an extra, and blaming
+        // it for an index outage would send someone looking in the wrong place.
         data = await searchStories({ ...p, live: false } as any)
       }
       setResults(data)
@@ -1209,7 +1213,10 @@ function SearchPageInner() {
         refreshFromAO3()   // pulls 5 pages from AO3, persists, then re-searches
       }
     } catch (e: any) {
-      setError(e?.message ? `Search error: ${e.message}` : "Search failed — please try again.")
+      // Classified rather than printed. "Failed to fetch" is what the browser
+      // says when it cannot open a socket, and it told a reader nothing about
+      // whether the fault was theirs, ours, or worth retrying.
+      setError(describeError(e, e?.status))
     } finally {
       setLoading(false)
     }
@@ -1279,7 +1286,7 @@ function SearchPageInner() {
       const params = new URLSearchParams({ count: "8" })
       if (incFandoms.length > 0) params.set("fandom", incFandoms[0])
       const r = await fetch(`${API_BASE}/api/search/random?${params.toString()}`)
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      if (!r.ok) throw describeError(null, r.status)
       const cards = await r.json()
       setResults({
         total: cards.length, page: 1, per_page: cards.length,
@@ -1288,7 +1295,7 @@ function SearchPageInner() {
       setParsedTokens([])
       window.scrollTo({ top: 0, behavior: "smooth" })
     } catch (e: any) {
-      setError(e.message || "Couldn't fetch random stories")
+      setError(e?.kind ? e : describeError(e))
     } finally {
       setLoading(false)
     }
@@ -1753,7 +1760,16 @@ function SearchPageInner() {
             {activeFilterCount > 0 && <span className="filters-trigger__badge">{activeFilterCount}</span>}
           </button>
 
-          {error && <div className="alert alert--error">{error}</div>}
+          {error && (
+            <div className="alert alert--error" role="alert">
+              <span>{error.message}</span>
+              {error.retryable && (
+                <button className="alert__retry" onClick={() => doSearch()}>
+                  Try again
+                </button>
+              )}
+            </div>
+          )}
 
           {loading && !results && (
             <div className="story-list" aria-busy="true" aria-label="Loading results">

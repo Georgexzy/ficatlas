@@ -3,6 +3,7 @@ import { AuthProvider } from "@/lib/auth"
 import ServiceWorkerRegistration from "./ServiceWorkerRegistration"
 import SiteFooter from "./SiteFooter"
 import PreviewBanner from "./PreviewBanner"
+import HealthBanner from "./HealthBanner"
 import "./globals.css"
 
 export const metadata: Metadata = {
@@ -39,6 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ServiceWorkerRegistration />
         <AuthProvider>
+          <HealthBanner />
           <PreviewBanner />
           {children}
           <SiteFooter />

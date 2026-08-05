@@ -254,6 +254,16 @@ async def fetch_live_ao3(params: dict, limit: int = 20, pages: int = 1,
     """
     # A background loop must not touch /works/search — see ROBOTS_DISALLOWED_SEARCH.
     # Without a fandom there is no allowed endpoint, so it simply does nothing.
+    # AO3 is in a cooldown after repeated throttling. A background loop can sleep
+    # it out; a reader's search cannot, and the live top-up runs on that path —
+    # so skip AO3 for this search rather than holding the response open for up to
+    # fifteen minutes. The index still answers; it just does not get topped up.
+    import ao3_budget
+    left = ao3_budget.paused_for()
+    if left > 0:
+        log.info(f"skipping live AO3 fetch: cooling down for another {left:.0f}s")
+        return []
+
     if automated and not (params.get("fandoms") or "").strip():
         log.info("skipping automated AO3 free-text fetch: /works/search is robots-disallowed")
         return []
