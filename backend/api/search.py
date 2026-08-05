@@ -221,6 +221,12 @@ class StoryCard(BaseModel):
     updated_at: Optional[str] = None
     is_live: bool = False          # true = came from live fetch, not index
     is_hosted: bool = False        # true = full text stored locally, one-click reader
+    # Series membership, attached after the page is selected — see _attach_series.
+    # Not part of the main query: most works are in none, so joining for every
+    # row would be cost paid overwhelmingly for nulls.
+    series_name: Optional[str] = None
+    series_id: Optional[str] = None
+    series_position: Optional[int] = None
     # Set only in an admin's results: the public filter removes delisted rows
     # entirely, so a card carrying this is one an operator is reviewing.
     delisted: bool = False
@@ -936,6 +942,35 @@ def search(          # NOT async — see below
     if count_is_capped:
         total = COUNT_CEILING
     indexed = [r[0] for r in rows]
+
+    # Series, looked up only for the rows actually being returned.
+    #
+    # A join in the main query would be paid for all 5,001 candidates and for
+    # the overwhelming majority of works, which are in no series at all. Twenty
+    # ids against an indexed table costs nothing and answers the same question.
+    def _attach_series(objs) -> None:
+        ids = [str(o.id) for o in objs if getattr(o, "id", None)]
+        if not ids:
+            return
+        rows = db.execute(sql_text("""
+            SELECT sw.story_id, s.id, s.name, sw.position
+            FROM series_works sw JOIN series s ON s.id = sw.series_id
+            WHERE sw.story_id = ANY(CAST(:ids AS uuid[]))
+            ORDER BY s.confidence DESC
+        """), {"ids": ids}).fetchall()
+        seen: dict = {}
+        for story_id, sid, name, pos in rows:
+            seen.setdefault(str(story_id), (str(sid), name, pos))
+        for o in objs:
+            hit = seen.get(str(getattr(o, "id", "")))
+            if hit:
+                o._series_id, o._series_name, o._series_position = hit
+
+    try:
+        _attach_series(indexed)
+    except Exception as e:
+        log.debug(f"series attach failed: {type(e).__name__}")
+
     indexed_cards = [_to_card(s) for s in indexed]
 
     # ── Live AO3 fetch ───────────────────────────────────────────────────────
@@ -964,6 +999,7 @@ def search(          # NOT async — see below
         if _claim_live_fetch(params):
             from live_fetch.jobs import run_in_background
             run_in_background(lambda: _fetch_and_persist_live(params, True))
+
 
     # Merge: live results (fresher) shown first on page 1, then the full indexed page.
     # We do NOT truncate indexed cards — that was dropping indexed results off page 1
@@ -1062,6 +1098,9 @@ def _to_card(s: Story) -> StoryCard:
         updated_at=s.updated_at.isoformat() if s.updated_at else None,
         is_live=False,
         is_hosted=bool(s.is_hosted),
+        series_name=getattr(s, "_series_name", None),
+        series_id=getattr(s, "_series_id", None),
+        series_position=getattr(s, "_series_position", None),
         # Only ever non-null in an admin's results — the public filter above
         # removes these rows entirely, so a card carrying this flag is one an
         # operator is looking at in order to decide whether to reverse it.

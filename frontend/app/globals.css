@@ -2766,6 +2766,44 @@ body.is-resizing * { cursor: col-resize !important; }
   .search-exit__btn { min-height: 36px; padding: 6px 14px; }
 }
 
+/* Series badge on a result card, and the series page itself. */
+.badge--series {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent); text-decoration: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.badge--series:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+
+.series-page__by { font-size: 13px; color: var(--text-dim); margin: -14px 0 14px; }
+.series-page__source {
+  font-size: 12.5px; line-height: 1.6; color: var(--text-dim);
+  margin: 0 0 22px; padding: 9px 12px; border-radius: 8px;
+  background: var(--surface2); border-left: 3px solid var(--border);
+}
+.series-page__source--explicit { border-left-color: var(--accent); }
+.series-page__list { list-style: none; margin: 0; padding: 0; }
+.series-page__item {
+  display: flex; gap: 12px; padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.series-page__item:last-child { border-bottom: none; }
+.series-page__n {
+  flex: 0 0 26px; text-align: right; font-family: var(--font-serif);
+  font-size: 20px; color: var(--text-faint); line-height: 1.2;
+}
+.series-page__body { min-width: 0; flex: 1; }
+.series-page__title {
+  font-family: var(--font-serif); font-size: 17px; font-weight: 600;
+  color: var(--text); text-decoration: none;
+}
+.series-page__title:hover { color: var(--accent); }
+.series-page__meta { font-size: 12px; color: var(--text-faint); margin: 3px 0 0; }
+.series-page__read { color: var(--accent); }
+.series-page__summary {
+  font-size: 13px; line-height: 1.6; color: var(--text-dim); margin: 6px 0 0;
+}
+.series-page__foot { margin-top: 24px; font-size: 13px; }
+
 /* Series on a story page — where you are in a sequence, and what is next. */
 .series-box {
   margin: 14px 0 4px; padding: 12px 14px;
