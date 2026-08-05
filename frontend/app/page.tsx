@@ -1613,6 +1613,29 @@ function SearchPageInner() {
               highlighted={fromSearch("ratings")} />
           </FilterSection>
 
+          {/* What a story IS about comes before how it is rated.
+              Archive Warnings and Categories sat second and third, above
+              Fandoms and ships — and they are AO3-only fields: measured
+              coverage is ~2% on FanFiction.net and FictionAlley, against
+              63% and 69% for ships and characters on AO3. Two filters that
+              cannot match most of the index were the first things a reader
+              met. They are still here, just after the ones that work. */}
+          <FilterSection label="Fandoms" highlighted={parsedLive.fandoms.length > 0} count={incFandoms.length}>
+            <TagInput value={incFandoms} onChange={setIncFandoms}
+              placeholder="e.g. Harry Potter" highlighted={parsedLive.fandoms} kind="fandom" />
+          </FilterSection>
+          <FilterSection label="Relationships" note={coverageWarning("relationships", sites)} highlighted={parsedLive.relationships.length > 0} count={incShips.length}>
+            <TagInput value={incShips} onChange={setIncShips}
+              placeholder="e.g. Draco/Hermione" highlighted={parsedLive.relationships} kind="relationship" />
+          </FilterSection>
+          <FilterSection label="Characters" note={coverageWarning("characters", sites)} highlighted={parsedLive.characters.length > 0} count={incChars.length}>
+            <TagInput value={incChars} onChange={setIncChars}
+              placeholder="e.g. Hermione Granger" highlighted={parsedLive.characters} kind="character" />
+          </FilterSection>
+          <FilterSection label="Additional Tags" highlighted={parsedLive.tags.length > 0} count={incTags.length}>
+            <TagInput value={incTags} onChange={setIncTags}
+              placeholder="e.g. slow burn" highlighted={parsedLive.tags} kind="tag" />
+          </FilterSection>
           <FilterSection label="Archive Warnings" note={coverageWarning("warnings", sites)} highlighted={fromSearch("warnings").length > 0} count={incWarnings.length}>
             {AO3_WARNINGS.map(w => (
               <label key={w} className={`check-row ${fromSearch("warnings").includes(w) ? "check-row--lit" : ""}`}>
@@ -1622,31 +1645,10 @@ function SearchPageInner() {
               </label>
             ))}
           </FilterSection>
-
           <FilterSection label="Categories" note={coverageWarning("categories", sites)} highlighted={fromSearch("categories").length > 0} count={incCats.length}>
             <Pills options={CATEGORIES.map(c => ({ id: c, label: c }))}
               selected={incCats} onToggle={id => tog(incCats, setIncCats, id)}
               highlighted={fromSearch("categories")} />
-          </FilterSection>
-
-          <FilterSection label="Fandoms" highlighted={parsedLive.fandoms.length > 0} count={incFandoms.length}>
-            <TagInput value={incFandoms} onChange={setIncFandoms}
-              placeholder="e.g. Harry Potter" highlighted={parsedLive.fandoms} kind="fandom" />
-          </FilterSection>
-
-          <FilterSection label="Relationships" note={coverageWarning("relationships", sites)} highlighted={parsedLive.relationships.length > 0} count={incShips.length}>
-            <TagInput value={incShips} onChange={setIncShips}
-              placeholder="e.g. Draco/Hermione" highlighted={parsedLive.relationships} kind="relationship" />
-          </FilterSection>
-
-          <FilterSection label="Characters" note={coverageWarning("characters", sites)} highlighted={parsedLive.characters.length > 0} count={incChars.length}>
-            <TagInput value={incChars} onChange={setIncChars}
-              placeholder="e.g. Hermione Granger" highlighted={parsedLive.characters} kind="character" />
-          </FilterSection>
-
-          <FilterSection label="Additional Tags" highlighted={parsedLive.tags.length > 0} count={incTags.length}>
-            <TagInput value={incTags} onChange={setIncTags}
-              placeholder="e.g. slow burn" highlighted={parsedLive.tags} kind="tag" />
           </FilterSection>
 
           <FilterSection label="Curation" count={
