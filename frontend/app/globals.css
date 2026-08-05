@@ -2732,6 +2732,40 @@ body.is-resizing * { cursor: col-resize !important; }
   .book__offline, .book__actions .book__remove { width: 32px; height: 32px; min-width: 32px; }
 }
 
+/* The way out of a search. Quiet until you look for it: this is an escape
+   hatch, not a call to action, so it must not compete with the results. */
+.search-exit {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 0 0 12px; padding: 7px 12px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface);
+  font-size: 12.5px; color: var(--text-dim);
+}
+.search-exit__what {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.search-exit__what strong { color: var(--text); font-weight: 600; }
+.search-exit__btn {
+  margin-left: auto; flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: 1px solid var(--border2, var(--border));
+  border-radius: 999px; padding: 4px 12px;
+  font: inherit; font-size: 12.5px; color: var(--text-dim);
+  cursor: pointer; transition: color .12s, border-color .12s, background .12s;
+}
+.search-exit__btn:hover {
+  color: var(--accent); border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.search-exit__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 700px) {
+  /* Full width and a real tap target; the label wraps above it rather than
+     being squeezed onto the same line. */
+  .search-exit { border-radius: 12px; padding: 9px 12px; }
+  .search-exit__btn { min-height: 36px; padding: 6px 14px; }
+}
+
 /* Site-wide health bar. Appears only after two consecutive failed polls — a
    banner that flickers on every hiccup is one people learn to ignore. */
 .health-banner {
