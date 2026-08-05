@@ -1125,6 +1125,8 @@ kbd {
 .settings-shell {
   max-width: 720px; margin: 0 auto; padding: 32px 24px 80px;
 }
+/* Room for the fixed save bar so the last setting is never trapped under it. */
+.settings-shell:has(.settings-actions--live) { padding-bottom: 132px; }
 .settings-title {
   font-family: var(--font-serif); font-size: 32px; font-weight: 600;
   color: var(--text); margin: 18px 0 28px;
@@ -1170,6 +1172,56 @@ kbd {
 }
 .settings-actions { margin-top: 28px; display: flex; justify-content: flex-end; }
 .settings-save { min-width: 150px; }
+
+/* One line under the page title saying whose settings these are. The whole
+   point of the split is lost if you have to infer it from the headings. */
+.settings-lede {
+  font-size: 13px; line-height: 1.6; color: var(--text-dim);
+  margin: -14px 0 22px;
+}
+
+/* The seam between "yours" and "the site's". A heading alone did not carry it:
+   the admin sections look identical to the reader ones, so without a break you
+   scroll from Reading straight into crawler scheduling. */
+.settings-divider {
+  display: flex; align-items: center; gap: 12px;
+  margin: 44px 0 6px; color: var(--text-faint);
+}
+.settings-divider::before, .settings-divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--border);
+}
+.settings-divider__label {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.14em; white-space: nowrap;
+}
+.settings-lede--admin { margin: 10px 0 20px; }
+
+/* Save has to stay reachable: the admin half is ~1500px tall, so a button at
+   its end is off-screen while you edit the field it saves. position:sticky did
+   not work — as the last child it has no scroll range to float within — so the
+   bar is fixed, and only while there is something to save. */
+.settings-actions--live {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 120;
+  margin: 0; padding: 12px 24px calc(12px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; justify-content: flex-end; gap: 14px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  backdrop-filter: saturate(180%) blur(12px);
+  border-top: 1px solid var(--border);
+}
+.settings-actions__dirty {
+  font-size: 12.5px; color: var(--text-dim); margin-right: auto;
+}
+
+.settings-save-error {
+  font-size: 12.5px; line-height: 1.5; margin: 0; text-align: right;
+  color: var(--danger, #d9534f);
+}
+
+.settings-footnote {
+  font-size: 13px; line-height: 1.6; color: var(--text-dim);
+  margin: 32px 0 0; padding-top: 18px; border-top: 1px solid var(--border);
+}
 
 /* Switch toggle */
 .switch {
@@ -2069,6 +2121,16 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
     max-width: 46vw;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+
+  /* Above the phone tab bar rather than under it — both are fixed to the same
+     corner, and the tab bar wins on z-index. Scoped to this query because
+     .tabbar is display:none but still in the DOM above 700px. */
+  .settings-actions--live {
+    bottom: calc(52px + env(safe-area-inset-bottom));
+    padding: 10px 14px;
+    gap: 10px;
+  }
+  .settings-actions__dirty { font-size: 12px; }
 
   .tabbar {
     display: flex;
