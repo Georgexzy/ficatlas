@@ -155,7 +155,15 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   padding: 0 4px; line-height: 1.6;
 }
 .filter-section__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); display: inline-block; }
-.filter-section__chevron { font-size: 10px; opacity: 0.45; transition: transform 0.15s; display: inline-block; }
+/* Was 10px at 0.45 opacity — legible only if you already knew to look for it,
+   so sections read as headings rather than as things that open. */
+.filter-section__chevron {
+  font-size: 13px; opacity: 0.8; color: var(--text-dim);
+  transition: transform 0.15s, opacity 0.15s, color 0.15s;
+  display: inline-block; line-height: 1;
+}
+.filter-section__toggle:hover .filter-section__chevron { opacity: 1; color: var(--accent); }
+.filter-section--lit .filter-section__chevron { color: var(--accent); opacity: 1; }
 .filter-section__chevron.open { transform: rotate(90deg); }
 .filter-section__body { padding: 4px 14px 10px; }
 
@@ -2575,6 +2583,27 @@ body.is-resizing * { cursor: col-resize !important; }
   font-size: 11px; padding: 1px 4px; border-radius: 4px;
   background: var(--surface2); color: var(--text);
 }
+
+/* The reference list inside a help bubble — five subsites, a line each. */
+.helptip__list {
+  margin: 8px 0 0; padding: 0; list-style: none;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.helptip__list li {
+  font-size: 11.5px; line-height: 1.45; color: var(--text-dim);
+  padding-left: 9px; border-left: 2px solid var(--border2, var(--border));
+}
+.helptip__list strong { color: var(--text); font-weight: 600; }
+
+/* Says who can read what is on this shelf. The whole point of the private shelf
+   is that it is not the public one, and that has to be stated, not implied. */
+.library-note--private {
+  font-size: 12.5px; line-height: 1.6; color: var(--text-dim);
+  margin: 0 0 18px; padding: 10px 12px; border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-left: 3px solid var(--accent);
+}
+.library-note--private strong { color: var(--text); }
 
 /* Live-ish counter in the index panel — the index grows while you use it. */
 .index-status__live { color: var(--accent); }

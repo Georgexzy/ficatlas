@@ -384,15 +384,17 @@ const SITE_LABEL: Record<string, string> = {
   ao3: "AO3", ffnet: "FanFiction.net", fictionalley: "FictionAlley",
 }
 
+// `short` is the one-line version for the help bubble's list; `help` is the
+// full sentence, used as the pill's own tooltip.
 export const FICALLEY_SECTIONS = [
-  { value: "Schnoogle", label: "Schnoogle",
+  { value: "Schnoogle", label: "Schnoogle", short: "novel-length work",
     help: "Novel-length work. FictionAlley's flagship section, for long multi-chapter stories rather than one-shots — the closest thing the archive had to a bookshelf of novels." },
-  { value: "The Dark Arts", label: "The Dark Arts",
+  { value: "The Dark Arts", label: "The Dark Arts", short: "horror and darkfic; the largest section",
     help: "Horror, darkfic and the grimmer end of the archive. The largest section by some way, at nearly 12,000 works." },
-  { value: "Astronomy Tower", label: "Astronomy Tower",
+  { value: "Astronomy Tower", label: "Astronomy Tower", short: "romance and adult work",
     help: "Romance and adult work. Named for where students were traditionally caught doing exactly that, and second only to The Dark Arts in size." },
-  { value: "Riddikulus", label: "Riddikulus",
+  { value: "Riddikulus", label: "Riddikulus", short: "humour and parody",
     help: "Humour and parody — named for the spell that turns a boggart into something laughable." },
-  { value: "Essays & Meta", label: "Essays & Meta",
+  { value: "Essays & Meta", label: "Essays & Meta", short: "essays and analysis, not fiction",
     help: "Analysis and discussion rather than fiction: essays on the books, character studies, arguments about canon. The smallest section, at 66 pieces." },
 ]

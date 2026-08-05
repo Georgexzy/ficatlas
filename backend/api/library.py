@@ -607,6 +607,72 @@ async def list_hosted(limit: int = 100, offset: int = 0, db: Session = Depends(g
     return {"total": total, "offset": offset, "limit": len(items), "items": items}
 
 
+# ── the reader's own shelf ──────────────────────────────────────────────────
+
+@router.get("/mine")
+async def list_mine(limit: int = 100, offset: int = 0,
+                    db: Session = Depends(get_db),
+                    viewer: Optional[User] = Depends(get_current_user)):
+    """Stories this reader imported privately — theirs alone, newest first.
+
+    The counterpart to /hosted. /hosted is the public shelf; this is the shelf
+    behind your own door, and the two never mix: a row here has is_hosted=false,
+    so it is invisible to search and unreadable by anyone else including admins
+    (see may_read_text in stories.py, which checks ownership rather than role).
+
+    Unauthenticated gets an empty shelf rather than a 401. The Library page
+    renders this tab for everyone, and a signed-out visitor should see "nothing
+    here yet" instead of an error — they have not done anything wrong.
+    """
+    if viewer is None:
+        return {"total": 0, "offset": 0, "limit": 0, "items": []}
+
+    total = db.execute(sql_text(
+        "SELECT count(*) FROM user_hosted WHERE user_id = :u"
+    ), {"u": str(viewer.id)}).scalar() or 0
+
+    rows = db.execute(sql_text("""
+        SELECT s.id, s.title, s.author, s.site, s.word_count, s.chapter_count,
+               s.summary, s.tags, s.url, uh.created_at
+        FROM user_hosted uh JOIN stories s ON s.id = uh.story_id
+        WHERE uh.user_id = :u
+        ORDER BY uh.created_at DESC
+        OFFSET :off LIMIT :lim
+    """), {"u": str(viewer.id), "off": offset, "lim": min(limit, 200)}).fetchall()
+
+    return {
+        "total": total, "offset": offset, "limit": len(rows),
+        "items": [{
+            "id": str(r[0]), "title": r[1], "author": r[2] or "Unknown",
+            "site": (r[3].value if hasattr(r[3], "value") else r[3]) or "ao3",
+            "word_count": r[4] or 0, "chapter_count": r[5] or 0,
+            "summary": r[6], "tags": r[7] or [], "url": r[8],
+            "added_at": r[9].isoformat() if r[9] else None,
+        } for r in rows],
+    }
+
+
+@router.delete("/mine/{story_id}")
+async def remove_mine(story_id: str, db: Session = Depends(get_db),
+                      viewer: Optional[User] = Depends(get_current_user)):
+    """Give up your copy of a story.
+
+    Drops the user_hosted row only. The story and its chapters stay in the
+    shared tables, because dedup and cross-post matching depend on them and
+    another reader may hold the same import. Nothing is deleted that anyone
+    else's access relies on, and nothing of yours survives.
+    """
+    if viewer is None:
+        raise HTTPException(401, "Sign in to manage your library.")
+    res = db.execute(sql_text(
+        "DELETE FROM user_hosted WHERE user_id = :u AND story_id = :s"
+    ), {"u": str(viewer.id), "s": story_id})
+    db.commit()
+    if not res.rowcount:
+        raise HTTPException(404, "That story is not in your library.")
+    return {"ok": True, "removed": story_id}
+
+
 # ── AO3 Atom feed discovery (the reliable fresh-data path) ───────────────────
 
 @router.post("/poll-feed")
