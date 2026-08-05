@@ -129,6 +129,41 @@ CREATE INDEX IF NOT EXISTS ix_stories_title_lower ON stories (lower(title));
 -- a work?" per request. 277ms as a sequential scan, 0.1ms with this.
 CREATE INDEX IF NOT EXISTS ix_facets_value_lower ON facets (lower(value), count DESC);
 
+-- ── Series ──────────────────────────────────────────────────────────────────
+-- Works that belong together and have a reading order.
+--
+-- AO3 has series as a first-class thing; FanFiction.net and FictionAlley never
+-- did, so authors there signal it in titles and summaries ("Sequel to X",
+-- "Book 2 of the Y series") or not at all. Our bulk dumps carry no series field
+-- from ANY source, so every row here is derived.
+--
+-- `source` records how, and it is not decoration: an inferred grouping can be
+-- wrong, and a reader deciding what to read next deserves to know whether the
+-- order came from the author or from us guessing.
+CREATE TABLE IF NOT EXISTS series (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    author      TEXT,
+    site        TEXT,
+    source      TEXT NOT NULL DEFAULT 'inferred',   -- 'explicit' | 'inferred'
+    confidence  REAL NOT NULL DEFAULT 0.5,
+    work_count  INT  NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_series_key ON series (lower(coalesce(author,'')), lower(name));
+CREATE INDEX IF NOT EXISTS ix_series_author ON series (lower(coalesce(author,'')));
+
+CREATE TABLE IF NOT EXISTS series_works (
+    series_id  UUID NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    story_id   UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    -- Author-assigned where we can read one, otherwise publication order, which
+    -- is what AO3 itself falls back to when a series has no positions set.
+    position   INT,
+    PRIMARY KEY (series_id, story_id)
+);
+CREATE INDEX IF NOT EXISTS ix_series_works_story ON series_works (story_id);
+CREATE INDEX IF NOT EXISTS ix_series_works_order ON series_works (series_id, position NULLS LAST);
+
 -- Keep planner statistics fresh on the one table that matters.
 --
 -- The default analyze scale factor is 10% of the table, which never converges

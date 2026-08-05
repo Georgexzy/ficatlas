@@ -134,8 +134,26 @@ export default function StoryPage() {
     } catch {}
   }
 
+  // Series membership, asked for separately. Most works are in none, and the
+  // join would be pure cost for them — so the page renders nothing until this
+  // comes back with something.
+  //
+  // Declared ABOVE the early returns below. Both of those fire on the first
+  // render, when story is still null, so hooks placed after them are never
+  // reached — React's rule about unconditional hooks, and it fails silently
+  // here: no error, just a box that never appears.
+  const [series, setSeries] = useState<any[]>([])
+  useEffect(() => {
+    if (!story?.id) return
+    fetch(`/api/stories/${story.id}/series`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setSeries(d?.series ?? []))
+      .catch(() => {})
+  }, [story?.id])
+
   if (error) return <div className="reader-shell"><SiteHeader /><div className="alert alert--error">{error}</div></div>
   if (!story) return <div className="reader-shell"><SiteHeader /><p className="loading">Loading…</p></div>
+
 
   return (
     <div className="reader-shell">
@@ -149,6 +167,44 @@ export default function StoryPage() {
               site is that it spans archives, and an AO3 user page only ever
               shows what they posted on AO3. The link out to their profile is
               kept as a separate arrow rather than being the primary action. */}
+          {series.map(sr => (
+            <div key={sr.id} className="series-box">
+              <p className="series-box__head">
+                <span className="series-box__name">{sr.name}</span>
+                <span className="series-box__pos">
+                  {sr.position ? `part ${sr.position} of ${sr.work_count}` : `${sr.work_count} works`}
+                </span>
+              </p>
+              {/* Says where the grouping came from. AO3 series are stated by the
+                  author; FF.net and FictionAlley have no series field at all, so
+                  ours are read off the titles — and a reader deciding what to
+                  read next is entitled to know which of those they are looking
+                  at, rather than being handed an order as though it were fact. */}
+              {sr.source === "inferred" && (
+                <p className="series-box__note">
+                  Grouped by FicAtlas from the titles and publication order —{" "}
+                  {sr.author ? <>all by <strong>{sr.author}</strong>. </> : null}
+                  {sr.site === "ao3" ? "AO3 " : "This archive "}
+                  did not publish a series list, so this is our reading of it.
+                </p>
+              )}
+              <ol className="series-box__list">
+                {sr.works.map((w: any) => (
+                  <li key={w.id} className={w.is_current ? "is-current" : ""}>
+                    <span className="series-box__n">{w.position ?? "•"}</span>
+                    {w.is_current
+                      ? <span className="series-box__this">{w.title}</span>
+                      : <Link href={`/story/${w.id}`}>{w.title}</Link>}
+                    <span className="series-box__meta">
+                      {w.word_count ? `${Math.round(w.word_count / 1000)}k` : ""}
+                      {w.kudos ? ` · ${w.kudos.toLocaleString()} kudos` : ""}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ))}
+
           <p className="story-detail__byline">
             by <Link href={`/?author=${encodeURIComponent(story.author)}`}
                  className="story-detail__author-link"

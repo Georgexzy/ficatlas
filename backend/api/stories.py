@@ -125,6 +125,54 @@ class StoryDetail(BaseModel):
     chapters: List[ChapterMeta]
 
 
+# ── Series ──────────────────────────────────────────────────────────────────
+
+@router.get("/{story_id}/series")
+def story_series(story_id: str = Depends(valid_story_id),
+                 db: Session = Depends(get_db)):
+    """Every series this work belongs to, with its siblings in reading order.
+
+    Returned as its own request rather than folded into the story payload: most
+    works are in no series at all, and the join is pure cost for them. The story
+    page asks separately and renders nothing when the answer is empty.
+    """
+    rows = db.execute(sql_text("""
+        SELECT s.id, s.name, s.author, s.source, s.confidence, s.work_count,
+               sw.position
+        FROM series_works sw JOIN series s ON s.id = sw.series_id
+        WHERE sw.story_id = :sid
+        ORDER BY s.confidence DESC
+    """), {"sid": story_id}).fetchall()
+    if not rows:
+        return {"series": []}
+
+    out = []
+    for r in rows:
+        works = db.execute(sql_text("""
+            SELECT st.id, st.title, st.author, st.site, st.word_count,
+                   st.chapter_count, st.kudos, sw.position,
+                   st.is_hosted, st.status
+            FROM series_works sw JOIN stories st ON st.id = sw.story_id
+            WHERE sw.series_id = :id AND st.delisted_at IS NULL
+            ORDER BY sw.position NULLS LAST, st.title
+        """), {"id": r[0]}).fetchall()
+        out.append({
+            "id": str(r[0]), "name": r[1], "author": r[2],
+            "source": r[3], "confidence": round(float(r[4]), 2),
+            "work_count": r[5], "position": r[6],
+            "works": [{
+                "id": str(w[0]), "title": w[1], "author": w[2],
+                "site": (w[3].value if hasattr(w[3], "value") else w[3]),
+                "word_count": w[4] or 0, "chapter_count": w[5] or 0,
+                "kudos": w[6] or 0, "position": w[7],
+                "is_hosted": bool(w[8]),
+                "status": (w[9].value if hasattr(w[9], "value") else w[9]),
+                "is_current": str(w[0]) == story_id,
+            } for w in works],
+        })
+    return {"series": out}
+
+
 @router.get("/{story_id}", response_model=StoryDetail)
 def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db),
                     viewer=Depends(get_current_user)):

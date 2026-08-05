@@ -803,6 +803,11 @@ function SearchPageInner() {
   // Search bar
   const [query,   setQuery]   = useState(get("q") ?? "")
   const [searchFocused, setSearchFocused] = useState(false)
+  // Set when the READER changed the bar, cleared once that edit has been read
+  // back into the filter state. Without it the two syncs fight: the panel
+  // writes the bar, which would parse back into the panel, which rewrites the
+  // bar. One flag makes the direction explicit per edit.
+  const barEditedRef = useRef(false)
   const [sites,   setSites]   = useState<string[]>(csv(get("sites") ?? "ao3,ffnet,fictionalley"))
   const [explicit, setExplicit] = useState(get("explicit") === "true")
   // Was hard-coded to 20, so the Results-per-page setting had never once had an
@@ -1266,6 +1271,46 @@ function SearchPageInner() {
     }
   }, [buildParams, page, pathname, router, query, sites, refreshing, filterSig])
 
+  // Editing the bar edits the filters.
+  //
+  // The comment below has claimed since it was written that the bar is "the
+  // single visible source of truth", and only half of that was implemented: the
+  // panel wrote to the bar, and nothing read it back. So deleting `author:X`
+  // from the bar left authorFilter set, the next serialisation put the text
+  // straight back, and buildParams searched on the state anyway — the filter you
+  // just removed was still applied AND still displayed. Same for every other
+  // token the panel owns.
+  useEffect(() => {
+    if (!barEditedRef.current) return
+    barEditedRef.current = false
+    const pq = parseQuery(query)
+    const same = (a: string[], b: string[]) =>
+      a.length === b.length && a.every((v, i) => v === b[i])
+    const sync = (next: string[], cur: string[], set: (v: string[]) => void) => {
+      if (!same(next, cur)) set(next)
+    }
+    sync(pq.fandoms, incFandoms, setIncFandoms)
+    sync(pq.relationships, incShips, setIncShips)
+    sync(pq.characters, incChars, setIncChars)
+    sync(pq.tags, incTags, setIncTags)
+    sync(pq.excFandoms, excFandoms, setExcFandoms)
+    sync(pq.excRelationships, excShips, setExcShips)
+    sync(pq.excCharacters, excChars, setExcChars)
+    sync(pq.excTags, excTags, setExcTags)
+    sync(pq.sections, sections, setSections)
+    if ((pq.author ?? "") !== authorFilter) setAuthorFilter(pq.author ?? "")
+    if ((pq.language ?? "") !== language) setLanguage(pq.language ?? "")
+    const nextStatus = pq.status ? [pq.status] : []
+    sync(nextStatus, status, setStatus)
+    if ((pq.wordCountMin ?? undefined) !== wordMin) setWordMin(pq.wordCountMin ?? undefined)
+    if ((pq.wordCountMax ?? undefined) !== wordMax) setWordMax(pq.wordCountMax ?? undefined)
+    // Ratings only when the bar actually names some: an empty list is "the
+    // default set", not "none selected", and treating it as the latter cleared
+    // the rating pills every time you edited a word of free text.
+    if (pq.ratings.length) sync(pq.ratings, incRatings, setIncRatings)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query])
+
   // When a sidebar filter changes: mirror the full filter state into the search
   // bar (so the bar is the single visible source of truth — "replace" model).
   // The bar text updates immediately on every change; the *search* only auto-runs
@@ -1320,7 +1365,8 @@ function SearchPageInner() {
   }, [])
 
   const removeToken = (raw: string) =>
-    setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim())
+    { barEditedRef.current = true
+      setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim()) }
 
   const surpriseMe = useCallback(async () => {
     setLoading(true); setError(null)
@@ -1783,7 +1829,7 @@ function SearchPageInner() {
                 <input type="text" className="search-input"
                   placeholder={exampleQuery}
                   value={query}
-                  onChange={e => setQuery(e.target.value)}
+                  onChange={e => { barEditedRef.current = true; setQuery(e.target.value) }}
                   onKeyDown={e => {
                     if (e.key === "Enter") { setSearchFocused(false); doSearch() }
                     if (e.key === "Escape") setSearchFocused(false)
@@ -1793,7 +1839,7 @@ function SearchPageInner() {
                 {query && (
                   <button className="search-clear" aria-label="Clear search text"
                     title="Clear the search box (keeps your filters)"
-                    onClick={() => { setQuery(""); setTimeout(() => doSearch(), 0) }}>✕</button>
+                    onClick={() => { barEditedRef.current = true; setQuery("") }}>✕</button>
                 )}
                 <SyntaxHelp onInsert={insertSyntax} />
                 <RecentSearches
