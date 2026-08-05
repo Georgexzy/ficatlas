@@ -83,9 +83,44 @@ def _evict_old() -> None:
 _running: set[asyncio.Task] = set()
 
 
-def run_in_background(coro_fn: Callable[[], Coroutine]) -> asyncio.Task:
-    """Schedule a coroutine as a fire-and-forget task that won't be GC'd mid-run."""
-    task = asyncio.create_task(coro_fn())
+# The event loop, captured at startup so background work can be scheduled from a
+# request thread as well as from the loop itself.
+#
+# Needed because the request handlers now run in a threadpool: they use blocking
+# SQLAlchemy, and declaring them `async def` meant every database call froze the
+# whole server. asyncio.create_task only works on the thread that owns the loop,
+# so from a worker thread it raises "no running event loop" — which would have
+# turned the live-fetch top-up into a silent 500 on every search.
+_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def bind_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Called once from the app's startup, on the loop's own thread."""
+    global _LOOP
+    _LOOP = loop
+
+
+def run_in_background(coro_fn: Callable[[], Coroutine]):
+    """Schedule a coroutine as fire-and-forget, from any thread."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Not on the loop's thread — hand it over rather than failing.
+        loop = _LOOP
+        if loop is None or loop.is_closed():
+            log.warning("no event loop available; skipping background job")
+            return None
+        fut = asyncio.run_coroutine_threadsafe(coro_fn(), loop)
+
+        def _done_fut(f) -> None:
+            exc = f.exception()
+            if exc is not None:
+                log.exception("background job failed", exc_info=exc)
+
+        fut.add_done_callback(_done_fut)
+        return fut
+
+    task = loop.create_task(coro_fn())
     _running.add(task)
 
     def _done(t: asyncio.Task) -> None:

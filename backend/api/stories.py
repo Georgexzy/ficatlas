@@ -126,7 +126,7 @@ class StoryDetail(BaseModel):
 
 
 @router.get("/{story_id}", response_model=StoryDetail)
-async def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db),
+def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db),
                     viewer=Depends(get_current_user)):
     story = db.query(Story).filter(Story.id == story_id).first()
     if not story:
@@ -189,7 +189,7 @@ async def get_story(story_id: str = Depends(valid_story_id), db: Session = Depen
 
 
 @router.get("/{story_id}/chapters/{number}", response_model=ChapterFull)
-async def get_chapter(number: int, story_id: str = Depends(valid_story_id),
+def get_chapter(number: int, story_id: str = Depends(valid_story_id),
                       db: Session = Depends(get_db),
                       viewer: Optional[User] = Depends(get_current_user)):
     """Serve one chapter's text.
@@ -279,7 +279,7 @@ class SimilarCard(BaseModel):
 
 
 @router.get("/{story_id}/similar", response_model=List[SimilarCard])
-async def similar_stories(
+def similar_stories(
     story_id: str = Depends(valid_story_id),
     count: int = Query(6, ge=1, le=20),
     db: Session = Depends(get_db),
@@ -422,7 +422,7 @@ def _clean_chapter_html(raw: str) -> str:
 
 
 @router.get("/{story_id}/export.epub")
-async def export_epub(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db),
+def export_epub(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db),
                       viewer: Optional[User] = Depends(get_current_user)):
     """Build an EPUB 2 of a hosted story on the fly. Standard library only —
     an EPUB is a ZIP with a fixed set of XML files, so no dependency is needed.

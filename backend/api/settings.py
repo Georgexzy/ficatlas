@@ -94,7 +94,7 @@ def put_setting(db: Session, key: str, value: str) -> None:
 
 
 @router.get("")
-async def all_settings(db: Session = Depends(get_db)):
+def all_settings(db: Session = Depends(get_db)):
     _ensure_table(db)
     rows = db.execute(text("SELECT key, value FROM app_settings")).fetchall()
     stored = {r[0]: r[1] for r in rows}
@@ -102,7 +102,7 @@ async def all_settings(db: Session = Depends(get_db)):
 
 
 @router.post("")
-async def set_setting(
+def set_setting(
     key: str = Form(...),
     value: str = Form(...),
     db: Session = Depends(get_db),

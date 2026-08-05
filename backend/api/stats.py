@@ -53,7 +53,7 @@ def _recompute_sites() -> None:
 
 
 @router.get("/sites")
-async def site_stats(
+def site_stats(
     background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
     refresh: bool = Query(False),
     db: Session = Depends(get_db),
@@ -162,7 +162,7 @@ _TOTALS_SQL = text("""
 
 
 @router.get("/totals")
-async def total_stats(
+def total_stats(
     background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
     refresh: bool = Query(False),
     db: Session = Depends(get_db),
@@ -207,7 +207,7 @@ async def total_stats(
 
 
 @router.get("/suggest")
-async def suggest(
+def suggest(
     kind: str = Query("fandom"),
     q: str = Query("", min_length=0),
     limit: int = Query(8, ge=1, le=20),
@@ -261,7 +261,7 @@ async def suggest(
 
 
 @router.get("/suggest-canonical")
-async def suggest_canonical(
+def suggest_canonical(
     q: str = Query("", min_length=1),
     kind: str = Query("fandom"),
     limit: int = Query(8, ge=1, le=15),
@@ -332,7 +332,7 @@ async def suggest_canonical(
 
 
 @router.post("/refresh-facets")
-async def refresh_facets(
+def refresh_facets(
     min_count: int = Query(1, ge=1, description="Drop values rarer than this"),
     db: Session = Depends(get_db),
     _admin=Depends(require_admin),

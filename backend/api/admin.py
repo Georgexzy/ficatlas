@@ -165,7 +165,7 @@ def _coverage(db: Session) -> list[dict]:
 
 
 @router.get("/overview")
-async def overview(refresh: bool = False,
+def overview(refresh: bool = False,
                    db: Session = Depends(get_db),
                    _admin: User = Depends(require_admin)):
     """Index health, crawl configuration and rate-limit state in one request."""
@@ -253,7 +253,7 @@ _running: dict[str, float] = {}
 
 
 @router.post("/run/{job}")
-async def run_job(job: str, limit: int = Form(200),
+def run_job(job: str, limit: int = Form(200),
                   db: Session = Depends(get_db),
                   _admin: User = Depends(require_admin)):
     """Start one enrichment pass in the background.

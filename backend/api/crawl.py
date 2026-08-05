@@ -17,7 +17,7 @@ CRAWLERS = {
 
 
 @router.post("/trigger/{site}")
-async def trigger_crawl(
+def trigger_crawl(
     site: str,
     job_type: str = "incremental",
     background_tasks: BackgroundTasks = BackgroundTasks(),
@@ -45,7 +45,7 @@ async def trigger_crawl(
 
 
 @router.get("/jobs")
-async def list_jobs(db: Session = Depends(get_db)):
+def list_jobs(db: Session = Depends(get_db)):
     jobs = db.query(CrawlJob).order_by(CrawlJob.created_at.desc()).limit(20).all()
     return [_job_dict(j) for j in jobs]
 

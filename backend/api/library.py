@@ -18,7 +18,7 @@ router = APIRouter()
 
 
 @router.get("/crawl-status")
-async def crawl_status(db: Session = Depends(get_db)):
+def crawl_status(db: Session = Depends(get_db)):
     """Read-only status for the direct-crawl feature so the settings toggle has
     honest feedback: whether it's enabled, and how the last few scheduled crawls
     actually went (so you can see the AO3/FFN blocks rather than guessing)."""
@@ -565,7 +565,7 @@ async def refresh_ao3(
 
 
 @router.get("/can-import")
-async def can_import(url: str):
+def can_import(url: str):
     """Check whether a URL is importable. Returns site + canonical URL."""
     u = url.strip()
     if "archiveofourown.org/works/" in u:
@@ -576,7 +576,7 @@ async def can_import(url: str):
 
 
 @router.get("/hosted")
-async def list_hosted(limit: int = 100, offset: int = 0, db: Session = Depends(get_db)):
+def list_hosted(limit: int = 100, offset: int = 0, db: Session = Depends(get_db)):
     """Stories hosted on FicAtlas (EPUB uploads + URL imports), newest first.
 
     Returns the TOTAL alongside the page. The endpoint always supported offset,
@@ -610,7 +610,7 @@ async def list_hosted(limit: int = 100, offset: int = 0, db: Session = Depends(g
 # ── the reader's own shelf ──────────────────────────────────────────────────
 
 @router.get("/mine")
-async def list_mine(limit: int = 100, offset: int = 0,
+def list_mine(limit: int = 100, offset: int = 0,
                     db: Session = Depends(get_db),
                     viewer: Optional[User] = Depends(get_current_user)):
     """Stories this reader imported privately — theirs alone, newest first.
@@ -653,7 +653,7 @@ async def list_mine(limit: int = 100, offset: int = 0,
 
 
 @router.delete("/mine/{story_id}")
-async def remove_mine(story_id: str, db: Session = Depends(get_db),
+def remove_mine(story_id: str, db: Session = Depends(get_db),
                       viewer: Optional[User] = Depends(get_current_user)):
     """Give up your copy of a story.
 
@@ -781,7 +781,7 @@ async def autopoll(db: Session = Depends(get_db),
 # ── Delete hosted stories ────────────────────────────────────────────────────
 
 @router.delete("/hosted/{story_id}")
-async def delete_hosted(story_id: str, db: Session = Depends(get_db),
+def delete_hosted(story_id: str, db: Session = Depends(get_db),
     _admin=Depends(require_admin),
 ):
     """Delete a hosted story and its chapters from the library."""
@@ -1363,7 +1363,7 @@ async def discover_squidgeworld(
 # ── Cross-post dedup (one-shot batch over existing data) ─────────────────────
 
 @router.post("/dedup-crossposts")
-async def dedup_crossposts(limit: Optional[int] = Form(None),
+def dedup_crossposts(limit: Optional[int] = Form(None),
     dry_run: bool = Form(False),
     _admin=Depends(require_admin),
 ):
@@ -1432,7 +1432,7 @@ async def dedup_crossposts(limit: Optional[int] = Form(None),
 
 
 @router.get("/jobs/{job_id}")
-async def get_job_status(job_id: str):
+def get_job_status(job_id: str):
     """Poll for an async discover-* job. Returns 404 once the job has aged out
     of the in-memory store (~15 min after completion)."""
     from live_fetch.jobs import get_job
@@ -1443,7 +1443,7 @@ async def get_job_status(job_id: str):
 
 
 @router.get("/ao3-status")
-async def ao3_status():
+def ao3_status():
     """Return current AO3 reachability state — whether we're in a cooldown
     after repeated failures, and how long until we'll retry. The UI uses
     this to grey out the AO3-dependent buttons when AO3 is unreachable."""
@@ -1460,7 +1460,7 @@ async def ao3_status():
 
 
 @router.post("/admin/clear-ao3-cooldown")
-async def clear_ao3_cooldown_endpoint(
+def clear_ao3_cooldown_endpoint(
     _admin=Depends(require_admin),
 ):
     """Force-clear the AO3 cooldown so the next scrape will retry immediately.
@@ -1474,7 +1474,7 @@ async def clear_ao3_cooldown_endpoint(
 # ── Admin: remove orphaned example/seed stories ──────────────────────────────
 
 @router.delete("/admin/cleanup-seeds")
-async def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db),
+def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db),
     _owner=Depends(require_owner),
 ):
     """Remove the fabricated demo stories written by seed_data.py.
@@ -1541,7 +1541,7 @@ async def cleanup_seeds(dry_run: bool = False, db: Session = Depends(get_db),
 
 
 @router.post("/cleanup-preface-chapters")
-async def cleanup_preface_chapters(dry_run: bool = Form(False), db: Session = Depends(get_db),
+def cleanup_preface_chapters(dry_run: bool = Form(False), db: Session = Depends(get_db),
     _owner=Depends(require_owner),
 ):
     """Fix already-imported stories whose first 'chapter' is actually FicHub/AO3
