@@ -270,6 +270,8 @@ export function formatStoryDate(iso?: string | null): string | null {
 // The server already caches this (it is a whole-table aggregate over 19.7M rows),
 // so the cost was small — but it was four round trips on every single page view,
 // and it made the network panel misleading when diagnosing anything else.
+export interface FieldCoverage { ships: number; characters: number }
+
 export interface IndexTotals {
   stories: number
   hosted: number
@@ -278,6 +280,8 @@ export interface IndexTotals {
   hpffa?: number
   indexed_last_hour?: number
   indexed_last_day?: number
+  /** Live per-site share of works listing a ship / a character. */
+  coverage?: Record<string, FieldCoverage>
 }
 
 const TOTALS_TTL_MS = 5 * 60 * 1000   // matches the server-side cache window
