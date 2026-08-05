@@ -116,6 +116,10 @@ CREATE INDEX IF NOT EXISTS ix_stories_delisted ON stories (id) WHERE delisted_at
 CREATE INDEX IF NOT EXISTS ix_stories_cross_post_urls ON stories USING gin (cross_post_urls);
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- Row-count sampling for the admin coverage panel. Counting "how many AO3 rows
+-- are stubs" exactly means a filtered scan of 13.1M rows; a 200k sample answers
+-- it to a fraction of a percent and returns immediately.
+CREATE EXTENSION IF NOT EXISTS tsm_system_rows;
 
 -- Keep planner statistics fresh on the one table that matters.
 --

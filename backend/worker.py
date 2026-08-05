@@ -123,8 +123,41 @@ async def _dedup_loop() -> None:
         await asyncio.sleep(interval)
 
 
+def _rotation_targets(db, want: int, pool: int) -> list[str]:
+    """The next `want` fandoms from the rotation, advancing the stored cursor.
+
+    Drawn from the facets table — AO3's own canonical tag names, ranked by how
+    many works we hold — so the crawler spends its requests roughly in
+    proportion to what the index is actually made of, instead of on whatever the
+    operator happens to read.
+
+    The cursor is persisted rather than random so every fandom in the pool is
+    reached in a bounded time. Random sampling would revisit the same few and
+    starve others indefinitely, which is the bias this replaces, just noisier.
+    """
+    from api.settings import get_setting, put_setting
+    from sqlalchemy import text as sql_text
+
+    rows = db.execute(sql_text(
+        "SELECT value FROM facets WHERE kind = 'fandom_ao3' "
+        "ORDER BY count DESC LIMIT :pool"), {"pool": pool}).fetchall()
+    names = [r[0] for r in rows if r[0]]
+    if not names:
+        return []
+
+    try:
+        cursor = int(get_setting(db, "crawl_rotate_cursor") or 0)
+    except (TypeError, ValueError):
+        cursor = 0
+
+    want = max(0, min(want, len(names)))
+    picked = [names[(cursor + i) % len(names)] for i in range(want)]
+    put_setting(db, "crawl_rotate_cursor", str((cursor + want) % len(names)))
+    return picked
+
+
 async def _recent_works_loop() -> None:
-    """Walk AO3 tag pages for the tracked fandoms and index what's there.
+    """Walk AO3 tag pages and index what is there.
 
     This is the ONLY way to get works published after the bulk dump. That dump
     tops out at AO3 work id 63,178,258 with zero entries above 70M, while AO3 is
@@ -148,8 +181,26 @@ async def _recent_works_loop() -> None:
     while True:
         try:
             with db_session() as db:
+                mode = (get_setting(db, "crawl_mode") or "mixed").strip().lower()
                 tracked = get_setting(db, "tracked_fandom") or ""
-            fandoms = [f.strip() for f in tracked.split(",") if f.strip()]
+                pinned = [f.strip() for f in tracked.split(",") if f.strip()]
+                rotating: list[str] = []
+                if mode in ("rotate", "mixed"):
+                    try:
+                        want = int(get_setting(db, "crawl_rotate_count") or 3)
+                        pool = int(get_setting(db, "crawl_rotate_pool") or 250)
+                    except (TypeError, ValueError):
+                        want, pool = 3, 250
+                    rotating = _rotation_targets(db, want, pool)
+
+            # Pinned first: in mixed mode the operator's own fandoms should not
+            # lose their turn to the rotation, they just stop being the only
+            # thing that ever gets crawled. dict.fromkeys keeps order and drops
+            # a duplicate when a pinned fandom is also large enough to rotate in.
+            fandoms = list(dict.fromkeys(
+                (pinned if mode != "rotate" else []) + rotating)) or pinned
+            if fandoms:
+                log.info(f"recent works: mode={mode} targets={fandoms}")
             for fandom in fandoms:
                 try:
                     results = await fetch_live_ao3(
