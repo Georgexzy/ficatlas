@@ -124,8 +124,14 @@ def _parse_work_blurb(blurb_html: str, host: str = "https://archiveofourown.org"
     series_out = []
     ser_block = re.search(r'<ul class="series">(.*?)</ul>', blurb_html, re.S)
     if ser_block:
+        # The number is wrapped: AO3 emits
+        #   Part <strong>2</strong> of <a href="/series/3418618">Name</a>
+        # so a pattern expecting "Part 2 of" immediately adjacent matched
+        # nothing at all — 20 blurbs parsed, five carrying a series, none
+        # extracted. Tags are allowed between every token now.
         for m in re.finditer(
-                r'Part\s+(\d+)\s+of\s*<a[^>]*href="/series/(\d+)"[^>]*>(.*?)</a>',
+                r'Part\s*(?:<[^>]+>\s*)*(\d+)\s*(?:</[^>]+>\s*)*of\s*'
+                r'(?:<[^>]+>\s*)*?<a[^>]*href="/series/(\d+)"[^>]*>(.*?)</a>',
                 ser_block.group(1), re.S | re.I):
             name = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(3))).strip()
             if name:

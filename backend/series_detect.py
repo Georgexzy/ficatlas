@@ -111,6 +111,18 @@ MIN_WORKS = int(os.getenv("SERIES_MIN_WORKS", "3"))
 # it is a fandom word, not a series name.
 MIN_TOKEN_IDF = float(os.getenv("SERIES_MIN_TOKEN_IDF", "7.0"))
 
+# An inferred series of a hundred works is not a series.
+#
+# The first clean run produced "Oneshots series" with 103 members, "Tong" with
+# 101, "Backstage" with 89 — one author's whole output sharing a word, which is
+# what a habit looks like, not a sequence. Real inferred series in this data run
+# to five or ten; the Dangerverse is five.
+#
+# Not applied to STATED or EXPLICIT series: an author who says "part 40 of X",
+# or AO3 reporting its own 43-work series, is stating a fact and the size is
+# theirs to decide.
+MAX_INFERRED_WORKS = int(os.getenv("SERIES_MAX_INFERRED", "25"))
+
 
 def tokens(title: str) -> set[str]:
     t = re.sub(r"[^a-z0-9 ]", " ", (title or "").lower())
@@ -197,6 +209,8 @@ def group_author(works: list[dict], idf: dict[str, float], default_idf: float
             continue
         tok_idf = idf.get(tok, default_idf)
         if tok_idf < MIN_TOKEN_IDF:
+            continue
+        if len(members) > MAX_INFERRED_WORKS:
             continue
         score = tok_idf * len(members)
         if score < MIN_SCORE:
