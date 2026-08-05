@@ -43,23 +43,46 @@ router = APIRouter()
 # because that is when someone opens it.
 _SAMPLE = 50_000
 
-_COVERAGE = sql_text(f"""
-    WITH s AS (
-        SELECT site, word_count, kudos, characters, relationships,
-               genres, summary, published_at
-        FROM stories TABLESAMPLE SYSTEM_ROWS(:n)
-    )
-    SELECT site,
-           count(*)                                                        AS sampled,
-           count(*) FILTER (WHERE COALESCE(word_count,0) = 0)              AS no_words,
-           count(*) FILTER (WHERE COALESCE(kudos,0) = 0)                   AS no_kudos,
-           count(*) FILTER (WHERE characters    IS NULL OR characters    = '{{}}') AS no_chars,
-           count(*) FILTER (WHERE relationships IS NULL OR relationships = '{{}}') AS no_ships,
-           count(*) FILTER (WHERE genres        IS NULL OR genres        = '{{}}') AS no_genres,
-           count(*) FILTER (WHERE nullif(summary,'') IS NULL)              AS no_summary,
-           count(*) FILTER (WHERE published_at IS NULL)                    AS no_date
-    FROM s GROUP BY site
-""")
+_FIELDS = {
+    "no_words":   "COALESCE(word_count,0) = 0",
+    "no_kudos":   "COALESCE(kudos,0) = 0",
+    "no_chars":   "characters    IS NULL OR characters    = '{}'",
+    "no_ships":   "relationships IS NULL OR relationships = '{}'",
+    "no_genres":  "genres        IS NULL OR genres        = '{}'",
+    "no_summary": "nullif(summary,'') IS NULL",
+    "no_date":    "published_at IS NULL",
+}
+
+# Which fields a site actually publishes.
+#
+# Reporting AO3 as "100% missing genres" was not a gap, it was a category error:
+# genres is FanFiction.net's vocabulary and AO3 has literally zero rows with one
+# (checked, not assumed). A red bar there says "fix this", and there is nothing
+# to fix — which devalues the bars that DO mean something.
+_NOT_APPLICABLE = {
+    "ao3": {"no_genres"},
+    "fictionalley": {"no_kudos"},   # FictionAlley had no kudos concept
+}
+
+# Below this many rows a site is counted exactly instead of sampled.
+#
+# The sample is drawn per BLOCK, and rows are clustered on disk by import batch,
+# so a small site lands in a handful of blocks and gets a handful of rows. In
+# practice FictionAlley drew 61–115 rows out of 50,000 and reported 21%, 23% and
+# 34% for a field whose true value is 18.5% — presented with exactly the same
+# confidence as AO3's 33,000-row estimate. Anything this small is cheap to count
+# properly: the exact FictionAlley figures come back in under a second.
+EXACT_BELOW = 400_000
+
+
+def _site_totals(db: Session) -> dict[str, int]:
+    """Rows per site, from the planner rather than a scan."""
+    rows = db.execute(sql_text("""
+        SELECT site, count(*) FROM stories
+        GROUP BY site
+    """)).fetchall()
+    return {(r[0].value if hasattr(r[0], "value") else str(r[0])): int(r[1]) for r in rows}
+
 
 
 # Served from cache and refreshed on demand. Two reasons, both learned the hard
@@ -69,6 +92,55 @@ _COVERAGE = sql_text(f"""
 _CACHE: dict | None = None
 _CACHED_AT = 0.0
 _TTL = 180.0
+
+
+def _coverage(db: Session) -> list[dict]:
+    """Per-site field coverage: exact for small sites, sampled for large ones."""
+    sel = ", ".join(
+        f"count(*) FILTER (WHERE {cond}) AS {name}" for name, cond in _FIELDS.items())
+
+    try:
+        totals = _site_totals(db)
+    except Exception as e:
+        log.info(f"site totals unavailable: {type(e).__name__}")
+        return []
+
+    out: list[dict] = []
+    big = [s for s, n in totals.items() if n >= EXACT_BELOW]
+
+    # Small sites: counted properly. Each is a bounded index scan.
+    for site, n in totals.items():
+        if n >= EXACT_BELOW:
+            continue
+        try:
+            r = db.execute(sql_text(
+                f"SELECT count(*) AS sampled, {sel} FROM stories WHERE site = :s"),
+                {"s": site}).first()
+            out.append({"site": site, "sampled": int(r[0]), "exact": True,
+                        **{name: int(r[i + 1]) for i, name in enumerate(_FIELDS)}})
+        except Exception as e:
+            log.info(f"exact coverage for {site} failed: {type(e).__name__}")
+
+    # Large sites: sampled, and big enough that a block sample is representative.
+    if big:
+        try:
+            rows = db.execute(sql_text(f"""
+                WITH s AS (SELECT * FROM stories TABLESAMPLE SYSTEM_ROWS(:n))
+                SELECT site, count(*) AS sampled, {sel} FROM s
+                WHERE site = ANY(:sites) GROUP BY site
+            """), {"n": _SAMPLE, "sites": big}).fetchall()
+            for r in rows:
+                site = r[0].value if hasattr(r[0], "value") else str(r[0])
+                out.append({"site": site, "sampled": int(r[1]), "exact": False,
+                            **{name: int(r[i + 2]) for i, name in enumerate(_FIELDS)}})
+        except Exception as e:
+            log.info(f"coverage sample unavailable: {type(e).__name__}")
+
+    for c in out:
+        c["total"] = totals.get(c["site"], 0)
+        c["na"] = sorted(_NOT_APPLICABLE.get(c["site"], set()))
+    out.sort(key=lambda c: -c["total"])
+    return out
 
 
 @router.get("/overview")
@@ -90,18 +162,8 @@ async def overview(refresh: bool = False,
     """)).fetchall()
     out["tables"] = {r[0]: max(0, int(r[1])) for r in rows}
 
-    try:
-        cov = db.execute(_COVERAGE, {"n": _SAMPLE}).fetchall()
-        out["coverage"] = [{
-            "site": r[0], "sampled": r[1],
-            "no_words": r[2], "no_kudos": r[3], "no_chars": r[4],
-            "no_ships": r[5], "no_genres": r[6], "no_summary": r[7], "no_date": r[8],
-        } for r in cov]
-        out["coverage_sample"] = _SAMPLE
-    except Exception as e:
-        # tsm_system_rows is an extension; without it the page still renders.
-        log.info(f"coverage sample unavailable: {type(e).__name__}")
-        out["coverage"] = []
+    out["coverage"] = _coverage(db)
+    out["coverage_sample"] = _SAMPLE
 
     # What the recent-works crawler is currently pointed at.
     pool = int(get_setting(db, "crawl_rotate_pool") or 250)

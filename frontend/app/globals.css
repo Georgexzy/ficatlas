@@ -2811,6 +2811,10 @@ body.is-resizing * { cursor: col-resize !important; }
   flex: 0 0 34px; text-align: right; color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
+/* A field this site does not have. Dimmed and with an empty track, so it reads
+   as "not applicable" rather than as a bar that happens to be at zero. */
+.admin-bar--na { opacity: 0.45; }
+.admin-bar--na .admin-bar__track { background: transparent; border: 1px dashed var(--border); height: 7px; box-sizing: border-box; }
 
 .admin-facts {
   display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px;
