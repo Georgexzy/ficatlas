@@ -252,14 +252,14 @@ SIGNUP_CODE = os.getenv("SIGNUP_CODE", "")
 # ── endpoints ───────────────────────────────────────────────────────────────
 
 @router.get("/signup-policy")
-async def signup_policy():
+def signup_policy():
     """What the signup form should render. Public: it exposes no secret, only
     whether a code box is needed, and the frontend cannot guess that."""
     return {"mode": SIGNUP_MODE, "needs_code": SIGNUP_MODE == "invite"}
 
 
 @router.post("/signup")
-async def signup(
+def signup(
     response: Response, request: Request,
     username: str = Form(...), password: str = Form(...),
     invite: str = Form(""),
@@ -291,7 +291,7 @@ async def signup(
 
 
 @router.post("/login")
-async def login(
+def login(
     response: Response, request: Request,
     username: str = Form(...), password: str = Form(...),
     db: Session = Depends(get_db),
@@ -316,7 +316,7 @@ async def login(
 
 
 @router.post("/logout")
-async def logout(
+def logout(
     response: Response,
     sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
     db: Session = Depends(get_db),
@@ -329,7 +329,7 @@ async def logout(
 
 
 @router.get("/me")
-async def me(user: Optional[User] = Depends(get_current_user)):
+def me(user: Optional[User] = Depends(get_current_user)):
     if not user:
         return {"user": None}
     from models.user import ROLE_ADMIN, ROLE_OWNER
@@ -356,7 +356,7 @@ async def me(user: Optional[User] = Depends(get_current_user)):
 
 
 @router.post("/change-password")
-async def change_password(
+def change_password(
     response: Response, request: Request,
     current_password: str = Form(...),
     new_password: str = Form(...),
@@ -382,7 +382,7 @@ async def change_password(
 
 
 @router.post("/view-as")
-async def set_view_as(role: str = Form(""), sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+def set_view_as(role: str = Form(""), sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
                       db: Session = Depends(get_db)):
     """Preview the site as a lesser role, or clear the preview with an empty value.
 
@@ -425,7 +425,7 @@ async def set_view_as(role: str = Form(""), sat: Optional[str] = Cookie(default=
 
 
 @router.post("/email")
-async def set_email(password: str = Form(...), email: str = Form(""),
+def set_email(password: str = Form(...), email: str = Form(""),
                     user: User = Depends(require_user), db: Session = Depends(get_db)):
     """Add, change or clear the account's contact address.
 
@@ -457,7 +457,7 @@ async def set_email(password: str = Form(...), email: str = Form(""),
 
 
 @router.get("/sessions")
-async def list_sessions(
+def list_sessions(
     sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
@@ -487,7 +487,7 @@ async def list_sessions(
 
 
 @router.post("/logout-all")
-async def logout_all(
+def logout_all(
     response: Response,
     keep_current: bool = Form(True),
     sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
@@ -507,7 +507,7 @@ async def logout_all(
 
 
 @router.post("/delete-account")
-async def delete_account(
+def delete_account(
     response: Response,
     password: str = Form(...),
     user: User = Depends(require_user),
@@ -531,7 +531,7 @@ async def delete_account(
 # ── Account management (owner only) ─────────────────────────────────────────
 
 @router.get("/users")
-async def list_users(db: Session = Depends(get_db), _owner=Depends(require_owner)):
+def list_users(db: Session = Depends(get_db), _owner=Depends(require_owner)):
     """Every account and its role. Owner-only: it exposes who exists."""
     rows = db.query(User).order_by(User.created_at.asc()).all()
     return {"users": [{
@@ -542,7 +542,7 @@ async def list_users(db: Session = Depends(get_db), _owner=Depends(require_owner
 
 
 @router.post("/users/{user_id}/role")
-async def set_user_role(
+def set_user_role(
     user_id: str,
     role: str = Form(...),
     db: Session = Depends(get_db),

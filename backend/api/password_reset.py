@@ -98,7 +98,7 @@ def _send_email(to: str, code: str) -> bool:
 
 
 @router.post("/forgot")
-async def forgot_password(username: str = Form(...), db: Session = Depends(get_db)):
+def forgot_password(username: str = Form(...), db: Session = Depends(get_db)):
     """Start a reset. Always reports success."""
     user = db.query(User).filter(User.username == username.strip().lower()).first()
 
@@ -131,7 +131,7 @@ async def forgot_password(username: str = Form(...), db: Session = Depends(get_d
 
 
 @router.post("/reset")
-async def reset_password(code: str = Form(...), new_password: str = Form(...),
+def reset_password(code: str = Form(...), new_password: str = Form(...),
                          db: Session = Depends(get_db)):
     if len(new_password) < 6:
         raise HTTPException(400, "Password must be at least 6 characters")
@@ -167,7 +167,7 @@ async def reset_password(code: str = Form(...), new_password: str = Form(...),
 
 
 @router.post("/admin/issue-reset")
-async def admin_issue_reset(username: str = Form(...), db: Session = Depends(get_db),
+def admin_issue_reset(username: str = Form(...), db: Session = Depends(get_db),
                             admin: User = Depends(require_admin)):
     """Mint a reset code for a user and return it once, to the admin.
 
@@ -214,7 +214,7 @@ async def admin_issue_reset(username: str = Form(...), db: Session = Depends(get
 
 
 @router.get("/reset-requests")
-async def list_reset_requests(db: Session = Depends(get_db),
+def list_reset_requests(db: Session = Depends(get_db),
                               _admin: User = Depends(require_admin)):
     """Open reset requests, for the no-email case.
 

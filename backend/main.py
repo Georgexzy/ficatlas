@@ -8,6 +8,16 @@ from api import (search, stories, stats, library, settings, auth, userdata,
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Hand the loop to the background-job helper before anything can need it.
+    # Request handlers run in a threadpool now (see below), and a thread cannot
+    # call asyncio.create_task — it has to post to a loop it holds a reference to.
+    try:
+        import asyncio as _asyncio
+        from live_fetch.jobs import bind_loop
+        bind_loop(_asyncio.get_running_loop())
+    except Exception:
+        pass
+
     # Idempotently ensure schema is up-to-date (adds new columns safely)
     try:
         from init_db import init as init_db

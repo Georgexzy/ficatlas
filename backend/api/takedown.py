@@ -109,7 +109,7 @@ class TakedownOut(BaseModel):
 
 
 @router.post("")
-async def submit_takedown(
+def submit_takedown(
     request: Request,
     story_url: str = Form(...),
     claimant: str = Form(...),
@@ -222,7 +222,7 @@ async def submit_takedown(
 
 
 @router.get("/check")
-async def check_author(author: str = "", db: Session = Depends(get_db)):
+def check_author(author: str = "", db: Session = Depends(get_db)):
     """Let an author see, without asking anyone, whether their work is hosted here.
 
     Takedown alone is a reactive remedy: it only helps someone who has already
@@ -266,7 +266,7 @@ async def check_author(author: str = "", db: Session = Depends(get_db)):
 # ── admin ───────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=list[TakedownOut])
-async def list_takedowns(state: str = "pending", limit: int = 100,
+def list_takedowns(state: str = "pending", limit: int = 100,
                          db: Session = Depends(get_db),
                          _admin: User = Depends(require_admin)):
     rows = db.execute(sql_text("""
@@ -289,7 +289,7 @@ async def list_takedowns(state: str = "pending", limit: int = 100,
 
 
 @router.get("/pending-count")
-async def pending_count(db: Session = Depends(get_db),
+def pending_count(db: Session = Depends(get_db),
                         _admin: User = Depends(require_admin)):
     """How many requests are waiting, for the badge on the admin entry point.
 
@@ -303,7 +303,7 @@ async def pending_count(db: Session = Depends(get_db),
 
 
 @router.post("/{takedown_id}/resolve")
-async def resolve_takedown(takedown_id: str, uphold: bool = Form(True),
+def resolve_takedown(takedown_id: str, uphold: bool = Form(True),
                            note: str = Form(""), delist: bool = Form(False),
                            db: Session = Depends(get_db),
                            admin: User = Depends(require_admin)):

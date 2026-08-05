@@ -330,7 +330,7 @@ def _should_fetch_live(sort: str, page: int, q: Optional[str]) -> bool:
 # ── Main endpoint ─────────────────────────────────────────────────────────────
 
 @router.get("", response_model=SearchResponse)
-async def search(
+def search(          # NOT async — see below
     q:                     Optional[str] = Query(None),
     sites:                 Optional[str] = Query(None),
     fandoms:               Optional[str] = Query(None),
@@ -524,7 +524,21 @@ async def search(
 
         Filters are now strict by default, and the caller opts into the permissive
         behaviour with include_unknown.
-        """
+        
+    Deliberately a plain `def`, not `async def`.
+
+    Every query in here is blocking psycopg2 through SQLAlchemy. Declared
+    `async def`, that ran on the event loop thread — so one search froze the
+    entire server, including other people's searches and the health check.
+    Measured before the change: a query that takes 0.34s alone took 8.3s median
+    with sixteen callers, scaling almost perfectly linearly, which is what
+    complete serialisation looks like.
+
+    As a plain `def`, FastAPI runs it in a worker thread and the loop stays free.
+    The right long-term answer is an async driver; this is the one-word version
+    of it that does not mean rewriting every query.
+
+    """
         if not csv_val: return None
         vals = [v.strip().lower() for v in csv_val.split(",") if v.strip()]
         if normalise:
@@ -843,7 +857,7 @@ async def search(
 
 
 @router.get("/random", response_model=List[StoryCard])
-async def random_stories(
+def random_stories(
     count: int = Query(3, ge=1, le=12),
     fandom: Optional[str] = Query(None),
     min_words: Optional[int] = Query(None, ge=0),
