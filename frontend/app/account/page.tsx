@@ -1,6 +1,7 @@
 "use client"
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import BackLink from "../BackLink"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth"
 import SiteHeader from "../SiteHeader"
@@ -120,11 +121,27 @@ export default function AccountPage() {
     finally { setBusy(false) }
   }
 
-  if (loading || !user) return <div className="settings-shell"><p className="loading">Loading…</p></div>
+  if (loading) return (
+    <div className="settings-shell"><SiteHeader current="account" />
+      <p className="loading">Loading…</p></div>
+  )
+  // Signed out, this page has nothing to show — and used to sit on "Loading…"
+  // for ever, with no header and no way out. Say so, and offer the two things
+  // that help.
+  if (!user) return (
+    <div className="page-prose">
+      <SiteHeader current="account" />
+      <BackLink fallback="/" fallbackLabel="Back to search" />
+      <h1>Your account</h1>
+      <p>You are not signed in, so there is nothing here yet.</p>
+      <p><Link href="/login" className="card-btn card-btn--primary">Sign in</Link></p>
+    </div>
+  )
 
   return (
     <div className="settings-shell">
       <SiteHeader current="account" />
+      <BackLink fallback="/" fallbackLabel="Back to search" />
       <h1 className="settings-title">Account</h1>
 
       {/* Identity + sync */}

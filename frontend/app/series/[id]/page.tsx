@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import BackLink from "../../BackLink"
 import { use, useEffect, useState } from "react"
 import SiteHeader from "../../SiteHeader"
 import { describeError, type Failure } from "@/lib/errors"
@@ -53,6 +54,7 @@ export default function SeriesPage({ params }: { params: Promise<{ id: string }>
   if (error) return (
     <div className="page-prose">
       <SiteHeader />
+      <BackLink fallback="/" fallbackLabel="Back to search" />
       <h1>Not found</h1>
       <p>{error.message}</p>
       <p><Link href="/" className="card-btn card-btn--primary">Back to search</Link></p>
@@ -67,6 +69,7 @@ export default function SeriesPage({ params }: { params: Promise<{ id: string }>
   return (
     <div className="settings-shell">
       <SiteHeader />
+      <BackLink fallback="/" fallbackLabel="Back to search" />
 
       <h1 className="settings-title">{data.name}</h1>
       <p className="series-page__by">

@@ -1,4 +1,5 @@
 import Link from "next/link"
+import BackLink from "../BackLink"
 import SiteHeader from "../SiteHeader"
 
 export const metadata = {
@@ -18,6 +19,7 @@ export default function About() {
           home, plus Library and Settings, and its Search remembers your
           results. */}
       <SiteHeader />
+      <BackLink fallback="/" fallbackLabel="Back to search" />
 
       <h1>About FicAtlas</h1>
       <p>

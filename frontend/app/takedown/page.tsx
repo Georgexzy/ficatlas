@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import BackLink from "../BackLink"
 import { useState } from "react"
 import SiteHeader from "../SiteHeader"
 
@@ -49,6 +50,7 @@ export default function TakedownPage() {
     return (
       <div className="page-prose">
         <SiteHeader />
+      <BackLink fallback="/about" fallbackLabel="About FicAtlas" />
         <h1>{sent.hidden || sent.delisted
           ? "The story has been taken down"
           : "Your request has been sent"}</h1>
@@ -69,7 +71,10 @@ export default function TakedownPage() {
   return (
     <div className="page-prose">
       <SiteHeader />
-      <p className="page-prose__back"><Link href="/about">← About FicAtlas</Link></p>
+      {/* Replaces a hard-coded "← About FicAtlas", which was a guess about
+          where you came from — and wrong for anyone arriving from the footer,
+          from search, or from a shared link. */}
+      <BackLink fallback="/about" fallbackLabel="About FicAtlas" />
 
       <h1>Request a takedown</h1>
       <p>

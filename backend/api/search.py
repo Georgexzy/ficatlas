@@ -393,6 +393,10 @@ def search(          # NOT async — see below
     status:                Optional[str] = Query(None),
     # Comma-separated archive sections, e.g. "Schnoogle,The Dark Arts".
     sections:              Optional[str] = Query(None),
+    in_series:             Optional[bool] = Query(
+        None,
+        description="true = only works that belong to a series, false = only "
+                    "standalones. Omitted means no preference."),
     language:              Optional[str] = Query(None),
     word_count_min:        Optional[int] = Query(None, ge=0),
     word_count_max:        Optional[int] = Query(None),
@@ -750,6 +754,18 @@ def search(          # NOT async — see below
     # Arts" meant horror — so this restores a distinction the original import
     # dropped. Exact match against the stored label, since these come from a
     # closed vocabulary rather than free text.
+    # Part of a series, or deliberately not. Two quite different searches: one
+    # reader wants something to sink into for a month, another wants a thing
+    # they can finish tonight without acquiring a reading list.
+    if in_series is not None:
+        # Written out both ways rather than negating with ~. SQLAlchemy wraps a
+        # negated text() as NOT (…) around the raw string, which produced
+        # invalid SQL and 500'd every in_series=false search.
+        db_query = db_query.filter(sql_text(
+            "EXISTS (SELECT 1 FROM series_works sw WHERE sw.story_id = stories.id)"
+            if in_series else
+            "NOT EXISTS (SELECT 1 FROM series_works sw WHERE sw.story_id = stories.id)"))
+
     if sections:
         wanted = [v.strip() for v in sections.split(",") if v.strip()]
         if wanted:

@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import BackLink from "../BackLink"
 import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
@@ -86,7 +87,8 @@ export default function TakedownsPage() {
   }
 
   if (authLoading) return (
-    <div className="settings-shell"><SiteHeader /><p className="loading">Loading…</p></div>
+    <div className="settings-shell"><SiteHeader />
+      <BackLink fallback="/settings" fallbackLabel="Settings" /><p className="loading">Loading…</p></div>
   )
 
   // Not an operator: no queue, no hint that one exists. Same reasoning as the
@@ -104,6 +106,7 @@ export default function TakedownsPage() {
   return (
     <div className="settings-shell">
       <SiteHeader />
+      <BackLink fallback="/settings" fallbackLabel="Settings" />
       <h1 className="settings-title">Takedown requests</h1>
       <p className="settings-lede">
         Text comes down automatically when a request arrives, so nothing here is

@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
+import BackLink from "../../BackLink"
 import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory } from "@/lib/offline"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SiteHeader from "@/app/SiteHeader"
@@ -151,7 +152,8 @@ export default function StoryPage() {
       .catch(() => {})
   }, [story?.id])
 
-  if (error) return <div className="reader-shell"><SiteHeader /><div className="alert alert--error">{error}</div></div>
+  if (error) return <div className="reader-shell"><SiteHeader />
+      <BackLink fallback="/" fallbackLabel="Back to search" /><div className="alert alert--error">{error}</div></div>
   if (!story) return <div className="reader-shell"><SiteHeader /><p className="loading">Loading…</p></div>
 
 
