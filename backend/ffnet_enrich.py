@@ -310,7 +310,23 @@ def _pick_targets(limit: int | None) -> list:
     return [(r["id"], r["site_id"], r["gap_score"]) for r in rows]
 
 
-def run(limit: int | None, dry_run: bool, delay: float, batch: int) -> None:
+def run(limit: int | None, dry_run: bool, delay: float, batch: int,
+        max_seconds: float | None = None) -> None:
+    """One enrichment pass.
+
+    `max_seconds` bounds the pass by WALL CLOCK, not by story count, and that is
+    what makes the background loop work at all. archive.org signals throttling
+    by refusing connections rather than by returning 429, and the budget backs
+    off to 600s a request in response. At that rate a 200-story pass takes 33
+    hours, so the worker's 30-minute loop simply never came round again — the
+    last pass started at 22:56 and was still going nine hours later, which is
+    why FF.net character coverage sat at 1.7% looking like a dead feature.
+
+    Stopping early costs nothing: _pick_targets only ever selects stories that
+    still have no characters, so the next pass resumes on what is left.
+    """
+    import time as _time
+    deadline = (_time.monotonic() + max_seconds) if max_seconds else None
     updated = missing = failed = from_fichub = 0
     rows = _pick_targets(limit)
     log.info(f"{len(rows)} FF.net stories to enrich")
@@ -318,6 +334,10 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int) -> None:
 
     with httpx.Client(headers=UA) as client:
         for n, (sid, site_id, wc) in enumerate(rows, 1):
+            if deadline and _time.monotonic() > deadline:
+                log.info(f"  time budget reached after {n - 1} stories — "
+                         f"stopping so the loop can come round")
+                break
             meta = fetch_meta(client, site_id)
             if not meta and _FICHUB_FALLBACK:
                 # ~31% of works have no usable Wayback capture (no_snapshot=62
