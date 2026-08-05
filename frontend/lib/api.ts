@@ -16,7 +16,13 @@ export async function searchStories(params: SearchParams): Promise<SearchRespons
 
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(`Search failed: ${res.status} ${body}`)
+    // Carries the status so the caller can say WHICH failure this was. It used
+    // to throw a bare Error, so a 500 and an unreachable server produced the
+    // same "something went wrong" — and the reader could not tell whether to
+    // retry, narrow the search, or check their connection.
+    const err: any = new Error(`Search failed: ${res.status} ${body.slice(0, 200)}`)
+    err.status = res.status
+    throw err
   }
 
   return res.json()

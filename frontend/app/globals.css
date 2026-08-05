@@ -2732,6 +2732,43 @@ body.is-resizing * { cursor: col-resize !important; }
   .book__offline, .book__actions .book__remove { width: 32px; height: 32px; min-width: 32px; }
 }
 
+/* Site-wide health bar. Appears only after two consecutive failed polls — a
+   banner that flickers on every hiccup is one people learn to ignore. */
+.health-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 16px; font-size: 13px; line-height: 1.5;
+  background: color-mix(in srgb, var(--danger, #d9534f) 14%, var(--surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--danger, #d9534f) 40%, transparent);
+  color: var(--text);
+}
+/* Offline is a state, not a fault — nothing is broken and there is nothing to
+   fix, so it reads as information rather than as an alarm. */
+.health-banner--offline {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.health-banner__dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--danger, #d9534f);
+}
+.health-banner--offline .health-banner__dot { background: var(--accent); }
+.health-banner__retry {
+  margin-left: auto; background: none; border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 10px; font: inherit; font-size: 12px;
+  color: var(--text); cursor: pointer;
+}
+.health-banner__retry:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Retry sits inside the alert, because "try again" is the whole response to a
+   retryable failure and making someone hunt for it is the wrong shape. */
+.alert { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.alert__retry {
+  margin-left: auto; background: none; border: 1px solid currentColor;
+  border-radius: 6px; padding: 3px 12px; font: inherit; font-size: 12.5px;
+  color: inherit; cursor: pointer; opacity: 0.85;
+}
+.alert__retry:hover { opacity: 1; }
+
 /* ── Admin: index health ────────────────────────────────────────────────── */
 .admin-tiles {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

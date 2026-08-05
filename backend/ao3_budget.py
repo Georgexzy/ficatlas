@@ -42,6 +42,29 @@ BACKOFF = 2.0        # on 429 — fast, because being over the line costs AO3
 RECOVER = 0.9        # per recovery step — slow, because guessing upward is rude
 RECOVER_AFTER = 10   # consecutive clean requests per step
 
+# Full stop, rather than crawling back up.
+#
+# Geometric decay alone was the wrong shape for this site. Once pinned at
+# MAX_INTERVAL, recovering to BASE_INTERVAL takes 0.9^n steps of ten clean
+# requests each — about 284 requests over nearly five hours, every one of them
+# spent at 60s just to relearn a rate we already knew.
+#
+# AO3's own advice for a "Retry later" is to wait about fifteen minutes and try
+# again. That is the behaviour of a rolling-window limiter: the counter drains
+# on its own if you stop, and stops draining if you keep poking it. So past a
+# threshold we stop completely for a cooldown and then resume at the BASE rate
+# rather than the punished one — following the site's published guidance instead
+# of guessing our way back.
+#
+# If we are throttled again soon after resuming, the cooldown doubles and the
+# floor rises: being throttled straight out of a pause is the one clear signal
+# that the base rate itself is too fast, as opposed to a passing burst.
+COOLDOWN_BASE = float(os.getenv("AO3_COOLDOWN_S", "900"))     # 15 minutes
+COOLDOWN_MAX = float(os.getenv("AO3_COOLDOWN_MAX_S", "7200"))  # 2 hours
+STRIKES_BEFORE_PAUSE = int(os.getenv("AO3_STRIKES", "3"))
+# A throttle within this long of resuming counts as "the pause did not help".
+RESUME_GRACE = 300.0
+
 
 # Cross-process coordination, via the one thing every FicAtlas process already
 # shares: Postgres.
@@ -136,6 +159,13 @@ class _Budget:
         self._clean = 0
         self.throttled = 0
         self.granted = 0
+        self._strikes = 0
+        self._paused_until = 0.0
+        self._resumed_at = 0.0
+        self._cooldown = COOLDOWN_BASE
+        # Rises only when a cooldown fails to help, so a site that genuinely
+        # wants us slower keeps us slower across recoveries.
+        self._floor = BASE_INTERVAL
 
     def wait(self) -> None:
         """Block until this caller may make one request against self.host."""
@@ -159,34 +189,81 @@ class _Budget:
             time.sleep(delay)
 
     def penalise(self, retry_after: float | None = None) -> None:
-        """AO3 refused someone. Everyone slows down."""
+        """AO3 refused someone. Everyone slows down, and past a point stops."""
+        cooldown = 0.0
         with self._lock:
             self.throttled += 1
             self._clean = 0
+            self._strikes += 1
             before = self.interval
             self.interval = min(self.interval * BACKOFF, MAX_INTERVAL)
             # Honour Retry-After against the shared queue, not just the caller
             # that happened to receive it — the limit is on the process.
             pause = retry_after if retry_after is not None else self.interval
+
+            # Throttled again shortly after a cooldown means the pause did not
+            # help, so the next one is longer and the base rate itself moves.
+            resumed_recently = (self._resumed_at > 0
+                                and time.monotonic() - self._resumed_at < RESUME_GRACE)
+            if self._strikes >= STRIKES_BEFORE_PAUSE or self.interval >= MAX_INTERVAL:
+                if resumed_recently:
+                    self._cooldown = min(self._cooldown * 2, COOLDOWN_MAX)
+                    self._floor = min(self._floor * 1.5, MAX_INTERVAL)
+                else:
+                    self._cooldown = COOLDOWN_BASE
+                cooldown = self._cooldown
+                self._paused_until = time.monotonic() + cooldown
+                self._strikes = 0
+                # Resume at the base rate, not the punished one. The point of
+                # stopping is that the window drains; carrying the 60s interval
+                # through the pause would waste what the pause bought.
+                self.interval = max(BASE_INTERVAL, self._floor)
+                pause = cooldown
             self._next = max(self._next, time.monotonic() + pause)
         # Publish the penalty so OTHER processes back off as well. Without this
         # a script would keep its own optimistic interval while the worker was
         # being told to slow down, which is the failure the shared row exists to
         # prevent.
         _publish_penalty(self.host, self.interval, pause)
+        if cooldown:
+            log.warning(f"{self.host}: throttled repeatedly — stopping for "
+                        f"{cooldown / 60:.0f} min, then resuming at "
+                        f"{self.interval:.1f}s (AO3 asks for ~15 min)")
         if self.interval != before:
             log.info(f"AO3 budget: 429 -> interval {before:.1f}s to {self.interval:.1f}s")
 
     def reward(self) -> None:
         with self._lock:
+            # A clean response is the end of a strike run: strikes count
+            # CONSECUTIVE refusals, so one success means the burst is over.
+            self._strikes = 0
+            if self._paused_until and time.monotonic() >= self._paused_until:
+                self._paused_until = 0.0
+                self._resumed_at = time.monotonic()
             self._clean += 1
-            if self._clean >= RECOVER_AFTER and self.interval > BASE_INTERVAL:
+            floor = max(BASE_INTERVAL, self._floor, MIN_INTERVAL)
+            if self._clean >= RECOVER_AFTER and self.interval > floor:
                 self._clean = 0
-                self.interval = max(self.interval * RECOVER, BASE_INTERVAL, MIN_INTERVAL)
+                self.interval = max(self.interval * RECOVER, floor)
+
+    def paused_for(self) -> float:
+        """Seconds until this host may be asked again, 0 if it may be asked now.
+
+        For callers that must not block. A background loop is happy to sleep out
+        a fifteen-minute cooldown; a reader's search is not, and the live top-up
+        runs on that path — so it checks this and simply skips AO3 for that
+        search rather than holding the request open.
+        """
+        with self._lock:
+            if not self._paused_until:
+                return 0.0
+            left = self._paused_until - time.monotonic()
+            return max(0.0, left)
 
     def snapshot(self) -> dict:
         return {"interval": round(self.interval, 2), "granted": self.granted,
-                "throttled": self.throttled}
+                "throttled": self.throttled,
+                "paused_for": round(self.paused_for(), 1)}
 
 
 BUDGET = _Budget()
@@ -200,6 +277,11 @@ async def await_slot() -> None:
     """Async callers get the same budget; the wait itself is off the loop."""
     import asyncio
     await asyncio.to_thread(BUDGET.wait)
+
+
+def paused_for(base_url: str | None = None) -> float:
+    """Seconds until `base_url` may be requested, 0 if now. Non-blocking."""
+    return for_host(base_url).paused_for() if base_url else BUDGET.paused_for()
 
 
 def note_response(status_code: int, retry_after: str | None = None) -> None:
