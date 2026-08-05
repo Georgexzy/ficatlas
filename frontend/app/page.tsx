@@ -358,6 +358,16 @@ function StoryCard({ story }: { story: StoryCard }) {
           <Link href={`/story/${story.id}`} className="card__title">{story.title}</Link>
           <div className="card__badges">
             <span className={`badge badge--site-${story.site}`}>{SITE_LABELS[story.site] ?? story.site}</span>
+            {/* Only ever set in an admin's results — the API drops delisted rows
+                for everyone else. Loud on purpose: this card is invisible to
+                every reader, and an operator scanning results needs to know
+                that at a glance rather than wondering why nobody can find it. */}
+            {story.delisted && (
+              <span className="badge badge--delisted"
+                title="Removed from the public index at the author's request. Only you can see this.">
+                Delisted
+              </span>
+            )}
             {/* FictionAlley was five archives behind one banner and readers
                 navigated by them, so the section is as identifying as the
                 site name. Clickable, like every other facet on a card. */}

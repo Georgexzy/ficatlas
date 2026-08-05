@@ -10,13 +10,14 @@ import SiteHeader from "../SiteHeader"
 // words, no legal vocabulary, and an answer that says what actually happened
 // rather than "your ticket has been received".
 export default function TakedownPage() {
-  const [sent, setSent] = useState<null | { hidden: boolean; message: string }>(null)
+  const [sent, setSent] = useState<null | { hidden: boolean; delisted?: boolean; message: string }>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [penName, setPenName] = useState("")
   const [hosted, setHosted] = useState<any[]>([])
   const [checked, setChecked] = useState(false)
   const [checking, setChecking] = useState(false)
+  const [delist, setDelist] = useState(false)
 
   async function runCheck() {
     if (penName.trim().length < 2) return
@@ -48,9 +49,11 @@ export default function TakedownPage() {
     return (
       <div className="page-prose">
         <SiteHeader />
-        <h1>{sent.hidden ? "The story has been taken down" : "Your request has been sent"}</h1>
+        <h1>{sent.hidden || sent.delisted
+          ? "The story has been taken down"
+          : "Your request has been sent"}</h1>
         <p>{sent.message}</p>
-        {!sent.hidden && (
+        {!sent.hidden && !sent.delisted && (
           <p className="page-prose__muted">
             We could not match that address to a story whose text we host — it may
             already be listing-only, in which case there is no text to remove. We
@@ -76,9 +79,9 @@ export default function TakedownPage() {
         you do not have to prove anything first.
       </p>
       <p className="page-prose__muted">
-        The story stays listed as a title, author and link, so readers can still
-        find your work where you publish it now. If you want the listing gone as
-        well, say so below.
+        By default the story stays listed as a title, author and link, so readers
+        can still find your work where you publish it now. There is a box below
+        to remove the listing as well.
       </p>
 
       {/* Says plainly what we do and do not do with this form. Two reasons it
@@ -169,10 +172,26 @@ export default function TakedownPage() {
           </select>
         </label>
 
+        {/* The page has always said "if you want the listing gone as well, say
+            so below", and for a long time there was nothing behind that
+            sentence — the message reached a human and no mechanism existed.
+            A checkbox instead of a sentence in a free-text box, because a
+            request typed in prose only works if somebody reads it. */}
+        <label className="takedown-form__check">
+          <input type="checkbox" name="delist" value="true"
+            checked={delist} onChange={e => setDelist(e.target.checked)} />
+          <span>
+            <strong>Remove the listing too.</strong> By default the title,
+            author and a link to where you publish stay, so readers can still
+            find your work at its own home. Tick this and the entry disappears
+            from search entirely.
+          </span>
+        </label>
+
         <label>
           <span>Anything you want to add <em>(optional)</em></span>
           <textarea name="detail" rows={4}
-            placeholder="For example: please remove the listing too." />
+            placeholder="Anything you would like us to know." />
         </label>
 
         {error && <p className="takedown-form__error">{error}</p>}

@@ -107,6 +107,7 @@ async def submit_takedown(
     email: str = Form(...),
     relationship: str = Form("author"),
     detail: str = Form(""),
+    delist: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     """Accept a takedown request and hide the story's text immediately."""
@@ -139,17 +140,34 @@ async def submit_takedown(
                      .first())
 
     hidden = False
+    delisted = False
     throttled = False
-    if story is not None and story.is_hosted and story.text_withdrawn_at is None:
+    if story is not None:
         recent = db.execute(_RECENT_AUTOHIDES).scalar() or 0
         if recent >= AUTOHIDE_MAX_PER_HOUR:
             throttled = True
             log.warning(f"takedown auto-hide ceiling reached ({recent} in the last "
-                        f"hour) — recording without hiding: {story_url[:120]}")
+                        f"hour) — recording without acting: {story_url[:120]}")
         else:
-            story.text_withdrawn_at = datetime.utcnow()
-            story.text_withdrawn_reason = "takedown request"
-            hidden = True
+            if story.is_hosted and story.text_withdrawn_at is None:
+                story.text_withdrawn_at = datetime.utcnow()
+                story.text_withdrawn_reason = "takedown request"
+                hidden = True
+            # Delisting is opt-in, because it is not the better answer by
+            # default. The listing is a title, an author and a link to where the
+            # work actually lives, so leaving it keeps the author findable —
+            # removing it makes them harder to find, which is rarely what
+            # someone objecting to a rehost actually wants. But the form has
+            # always offered it, and an author who asks has a reason.
+            #
+            # Auto-applied like the text hide, and for the same reason: making
+            # someone wait days for the specific thing they asked for is the
+            # failure mode auto-action exists to avoid. Reversible, under the
+            # same hourly ceiling, and never a delete.
+            if delist and story.delisted_at is None:
+                story.delisted_at = datetime.utcnow()
+                story.delisted_reason = "takedown request"
+                delisted = True
 
     db.execute(sql_text("""
         INSERT INTO takedowns (story_id, story_url, claimant, email, relationship,
@@ -167,15 +185,22 @@ async def submit_takedown(
     db.commit()
 
     log.info(f"takedown submitted for {story_url[:120]} "
-             f"(matched={'yes' if story else 'no'}, hidden={hidden})")
+             f"(matched={'yes' if story else 'no'}, hidden={hidden}, "
+             f"delisted={delisted})")
 
     return {
         "received": True,
         "matched": story is not None,
         "hidden": hidden,
+        "delisted": delisted,
         # Told plainly, because the person submitting this wants to know it
         # actually did something, not that it entered a queue.
         "message": (
+            "The story has been removed from FicAtlas — the text is gone and the "
+            "listing no longer appears in search."
+            if hidden and delisted else
+            "The listing has been removed and no longer appears in search."
+            if delisted else
             "The story text has been taken down and is no longer readable here."
             if hidden else
             "Your request has been recorded and a person will action it shortly. "
@@ -252,7 +277,7 @@ async def list_takedowns(state: str = "pending", limit: int = 100,
 
 @router.post("/{takedown_id}/resolve")
 async def resolve_takedown(takedown_id: str, uphold: bool = Form(True),
-                           note: str = Form(""),
+                           note: str = Form(""), delist: bool = Form(False),
                            db: Session = Depends(get_db),
                            admin: User = Depends(require_admin)):
     """Uphold (text stays down) or reject (text comes back)."""
@@ -267,9 +292,17 @@ async def resolve_takedown(takedown_id: str, uphold: bool = Form(True),
             if uphold:
                 story.text_withdrawn_at = story.text_withdrawn_at or datetime.utcnow()
                 story.text_withdrawn_reason = "takedown upheld"
+                if delist:
+                    story.delisted_at = story.delisted_at or datetime.utcnow()
+                    story.delisted_reason = "takedown upheld"
             else:
+                # Rejecting restores BOTH, so "reject" means what it says. Leaving
+                # a delisting in place after rejecting the request would make a
+                # work unfindable with no record of anyone having decided that.
                 story.text_withdrawn_at = None
                 story.text_withdrawn_reason = None
+                story.delisted_at = None
+                story.delisted_reason = None
 
     db.execute(sql_text("""
         UPDATE takedowns SET state = :st, resolved_at = now(), resolved_by = :by,

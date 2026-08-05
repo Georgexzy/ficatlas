@@ -10,6 +10,8 @@ from pydantic import BaseModel
 
 from db.session import get_db
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
+from models.user import User, ROLE_ADMIN
+from api.auth import get_current_user
 from query_parser import parse_query, parsed_to_search_params
 import re
 from character_aliases import character_variants, relationship_variants
@@ -183,6 +185,9 @@ class StoryCard(BaseModel):
     updated_at: Optional[str] = None
     is_live: bool = False          # true = came from live fetch, not index
     is_hosted: bool = False        # true = full text stored locally, one-click reader
+    # Set only in an admin's results: the public filter removes delisted rows
+    # entirely, so a card carrying this is one an operator is reviewing.
+    delisted: bool = False
     # Which section of a multi-part archive this came from — FictionAlley's
     # Schnoogle / The Dark Arts / Astronomy Tower / Riddikulus / essays.
     archive_section: Optional[str] = None
@@ -382,6 +387,7 @@ async def search(
     per_page:              int           = Query(20, ge=1, le=100),
     live:                  bool          = Query(True, description="Enable hybrid live fetch"),
     db: Session = Depends(get_db),
+    viewer: Optional[User] = Depends(get_current_user),
 ):
     # ── Parse q for embedded operators ───────────────────────────────────────
     parsed_tokens = []
@@ -424,6 +430,21 @@ async def search(
     # ── Build DB query ────────────────────────────────────────────────────────
     db_query = db.query(Story)
     filters  = []
+
+    # Delisted works are hidden from the public, not from the operator.
+    #
+    # Applied at the base of the query rather than at each call site, so no route
+    # — random, related-works, live top-up — can reintroduce a row an author
+    # asked to have removed. Missing one would mean the listing is gone from the
+    # page the author checked and present everywhere else.
+    #
+    # An admin still sees them, flagged, because someone has to be able to review
+    # what the auto-delist did. A request can be mistaken or malicious, and
+    # hiding them from the person who has to judge them would make the reversal
+    # the policy promises impossible to carry out.
+    is_operator = viewer is not None and viewer.at_least(ROLE_ADMIN)
+    if not is_operator:
+        filters.append(Story.delisted_at.is_(None))
 
     if site_enums:
         filters.append(Story.site.in_(site_enums))
@@ -813,7 +834,7 @@ async def random_stories(
     min_w = min_words or 1000
     fandom_pat = f"%{fandom.strip()}%" if fandom else None
 
-    where = ["word_count > :min_w"]
+    where = ["word_count > :min_w", "delisted_at IS NULL"]
     params: dict = {"min_w": min_w, "count": count}
     if fandom_pat:
         where.append("fic_arr(fandoms) ILIKE :fandom_pat")
@@ -836,7 +857,8 @@ async def random_stories(
 
     # Fallback: whole-table scan. Only reached for filters too rare to show up in a
     # 3% page sample, where correctness matters more than the latency.
-    q = db.query(Story).filter(Story.word_count > min_w)
+    q = db.query(Story).filter(Story.word_count > min_w,
+                               Story.delisted_at.is_(None))
     if fandom_pat:
         q = q.filter(_arr_text(Story.fandoms).ilike(fandom_pat))
     return [_to_card(s) for s in q.order_by(func.random()).limit(count).all()]
@@ -867,6 +889,10 @@ def _to_card(s: Story) -> StoryCard:
         updated_at=s.updated_at.isoformat() if s.updated_at else None,
         is_live=False,
         is_hosted=bool(s.is_hosted),
+        # Only ever non-null in an admin's results — the public filter above
+        # removes these rows entirely, so a card carrying this flag is one an
+        # operator is looking at in order to decide whether to reverse it.
+        delisted=s.delisted_at is not None,
         archive_section=s.archive_section,
         cross_post_urls=s.cross_post_urls or [],
     )

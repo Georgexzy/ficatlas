@@ -1059,6 +1059,15 @@ kbd {
   /* Touch-friendly tap targets inside the drawer */
   .sidebar select, .sidebar .input-sm, .sidebar input[type="text"],
   .sidebar input[type="number"] { min-height: 40px; font-size: 15px; }
+
+  /* A section heading is the control you use most in the drawer and it was the
+     smallest: 13px text with 6px padding is a 31px row, under the 44px every
+     touch guideline asks for, with a chevron that read as punctuation. Sized
+     for a thumb, and the arrow given enough weight to say "this opens". */
+  .filter-section__toggle {
+    padding: 11px 14px; font-size: 14px; min-height: 44px;
+  }
+  .filter-section__chevron { font-size: 17px; opacity: 0.9; }
   .curated-check, .site-check, .filter-check { padding: 6px 0; }
 
   .main { padding: 12px 14px 32px; }
@@ -2604,6 +2613,24 @@ body.is-resizing * { cursor: col-resize !important; }
   border-left: 3px solid var(--accent);
 }
 .library-note--private strong { color: var(--text); }
+
+/* A listing withdrawn at the author's request, visible only to an operator. */
+.badge--delisted {
+  background: color-mix(in srgb, var(--danger, #d9534f) 18%, transparent);
+  color: var(--danger, #d9534f);
+  border: 1px solid color-mix(in srgb, var(--danger, #d9534f) 45%, transparent);
+  font-weight: 600;
+}
+
+/* The "remove the listing too" opt-in on the takedown form. */
+.takedown-form__check {
+  flex-direction: row; align-items: flex-start; gap: 10px;
+  font-size: 13px; line-height: 1.55; color: var(--text-dim);
+  padding: 12px; border-radius: 8px;
+  background: var(--surface2); border: 1px solid var(--border);
+}
+.takedown-form__check input { margin-top: 3px; accent-color: var(--accent); flex-shrink: 0; }
+.takedown-form__check strong { color: var(--text); }
 
 /* Live-ish counter in the index panel — the index grows while you use it. */
 .index-status__live { color: var(--accent); }

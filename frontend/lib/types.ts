@@ -35,6 +35,8 @@ export interface StoryCard {
   updated_at?: string
   is_live?: boolean
   is_hosted?: boolean
+  /** Only ever true for an admin: the API removes these rows for everyone else. */
+  delisted?: boolean
   /** FictionAlley section: Schnoogle, The Dark Arts, Astronomy Tower, Riddikulus. */
   archive_section?: string | null
   cross_post_urls?: string[]

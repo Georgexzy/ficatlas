@@ -93,6 +93,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_chapters_story_number ON chapters (story_id
 
 -- Idempotent schema additions for existing deployments
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS cross_post_urls TEXT[] DEFAULT '{}';
+
+-- Delisting: the metadata entry itself withdrawn, not just the hosted text.
+--
+-- text_withdrawn_at hides the story's TEXT and leaves the listing, which is the
+-- right default: the listing is a title, an author and a link to where the work
+-- actually lives, so it keeps the author findable. But the takedown form has
+-- always offered "if you want the listing gone as well, say so below", and
+-- there was nothing behind that sentence. An author who asks for their name off
+-- the index has a reason, and a search engine that cannot honour it is one that
+-- made a promise it could not keep.
+--
+-- A flag rather than a delete, for the same reason takedowns never delete: the
+-- row is needed for dedup and cross-post matching, and a mistaken or malicious
+-- request has to be reversible.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS delisted_at TIMESTAMPTZ;
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS delisted_reason TEXT;
+-- Partial: delisted rows are a vanishing fraction of 19.7M, and every search
+-- adds "AND delisted_at IS NULL", so the useful index is the one over the few
+-- rows that are set.
+CREATE INDEX IF NOT EXISTS ix_stories_delisted ON stories (id) WHERE delisted_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_stories_cross_post_urls ON stories USING gin (cross_post_urls);
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
