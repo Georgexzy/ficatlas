@@ -2698,6 +2698,50 @@ body.is-resizing * { cursor: col-resize !important; }
   background: var(--accent); color: #fff;
 }
 
+/* Per-book actions, top-right of a cover. Always present rather than
+   hover-revealed: there is no hover on a phone, and a control you cannot find
+   is one that does not exist. */
+.book__actions {
+  position: absolute; top: 6px; right: 6px;
+  display: flex; gap: 4px; z-index: 2;
+}
+.book__offline, .book__actions .book__remove {
+  position: static;
+  width: 28px; height: 28px; min-width: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 999px; border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  color: var(--text-dim); font-size: 13px; line-height: 1;
+  cursor: pointer; transition: background .12s, color .12s, border-color .12s;
+}
+.book__offline:hover { color: var(--text); border-color: var(--accent); }
+.book__offline.is-yes {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.book__offline.is-busy { color: var(--accent); cursor: progress; }
+.book__offline.is-error { color: var(--danger, #d9534f); border-color: var(--danger, #d9534f); }
+/* Holds the slot while the IndexedDB lookup resolves, so the row does not jump. */
+.book__offline--ghost { border-color: transparent; background: none; }
+.book__offline-count { font-size: 9px; font-weight: 600; letter-spacing: -0.02em; }
+
+/* .book is already position:relative above, which is what the actions anchor to. */
+
+@media (max-width: 700px) {
+  /* Comfortably tappable without covering the title on a 2-column grid. */
+  .book__offline, .book__actions .book__remove { width: 32px; height: 32px; min-width: 32px; }
+}
+
+/* Shelf ordering control. Sits above the covers, wraps on a phone. */
+.shelf-sort {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin: 0 0 16px;
+}
+.shelf-sort__label {
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--text-faint); margin-right: 4px;
+}
+
 /* Live-ish counter in the index panel — the index grows while you use it. */
 .index-status__live { color: var(--accent); }
 

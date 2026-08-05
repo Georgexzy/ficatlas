@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef } from "react"
 import Link from "next/link"
 import OfflineLink from "../OfflineLink"
-import { listOfflineStories, deleteOfflineStory } from "@/lib/offline"
+import { listOfflineStories, deleteOfflineStory, isStoryOffline, downloadStoryForOffline } from "@/lib/offline"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 import { pollJob } from "@/lib/pollJob"
@@ -90,10 +90,56 @@ const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
 interface Bookmark { id: string; title: string; author: string; site: string; url: string; savedAt: string }
 interface ProgressEntry { chapter: number; at: string; title: string }
-interface HostedStory { id: string; title: string; author: string; site: string; word_count: number; chapter_count: number; summary?: string; tags: string[] }
+interface HostedStory { id: string; title: string; author: string; site: string; word_count: number; chapter_count: number; summary?: string; tags: string[]; indexed_at?: string | null; added_at?: string | null }
 // "searches" is gone — recent searches now sit under the search bar, which is
 // where you are when you want to re-run one.
 type Tab = "hosted" | "mine" | "bookmarks" | "reading" | "offline" | "import"
+
+// Shelf ordering, in the shape Apple Books uses — and for the same reason: a
+// shelf of covers has no inherent order, so whatever it defaults to IS the
+// order as far as the reader is concerned, and they need to be able to change
+// it. Recently added first, because on a shelf that grows by importing, the
+// thing you just added is the thing you came to open.
+//
+// "Recently read" only appears where reading progress exists to sort by, and
+// "Length" is here because on this shelf a 500k-word novel and a 2k one-shot
+// look identical as covers.
+type SortKey = "added" | "title" | "author" | "words" | "read"
+
+const SORTS: { id: SortKey; label: string }[] = [
+  { id: "added",  label: "Recently added" },
+  { id: "read",   label: "Recently read" },
+  { id: "title",  label: "Title" },
+  { id: "author", label: "Author" },
+  { id: "words",  label: "Length" },
+]
+
+/** Sort a shelf without mutating it. `stamp` supplies the per-story recency
+ *  used by "added" and "read" — the shelves store those differently (indexed_at,
+ *  added_at, savedAt), so the caller says which one it means. */
+function sortShelf<T extends { id: string; title: string; author?: string; word_count?: number }>(
+  items: T[], key: SortKey,
+  stamp: (s: T) => number,
+  readAt: (s: T) => number,
+): T[] {
+  const out = [...items]
+  // localeCompare so "Ángel" files next to "Angel" rather than after "Zoe", and
+  // numeric so "Chapter 2" precedes "Chapter 10".
+  const cmpText = (a: string, b: string) =>
+    a.localeCompare(b, undefined, { sensitivity: "base", numeric: true })
+  // Titles file under the first word that carries meaning, which is how a
+  // shelf of books is ordered everywhere else.
+  const fileAs = (t: string) => t.replace(/^(the|a|an)\s+/i, "").trim() || t
+  switch (key) {
+    case "title":  out.sort((a, b) => cmpText(fileAs(a.title), fileAs(b.title))); break
+    case "author": out.sort((a, b) => cmpText(a.author || "", b.author || "")
+                                   || cmpText(fileAs(a.title), fileAs(b.title))); break
+    case "words":  out.sort((a, b) => (b.word_count || 0) - (a.word_count || 0)); break
+    case "read":   out.sort((a, b) => readAt(b) - readAt(a)); break
+    default:       out.sort((a, b) => stamp(b) - stamp(a))
+  }
+  return out
+}
 
 export default function LibraryPage() {
   const { user, loading: authLoading } = useAuth()
@@ -113,6 +159,17 @@ export default function LibraryPage() {
   // things: `hosted` is what anyone may read, `mine` is what only you may.
   const [mine, setMine] = useState<HostedStory[]>([])
   const [mineTotal, setMineTotal] = useState(0)
+  // One setting across the shelves rather than one each: they hold the same
+  // kind of thing, and a reader who files by author means it for all of them.
+  const [sortKey, setSortKey] = useState<SortKey>("added")
+  useEffect(() => {
+    const saved = localStorage.getItem("ficatlas:shelf_sort") as SortKey | null
+    if (saved && SORTS.some(s => s.id === saved)) setSortKey(saved)
+  }, [])
+  const chooseSort = (k: SortKey) => {
+    setSortKey(k)
+    try { localStorage.setItem("ficatlas:shelf_sort", k) } catch {}
+  }
   const [loadingMore, setLoadingMore] = useState(false)
   const [tab, setTab] = useState<Tab>("hosted")
   const [offlineStories, setOfflineStories] = useState<any[]>([])
@@ -136,6 +193,16 @@ export default function LibraryPage() {
       { method: "DELETE", credentials: "include" })
     if (r.ok) { setMine(m => m.filter(x => x.id !== id)); setMineTotal(t => Math.max(0, t - 1)) }
   }
+
+  // Reading recency comes from the progress map, which is keyed by story id and
+  // is the same source the "Reading" tab uses — so "recently read" means the
+  // same thing everywhere rather than being re-derived per shelf.
+  const ts = (v?: string | null) => (v ? Date.parse(v) || 0 : 0)
+  const readAt = (x: { id: string }) => ts(progress[x.id]?.at)
+  const hostedSorted  = sortShelf(hosted, sortKey, x => ts(x.indexed_at), readAt)
+  const mineSorted    = sortShelf(mine,   sortKey, x => ts(x.added_at),   readAt)
+  const offlineSorted = sortShelf(offlineStories as any[], sortKey,
+                                  x => (x as any).savedAt ?? 0, readAt)
   const removeOfflineStory = async (id: string) => {
     await deleteOfflineStory(id).catch(() => {})
     setOfflineStories(s => s.filter(x => x.id !== id))
@@ -716,6 +783,11 @@ export default function LibraryPage() {
         )}
       </div>
 
+      {(tab === "hosted" || tab === "mine" || tab === "offline") && (
+        <ShelfSort value={sortKey} onChange={chooseSort}
+          hasProgress={Object.keys(progress).length > 0} />
+      )}
+
       {tab === "hosted" && (
         <div className="books-shelf">
           {hosted.length === 0
@@ -735,7 +807,7 @@ export default function LibraryPage() {
             : (
               <>
                 <div className="books-grid">
-                  {hosted.map(s => <BookCover key={s.id} story={s} onDelete={deleteHosted}
+                  {hostedSorted.map(s => <BookCover key={s.id} story={s} onDelete={deleteHosted}
                     progress={progress[s.id]} />)}
                 </div>
                 {hosted.length < hostedTotal && (
@@ -779,7 +851,7 @@ export default function LibraryPage() {
           ) : (
             <>
               <div className="books-grid">
-                {mine.map(s => <BookCover key={s.id} story={s} onDelete={removeMine}
+                {mineSorted.map(s => <BookCover key={s.id} story={s} onDelete={removeMine}
                   progress={progress[s.id]} />)}
               </div>
               {mine.length < mineTotal && (
@@ -860,7 +932,7 @@ export default function LibraryPage() {
                   Saved on this device and readable with no connection. Stored in your browser —
                   clearing site data removes them.
                 </p>
-                {offlineStories.map(s => {
+                {offlineSorted.map((s: any) => {
                   const p = progress[s.id]
                   const href = p?.chapter ? `/story/${s.id}/chapter/${p.chapter}` : `/story/${s.id}/chapter/1`
                   return (
@@ -1397,6 +1469,32 @@ const COVER_GRADIENTS = [
   ["#1f2d3a", "#3a5a7a"],   // navy mist
 ]
 
+// The sort control, as a row of pills rather than a <select>.
+//
+// A select hides the current value behind a tap and hides the alternatives
+// entirely, which on a shelf — where the ordering IS the interface — makes the
+// one setting that matters the least visible thing on the page. Five short
+// options fit on a phone row and wrap when they do not.
+function ShelfSort({ value, onChange, hasProgress }: {
+  value: SortKey; onChange: (k: SortKey) => void; hasProgress: boolean
+}) {
+  // "Recently read" with nothing read sorts everything to a tie and looks
+  // broken, so it only appears once there is progress to sort by.
+  const opts = SORTS.filter(o => o.id !== "read" || hasProgress)
+  return (
+    <div className="shelf-sort" role="group" aria-label="Sort shelf">
+      <span className="shelf-sort__label">Sort</span>
+      {opts.map(o => (
+        <button key={o.id} onClick={() => onChange(o.id)}
+          aria-pressed={value === o.id}
+          className={`pill ${value === o.id ? "pill--on" : ""}`}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function BookCover({ story, onDelete, progress }: {
   story: HostedStory; onDelete: (id: string, title: string) => void;
   progress?: { chapter: number; totalChapters?: number; scrollPct?: number }
@@ -1449,8 +1547,70 @@ function BookCover({ story, onDelete, progress }: {
           {pct !== null ? label : `${story.chapter_count} ch · ${(story.word_count/1000).toFixed(0)}k words`}
         </p>
       </div>
-      <button className="book__remove" title="Remove from library"
-        onClick={(e) => { e.preventDefault(); onDelete(story.id, story.title) }}>✕</button>
+      <div className="book__actions">
+        <OfflineToggle storyId={story.id} />
+        <button className="book__remove" title="Remove from library"
+          onClick={(e) => { e.preventDefault(); onDelete(story.id, story.title) }}>✕</button>
+      </div>
     </div>
+  )
+}
+
+// Save-for-offline, on the cover itself.
+//
+// It already existed, but only on a story's own page — so keeping a shelf of
+// books for a journey meant opening each one, finding the button, and coming
+// back. The shelf is where you decide what to take with you, so the control
+// belongs there.
+//
+// Three states and no dialog: not saved, downloading with a count, saved. The
+// download is chapter-by-chapter and a long novel is hundreds of requests, so
+// showing progress is not decoration — without it the button looks stuck.
+function OfflineToggle({ storyId }: { storyId: string }) {
+  const [state, setState] = useState<"unknown" | "no" | "busy" | "yes">("unknown")
+  const [done, setDone] = useState<{ n: number; total: number } | null>(null)
+  const [err, setErr] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    isStoryOffline(storyId)
+      .then(v => { if (alive) setState(v ? "yes" : "no") })
+      .catch(() => { if (alive) setState("no") })
+    return () => { alive = false }
+  }, [storyId])
+
+  if (state === "unknown") return <span className="book__offline book__offline--ghost" />
+
+  const toggle = async (e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation()
+    setErr(false)
+    if (state === "yes") {
+      await deleteOfflineStory(storyId).catch(() => {})
+      setState("no"); setDone(null)
+      return
+    }
+    setState("busy")
+    try {
+      await downloadStoryForOffline(storyId, (n, total) => setDone({ n, total }))
+      setState("yes")
+    } catch {
+      // Most likely a story whose text we do not hold — the shelf shows those
+      // too. Say so on the control rather than with an alert that interrupts.
+      setErr(true); setState("no")
+    } finally { setDone(null) }
+  }
+
+  const label = err ? "Could not save — the text is not available here"
+    : state === "yes" ? "Saved on this device — tap to remove"
+    : state === "busy" ? "Saving…"
+    : "Save to this device for reading offline"
+
+  return (
+    <button className={`book__offline is-${err ? "error" : state}`}
+      onClick={toggle} disabled={state === "busy"} title={label} aria-label={label}>
+      {state === "busy"
+        ? <span className="book__offline-count">{done ? `${done.n}/${done.total}` : "…"}</span>
+        : <span aria-hidden="true">{err ? "!" : state === "yes" ? "✓" : "⤓"}</span>}
+    </button>
   )
 }

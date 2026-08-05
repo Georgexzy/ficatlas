@@ -1077,8 +1077,13 @@ function SearchPageInner() {
   // when something the search depends on actually changes.
   const [appliedSig, setAppliedSig] = useState<string | null>(null)
 
-  const buildParams = useCallback((pg: number): SearchParams => {
-    const pq = parseQuery(query)
+  const buildParams = useCallback((pg: number, queryOverride?: string): SearchParams => {
+    // queryOverride exists for the same reason explicitPage does, one function
+    // down: React state is not readable in the tick you set it. Picking a recent
+    // search called setQuery(q) and then doSearch(), and doSearch — a callback
+    // captured in the render where query was still "" — searched for nothing.
+    // That is the "first click does an empty search, second click works" bug.
+    const pq = parseQuery(queryOverride ?? query)
     const merge = (sidebar: string[], parsed: string[]) =>
       [...new Set([...sidebar, ...parsed.filter(v => !sidebar.includes(v))])]
 
@@ -1137,7 +1142,8 @@ function SearchPageInner() {
   ])
   const filtersDirty = appliedSig !== null && appliedSig !== filterSig
 
-  const doSearch = useCallback(async (resetPage = true, explicitPage?: number) => {
+  const doSearch = useCallback(async (resetPage = true, explicitPage?: number,
+                                      explicitQuery?: string) => {
     // explicitPage lets pagination pass the target page directly, avoiding the
     // stale-closure bug where setPage(p=>p+1) hadn't flushed before doSearch ran.
     hasSearchedRef.current = true   // filter changes start queueing from here on
@@ -1145,7 +1151,7 @@ function SearchPageInner() {
     const pg = explicitPage ?? (resetPage ? 1 : page)
     if (resetPage) setPage(1)
     else if (explicitPage) setPage(explicitPage)
-    const p = buildParams(pg)
+    const p = buildParams(pg, explicitQuery)
 
     const qs = new URLSearchParams()
     for (const [k, v] of Object.entries(p)) {
@@ -1162,9 +1168,11 @@ function SearchPageInner() {
     setError(null)
 
     // Save to recent searches
-    if (query.trim()) {
+    const effectiveQuery = explicitQuery ?? query
+    if (effectiveQuery.trim()) {
       const recents = JSON.parse(localStorage.getItem("ficatlas:recent-searches") ?? "[]")
-      const next = [query.trim(), ...recents.filter((q: string) => q !== query.trim())].slice(0, 20)
+      const next = [effectiveQuery.trim(),
+                    ...recents.filter((q: string) => q !== effectiveQuery.trim())].slice(0, 20)
       localStorage.setItem("ficatlas:recent-searches", JSON.stringify(next))
     }
 
@@ -1191,7 +1199,7 @@ function SearchPageInner() {
       // guard ref prevents looping. Only on a real query (page 1, has text/fandom).
       const indexedCount = (data as any).total ?? 0
       const thin = indexedCount < 5
-      const hasQuery = (pg === 1) && (query.trim().length > 0 || (p as any).fandoms)
+      const hasQuery = (pg === 1) && (effectiveQuery.trim().length > 0 || (p as any).fandoms)
       // Admin-gated server-side, so for a logged-out visitor this fired a 401
       // on every thin result set — and they saw no benefit either way, since
       // the deepened results only appear after the re-search it triggers.
@@ -1719,7 +1727,15 @@ function SearchPageInner() {
                 <SyntaxHelp onInsert={insertSyntax} />
                 <RecentSearches
                   open={searchFocused && !query.trim()}
-                  onPick={q => { setSearchFocused(false); setQuery(q); setTimeout(() => doSearch(), 0) }}
+                  // The query goes to doSearch directly rather than via state:
+                  // setQuery has not flushed yet when this runs, and waiting a
+                  // tick would not help either, because doSearch is captured
+                  // from this render.
+                  onPick={q => {
+                    setSearchFocused(false)
+                    setQuery(q)
+                    doSearch(true, undefined, q)
+                  }}
                   onDismiss={() => setSearchFocused(false)} />
               </div>
               <button className="search-btn" onClick={() => doSearch()} disabled={loading}>
