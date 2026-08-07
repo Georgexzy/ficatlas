@@ -140,6 +140,39 @@ def parse_position(summary: str | None) -> int | None:
     return int(raw) if raw.isdigit() else _ROMAN.get(raw)
 
 
+def load_facet_names(db, min_count: int = 200) -> set[str]:
+    """Normalised fandom, character and ship names, for rejecting them as stems.
+
+    A stem that IS the name of a fandom is not a series. Real output included six
+    separate "Harry Potter" series — "Harry Potter and the Travelers Destiny",
+    "and the Prophesised One", "and the Raven" — which is a title convention that
+    half the fandom follows, not a sequence by one author.
+
+    Taken from the facets table, so it covers every fandom, character and ship
+    the index knows rather than a list somebody has to maintain. The floor keeps
+    out one-off tags: a "fandom" with three works is not a naming convention.
+    """
+    try:
+        rows = db.execute(sql_text(
+            "SELECT DISTINCT lower(value) FROM facets "
+            "WHERE kind IN ('fandom','fandom_ao3','character','relationship') "
+            "AND count >= :n"), {"n": min_count}).fetchall()
+    except Exception as e:
+        log.warning(f"facet names unavailable ({type(e).__name__}); "
+                    f"stems will not be checked against them")
+        return set()
+    out = set()
+    for (v,) in rows:
+        n = series_titles.normalise(v)
+        if len(n) >= 3:
+            out.add(n)
+            # "Harry Potter and the ..." — the convention is the fandom name
+            # plus a connector, and the stem lands on the connector.
+            for tail in (" and the", " and", " the", " x"):
+                out.add(n + tail)
+    return out
+
+
 def build_idf(db, sample: int = 300_000) -> dict[str, float]:
     """How ordinary each title word is, from a sample of the corpus.
 
@@ -267,6 +300,8 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
         idf = build_idf(db)
         default_idf = max(idf.values()) if idf else 12.0
         log.info(f"  {len(idf):,} distinct title words sampled")
+        facet_names = load_facet_names(db)
+        log.info(f"  {len(facet_names):,} fandom/character/ship names to avoid")
 
         if only_author:
             # Lowercased to match the query above, which no longer folds it.
@@ -370,6 +405,18 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
             # title strings TOGETHER WITH a book number).
             rest = [w for w in works if w["id"] not in claimed]
             for g in series_titles.group_by_structure(rest):
+                # A stem that is just a fandom or character name is the
+                # "Fandom: Subtitle" convention, which half a fandom follows —
+                # "Harry Potter and the Travelers Destiny", "and the Prophesised
+                # One". Not a sequence by one author.
+                #
+                # But only when nothing else vouches for the group. "Batgirl 68
+                # 01 / 02 / 03" is numbered, and numbering is the author stating
+                # an order — that is a real series that happens to be named after
+                # its lead. Rejecting on the stem alone threw those away too.
+                numbered = any(pos is not None for _, pos in g["members"])
+                if g["stem"] in facet_names and not numbered:
+                    continue
                 members = [m for m, _ in g["members"]]
                 # Position from the structure itself where there is one. A work
                 # the author numbered is IN the sequence; one that merely shares
@@ -380,6 +427,12 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                     m["struct_pos"] = pos
                 stated = series_cues.stated_name([m.get("summary") for m in members])
                 name = stated or _stem_name(g["stem"], members)
+                # A kept group whose stem IS a fandom or character name — the
+                # numbered ones we deliberately no longer reject. "My Little
+                # Pony" alone reads as the fandom; " series" says this is one
+                # author's sequence within it, which is what it is.
+                if not stated and g["stem"] in facet_names:
+                    name = f"{name} series"'''
                 groups.append((name, members, 30.0, "inferred"))
 
             for name, members, score, source in groups:

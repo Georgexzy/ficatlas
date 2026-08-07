@@ -248,7 +248,11 @@ def tidy_name(name: str) -> str:
     parts = [p for p in re.split(r"\s+", name.strip()) if p]
     while parts:
         last = re.sub(r"[^\w]", "", parts[-1]).lower()
-        if last in _TRAILING_JUNK or (last.isdigit() and len(parts) > 1):
+        # Digits are NOT stripped. By this point split_position has already
+        # removed the instalment number, so anything left is part of the name:
+        # "Batgirl 68 01 / 02 / 03" has stem "Batgirl 68", and trimming the 68
+        # renamed a real series after the character it stars.
+        if last in _TRAILING_JUNK:
             parts.pop()
             continue
         break
