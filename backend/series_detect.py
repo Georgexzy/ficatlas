@@ -432,7 +432,7 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                 # Pony" alone reads as the fandom; " series" says this is one
                 # author's sequence within it, which is what it is.
                 if not stated and g["stem"] in facet_names:
-                    name = f"{name} series"'''
+                    name = f"{name} series"
                 groups.append((name, members, 30.0, "inferred"))
 
             for name, members, score, source in groups:
