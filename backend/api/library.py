@@ -541,14 +541,34 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
                 "matched_via": "cross_post" if existing.url != url else "url"}
 
     log.info(f"Fetching {url} via FicHub...")
-    meta = await fetch_from_fichub(url)
-    epub_url = (meta.get("epub_url") or
-                meta.get("urls", {}).get("epub"))
-    if not epub_url:
-        raise HTTPException(502, f"FicHub didn't return an EPUB URL: {meta}")
+    is_ao3 = "archiveofourown.org" in url
+    try:
+        meta = await fetch_from_fichub(url)
+        epub_url = (meta.get("epub_url") or
+                    meta.get("urls", {}).get("epub"))
+        if not epub_url:
+            raise HTTPException(502, f"FicHub didn't return an EPUB URL: {meta}")
 
-    epub_bytes = await fetch_epub_bytes(epub_url)
-    parsed = parse_epub(epub_bytes)
+        epub_bytes = await fetch_epub_bytes(epub_url)
+        parsed = parse_epub(epub_bytes)
+    except HTTPException as exc:
+        # FicHub throttles the whole IP, and once throttled it slow-rolls every
+        # request past the ~30s proxy timeout — an import fails without ever
+        # reaching the EPUB. AO3 works are the most common import target and
+        # have a direct route, so fall back to fetching them from AO3 itself.
+        # FF.net has no such route; re-raise with FicHub's own message.
+        if not is_ao3:
+            raise
+        log.warning("FicHub import failed (%s); falling back to direct AO3 fetch", exc.detail)
+        from ao3_import import fetch_ao3_full_work
+        parsed = await asyncio.to_thread(fetch_ao3_full_work, url)
+        meta = {}
+        if not parsed:
+            raise HTTPException(
+                502,
+                "FicHub is throttling us right now and the direct AO3 fetch also "
+                "failed. Try again in a few minutes.",
+            )
 
     # If story already exists in DB (just metadata, not hosted), upgrade it
     if existing:
