@@ -50,6 +50,17 @@ ORDINALS = {
 _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5,
           "vi": 6, "vii": 7, "viii": 8, "ix": 9, "x": 10}
 
+# "Book FOUR of the X series" — a cardinal word AFTER the marker word, the
+# mirror of _NAMED_ORDINAL's "SECOND BOOK IN". "BOOK FOUR OF THE ELIZABETH
+# KANE SERIES" was the concrete miss: the Goblet of Fire (a full book in a
+# numbered 1,2,3,6,7,8 run) got no position and sorted last. ORDINALS above is
+# the ordinal ("fourth"); this is the cardinal ("four") — both are used in the
+# wild for the same slot.
+CARDINALS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
 _ORD_WORDS = "|".join(ORDINALS)
 
 # "Third in the X series" / "3rd story in the X trilogy"
@@ -62,6 +73,16 @@ _NAMED_NUMBER = re.compile(
     r"\b(?:part|book|story|installment|instalment|volume)\s+(\d{1,2}|[ivx]{1,5})\b"
     r"\s*(?:of|in)\s+(?:the\s+)?[\"'“]?(.{2,60}?)[\"'”]?"
     r"\s*(series|trilogy|verse|saga|cycle|arc)?\s*(?:[.,;!]|$)", re.I)
+
+# "Book FOUR of the X series" / "Part two of X" — a spelled-out number AFTER
+# the marker word. _NAMED_NUMBER only takes digits/roman and _NAMED_ORDINAL
+# only takes the ordinal before "in/of the X series", so "BOOK FOUR" was the
+# gap that left an in-sequence work unnumbered.
+_NAMED_ORDINAL_AFTER = re.compile(
+    rf"\b(?:part|book|story|installment|instalment|volume)\s+"
+    rf"(\d{{1,2}}|{_ORD_WORDS}|{'|'.join(CARDINALS)})\b"
+    rf"\s+(?:of|in)\s+(?:the\s+)?[\"'“]?(.{{2,60}}?)[\"'”]?\s*"
+    r"(series|trilogy|verse|saga|cycle|arc)\b", re.I)
 
 # "the Dangerverse", "the Wastelands series" — a name with no position.
 _NAMED_BARE = re.compile(
@@ -128,6 +149,11 @@ def _clean_name(raw: str) -> str | None:
         return None
     if name.lower() in _JUNK_NAMES:
         return None
+    # "Companion to the series" / "sequel to this story" — the relative cue
+    # matched but the referent is not a title at all.
+    if name.lower() in {"series", "story", "this story", "this", "fic", "fanfic",
+                        "oneshot", "one-shot", "one shot", "work", "this work"}:
+        return None
     # A "name" that is only punctuation or digits is a parse artefact.
     if not re.search(r"[A-Za-z]{3}", name):
         return None
@@ -138,7 +164,7 @@ def _as_int(raw: str) -> int | None:
     raw = raw.strip().lower()
     if raw.isdigit():
         return int(raw)
-    return _ROMAN.get(raw) or ORDINALS.get(raw)
+    return _ROMAN.get(raw) or ORDINALS.get(raw) or CARDINALS.get(raw)
 
 
 def parse_named(summary: str | None) -> dict | None:
@@ -148,6 +174,7 @@ def parse_named(summary: str | None) -> dict | None:
     for rx, pos_group, name_group in (
         (_NAMED_ORDINAL, 1, 2),
         (_NAMED_NUMBER, 1, 2),
+        (_NAMED_ORDINAL_AFTER, 1, 2),
         (_NAMED_BARE, None, 1),
     ):
         m = rx.search(summary)
