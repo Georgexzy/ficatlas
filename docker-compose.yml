@@ -37,7 +37,8 @@ services:
       -c maintenance_work_mem=512MB
       -c random_page_cost=1.1
       -c effective_io_concurrency=200
-      -c max_parallel_workers_per_gather=2
+      -c max_parallel_workers_per_gather=1
+      -c jit=off
     # Loopback only. This was bound to 0.0.0.0, which put a Postgres with the
     # password "ficatlas" on every interface — reachable by anything on the LAN or
     # the tailnet. Nothing outside this host needs it: the backend connects over the
@@ -61,6 +62,7 @@ services:
     # shared_buffers also came down from 2GB, which was sized for a box that
     # owns its memory.
     mem_limit: 4g
+    cpus: 1.0
     shm_size: "1gb"
     ports:
       - "127.0.0.1:5432:5432"
@@ -100,6 +102,7 @@ services:
     volumes:
       - ./backend:/app
     mem_limit: 1500m
+    cpus: 0.75
 
   frontend:
     build: ./frontend
@@ -150,6 +153,7 @@ services:
     volumes:
       - ./backend:/app
     mem_limit: 1500m
+    cpus: 1.0
 
 volumes:
   pgdata:
