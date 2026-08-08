@@ -13,7 +13,7 @@ import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryP
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
 import { rememberSearch } from "@/lib/lastSearch"
-import { saveScroll, takeScroll } from "@/lib/scrollMemory"
+import { saveScroll, restoreScroll } from "@/lib/scrollMemory"
 import { describeError, type Failure } from "@/lib/errors"
 import { readAllPrefs, type Prefs } from "@/lib/prefs"
 import WordCountSlider from "./WordCountSlider"
@@ -1024,10 +1024,18 @@ function SearchPageInner() {
   // the cleanup just writes that last-known pair.
   const scrollMemoRef = useRef<{ href: string; y: number }>({ href: "", y: 0 })
   useEffect(() => {
+    let lastSave = 0
     const capture = () => {
-      scrollMemoRef.current = {
-        href: window.location.pathname + window.location.search,
-        y: window.scrollY,
+      const href = window.location.pathname + window.location.search
+      const y = window.scrollY
+      scrollMemoRef.current = { href, y }
+      // Persist continuously (throttled) so the position is already on disk
+      // before navigation, not only at unmount — the unmount cleanup can be
+      // unreliable, and a continuous write survives even if it never runs.
+      const now = Date.now()
+      if (y > 0 && now - lastSave > 150) {
+        lastSave = now
+        saveScroll(href, y)
       }
     }
     capture()
@@ -1065,11 +1073,11 @@ function SearchPageInner() {
     history.scrollRestoration = "manual"
     const restore = () => {
       if (loading || !results) return
-      const y = takeScroll(window.location.pathname + window.location.search)
-      if (y != null && y > 0) window.scrollTo({ top: y, left: 0, behavior: "instant" })
+      restoreScroll(window.location.pathname + window.location.search)
     }
     if (!loading && results) restore()          // fresh mount
-    const onPop = () => requestAnimationFrame(restore)   // back/forward via cache
+    const onPop = () => requestAnimationFrame(() =>
+      restoreScroll(window.location.pathname + window.location.search))  // back via cache
     window.addEventListener("popstate", onPop)
     return () => {
       window.removeEventListener("popstate", onPop)
