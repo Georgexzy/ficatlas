@@ -598,16 +598,28 @@ async def _dlp_pass() -> None:
         # separate matter: /api/v0/epub hands back a /cache/epub/... URL and
         # FicHub's robots.txt disallows that path, so EPUB fetching stays on the
         # Library page's explicit button rather than running unattended here.
-        missing = []
-        with db_session() as db:
-            for e in entries:
-                cand = [v for k, v in (e.get("urls") or {}).items() if k in ("ffn", "ao3")]
-                if cand and _find_indexed_story(db, cand) is None:
-                    missing.append((cand[0], e.get("dlp_tags") or []))
-        if missing:
-            batch = int(_num("DLP_IMPORT_BATCH", 25))
-            added = await asyncio.to_thread(_dlp_import_missing, missing[:batch], provenance="dlp_library")
-            log.info(f"dlp {corpus}: {len(missing)} not indexed, {added} added this pass")
+        #
+        # That is the point of the commented-out block below: an unattended bulk
+        # pass is exactly what kept the shared FicHub IP throttled and blocked
+        # user imports. FicHub throttles the whole IP, not one caller, and a
+        # ~25-URL batch every pass tripped 429s that set a cooldown every
+        # on-demand import then had to sleep through (and usually exceeded the
+        # proxy timeout on). Importing DLP-only works therefore stays on the
+        # Library page's explicit button, where the volume is low and the user
+        # is waiting on the result anyway. Leave DLP import disabled unless the
+        # shared IP is not in use — this code was the cause of "FicHub won't
+        # import" for everyone.
+        #
+        # missing = []
+        # with db_session() as db:
+        #     for e in entries:
+        #         cand = [v for k, v in (e.get("urls") or {}).items() if k in ("ffn", "ao3")]
+        #         if cand and _find_indexed_story(db, cand) is None:
+        #             missing.append((cand[0], e.get("dlp_tags") or []))
+        # if missing:
+        #     batch = int(_num("DLP_IMPORT_BATCH", 25))
+        #     added = await asyncio.to_thread(_dlp_import_missing, missing[:batch], provenance="dlp_library")
+        #     log.info(f"dlp {corpus}: {len(missing)} not indexed, {added} added this pass")
         log.info(f"dlp {corpus}: {len(entries)} curated, {tagged} newly tagged")
 
         # Star ratings live on the thread page, one request each, so they are
