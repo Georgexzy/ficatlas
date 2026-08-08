@@ -55,8 +55,10 @@ _MARKERS = [
 ]
 
 # How much of a title the shared stem must account for, when there is no number
-# to prove an order. See the note where it is used.
-STEM_SHARE = 0.45
+# to prove an order. Raised from 0.45 after sampling: at 0.45, "Candle Flame /
+# Candle Burning / Candle Burnt" and one-word prefixes still grouped unrelated
+# one-shots. 0.55 keeps "Places Left (to find)" while rejecting name-prefix noise.
+STEM_SHARE = 0.55
 
 _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7,
           "viii": 8, "ix": 9, "x": 10, "xi": 11, "xii": 12, "xiii": 13,
@@ -201,6 +203,12 @@ def group_by_structure(works: list[dict]) -> list[dict]:
         if len(titles) < len(members):
             continue          # duplicates, not instalments
 
+        # A single-token stem with no numbers is a word these titles happen to
+        # share ("Candle", "Week", "Drarry"), not a series name. Numbered groups
+        # already left via the path above; stem-only needs at least two words.
+        if len(stem.split()) < 2:
+            continue
+
         # The shared part has to be MOST of the title, not a fragment at the
         # front of it. Without this, two-word prefixes swept up whole shelves:
         # "Fang Hua" is a name, and it grouped 22 unrelated works because every
@@ -215,6 +223,29 @@ def group_by_structure(works: list[dict]) -> list[dict]:
         avg = sum(len(t) for t in titles) / len(titles)
         if avg <= 0 or len(stem) / avg < STEM_SHARE:
             continue
+
+        # A year alone is not a series stem — "2024 series" grouped every work
+        # an author posted that year.
+        if re.fullmatch(r"(?:19|20)\d{2}", stem):
+            continue
+
+        # Prevent weak stem grouping on 3+ word proper nouns.
+        # If the stem is 3 or more words, it is highly likely a character/ship
+        # name being prefixed (e.g. "Ren Heng Ia Ming"). We only accept it if
+        # the author explicitly used a subtitle separator (like ":" or "-") OR
+        # if one of the titles is EXACTLY the stem. Without this, any author
+        # who writes multiple fics about the same 3-word character gets a false series.
+        if len(stem.split()) >= 3:
+            has_separator = any(
+                re.search(r"[:\-–—\[\(【]", m.get("title") or "")
+                for m in members
+            )
+            stem_is_full_title = any(
+                normalise(m.get("title") or "") == stem for m in members
+            )
+            if not has_separator and not stem_is_full_title:
+                continue  # Reject group: likely a character name prefix
+
         claimed.update(m["id"] for m in members)
         out.append({"stem": stem, "kind": "stem",
                     "members": [(m, None) for m in members]})

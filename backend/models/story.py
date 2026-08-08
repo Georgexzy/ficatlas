@@ -78,6 +78,12 @@ class Story(Base):
     # Schnoogle / Dark Arts / Astronomy Tower / Riddikulus, and equivalents.
     archive_section = Column(String(64))
 
+    # Denormalised: true when this work appears in series_works. The in_series
+    # search filter used to be an EXISTS subquery that forced a seq scan of
+    # series_works and nested-loop lookup of every member — 15s for a Harry
+    # Potter + AO3/FFN search. A plain boolean AND the other filters is ~1s.
+    has_series = Column(Boolean, default=False, nullable=False)
+
     # New: hosted content
     is_hosted = Column(Boolean, default=False, index=True)   # we have the full text
     # Set when an author asks for their text not to be hosted here. The row

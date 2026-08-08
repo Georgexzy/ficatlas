@@ -45,6 +45,22 @@ _PART_RE = re.compile(
     r'(?:<[^>]+>\s*)*?<a[^>]*href="/series/(\d+)"[^>]*>(.*?)</a>', re.S | re.I)
 # A work can sit in several series, each its own <span class="position">.
 _POSITION_RE = re.compile(r'<span class="position">(.*?)</span>', re.S)
+_SIDE_TITLE_RE = re.compile(
+    r"\b(?:b[-\s]?sides?|side[-\s]?stories|companion(?:\s+pieces?)?|outtakes?|"
+    r"extras?|deleted\s+scenes?|codas?)\b",
+    re.I,
+)
+
+
+def _role_for_work(db, story_id: str) -> str:
+    """Whether an AO3 series work should sit in the main run or companion list."""
+    row = db.execute(sql_text("""
+        SELECT title, summary FROM stories WHERE id = :id
+    """), {"id": story_id}).first()
+    if not row:
+        return "main"
+    text = f"{row[0] or ''}\n{row[1] or ''}"
+    return "side" if _SIDE_TITLE_RE.search(text) else "main"
 
 
 def parse_series(html: str) -> list[dict]:
@@ -66,6 +82,9 @@ def parse_series(html: str) -> list[dict]:
         seen.add(ao3_id)
         name = re.sub(r"<[^>]+>", "", m.group(3))
         name = re.sub(r"\s+", " ", name).strip()
+        # AO3 entities in series titles: "Vastra &amp; Jenny"
+        import html as html_lib
+        name = html_lib.unescape(name)
         if not name:
             continue
         out.append({"position": int(m.group(1)), "ao3_id": ao3_id, "name": name})
@@ -78,26 +97,78 @@ def record(db, story_id: str, author: str | None, entries: list[dict]) -> int:
     Keyed on the AO3 series id rather than the name, so two different series
     that happen to share a title stay separate — and so a series renamed by its
     author updates in place instead of forking.
+
+    The unique index on ao3_id is PARTIAL (`WHERE ao3_id IS NOT NULL`), because
+    inferred/stated series have no AO3 id and many rows share NULL. Postgres
+    only accepts ON CONFLICT against a partial unique index when the predicate
+    is repeated on the conflict target — without it, every insert raised
+    InvalidColumnReference and was swallowed by the caller, which is why the
+    index held zero explicit series despite blurbs carrying them for months.
+
+    A second unique key exists on (author, name). When we already inferred or
+    stated a series under the same name for this author, upgrade that row to
+    explicit rather than failing the insert.
     """
     n = 0
+    role = _role_for_work(db, story_id)
     for e in entries:
         key = f"ao3:{e['ao3_id']}"
         sid = db.execute(sql_text("""
-            INSERT INTO series (name, author, site, source, confidence, work_count, ao3_id)
-            VALUES (:n, :a, 'ao3', 'explicit', 1.0, 0, :k)
-            ON CONFLICT (ao3_id) DO UPDATE
-                SET name = EXCLUDED.name, source = 'explicit', confidence = 1.0
-            RETURNING id
-        """), {"n": e["name"], "a": author, "k": key}).scalar()
+            SELECT id FROM series WHERE ao3_id = :k
+        """), {"k": key}).scalar()
+        if sid is None and author:
+            sid = db.execute(sql_text("""
+                SELECT id FROM series
+                WHERE lower(coalesce(author,'')) = lower(coalesce(:a,''))
+                  AND lower(name) = lower(:n)
+                LIMIT 1
+            """), {"a": author, "n": e["name"]}).scalar()
+        if sid is None:
+            sid = db.execute(sql_text("""
+                SELECT id FROM series
+                WHERE ao3_id IS NULL AND lower(name) = lower(:n)
+                  AND (author IS NULL OR lower(author) = lower(coalesce(:a,'')))
+                LIMIT 1
+            """), {"a": author, "n": e["name"]}).scalar()
+
+        if sid is not None:
+            db.execute(sql_text("""
+                UPDATE series SET
+                    name = :n,
+                    author = COALESCE(author, :a),
+                    site = 'ao3',
+                    source = 'explicit',
+                    confidence = 1.0,
+                    ao3_id = :k
+                WHERE id = :s
+            """), {"n": e["name"], "a": author, "k": key, "s": sid})
+        else:
+            sid = db.execute(sql_text("""
+                INSERT INTO series (name, author, site, source, confidence, work_count, ao3_id)
+                VALUES (:n, :a, 'ao3', 'explicit', 1.0, 0, :k)
+                ON CONFLICT (ao3_id) WHERE ao3_id IS NOT NULL DO UPDATE
+                    SET name = EXCLUDED.name,
+                        source = 'explicit',
+                        confidence = 1.0,
+                        author = COALESCE(series.author, EXCLUDED.author)
+                RETURNING id
+            """), {"n": e["name"], "a": author, "k": key}).scalar()
+
         db.execute(sql_text("""
-            INSERT INTO series_works (series_id, story_id, position)
-            VALUES (:s, :w, :p)
-            ON CONFLICT (series_id, story_id) DO UPDATE SET position = EXCLUDED.position
-        """), {"s": sid, "w": story_id, "p": e["position"]})
+            INSERT INTO series_works (series_id, story_id, position, role)
+            VALUES (:s, :w, :p, :r)
+            ON CONFLICT (series_id, story_id) DO UPDATE
+                SET position = EXCLUDED.position, role = EXCLUDED.role
+        """), {"s": sid, "w": story_id, "p": e["position"], "r": role})
         db.execute(sql_text("""
             UPDATE series SET work_count =
                 (SELECT count(*) FROM series_works WHERE series_id = :s)
             WHERE id = :s
         """), {"s": sid})
+        # Keep the denormalised search flag in sync. Without this, in_series
+        # filters using has_series would miss every AO3-explicit membership.
+        db.execute(sql_text("""
+            UPDATE stories SET has_series = true WHERE id = :w AND NOT has_series
+        """), {"w": story_id})
         n += 1
     return n

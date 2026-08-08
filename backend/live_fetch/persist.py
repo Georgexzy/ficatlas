@@ -54,15 +54,29 @@ def _site_and_id(url: str, d: dict) -> tuple:
 
 
 def _as_datetime(value):
-    """Accept a datetime or an ISO string; callers supply both."""
+    """Accept a datetime or an ISO string; callers supply both.
+
+    Always returns a timezone-aware UTC datetime. `fromisoformat` on a naive
+    string (AO3 live paths emit `updated_at` without a tz) yields a naive
+    datetime, and comparing that against Postgres's tz-aware `updated_at`
+    raised `TypeError` inside the cross-post merge — which the bare
+    `except: rollback()` there swallowed, silently turning every merge into a
+    duplicate insert. Normalising to UTC here fixes the comparison and the
+    stored value together.
+    """
     if value in (None, ""):
         return None
     if isinstance(value, datetime):
-        return value
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
     try:
-        return datetime.fromisoformat(str(value))
+        dt = datetime.fromisoformat(str(value))
     except ValueError:
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def persist_live_results(db: Session, live_results: list[dict],
@@ -225,7 +239,7 @@ def persist_live_results(db: Session, live_results: list[dict],
                 tags=d.get("tags") or [],
                 warnings=d.get("warnings") or [],
                 categories=d.get("categories") or [],
-                genres=[],
+                genres=d.get("genres") or [],
                 is_crossover=len(d.get("fandoms", [])) > 1,
                 is_hosted=False,
                 published_at=None,
@@ -283,7 +297,10 @@ def _save_series(db: Session, story_id: str, author: str | None, d: dict) -> Non
         import ao3_series
         ao3_series.record(db, str(story_id), author, entries)
     except Exception as e:
-        log.debug(f"series save failed for {story_id}: {type(e).__name__}: {e}")
+        # Was debug — every AO3 series save was failing on a bad ON CONFLICT
+        # target and nobody saw it, which is how the index held zero explicit
+        # series despite blurbs carrying them on every listing page.
+        log.warning(f"series save failed for {story_id}: {type(e).__name__}: {e}")
 
 
 def _enrich_existing(db: Session, url: str, d: dict) -> bool:
