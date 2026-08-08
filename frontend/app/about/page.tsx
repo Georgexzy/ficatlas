@@ -4,7 +4,8 @@ import SiteHeader from "../SiteHeader"
 
 export const metadata = {
   title: "About & contact — FicAtlas",
-  description: "What FicAtlas is, where its data comes from, and how to ask for a story to be taken down.",
+  description:
+    "What FicAtlas is, how it treats fanworks and AI, where its data comes from, and how to ask for a story to be taken down.",
 }
 
 // A public site needs a page that says what it is and how to reach a human.
@@ -92,13 +93,55 @@ export default function About() {
         from them.
       </p>
 
-      <h2>Crawling and AI</h2>
+      <h2 id="ai">AI, crawling, and your work</h2>
       <p>
-        FicAtlas gathers metadata slowly and politely, and reads archived copies
-        from the Internet Archive wherever it can, to keep load off the archives
-        themselves. It does not provide bulk data to AI training crawlers, which
-        are refused in{" "}
-        <a href="/robots.txt">robots.txt</a>.
+        Fandom has good reasons to be wary of anything that looks like another
+        scrape of AO3 for someone else&apos;s model. So here is what FicAtlas is,
+        and what it is not, stated plainly.
+      </p>
+      <ul>
+        <li>
+          <strong>No generative AI acts on fanfiction here.</strong> Nothing in
+          the index is fed to a model that writes, rewrites, summarises, or
+          &ldquo;continues&rdquo; stories. There is no chatbot over your fic, no
+          auto-generated recommendations trained on full text, and no feature
+          that remixes someone else&apos;s prose.
+        </li>
+        <li>
+          <strong>This is not a training dataset.</strong> FicAtlas does not
+          publish bulk dumps of works, does not sell access to the index for
+          machine learning, and does not hand stories to AI companies. Training
+          crawlers are refused in{" "}
+          <a href="/robots.txt">robots.txt</a> — the same stance the OTW takes
+          for AO3.
+        </li>
+        <li>
+          <strong>Almost everything is metadata and a link.</strong> For the
+          vast majority of works we store title, author, summary, tags, length
+          and where to read it on the original archive. The story itself stays
+          where you posted it. Full text here is limited to a small preserved
+          set from a dead archive (see above), and authors can have that text
+          taken down immediately.
+        </li>
+        <li>
+          <strong>Building the site is not the same as mining fic.</strong>{" "}
+          Parts of FicAtlas&apos;s own code and search tooling were written with
+          ordinary programming help — the way many open-source projects are
+          built. That help never trained on, and never runs against, the
+          fanworks in the index. The stories are data for a search engine, not
+          fuel for a model.
+        </li>
+        <li>
+          <strong>Collection is slow and bounded.</strong> Metadata is gathered
+          politely, with rate limits and backoff, and from the Internet Archive
+          wherever that keeps load off live archives. It is indexing for
+          readers, not harvesting corpora.
+        </li>
+      </ul>
+      <p>
+        If something here still feels wrong for your work, use the{" "}
+        <Link href="/takedown">takedown form</Link> or write to{" "}
+        <strong>admin@ficatlas.app</strong>. Authors come first.
       </p>
     </div>
   )

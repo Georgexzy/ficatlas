@@ -10,6 +10,8 @@ export default function SiteFooter() {
       <span className="site-footer__sep">·</span>
       <Link href="/about">About</Link>
       <span className="site-footer__sep">·</span>
+      <Link href="/about#ai">AI policy</Link>
+      <span className="site-footer__sep">·</span>
       <Link href="/takedown">Remove my story</Link>
       <span className="site-footer__sep">·</span>
       <a href="/robots.txt">Crawler policy</a>
