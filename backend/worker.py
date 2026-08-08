@@ -463,12 +463,25 @@ def _dlp_import_missing(items: list[tuple[str, list[str]]], provenance: str) -> 
     """Resolve DLP URLs we do not hold through FicHub and index them."""
     import httpx
     from db.session import db_session
-    from fichub_meta import fetch_meta, HEADERS
+    from fichub_meta import fetch_meta, HEADERS, throttled
     from live_fetch.persist import persist_live_results
+
+    # FicHub is a shared-IP service and throttles the whole IP, not one caller.
+    # A background bulk pass must yield to an active throttle instead of firing
+    # a request and re-triggering it — that is what kept user imports blocked.
+    if throttled():
+        log.info("dlp import: yielding, FicHub throttled")
+        return 0
 
     rows: list[dict] = []
     with httpx.Client(headers=HEADERS, follow_redirects=True) as client:
         for url, dlp_tags in items:
+            # Bail the moment a throttle appears mid-batch, not just at entry —
+            # a batch that started clean can trip the IP on its first URL, and
+            # firing the rest would keep the throttle alive and block imports.
+            if throttled():
+                log.info("dlp import: yielding mid-batch, FicHub throttled")
+                break
             meta = fetch_meta(client, url)
             if not meta:
                 continue

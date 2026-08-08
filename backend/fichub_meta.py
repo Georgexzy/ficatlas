@@ -33,6 +33,7 @@ in the Library page and is never run from a background loop.
 """
 
 import logging
+import os
 import re
 import threading
 import time
@@ -50,9 +51,64 @@ HEADERS = {
 # One request every 2s across every caller. FicHub is one person's server and
 # is doing the Cloudflare work on our behalf; there is no rate limit published,
 # which is a reason to be conservative rather than a licence not to be.
-_MIN_INTERVAL = 2.0
+_MIN_INTERVAL = 3.0
 _lock = threading.Lock()
 _next_at = 0.0
+# When FicHub answers 429 (it throttles the shared IP), we stop requesting until
+# this moment so the cooldown can pass instead of hammering a service that is
+# telling us to stop. Without this the background FF.net enrichment loop kept
+# firing into the throttle at the base interval for hours, keeping the whole IP
+# blocked — and blocking user imports, which share the same budget.
+_cooldown_until = 0.0
+_consecutive_throttles = 0
+# Default lives on the host bind-mount (./backend:/app) so it survives BOTH a
+# container restart and a `docker compose up` recreate, which a container-local
+# path would not. Override with FICHUB_COOLDOWN_FILE in the environment.
+_COOLDOWN_FILE = os.environ.get(
+    "FICHUB_COOLDOWN_FILE",
+    "/app/.fichub_cooldown",
+)
+
+
+def _load_persisted_cooldown() -> None:
+    """Restore a cooldown saved before a restart.
+
+    The worker is a long-running process, but it can crash or be recreated. A
+    restart would otherwise clear `_cooldown_until` and immediately re-hammer a
+    service that throttled us seconds ago — undoing the whole point of backing
+    off. Reading the persisted value means a restart resumes the pause instead
+    of burning the IP again.
+    """
+    global _cooldown_until, _consecutive_throttles
+    try:
+        with open(_COOLDOWN_FILE, "r", encoding="utf-8") as fh:
+            raw = fh.read().strip()
+        if not raw:
+            return
+        parts = raw.split()
+        if len(parts) == 2:
+            expires_at = float(parts[0])
+            _consecutive_throttles = int(parts[1])
+        else:
+            expires_at = float(parts[0])
+        if expires_at > time.monotonic():
+            _cooldown_until = expires_at
+            log.info(f"resumed FicHub cooldown "
+                     f"({expires_at - time.monotonic():.0f}s left) from restart")
+    except (OSError, ValueError, IndexError):
+        pass
+
+
+def _persist_cooldown() -> None:
+    try:
+        os.makedirs(os.path.dirname(_COOLDOWN_FILE), exist_ok=True)
+        with open(_COOLDOWN_FILE, "w", encoding="utf-8") as fh:
+            fh.write(f"{_cooldown_until:.0f} {_consecutive_throttles}\n")
+    except OSError:
+        pass
+
+
+_load_persisted_cooldown()
 
 _RATING = {
     "K": "general", "K+": "general", "T": "teen", "M": "mature", "MA": "explicit",
@@ -66,11 +122,50 @@ def _throttle() -> None:
     global _next_at
     with _lock:
         now = time.monotonic()
-        start = max(now, _next_at)
+        start = max(now, _next_at, _cooldown_until)
         _next_at = start + _MIN_INTERVAL
     delay = start - time.monotonic()
     if delay > 0:
         time.sleep(delay)
+
+
+def _note_throttled(retry_after: float | None = None) -> None:
+    """Record a FicHub throttle so _throttle() pauses past its cooldown."""
+    global _cooldown_until, _consecutive_throttles
+    _consecutive_throttles += 1
+    # Wait the retry-after plus a buffer so we do not re-fire the instant the
+    # window ends and trip it again. If FicHub did not say, or we keep getting
+    # throttled, escalate so repeated offenders wait much longer.
+    if retry_after:
+        pause = float(retry_after) + 15.0
+    elif _consecutive_throttles > 2:
+        pause = 600.0
+    else:
+        pause = 60.0
+    pause = min(max(pause, 10.0), 3600.0)
+    with _lock:
+        _cooldown_until = max(_cooldown_until, time.monotonic() + pause)
+    _persist_cooldown()
+
+
+def _clear_throttle() -> None:
+    """After a clean 200, relax the escalation so a later blip is not over-punished."""
+    global _consecutive_throttles
+    if _consecutive_throttles > 0:
+        _consecutive_throttles = 0
+        _persist_cooldown()
+
+
+def throttled() -> bool:
+    """True while FicHub is throttling the shared IP.
+
+    Background bulk consumers (the DLP import loop, FFnet enrichment fallback)
+    check this and yield entirely rather than firing one request per cooldown
+    window. Firing through a throttle keeps re-refreshing the cooldown, so it
+    never clears and a *user* import — which shares the same IP budget — stays
+    blocked too. Yielding lets the pause expire cleanly.
+    """
+    return time.monotonic() < _cooldown_until
 
 
 def _int(value) -> int | None:
@@ -166,8 +261,20 @@ def fetch_meta(client: httpx.Client, url: str) -> dict | None:
     except Exception as e:
         log.debug(f"fichub meta {url}: {type(e).__name__}")
         return None
+    # A 429 is FicHub telling the whole IP to slow down. Don't just fail this
+    # one request — pause the caller so it stops hammering and the cooldown can
+    # clear (see _cooldown_until). Without this the background enrich loop kept
+    # requesting at the base interval through a throttle, keeping us blocked.
+    if r.status_code in (429, 502, 503):
+        retry = r.headers.get("retry-after")
+        try:
+            _note_throttled(float(retry) if retry else None)
+        except (TypeError, ValueError):
+            _note_throttled()
+        return None
     if r.status_code != 200:
         return None
+    _clear_throttle()
     try:
         payload = r.json()
     except ValueError:
