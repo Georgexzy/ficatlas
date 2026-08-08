@@ -13,6 +13,7 @@ import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryP
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
 import { rememberSearch } from "@/lib/lastSearch"
+import { saveScroll, takeScroll } from "@/lib/scrollMemory"
 import { describeError, type Failure } from "@/lib/errors"
 import { readAllPrefs, type Prefs } from "@/lib/prefs"
 import WordCountSlider from "./WordCountSlider"
@@ -260,6 +261,7 @@ function TokenStrip({ tokens, onRemove }: { tokens: ParsedToken[]; onRemove: (ra
     tags: "tag", ratings: "rating", status: "status",
     word_count: "words", updated_after: "since", language: "lang",
     sites: "site", crossovers: "xover", warnings: "warn", categories: "cat",
+    in_series: "series",
   }
   return (
     <div className="token-strip">
@@ -652,6 +654,7 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
         <li>Non-commercial &amp; <a href="https://github.com/Georgexzy/ficatlas"
               target="_blank" rel="noopener noreferrer">open source</a></li>
         <li>Links out to the original archive</li>
+        <li>No AI trained on fic — <a href="/about#ai">what that means</a></li>
       </ul>
     </div>
   )
@@ -888,6 +891,9 @@ function SearchPageInner() {
   const autoDeepenedRef = useRef<string>("")
   // Auto-search-on-filter-change machinery (see effect below).
   const hasSearchedRef = useRef(false)
+  // Monotonic token so a slow, stale search response can never overwrite a
+  // newer one (rapid paging / filter changes used to race and win out of order).
+  const searchSeqRef = useRef(0)
   const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Mobile filter drawer (sidebar becomes a slide-out panel on phones)
   const [filtersOpen,  setFiltersOpen]  = useState(false)
@@ -990,6 +996,7 @@ function SearchPageInner() {
       // is exactly what the section badges on result cards produce — landed on
       // the page and ran no search at all.
       "sections",
+      "in_series",
     ]
     if (!SEARCH_PARAMS.some(k => rawParams.get(k))) return
 
@@ -1006,6 +1013,69 @@ function SearchPageInner() {
     doSearch()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Save where the reader was before leaving, so Back can return them to the
+  // same height. The key trap here: reading window.location in the unmount
+  // cleanup is wrong, because by the time the cleanup runs the router has
+  // already navigated — window.location is the STORY url, not the search url,
+  // so the entry is saved under the wrong key and dropped on Back. Instead we
+  // track {url, y} on every scroll while this page is on screen (scroll events
+  // only fire here, so the captured url is always the search page's own), and
+  // the cleanup just writes that last-known pair.
+  const scrollMemoRef = useRef<{ href: string; y: number }>({ href: "", y: 0 })
+  useEffect(() => {
+    const capture = () => {
+      scrollMemoRef.current = {
+        href: window.location.pathname + window.location.search,
+        y: window.scrollY,
+      }
+    }
+    capture()
+    window.addEventListener("scroll", capture, { passive: true })
+    return () => window.removeEventListener("scroll", capture)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      try {
+        const { href, y } = scrollMemoRef.current
+        if (href) saveScroll(href, y)
+      } catch {}
+    }
+  }, [])
+
+  // Restore a saved scroll position once results are on screen.
+  //
+  // `loading` flips false when results land, so restoring after that scrolls a
+  // page that has actually grown. takeScroll is read-and-cleared AND keyed by
+  // the exact URL, so paging or changing filters never replays a stale position
+  // over fresh results (the URL differs, so the entry is dropped).
+  //
+  // Next's App Router restores a back-navigated page from its router cache
+  // WITHOUT remounting the component, so a mount-once restore never runs again
+  // for the back path. popstate fires on back/forward and re-attempts the
+  // restore on the next frame, after the cached results have laid out.
+  //
+  // scrollRestoration is set to "manual" for the lifetime of this page so the
+  // browser's own back/forward scroll restore can't re-scroll after our
+  // scrollTo and clobber the saved position (the reason a manual restore
+  // silently "doesn't work" in Next App Router). Only this page sets it, so
+  // story/library back-nav still uses the browser default.
+  useEffect(() => {
+    history.scrollRestoration = "manual"
+    const restore = () => {
+      if (loading || !results) return
+      const y = takeScroll(window.location.pathname + window.location.search)
+      if (y != null && y > 0) window.scrollTo({ top: y, left: 0, behavior: "instant" })
+    }
+    if (!loading && results) restore()          // fresh mount
+    const onPop = () => requestAnimationFrame(restore)   // back/forward via cache
+    window.addEventListener("popstate", onPop)
+    return () => {
+      window.removeEventListener("popstate", onPop)
+      history.scrollRestoration = "auto"
+    }
+  }, [loading, results])
 
   // Apply saved default sites / sort from settings on a fresh landing (no URL params)
   useEffect(() => {
@@ -1127,13 +1197,17 @@ function SearchPageInner() {
     // without it — leaving "rating:G rating:T ..." on screen and losing the
     // author the moment anything re-ran the search.
     if (authorFilter) parts.push(`author:${q(authorFilter)}`)
+    // series:true / series:false — same vocabulary the parser accepts, so the
+    // bar round-trips with the sidebar pills and with a typed operator.
+    if (inSeries === "yes") parts.push("series:true")
+    else if (inSeries === "no") parts.push("series:false")
     return [freeText, ...parts].filter(Boolean).join(" ")
   }, [query, incFandoms, incShips, incChars, incTags, excFandoms, excShips,
       excChars, excTags, incRatings, status, wordMin, wordMax, language,
       // sections was missing, so the serializer closed over an empty list and
       // the search bar never mentioned a chosen section — the bar is meant to
       // be the single visible statement of what you asked for.
-      authorFilter, explicit, sections])
+      authorFilter, explicit, sections, inSeries])
 
   // Build search params
   // The Apply bar compares a signature of the current filters against the
@@ -1158,7 +1232,10 @@ function SearchPageInner() {
 
     return {
       sections: sections.length ? sections.join(",") : undefined,
-      in_series: inSeries === "yes" ? true : inSeries === "no" ? false : undefined,
+      // Prefer the bar's series:true/false when present, otherwise the sidebar.
+      in_series: pq.inSeries !== null && pq.inSeries !== undefined
+        ? pq.inSeries
+        : inSeries === "yes" ? true : inSeries === "no" ? false : undefined,
       q:                     pq.cleanText || undefined,
       sites:                 joinCsv(sites),
       fandoms:               joinCsv(merge(incFandoms, pq.fandoms)),
@@ -1219,6 +1296,7 @@ function SearchPageInner() {
     // stale-closure bug where setPage(p=>p+1) hadn't flushed before doSearch ran.
     hasSearchedRef.current = true   // filter changes start queueing from here on
     setAppliedSig(filterSig)        // this is now what the results reflect
+    const seq = ++searchSeqRef.current
     const pg = explicitPage ?? (resetPage ? 1 : page)
     if (resetPage) setPage(1)
     else if (explicitPage) setPage(explicitPage)
@@ -1260,6 +1338,7 @@ function SearchPageInner() {
         // it for an index outage would send someone looking in the wrong place.
         data = await searchStories({ ...p, live: false } as any)
       }
+      if (seq !== searchSeqRef.current) return   // a newer search superseded this one
       setResults(data)
       setParsedTokens((data as any).parsed_tokens ?? [])
       // Scroll to top of results on page change for a clean reading position
@@ -1286,9 +1365,9 @@ function SearchPageInner() {
       // Classified rather than printed. "Failed to fetch" is what the browser
       // says when it cannot open a socket, and it told a reader nothing about
       // whether the fault was theirs, ours, or worth retrying.
-      setError(describeError(e, e?.status))
+      if (seq === searchSeqRef.current) setError(describeError(e, e?.status))
     } finally {
-      setLoading(false)
+      if (seq === searchSeqRef.current) setLoading(false)
     }
   }, [buildParams, page, pathname, router, query, sites, refreshing, filterSig])
 
@@ -1329,6 +1408,15 @@ function SearchPageInner() {
     // default set", not "none selected", and treating it as the latter cleared
     // the rating pills every time you edited a word of free text.
     if (pq.ratings.length) sync(pq.ratings, incRatings, setIncRatings)
+    // series:true / series:false ↔ the three-state sidebar pills.
+    if (pq.inSeries === true) {
+      if (inSeries !== "yes") setInSeries("yes")
+    } else if (pq.inSeries === false) {
+      if (inSeries !== "no") setInSeries("no")
+    } else if (inSeries && !/(?:^|\s)(?:-?)(?:series|in_series)\s*:/i.test(query)) {
+      // Token removed from the bar — clear the pill, same as deleting author:.
+      setInSeries("")
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query])
 
@@ -1367,7 +1455,7 @@ function SearchPageInner() {
       // sections belongs here too: this is the effect that re-runs the search
       // when a filter changes, so leaving it out meant a section click updated
       // the pill and then sat there.
-      matchMode, sort, dlpMinRating, sections])
+      matchMode, sort, dlpMinRating, sections, inSeries])
 
   // Append a syntax fragment from the help panel and put the caret after it, so
   // an operator like "fandom:" is ready to be typed into rather than merely
@@ -1395,6 +1483,7 @@ function SearchPageInner() {
       const API_BASE = ""
       // Use the current fandom filter if the user has one set, for relevant surprises.
       const params = new URLSearchParams({ count: "8" })
+      params.set("explicit", explicit ? "true" : "false")
       if (incFandoms.length > 0) params.set("fandom", incFandoms[0])
       const r = await fetch(`${API_BASE}/api/search/random?${params.toString()}`)
       if (!r.ok) throw describeError(null, r.status)
@@ -1410,7 +1499,7 @@ function SearchPageInner() {
     } finally {
       setLoading(false)
     }
-  }, [incFandoms])
+  }, [incFandoms, explicit])
 
   const totalPages = results ? Math.ceil(results.total / results.per_page) : 0
 
@@ -1478,32 +1567,6 @@ function SearchPageInner() {
               highlighted={fromSearch("sites")} />
           </div>
 
-          {/* FictionAlley sections. Only shown when FicAlley is among the
-              selected sites, because for an AO3-only search the control would
-              filter nothing and just add noise to an already dense sidebar. */}
-          {sites.includes("fictionalley") && (
-            <FilterSection label="FictionAlley subsites" count={sections.length}
-              defaultOpen={sections.length > 0}>
-              <p className="filter-note">
-                Five archives behind one banner.{" "}
-                <HelpTip label="What are subsites?">{sectionHelpBody}</HelpTip>
-              </p>
-              <div className="pill-row">
-                {FICALLEY_SECTIONS.map(sec => (
-                  <button key={sec.value}
-                    className={`pill ${sections.includes(sec.value) ? "pill--on" : ""}`}
-                    title={sec.help}
-                    onClick={() => setSections(
-                      sections.includes(sec.value)
-                        ? sections.filter(v => v !== sec.value)
-                        : [...sections, sec.value])}>
-                    {sec.label}
-                  </button>
-                ))}
-              </div>
-            </FilterSection>
-          )}
-
           <div className="sidebar__group">
             <label className="sidebar__label">
               Picking several
@@ -1535,35 +1598,6 @@ function SearchPageInner() {
             </p>
           </div>
 
-          {/* Collapsible like every other facet. It was the one group left as
-              an always-open block, which made it the loudest thing in a sidebar
-              of quiet headings while being the filter most people never touch.
-              Counted in the header and opened on its own when a choice is
-              already active, so a filter set from a URL is never hidden. */}
-          <FilterSection label="Series" count={inSeries ? 1 : 0}
-            defaultOpen={!!inSeries}>
-            <p className="filter-note">
-              Part of a longer sequence, or complete in itself.{" "}
-              <HelpTip label="About series">
-                <p>Two quite different searches: something to sink into for a
-                month, or something you can finish tonight without acquiring a
-                reading list.</p>
-                <p className="helptip__aside">
-                  AO3 publishes its series; FanFiction.net and FictionAlley have
-                  no such field, so those are read from what authors wrote in
-                  their titles and summaries.
-                </p>
-              </HelpTip>
-            </p>
-            <div className="pill-row">
-              {[["", "Either"], ["yes", "In a series"], ["no", "Standalone"]].map(([v, label]) => (
-                <button key={v} aria-pressed={inSeries === v}
-                  className={`pill ${inSeries === v ? "pill--on" : ""}`}
-                  onClick={() => setInSeries(v)}>{label}</button>
-              ))}
-            </div>
-          </FilterSection>
-
           <div className="sidebar__group">
             <label className="checkbox-row">
               <input type="checkbox" checked={includeUnknown}
@@ -1571,15 +1605,14 @@ function SearchPageInner() {
               <span>Include stories with no ship or character data</span>
             </label>
             <HelpTip label="Stories with no ship or character data">
-              <p>Filtering by a ship or a character normally returns only stories
-              that actually list one, so a Drarry search is Drarry and not
-              &ldquo;might be&rdquo;. This widens it to stories where we have no
-              such data either way.</p>
-              <p>How much that helps depends entirely on the archive:</p>
-              {/* Read from the index rather than written into the prose. The
-                  hard-coded version said FictionAlley was "18% ships, 82%
-                  characters" long after the real figures had moved — a number
-                  in a sentence is a number nobody updates. */}
+              <p>When you filter by a ship or a character, only stories that
+              <em> list </em> that ship or character are returned. Untagged
+              stories are left out — even if the fic is actually about them —
+              because we cannot tell from empty metadata.</p>
+              <p>Tick this to also include stories whose ship/character fields
+              are empty. Free-text search and fandom filters are unaffected;
+              those already work across every archive.</p>
+              <p>How often a ship/character field is filled, by archive:</p>
               <ul className="helptip__list">
                 {(["ao3", "ffnet", "fictionalley"] as const).map(site => {
                   const c = totals?.coverage?.[site]
@@ -1589,15 +1622,16 @@ function SearchPageInner() {
                       <strong>{SITE_LABELS[site] ?? site}</strong> — {c.ships}% list a
                       ship and {c.characters}% a character.
                       {c.ships < 10
-                        ? " A ship filter finds almost nothing here unless you tick this."
-                        : " The filter already works well here; this mostly adds noise."}
+                        ? " Without this tick, a ship filter finds almost nothing here."
+                        : " Ship filters already work well here; this mostly adds noise."}
                     </li>
                   )
                 })}
               </ul>
               <p className="helptip__aside">
-                Every story has freeform tags; this is only about ships and
-                characters. More results, less certainty.
+                FanFiction.net results still appear in fandom and title searches —
+                this checkbox only changes what happens when a ship or character
+                filter is active.
               </p>
             </HelpTip>
           </div>
@@ -1698,6 +1732,58 @@ function SearchPageInner() {
 
           <hr className="sidebar__rule" />
           <p className="sidebar__section-head">More Options</p>
+
+          {/* FictionAlley sections and the series filter sit here rather than
+              above the fold: most searches never touch them, and they were
+              crowding the filters people use on every query. Still opened
+              automatically when a URL already sets them, so shared links keep
+              working. */}
+          {sites.includes("fictionalley") && (
+            <FilterSection label="FictionAlley subsites" count={sections.length}
+              defaultOpen={sections.length > 0}>
+              <p className="filter-note">
+                Five archives behind one banner.{" "}
+                <HelpTip label="What are subsites?">{sectionHelpBody}</HelpTip>
+              </p>
+              <div className="pill-row">
+                {FICALLEY_SECTIONS.map(sec => (
+                  <button key={sec.value}
+                    className={`pill ${sections.includes(sec.value) ? "pill--on" : ""}`}
+                    title={sec.help}
+                    onClick={() => setSections(
+                      sections.includes(sec.value)
+                        ? sections.filter(v => v !== sec.value)
+                        : [...sections, sec.value])}>
+                    {sec.label}
+                  </button>
+                ))}
+              </div>
+            </FilterSection>
+          )}
+
+          <FilterSection label="Series" count={inSeries ? 1 : 0}
+            defaultOpen={!!inSeries}>
+            <p className="filter-note">
+              Part of a longer sequence, or complete in itself.{" "}
+              <HelpTip label="About series">
+                <p>Two quite different searches: something to sink into for a
+                month, or something you can finish tonight without acquiring a
+                reading list.</p>
+                <p className="helptip__aside">
+                  AO3 publishes its series; FanFiction.net and FictionAlley have
+                  no such field, so those are read from what authors wrote in
+                  their titles and summaries.
+                </p>
+              </HelpTip>
+            </p>
+            <div className="pill-row">
+              {[["", "Either"], ["yes", "In a series"], ["no", "Standalone"]].map(([v, label]) => (
+                <button key={v} aria-pressed={inSeries === v}
+                  className={`pill ${inSeries === v ? "pill--on" : ""}`}
+                  onClick={() => setInSeries(v)}>{label}</button>
+              ))}
+            </div>
+          </FilterSection>
 
           <FilterSection label="Completion Status" highlighted={!!parsedLive.status} count={status.length}>
             <Pills
