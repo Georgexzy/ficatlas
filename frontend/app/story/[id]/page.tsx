@@ -51,15 +51,19 @@ export default function StoryPage() {
 
   useEffect(() => {
     if (!id) return
-    fetch(`${API_BASE}/api/stories/${id}`)
+    // Abort on unmount or when the id changes, so a stale response for a
+    // previous story can never overwrite the current one mid-navigation.
+    const ctl = new AbortController()
+    fetch(`${API_BASE}/api/stories/${id}`, { signal: ctl.signal })
       .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
       .then(setStory)
-      .catch(e => setError(String(e)))
+      .catch(e => { if (!ctl.signal.aborted) setError(String(e)) })
     // Fetch similar stories in parallel (non-blocking; failures are silent)
-    fetch(`${API_BASE}/api/stories/${id}/similar?count=6`)
+    fetch(`${API_BASE}/api/stories/${id}/similar?count=6`, { signal: ctl.signal })
       .then(r => r.ok ? r.json() : [])
       .then(d => setSimilar(Array.isArray(d) ? d : []))
       .catch(() => {})
+    return () => ctl.abort()
   }, [id])
 
   // Bookmark state from localStorage
@@ -154,12 +158,14 @@ export default function StoryPage() {
 
   if (error) return <div className="reader-shell"><SiteHeader />
       <BackLink fallback="/" fallbackLabel="Back to search" /><div className="alert alert--error">{error}</div></div>
-  if (!story) return <div className="reader-shell"><SiteHeader /><p className="loading">Loading…</p></div>
+  if (!story) return <div className="reader-shell"><SiteHeader />
+      <BackLink fallback="/" fallbackLabel="Back to search" /><p className="loading">Loading…</p></div>
 
 
   return (
     <div className="reader-shell">
       <SiteHeader />
+      <BackLink fallback="/" fallbackLabel="Back to search" />
 
       <article className="story-detail">
         <header className="story-detail__header">
@@ -278,11 +284,32 @@ export default function StoryPage() {
           })()}
           {/* Seed rows are excluded: there is no real page for FicHub to fetch. */}
           {!story.is_hosted && !isSeedUrl(story.url)
-            && (story.site === "ao3" || story.site === "ffnet") && (
-            <button className="btn btn--primary" onClick={importAndRead} disabled={importing}>
-              {importing ? "Importing…" : "Import & Read here"}
-            </button>
-          )}
+            && (story.site === "ao3" || story.site === "ffnet") && (() => {
+              const { href, label } = storyLink(story, SITE_LABELS)
+              return (
+                <div className="btn-row">
+                  <button className="btn btn--primary" onClick={importAndRead} disabled={importing}>
+                    {importing ? "Importing…" : "Import & Read here"}
+                  </button>
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
+                    {label}
+                  </a>
+                </div>
+              )
+            })()}
+          {/* Reading in the app is the primary action for hosted works, but the
+              original page stays reachable — this record IS a copy, and the
+              source is part of its provenance. Hosted AO3/FFN works have no
+              link out yet, so give them one. */}
+          {story.is_hosted && !isSeedUrl(story.url)
+            && (story.site === "ao3" || story.site === "ffnet") && (() => {
+              const { href, label } = storyLink(story, SITE_LABELS)
+              return (
+                <a href={href} target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
+                  {label}
+                </a>
+              )
+            })()}
           {/* Metadata-only seed rows have no page of their own, so they need this
               link even though they are filed under AO3. */}
           {!story.is_hosted

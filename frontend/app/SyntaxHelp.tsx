@@ -41,6 +41,8 @@ const GROUPS: { group: string; rows: Row[] }[] = [
     // where someone finds out the subsites exist at all.
     { syntax: "subsite:Schnoogle", desc: "A FictionAlley subsite — Schnoogle, The Dark Arts, Astronomy Tower, Riddikulus, Essays & Meta",
       insert: "subsite:" },
+    { syntax: "series:true", desc: "Part of a series", insert: "series:true" },
+    { syntax: "series:false", desc: "Standalone — not in a series", insert: "series:false" },
   ]},
   { group: "When it was updated", rows: [
     { syntax: "updated:1y", desc: "Within the last year", insert: "updated:1y" },

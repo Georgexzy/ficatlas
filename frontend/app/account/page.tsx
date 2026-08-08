@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import Link from "next/link"
 import BackLink from "../BackLink"
 import { useRouter } from "next/navigation"
@@ -40,6 +40,73 @@ function timeAgo(iso: string | null): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`
   return `${Math.floor(s / 86400)}d ago`
+}
+
+const ROLE_OPTIONS = ["reader", "admin", "owner"] as const
+
+// Owner-only account management: who exists, and what role each account has.
+// The endpoints behind this (GET /api/auth/users, POST /api/auth/users/{id}/role)
+// are guarded owner-only server-side, so this UI is a thin wrapper over powers
+// the backend already enforces.
+function ManageAccounts({ selfId }: { selfId: string }) {
+  const [users, setUsers] = useState<{ id: string; username: string; role: string; last_login: string | null }[] | null>(null)
+  const [msg, setMsg] = useState("")
+  const [err, setErr] = useState("")
+
+  const load = useCallback(async () => {
+    const r = await fetch("/api/auth/users", { credentials: "include" })
+    if (!r.ok) { setErr("Could not load accounts."); return }
+    const d = await r.json().catch(() => null)
+    if (d?.users) { setUsers(d.users); setErr("") }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const setRole = async (id: string, role: string) => {
+    setMsg(""); setErr("")
+    const fd = new FormData(); fd.append("role", role)
+    const r = await fetch(`/api/auth/users/${id}/role`, { method: "POST", body: fd, credentials: "include" })
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}))
+      setErr(d.detail || "Could not change that account's role.")
+      return
+    }
+    setMsg("Role updated.")
+    load()
+  }
+
+  return (
+    <section className="settings-group">
+      <h2 className="settings-group__title">Manage accounts</h2>
+      <p className="account-help">
+        Who has access to this instance and what each account may do. Only you,
+        the owner, can change roles.
+      </p>
+      {msg && <p className="settings-save-ok">{msg}</p>}
+      {err && <p className="settings-save-error">{err}</p>}
+      <div className="manage-users">
+        {users === null ? <p className="account-help account-help--muted">Loading…</p> : (
+          users.map(u => (
+            <div key={u.id} className="manage-user">
+              <div className="manage-user__id">
+                <span className="manage-user__name">{u.username}</span>
+                <span className="manage-user__meta">Last active {u.last_login ? timeAgo(u.last_login) : "never"}</span>
+              </div>
+              <select
+                className="manage-user__select"
+                value={u.role}
+                disabled={u.id === selfId}
+                title={u.id === selfId ? "You cannot change your own role here." : undefined}
+                onChange={e => setRole(u.id, e.target.value)}
+              >
+                {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  )
 }
 
 export default function AccountPage() {
@@ -212,6 +279,9 @@ export default function AccountPage() {
           </div>
         </section>
       )}
+
+      {/* Owner-only: list accounts and change roles. */}
+      {user?.can_manage && !user?.previewing && <ManageAccounts selfId={user.id} />}
 
       {/* Contact address — the only route back into a locked-out account */}
       <section className="settings-group">

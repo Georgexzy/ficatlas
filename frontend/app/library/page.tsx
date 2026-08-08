@@ -7,6 +7,20 @@ import { listOfflineStories, deleteOfflineStory, isStoryOffline, downloadStoryFo
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 import { pollJob } from "@/lib/pollJob"
+import { describeError } from "@/lib/errors"
+
+// Turn a failed import response into a message a reader can act on. Prefer the
+// backend's own `detail` (e.g. "FicHub is throttling us right now"); fall back
+// to classifying by status code. A response whose body is not JSON at all — a
+// proxy error page — degrades to a status message instead of a raw JSON.parse
+// crash.
+const importErrorText = async (r: Response): Promise<string> => {
+  try {
+    const b = await r.json()
+    if (b && typeof b.detail === "string" && b.detail) return b.detail
+  } catch { /* non-JSON body */ }
+  return describeError(null, r.status).message
+}
 
 const API_BASE_C = ""
 
@@ -371,8 +385,9 @@ export default function LibraryPage() {
       const fd = new FormData()
       fd.append("url", importUrl.trim())
       const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
-      if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`)
-      const data = await r.json()
+      if (!r.ok) throw new Error(await importErrorText(r))
+      const data = await r.json().catch(() => null)
+      if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
       const ch = data.chapters ?? "?"
       setImportMsg(`Imported "${data.title}" (${ch} chapters). Find it in the Hosted tab.`)
       setImportUrl(""); loadHosted()
@@ -401,10 +416,10 @@ export default function LibraryPage() {
         const fd = new FormData(); fd.append("url", url)
         const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
         if (!r.ok) {
-          const t = await r.text().catch(() => "")
-          throw new Error(t || `HTTP ${r.status}`)
+          throw new Error(await importErrorText(r))
         }
-        const data = await r.json()
+        const data = await r.json().catch(() => null)
+        if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
         ok++
         results.push({ url, ok: true, detail: `${data.title || "Imported"} (${data.chapters ?? "?"} ch)` })
       } catch (e: any) {
@@ -513,7 +528,9 @@ export default function LibraryPage() {
     const fd = new FormData(); fd.append("url", url)
     try {
       const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
-      const data = await r.json()
+      if (!r.ok) throw new Error(await importErrorText(r))
+      const data = await r.json().catch(() => null)
+      if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
       setImportMsg(`Imported "${data.title}" (${data.chapters} chapters).`)
       setFfnUrls(urls => urls.filter(u => u.url !== url))
       loadHosted()
@@ -720,7 +737,9 @@ export default function LibraryPage() {
     const fd = new FormData(); fd.append("url", url)
     try {
       const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
-      const data = await r.json()
+      if (!r.ok) throw new Error(await importErrorText(r))
+      const data = await r.json().catch(() => null)
+      if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
       setImportMsg(`Imported "${data.title}" (${data.chapters} chapters).`)
       setDlpEntries(entries => entries.filter(e => e !== entry))
       loadHosted()
