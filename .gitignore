@@ -3,6 +3,7 @@ frontend/node_modules/
 
 # Runtime data — never commit
 backend/data/
+backend/.fichub_cooldown
 **/__pycache__/
 *.pyc
 

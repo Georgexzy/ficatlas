@@ -122,9 +122,13 @@ def _classify_genres(part: str) -> list[str]:
     return out
 
 
-# Off by default is wrong here — the misses are pure waste — but keep the switch
-# so it can be turned off if FicHub ever asks.
-_FICHUB_FALLBACK = os.getenv("FFNET_FICHUB_FALLBACK", "true").lower() in ("1", "true", "yes")
+# Off by default. This is a BULK background sweep, and FicHub is one volunteer's
+# server with no published rate limit — sending it the ~31% of FF.net works that
+# Wayback missed trips its per-IP throttle and keeps the whole IP blocked,
+# including the on-demand user imports that also go through FicHub. Bulk sweeps
+# belong on the Internet Archive; leave FicHub for the low-volume, user-initiated
+# import path. Turn it back on with FFNET_FICHUB_FALLBACK=true if desired.
+_FICHUB_FALLBACK = os.getenv("FFNET_FICHUB_FALLBACK", "false").lower() in ("1", "true", "yes")
 _fichub_client = None
 
 

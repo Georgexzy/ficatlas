@@ -1,5 +1,5 @@
 """Library API — downloads, EPUB uploads, hosted stories."""
-import os, re, uuid, zipfile, io, logging
+import os, re, uuid, zipfile, io, logging, asyncio, time
 import httpx
 from typing import Optional
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form
@@ -89,12 +89,90 @@ async def crawl_reset_breaker(site: str = Form(...), db: Session = Depends(get_d
 
 FICHUB_API = "https://fichub.net/api/v0"
 
+# One request every FICHUB_INTERVAL seconds across every import caller. The
+# import path previously opened its own unthrottled httpx client, so a user
+# import and the background FF.net enrichment hit FicHub as two independent
+# hammers — the exact thing that trips FicHub's per-IP rate limit and turns
+# into "429" on an import.
+#
+# The API and the worker are SEPARATE processes, so they cannot share an
+# in-memory budget. What they share is the persisted cooldown file
+# (fichub_meta._COOLDOWN_FILE): a 429 in either process records the pause, and
+# _fichub_throttle below honours it, so a user import never fires into a
+# throttle the worker has already backed off from — and vice versa.
+_FICHUB_INTERVAL = 2.0
+_fichub_lock = asyncio.Lock()
+_fichub_next_at = 0.0
+
+async def _fichub_throttle() -> None:
+    global _fichub_next_at
+    async with _fichub_lock:
+        now = time.monotonic()
+        # Respect the cooldown the worker (or a prior import) persisted, so an
+        # import waits out a throttle instead of tripping it again. Read the
+        # module attribute (not `from ... import`), which would freeze the value.
+        try:
+            import fichub_meta
+            start = max(now, _fichub_next_at, fichub_meta._cooldown_until)
+        except Exception:
+            start = max(now, _fichub_next_at)
+        _fichub_next_at = start + _FICHUB_INTERVAL
+        delay = start - now
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+
+async def _fichub_request(client: httpx.AsyncClient, method: str, url: str,
+                          *, params=None) -> httpx.Response:
+    """One FicHub call, throttled, with a short 429/5xx retry.
+
+    FicHub is one volunteer's server; a 429 means it is throttling the shared
+    IP, so the answer is to back off, not hammer harder. But a single import must
+    stay fast and bounded: the Next.js proxy that sits in front of this API
+    times out at ~30s, so we never sleep out the full Retry-After inside a
+    request (FicHub has been seen asking for 195s). If it is throttled that
+    hard, we fail fast with a clear message instead of hanging the request.
+    The user-facing error for a hard throttle is the detail string returned."""
+    backoff = 3.0
+    for attempt in range(3):
+        await _fichub_throttle()
+        try:
+            r = await client.request(method, url, params=params)
+        except httpx.HTTPError:
+            # Transient network/read error: short backoff and retry, not a 502 yet.
+            if attempt == 2:
+                raise
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 20.0)
+            continue
+        if r.status_code == 429:
+            # Tell the shared cooldown (persisted to disk) so the worker stops
+            # firing into this throttle too, not just this import path.
+            try:
+                from fichub_meta import _note_throttled as _fh_note
+                retry = r.headers.get("retry-after")
+                try:
+                    _fh_note(float(retry) if retry else None)
+                except (TypeError, ValueError):
+                    _fh_note()
+            except Exception:
+                pass
+            if attempt == 2:
+                raise HTTPException(429, "FicHub is throttling us right now. "
+                                   "Try again in a few minutes.")
+            await asyncio.sleep(min(backoff, 10.0))
+            backoff = min(backoff * 2, 20.0)
+            continue
+        return r
+    raise HTTPException(502, "FicHub request failed")
+
 
 async def fetch_from_fichub(url: str) -> dict:
     """Get metadata + epub URL from FicHub."""
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as c:
-        r = await c.get(f"{FICHUB_API}/epub", params={"q": url},
-                        headers={"User-Agent": "FicAtlas/1.0"})
+        r = await _fichub_request(c, "GET", f"{FICHUB_API}/epub",
+                                  params={"q": url},
+                                  )
         if r.status_code != 200:
             raise HTTPException(502, f"FicHub returned {r.status_code}")
         return r.json()
@@ -104,7 +182,7 @@ async def fetch_epub_bytes(epub_url: str) -> bytes:
     """Fetch the actual epub binary from FicHub's URL."""
     full_url = epub_url if epub_url.startswith("http") else f"https://fichub.net{epub_url}"
     async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as c:
-        r = await c.get(full_url, headers={"User-Agent": "FicAtlas/1.0"})
+        r = await _fichub_request(c, "GET", full_url)
         if r.status_code != 200:
             raise HTTPException(502, f"EPUB fetch returned {r.status_code}")
         return r.content
