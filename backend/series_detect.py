@@ -415,7 +415,17 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                 # an order — that is a real series that happens to be named after
                 # its lead. Rejecting on the stem alone threw those away too.
                 numbered = any(pos is not None for _, pos in g["members"])
-                if g["stem"] in facet_names and not numbered:
+                
+                # A colon or bracket explicitly marks a subtitle/sequence.
+                # "The Arithmancer: Lady Granger" is a real series, even if
+                # "The Arithmancer" is also a character tag. A bare fandom name
+                # with a connecting word ("Harry Potter and the...") does not.
+                has_subtitle_sep = any(
+                    re.search(r"[:\-–—\[\(【]", m.get("title") or "")
+                    for m, _ in g["members"]
+                )
+                
+                if g["stem"] in facet_names and not numbered and not has_subtitle_sep:
                     continue
                 members = [m for m, _ in g["members"]]
                 # Position from the structure itself where there is one. A work
@@ -512,6 +522,10 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                             SET position = EXCLUDED.position, role = EXCLUDED.role
                     """), {"s": sid, "w": m["id"], "p": m["pos"],
                            "r": m.get("role", "main")})
+                    db.execute(sql_text("""
+                        UPDATE stories SET has_series = true
+                        WHERE id = :w AND NOT has_series
+                    """), {"w": m["id"]})
                 stored += 1
 
             if not dry_run and i % 200 == 0:
@@ -544,6 +558,19 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
             db.commit()
             if gone:
                 log.info(f"  dropped {gone:,} inferred series superseded by a stated one")
+            # Keep has_series honest after deletes (membership may have gone).
+            # Only touch rows currently flagged — the partial index makes this
+            # cheap; a WHERE NOT EXISTS over all 19.7M rows is not.
+            db.execute(sql_text("""
+                UPDATE stories s SET has_series = false
+                WHERE s.id IN (
+                    SELECT s2.id FROM stories s2
+                    WHERE s2.has_series
+                      AND NOT EXISTS (
+                        SELECT 1 FROM series_works sw WHERE sw.story_id = s2.id)
+                )
+            """))
+            db.commit()
         log.info(f"DONE — {found:,} candidate series, {stored:,} stored")
     return len(authors)
 

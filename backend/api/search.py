@@ -459,6 +459,10 @@ def search(          # NOT async — see below
         if not exclude_relationships and parsed_params.get("exclude_relationships"): exclude_relationships = parsed_params["exclude_relationships"]
         if not exclude_characters    and parsed_params.get("exclude_characters"):    exclude_characters    = parsed_params["exclude_characters"]
         if not exclude_tags          and parsed_params.get("exclude_tags"):          exclude_tags          = parsed_params["exclude_tags"]
+        # series:true / series:false in the search bar. Explicit ?in_series=
+        # still wins, matching every other operator.
+        if in_series is None and parsed_params.get("in_series") is not None:
+            in_series = parsed_params["in_series"]
 
         # Replace q with just the clean free text
         q = pq.clean_text or None
@@ -515,6 +519,10 @@ def search(          # NOT async — see below
         # "every term must appear somewhere" semantics, and it never raises on
         # malformed input (unlike to_tsquery), so user text is safe to pass straight
         # through. It also gives quoted phrases, OR and -negation for free.
+        #
+        # Mild spelling tolerance lives in the title-candidate UNION below, not
+        # here. An OR similarity() against the whole table forced a seq scan of
+        # 19.7M titles and turned a 200ms search into a 60s timeout.
         filters.append(
             _story_tsv().op("@@")(func.websearch_to_tsquery(_REGCONFIG, q))
         )
@@ -743,6 +751,18 @@ def search(          # NOT async — see below
     if published_after:
         filters.append(_or_unknown(Story.published_at >= published_after, Story.published_at.is_(None)))
 
+    # Part of a series, or deliberately not. Two quite different searches: one
+    # reader wants something to sink into for a month, another wants a thing
+    # they can finish tonight without acquiring a reading list.
+    #
+    # Plain column, not EXISTS against series_works. The EXISTS form seq-scanned
+    # series_works and nested-looped every member into stories — 15s for Harry
+    # Potter + AO3/FFN + in_series, against 1.5s without it. has_series is kept
+    # in sync by series_detect and ao3_series.record.
+    if in_series is not None:
+        filters.append(Story.has_series.is_(True) if in_series
+                       else Story.has_series.is_(False))
+
     if filters:
         db_query = db_query.filter(and_(*filters))
 
@@ -754,18 +774,6 @@ def search(          # NOT async — see below
     # Arts" meant horror — so this restores a distinction the original import
     # dropped. Exact match against the stored label, since these come from a
     # closed vocabulary rather than free text.
-    # Part of a series, or deliberately not. Two quite different searches: one
-    # reader wants something to sink into for a month, another wants a thing
-    # they can finish tonight without acquiring a reading list.
-    if in_series is not None:
-        # Written out both ways rather than negating with ~. SQLAlchemy wraps a
-        # negated text() as NOT (…) around the raw string, which produced
-        # invalid SQL and 500'd every in_series=false search.
-        db_query = db_query.filter(sql_text(
-            "EXISTS (SELECT 1 FROM series_works sw WHERE sw.story_id = stories.id)"
-            if in_series else
-            "NOT EXISTS (SELECT 1 FROM series_works sw WHERE sw.story_id = stories.id)"))
-
     if sections:
         wanted = [v.strip() for v in sections.split(",") if v.strip()]
         if wanted:
@@ -819,14 +827,68 @@ def search(          # NOT async — see below
     # lower(title) index that lookup is 0.33ms, against 24s before it existed.
     if q and q.strip():
         q_norm = q.strip().lower()
+        words = q_norm.split()
         title_pred = or_(
             func.lower(Story.title) == q_norm,
             func.lower(Story.title).like(q_norm + "%"),
         )
+        # Near-miss titles FTS will miss (a typo). Plurals are already handled
+        # by the english stemmer ("dude" matches "Dudes"); this is for
+        # "arithmnacer" → "The Arithmancer".
+        #
+        # similarity() itself is unindexed, so the slice it runs over MUST be
+        # served by ix_stories_title_lower. A LIKE 'arit%' predicate made the
+        # planner seq-scan 19.7M rows (13s); a range condition
+        # (lower(title) >= 'arit' AND < 'ariu') is an index scan (8ms).
+        #
+        # Applied on a SEPARATE query that does NOT carry the FTS predicate —
+        # otherwise a typo that fails FTS can never enter via this branch.
+        fuzzy_pred = None
+        if (len(words) == 1 and len(q_norm) >= 6
+                and q_norm.isalpha()
+                and not re.search(r'[:"()\-]', q_norm)):
+            # Titles often lead with an article ("The Arithmancer"). Range-scan
+            # each common article+prefix so the btree still fires; without this
+            # "arithmnacer" only reached works literally titled "Arithmancer".
+            article_ranges = []
+            for art in ("", "the ", "a ", "an "):
+                p = art + q_norm[:4]
+                n = p[:-1] + chr(ord(p[-1]) + 1)
+                article_ranges.append(and_(
+                    func.lower(Story.title) >= p,
+                    func.lower(Story.title) < n,
+                    func.similarity(func.lower(Story.title), art + q_norm) >= 0.5,
+                ))
+            fuzzy_pred = or_(*article_ranges)
+        elif (3 <= len(words) <= 8 and len(q_norm) >= 10
+                and not re.search(r'[:"()\-]', q_norm)):
+            # Multi-word: bound by the first two words as a range prefix.
+            # Skipped for very common openers ("the", "a", "all the") that
+            # would still touch tens of thousands of titles.
+            prefix = " ".join(words[:2])
+            if prefix not in ("the", "a", "an", "all the", "to the", "in the",
+                              "of the", "for the", "on the"):
+                nxt = prefix[:-1] + chr(ord(prefix[-1]) + 1) if prefix else None
+                if nxt:
+                    fuzzy_pred = and_(
+                        func.lower(Story.title) >= prefix,
+                        func.lower(Story.title) < nxt,
+                        func.similarity(func.lower(Story.title), q_norm) >= 0.5,
+                    )
         parts = [
             db_query.order_by(None).filter(title_pred).limit(TITLE_CANDIDATES),
             db_query.order_by(None).limit(COUNT_CEILING + 1),
         ]
+        if fuzzy_pred is not None:
+            # Structural filters only — same site/explicit/delisted gate as the
+            # main query, but no FTS, so a near-miss title is allowed in.
+            fuzzy_q = db.query(Story).filter(Story.delisted_at.is_(None))
+            if site_enums:
+                fuzzy_q = fuzzy_q.filter(Story.site.in_(site_enums))
+            if not explicit:
+                fuzzy_q = fuzzy_q.filter(or_(
+                    Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
+            parts.append(fuzzy_q.filter(fuzzy_pred).limit(50))
         # For a BROAD query the arbitrary slice is the whole problem. Searching
         # "harry potter" matches far more than the ceiling, so the 5,001 rows the
         # ranker sees are an arbitrary sample of 686,000 — and the works everyone
@@ -1040,6 +1102,7 @@ def random_stories(
     count: int = Query(3, ge=1, le=12),
     fandom: Optional[str] = Query(None),
     min_words: Optional[int] = Query(None, ge=0),
+    explicit: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """Surprise-me discovery: returns N random stories, optionally constrained by
@@ -1061,6 +1124,8 @@ def random_stories(
 
     where = ["word_count > :min_w", "delisted_at IS NULL"]
     params: dict = {"min_w": min_w, "count": count}
+    if not explicit:
+        where.append("(rating <> 'explicit' OR rating IS NULL)")
     if fandom_pat:
         where.append("fic_arr(fandoms) ILIKE :fandom_pat")
         params["fandom_pat"] = fandom_pat
@@ -1084,6 +1149,8 @@ def random_stories(
     # 3% page sample, where correctness matters more than the latency.
     q = db.query(Story).filter(Story.word_count > min_w,
                                Story.delisted_at.is_(None))
+    if not explicit:
+        q = q.filter(or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
     if fandom_pat:
         q = q.filter(_arr_text(Story.fandoms).ilike(fandom_pat))
     return [_to_card(s) for s in q.order_by(func.random()).limit(count).all()]

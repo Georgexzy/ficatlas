@@ -172,6 +172,16 @@ CREATE INDEX IF NOT EXISTS ix_series_works_story ON series_works (story_id);
 ALTER TABLE series_works ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'main';
 CREATE INDEX IF NOT EXISTS ix_series_works_order ON series_works (series_id, position NULLS LAST);
 
+-- AO3 series id, for explicit series keyed on the archive's own identifier.
+-- Partial unique index: inferred/stated series have no AO3 id, and many rows
+-- share NULL. ON CONFLICT in ao3_series.record MUST repeat the WHERE clause.
+ALTER TABLE series ADD COLUMN IF NOT EXISTS ao3_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS ix_series_ao3 ON series (ao3_id) WHERE ao3_id IS NOT NULL;
+
+-- Denormalised membership flag for the in_series search filter. See Story.has_series.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS has_series boolean NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS ix_stories_has_series ON stories (id) WHERE has_series;
+
 -- Keep planner statistics fresh on the one table that matters.
 --
 -- The default analyze scale factor is 10% of the table, which never converges

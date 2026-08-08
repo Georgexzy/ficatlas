@@ -18,6 +18,7 @@ Operators (case-insensitive, any order):
   -tag:fluff                   -fandom:twilight   (exclude prefix)
   crossover:only               crossover:no
   site:ao3                     site:ffnet
+  series:true                  series:false   (in a series / standalone)
 
 Shorthand without operator key:
   >100k  <50k  100k+           → word count
@@ -134,6 +135,10 @@ FIELD_ALIASES = {
     "crossover": "crossovers", "xover": "crossovers",
     "warn": "warnings", "warning": "warnings",
     "category": "categories", "cat": "categories",
+    # Part of a series, or deliberately not. `series:true` / `series:false` is
+    # what the search bar writes; `in_series:` is accepted as a synonym because
+    # that is the query-parameter name and people mirror what they see in URLs.
+    "series": "in_series", "in_series": "in_series",
 }
 
 
@@ -167,6 +172,8 @@ class ParsedQuery:
     word_count_max: Optional[int]  = None
     updated_after: Optional[str]   = None
     crossovers: Optional[str]      = None  # include | exclude | only
+    # True = in a series, False = standalone, None = either.
+    in_series: Optional[bool]      = None
 
     # Meta
     tokens: list[dict] = field(default_factory=list)  # for UI highlighting
@@ -295,6 +302,15 @@ def parse_query(raw: str) -> ParsedQuery:
             v = value.lower()
             pq.crossovers = "only" if v in ("only", "yes", "true") else "exclude" if v in ("no", "false", "exclude") else "include"
 
+        elif canonical == "in_series":
+            v = value.lower()
+            if v in ("true", "yes", "in", "series"):
+                pq.in_series = True
+                token["value"] = "true"
+            elif v in ("false", "no", "standalone", "alone", "oneshot", "one-shot"):
+                pq.in_series = False
+                token["value"] = "false"
+
         pq.tokens.append(token)
 
     # ── 2. Strip consumed spans from text ──────────────────────────────────
@@ -358,4 +374,5 @@ def parsed_to_search_params(pq: ParsedQuery) -> dict:
         "word_count_max":      pq.word_count_max,
         "updated_after":       pq.updated_after,
         "crossovers":          pq.crossovers,
+        "in_series":           pq.in_series,
     }
