@@ -12,6 +12,7 @@ from api.auth import (require_admin, require_owner, get_current_user,
                       _require_role)
 from models.user import User, ROLE_ADMIN
 from models.story import Story, Chapter, SiteEnum, RatingEnum, StatusEnum
+from external_optout import has_external_optout
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -569,6 +570,17 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
                 "FicHub is throttling us right now and the direct AO3 fetch also "
                 "failed. Try again in a few minutes.",
             )
+
+    # Honour the author's opt-out: a public import republishes the work under
+    # this site's name, so a summary that explicitly refuses external reposting
+    # must refuse it here. A private import republishes nothing (the reader
+    # keeps a personal copy only they can read), so it is left alone.
+    if not private and has_external_optout(parsed.get("summary")):
+        raise HTTPException(
+            403,
+            "This work's author states it must not be reposted on other sites, "
+            "so FicAtlas won't add it to the shared index.",
+        )
 
     # If story already exists in DB (just metadata, not hosted), upgrade it
     if existing:

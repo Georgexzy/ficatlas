@@ -284,5 +284,12 @@ def run_job(job: str, limit: int = Form(200),
         except Exception as e:
             log.warning(f"admin job {job} failed: {type(e).__name__}: {e}")
 
-    asyncio.get_event_loop().run_in_executor(None, _go)
+    # _go is synchronous and blocking, and this endpoint runs in a FastAPI
+    # threadpool thread, so asyncio.get_event_loop() here would raise
+    # RuntimeError on py3.10+ (the job endpoint 500'd every call). Schedule it
+    # through the loop-safe run_in_background helper instead, running _go on a
+    # threadpool thread; the helper's done-callback also surfaces any error the
+    # inner try/except missed.
+    from live_fetch.jobs import run_in_background
+    run_in_background(lambda: asyncio.to_thread(_go))
     return {"started": job, "limit": min(limit, 2000)}

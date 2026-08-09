@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from provenance import PROVENANCE_TAGS
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
+from external_optout import has_external_optout
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +113,18 @@ def persist_live_results(db: Session, live_results: list[dict],
         if not url:
             failed += 1
             continue
+        # Honour the author's opt-out: a summary that explicitly refuses having
+        # the work on external sites means it must not be indexed. Skip the
+        # insert, and if it already exists, drop it (cascades its hosted text).
+        # Only the live blurb carries a summary — the AO3 bulk dump has none —
+        # so this only ever sees works a fetch actually described.
+        if has_external_optout(d.get("summary")):
+            if db.query(Story.id).filter(Story.url == url).first() is not None:
+                db.query(Story).filter(Story.url == url).delete(
+                    synchronize_session=False)
+                db.commit()
+            skipped_existing += 1
+            continue
         if url in existing_urls:
             # Already indexed — but the live blurb may carry fields the bulk
             # import never had. AO3's metadata dump has NO summary field at all,
@@ -133,7 +146,14 @@ def persist_live_results(db: Session, live_results: list[dict],
             existing_work = find_crosspost_for(
                 db, d.get("title") or "", d.get("author") or "", exclude_url=url
             )
-        except Exception:
+        except Exception as e:
+            # A transient DB error here must not look like "no cross-post". The
+            # previous bare `except: existing_work = None` turned it into a
+            # silent duplicate insert whenever a matching work DID exist. We can't
+            # know, so log it and fall through; the conservative matcher would
+            # rather miss a match than merge two different stories.
+            log.warning("cross-post lookup failed for %r: %s: %s",
+                        url, type(e).__name__, e, exc_info=True)
             existing_work = None
         if existing_work is not None:
             try:
@@ -198,8 +218,18 @@ def persist_live_results(db: Session, live_results: list[dict],
                     db.commit()
                 existing_urls.add(url)
                 continue
-            except Exception:
+            except Exception as e:
+                # A failed merge means we KNOW this is a cross-post but could not
+                # record it. The previous bare `except: rollback()` then fell
+                # through to the insert below — creating the very duplicate the
+                # merge exists to prevent. Roll back and count it as failed
+                # instead, so it is surfaced (not silently duplicated).
                 db.rollback()
+                failed += 1
+                existing_urls.add(url)
+                log.warning("cross-post merge failed for %r: %s: %s",
+                            url, type(e).__name__, e, exc_info=True)
+                continue
         try:
             # Site and id come from the URL unless the caller supplied them.
             #

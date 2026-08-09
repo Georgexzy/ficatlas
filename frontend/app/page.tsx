@@ -21,6 +21,14 @@ import DlpStars, { dlpRating } from "./DlpStars"
 import SiteHeader from "./SiteHeader"
 import { useAuth } from "@/lib/auth"
 
+// Last search results, keyed by the exact URL that produced them. Back/forward
+// navigation to the same search renders these instantly instead of re-fetching.
+// A facet link lands on a DIFFERENT URL, so it misses here and still runs a
+// fresh search — this cannot serve stale results to a different query. Written
+// only after a fetch resolves (in doSearch), so it never races the instance
+// that produced it.
+let lastSearchCache: { url: string; data: SearchResponse } | null = null
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function csv(s?: string): string[] {
   return s ? s.split(",").map(x => x.trim()).filter(Boolean) : []
@@ -1010,6 +1018,18 @@ function SearchPageInner() {
     // clicked a facet link. The difference is whether these parameters are
     // already what the current results reflect.
     hasSearchedRef.current = true    // filter tweaks queue from here on
+
+    // Back/forward to the exact search we were just viewing: render the cached
+    // results immediately instead of re-fetching. Keyed on the exact URL, so a
+    // facet link (different URL) still runs a fresh search. The cache is only
+    // written after a fetch resolves, so nothing is served before it exists.
+    if (lastSearchCache && lastSearchCache.url === rawParams.toString()) {
+      setResults(lastSearchCache.data)
+      setParsedTokens((lastSearchCache.data as any).parsed_tokens ?? [])
+      setLoading(false)
+      setAppliedSig(filterSig)
+      return
+    }
     doSearch()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -1024,32 +1044,28 @@ function SearchPageInner() {
   // the cleanup just writes that last-known pair.
   const scrollMemoRef = useRef<{ href: string; y: number }>({ href: "", y: 0 })
   useEffect(() => {
-    let lastSave = 0
+    // Only the search page records a position. During a navigation in flight,
+    // window.location is already the STORY url and Next.js fires a y=0 scroll
+    // to the top — recording either corrupts the entry with a story href or a
+    // zero height that clobbers the real one. Guarding on the path keeps the
+    // saved entry keyed to the search url and holds the genuine y.
+    const isSearch = () => window.location.pathname === "/"
+    let timer: ReturnType<typeof setTimeout> | undefined
     const capture = () => {
+      if (!isSearch()) return
       const href = window.location.pathname + window.location.search
       const y = window.scrollY
       scrollMemoRef.current = { href, y }
-      // Persist continuously (throttled) so the position is already on disk
-      // before navigation, not only at unmount — the unmount cleanup can be
-      // unreliable, and a continuous write survives even if it never runs.
-      const now = Date.now()
-      if (y > 0 && now - lastSave > 150) {
-        lastSave = now
-        saveScroll(href, y)
-      }
+      // Trailing debounce: persist the final resting position ~150ms after the
+      // user stops scrolling. Clearing the timer on unmount means a navigation-
+      // triggered scroll event can never write a stale value after we leave,
+      // and the y>0 guard means a real scroll-to-top just clears the entry.
+      clearTimeout(timer)
+      timer = setTimeout(() => { if (y > 0) saveScroll(href, y) }, 150)
     }
     capture()
     window.addEventListener("scroll", capture, { passive: true })
-    return () => window.removeEventListener("scroll", capture)
-  }, [])
-
-  useEffect(() => {
-    return () => {
-      try {
-        const { href, y } = scrollMemoRef.current
-        if (href) saveScroll(href, y)
-      } catch {}
-    }
+    return () => { window.removeEventListener("scroll", capture); clearTimeout(timer) }
   }, [])
 
   // Restore a saved scroll position once results are on screen.
@@ -1349,6 +1365,7 @@ function SearchPageInner() {
       if (seq !== searchSeqRef.current) return   // a newer search superseded this one
       setResults(data)
       setParsedTokens((data as any).parsed_tokens ?? [])
+      lastSearchCache = { url: qs.toString(), data }
       // Scroll to top of results on page change for a clean reading position
       if (explicitPage && explicitPage > 1) {
         window.scrollTo({ top: 0, behavior: "smooth" })
