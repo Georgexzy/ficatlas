@@ -236,6 +236,16 @@ CREATE INDEX IF NOT EXISTS ix_stories_relationships_trgm ON stories USING gin (f
 CREATE INDEX IF NOT EXISTS ix_stories_characters_trgm    ON stories USING gin (fic_arr(characters) gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_stories_tags_trgm          ON stories USING gin (fic_arr(tags) gin_trgm_ops);
 
+-- search_within (api/search.py:557) is a leading-wildcard ILIKE over title OR
+-- summary. A btree cannot serve a '%term%' pattern, so without trigram indexes
+-- on the bare columns that filter fell back to a sequential scan of the whole
+-- 19.7M-row table on every request that used it. gin_trgm_ops on the column
+-- serves ILIKE '%term%' directly. (These are deliberately on the plain columns,
+-- not lower()/fic_doc: the predicate is ILIKE, and the GIN trigram operator
+-- class already lowercases internally.)
+CREATE INDEX IF NOT EXISTS ix_stories_title_trgm   ON stories USING gin (title   gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_stories_summary_trgm ON stories USING gin (summary gin_trgm_ops);
+
 -- Exact author lookup, for "everything by this person" and for the cross-post
 -- matcher. It MUST be queried as lower(author) = ... : Postgres cannot use a
 -- functional index for an ILIKE even with no wildcards, and that form was a full

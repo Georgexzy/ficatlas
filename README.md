@@ -80,6 +80,14 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   DLP's list is already curated, so the rating separates the best of it from the
   merely-included
 - **DLP badge & cross-post links** — DLP-curated stories show a purple "DLP" badge; cross-posted works show a "+N copies" badge in results and "Also on AO3 / FF.net / SquidgeWorld" links on the detail page
+- **Author opt-outs are honoured** — some authors state in a work's summary that
+  they do not want it reposted or redistributed on other sites. FicAtlas treats
+  that as an explicit no-index notice: such works are skipped at ingest and
+  removed from the index (metadata entry *and* hosted full text, which cascades
+  with the row). Detection is deliberately conservative (`backend/external_optout.py`)
+  so an ordinary summary is never misread as a refusal. `backend/optout_sweep.py`
+  is the one-shot cleanup that finds and removes already-indexed matches
+  (dry-run by default; `--apply` deletes)
 
 ### Accounts & sync
 - **Optional accounts** — username + password (bcrypt), no email required. 90-day httponly cookie sessions
@@ -320,6 +328,11 @@ For newer stories not in the dumps, two paths:
 - **URL paste**: paste any AO3 or FF.net URL into the search bar. A banner appears with a one-click import. The full text is pulled via FicHub.
 - **Bulk URL import**: paste a whole list of URLs (one per line) in the Library page; each is imported via FicHub with a live progress bar.
 - **EPUB upload**: drag one or many .epub files onto the import zone in the Library page. Bulk uploads process up to 100 files at a time with a progress bar.
+
+Public imports and live-fetch indexing refuse works whose author explicitly
+opt out of external reposting (a 403 for a pasted URL, an ingest skip otherwise);
+private imports to a signed-in reader's own library are unaffected, since those
+republish nothing. See the opt-out note under **Reading & library**.
 
 ## Search syntax
 
