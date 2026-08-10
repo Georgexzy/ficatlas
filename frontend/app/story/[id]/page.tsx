@@ -460,22 +460,22 @@ export default function StoryPage() {
               </button>
             )
           )}
-          {/* For hosted FicAlley stories, expose Wayback alongside the in-app reader */}
-          {story.is_hosted && story.site === "fictionalley" && (() => {
-            let u = story.url
-            if (u.includes("fictionalley.org") && !u.includes("fictionalley.org:")) {
-              u = u.replace("fictionalley.org/", "fictionalley.org:80/")
-            }
-            return (
-              <a href={`https://web.archive.org/web/2010/${u}`}
-                target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
-                View on Wayback ↗
-              </a>
-            )
-          })()}
-          {story.wayback_url && (
-            <a href={story.wayback_url} target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
-              Wayback ↗
+          {/* One Wayback link, not two.
+              This rendered both a derived link (for hosted FicAlley works) and
+              a stored `wayback_url` when there was one — so a FicAlley story
+              with a captured snapshot showed "View on Wayback ↗" next to
+              "Wayback ↗", two buttons, same archive, different wording.
+
+              The derived branch also re-implemented the fictionalley:80 rewrite
+              that lib/storyLinks.ts exists to own — and whose header records
+              that this exact logic "was previously duplicated between the
+              results grid and the story detail page". It had crept back. Now
+              there is one link, preferring a real captured snapshot over a
+              constructed URL, and the port quirk lives in one place. */}
+          {(story.wayback_url || story.site === "fictionalley") && (
+            <a href={story.wayback_url || storyLink(story, SITE_LABELS).href}
+              target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
+              View on Wayback ↗
             </a>
           )}
           {story.cross_post_urls?.map(url => {
