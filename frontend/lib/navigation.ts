@@ -25,20 +25,36 @@
  *  enough that a dead button is not what the reader experiences. */
 export const ROUTER_PATIENCE_MS = 1200
 
+/** The same idea offline, but the router has far less to prove.
+ *
+ *  Offline used to skip the router entirely and force a document request. That
+ *  is correct for a route the browser has never seen, and badly wrong for one
+ *  it has: a document navigation offline means the service worker serves the
+ *  shell and the whole app boots again — parse, execute, hydrate, re-read
+ *  IndexedDB — for every chapter. Turning pages in a saved story rebooted the
+ *  application each time, which is what "ages to go to the next chapter"
+ *  actually was.
+ *
+ *  A route already in the router cache needs no network, so the client
+ *  transition works offline and is instant. The reader prefetches its
+ *  neighbours, so next/previous are nearly always cached. This is the wait
+ *  before giving up on that: long enough for a cache hit to render, short
+ *  enough that an uncached route does not feel stalled before the reload. */
+export const OFFLINE_ROUTER_PATIENCE_MS = 400
+
 type PushFn = (href: string) => void
 
 export function navigateTo(push: PushFn, href: string): void {
   if (typeof window === "undefined") return
 
-  // navigator.onLine is only trustworthy when false (see lib/errors.ts), which
-  // is exactly the direction needed here: if it says offline, skip the router
-  // entirely and go straight to the request the service worker can serve.
-  if (!navigator.onLine) {
-    window.location.href = href
-    return
-  }
-
   push(href)
+
+  // navigator.onLine is only trustworthy when false (see lib/errors.ts), which
+  // is the direction that matters here: a confident "offline" shortens the wait
+  // before the document-navigation fallback, rather than skipping the attempt.
+  const patience = navigator.onLine
+    ? ROUTER_PATIENCE_MS
+    : OFFLINE_ROUTER_PATIENCE_MS
 
   const target = href.split(/[?#]/)[0]
   window.setTimeout(() => {
@@ -46,5 +62,5 @@ export function navigateTo(push: PushFn, href: string): void {
     // and hashes that the caller did not ask for, and a mismatch there is not a
     // failed navigation.
     if (window.location.pathname !== target) window.location.href = href
-  }, ROUTER_PATIENCE_MS)
+  }, patience)
 }

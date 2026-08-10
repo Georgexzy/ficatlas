@@ -192,6 +192,20 @@ export default function ChapterPage() {
     }
 
     const load = async () => {
+      // Offline, go to the saved copy first instead of racing two fetches that
+      // cannot succeed. Both were doomed, the failures had to unwind before the
+      // fallback even started, and on a flaky connection — the case where
+      // navigator.onLine is most likely to be right — they could sit unresolved
+      // rather than failing fast. Reading IndexedDB directly is immediate.
+      //
+      // Only trusted in the false direction (see lib/errors.ts): if it claims
+      // to be online we still try the network, because it is often wrong about
+      // that. If it says offline and we hold nothing, the code below falls
+      // through to the network attempt anyway rather than declaring failure on
+      // the strength of a flag.
+      if (!navigator.onLine && await fromOffline()) return
+      if (cancelled) return
+
       try {
         const [s, c] = await Promise.all([
           fetch(`${API_BASE}/api/stories/${storyId}`, { signal: ctl.signal })
@@ -425,6 +439,27 @@ export default function ChapterPage() {
   const nextNum = idx >= 0 && idx < numbers.length - 1
     ? numbers[idx + 1]
     : (numbers.length === 0 && story && num < story.chapter_count ? num + 1 : null)
+
+  // Prefetch the neighbouring chapters into the router cache.
+  //
+  // This is what makes offline page-turning fast rather than merely possible.
+  // A client-side transition needs the destination's RSC payload; without it
+  // the router cannot move, navigateTo falls back to a document request, and
+  // offline that means the service worker serves the shell and the entire app
+  // boots again for every chapter. Prefetching while there IS a connection puts
+  // next and previous in the router cache, so later — online or off — turning
+  // the page is a local state change.
+  //
+  // Deliberately only the immediate neighbours: that is what the buttons and
+  // the arrow keys reach, and prefetching further ahead would spend a reader's
+  // connection on chapters they have not asked for.
+  useEffect(() => {
+    if (!storyId) return
+    if (!navigator.onLine) return          // nothing to warm a cache from
+    for (const n of [nextNum, prevNum]) {
+      if (n != null) router.prefetch(`/story/${storyId}/chapter/${n}`)
+    }
+  }, [storyId, nextNum, prevNum, router])
 
   // Keyboard navigation
   useEffect(() => {
