@@ -15,6 +15,7 @@ export async function generateMetadata(
   try {
     const r = await fetch(`${INTERNAL_API}/api/stories/series/${id}`, {
       next: { revalidate },
+      headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
       signal: AbortSignal.timeout(8000),
     })
     if (!r.ok) return {}

@@ -164,6 +164,9 @@ services:
       retries: 3
       start_period: 90s
     environment:
+      # See backend/ratelimit.py — marks our own SSR traffic so it is not
+      # counted as one very busy client. Same value in both services.
+      INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
       DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:-ficatlas}@db:5432/ficatlas
     depends_on:
       db:
@@ -180,6 +183,11 @@ services:
   frontend:
     build: ./frontend
     restart: unless-stopped
+    environment:
+      # See backend/ratelimit.py — proves a request is our own server-side
+      # rendering rather than a browser, so rendered pages are not all counted
+      # against a single client bucket. Must match the backend's value.
+      INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
     ports:
       - "3000:3000"
     depends_on:

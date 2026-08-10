@@ -43,6 +43,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   try {
     const r = await fetch(`${INTERNAL_API}/api/hubs?limit=10000`, {
       next: { revalidate: CACHE_S },
+      headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
       signal: AbortSignal.timeout(15000),
     })
     if (!r.ok) return staticPages

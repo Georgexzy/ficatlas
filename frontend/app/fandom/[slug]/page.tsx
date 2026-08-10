@@ -48,6 +48,7 @@ async function fetchHub(slug: string): Promise<Hub | null> {
   try {
     const r = await fetch(`${INTERNAL_API}/api/hubs/${encodeURIComponent(slug)}`, {
       next: { revalidate },
+      headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
       signal: AbortSignal.timeout(10000),
     })
     if (!r.ok) return null
