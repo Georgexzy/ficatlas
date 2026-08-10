@@ -23,6 +23,17 @@ docker exec \
 Get the DB password from `docker inspect ficatlas-backend-1` (env `DATABASE_URL`).
 `tests/conftest.py` builds a session and truncates all app tables per test.
 
+```bash
+# Frontend unit tests (vitest + happy-dom). Runs in the built image, so no
+# node_modules on the host. Covers lib/ only — this is not a component-testing
+# setup and does not render React.
+docker compose run --rm --no-deps -T frontend npx vitest run
+
+# Against working-copy sources without rebuilding the image:
+docker compose run --rm --no-deps -T \
+  -v "$PWD/frontend/lib:/app/lib" frontend npx vitest run
+```
+
 ## Live workflow
 
 - Backend + worker mount the repo as `/app` (live reload). `docker compose restart backend worker` to pick up changes.
