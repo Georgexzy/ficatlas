@@ -1906,6 +1906,67 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
 }
 
+/* ── Author permission page ────────────────────────────────────────────────── */
+/* The reassurance block. Visually calmer than a warning — this page exists to
+   make someone comfortable, not alert them. */
+.perm-note {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-dim);
+  border-radius: var(--radius); padding: 14px 16px; margin: 20px 0 26px;
+}
+.perm-note p { font-size: 13.5px; line-height: 1.65; color: var(--text-dim); }
+.perm-note p + p { margin-top: 10px; }
+
+.perm-token {
+  margin: 16px 0 6px; padding: 14px 16px; text-align: center;
+  background: var(--surface3); border: 1px dashed var(--border2);
+  border-radius: var(--radius);
+}
+.perm-token code {
+  font-family: var(--font-mono); font-size: 15px; color: var(--accent);
+  user-select: all;   /* one tap selects the whole code on a phone */
+  overflow-wrap: anywhere;
+}
+.perm-why { font-size: 12.5px; color: var(--text-faint); margin-bottom: 22px; }
+
+.perm-choices { border: 0; padding: 0; margin: 0 0 20px; }
+.perm-choices legend {
+  font-size: 11px; font-family: var(--font-mono); text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 10px;
+}
+.perm-choice {
+  display: flex; gap: 11px; align-items: flex-start;
+  padding: 12px 14px; margin-bottom: 8px; cursor: pointer;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); transition: border-color .12s, background .12s;
+}
+.perm-choice:hover { border-color: var(--border2); }
+.perm-choice.is-on { border-color: var(--accent); background: var(--accent-bg); }
+.perm-choice input { margin-top: 3px; }
+.perm-choice span { display: block; }
+.perm-choice strong { display: block; font-size: 13.5px; color: var(--text); }
+.perm-choice em {
+  display: block; margin-top: 3px; font-style: normal;
+  font-size: 12.5px; line-height: 1.55; color: var(--text-dim);
+}
+/* This field sits outside .takedown-form, so it inherits none of that form's
+   layout — the label and the input ended up side by side with the input crushed
+   to a few characters. Stated here rather than by moving it into the form,
+   because it is genuinely optional and should not look like the required ones. */
+.perm-email { display: block; margin-bottom: 18px; }
+.perm-email span {
+  display: block; margin-bottom: 6px;
+  font-size: 11px; font-family: var(--font-mono); text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--text-faint);
+}
+.perm-email input {
+  display: block; width: 100%;
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 9px 11px;
+  color: var(--text); font-size: 14px;
+}
+.perm-email input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* The "is this your work?" line at the foot of a story page. Quiet — it should
    be findable without competing with the story, and it must not read as a
    warning notice. */
