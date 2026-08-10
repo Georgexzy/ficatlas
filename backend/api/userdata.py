@@ -43,7 +43,7 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
         return merged
 
     if key == "progress":
-        # dict: { storyId: { chapter, scrollPct, at, ... } }
+        # dict: { storyId: { chapter, scrollPct, at, positions: {chapterNo: pct} } }
         if not isinstance(client, dict) or not isinstance(server, dict):
             return client
         out = dict(server)
@@ -55,7 +55,29 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
                 # Keep whichever was updated most recently (by 'at' ISO timestamp)
                 c_at = (c_entry or {}).get("at", "") if isinstance(c_entry, dict) else ""
                 s_at = (s_entry or {}).get("at", "") if isinstance(s_entry, dict) else ""
-                out[sid] = c_entry if c_at >= s_at else s_entry
+                winner, loser = ((c_entry, s_entry) if c_at >= s_at
+                                 else (s_entry, c_entry))
+                out[sid] = winner
+
+                # `positions` is a per-chapter map and must be unioned, not
+                # replaced with the winner's copy.
+                #
+                # Whole-entry last-write-wins was right when progress was a
+                # single scrollPct — there was one number and the newer one was
+                # the answer. It is wrong now the entry carries a position per
+                # chapter: reading chapter 7 on a phone would discard the
+                # position in chapter 3 recorded on a laptop, so going back a
+                # chapter lost your place on the device that had never moved.
+                #
+                # The winner still owns the scalar fields (which chapter you are
+                # on, and when) — those genuinely are last-write-wins. Only the
+                # map is combined, with the winner taking any chapter both hold.
+                if isinstance(winner, dict) and isinstance(loser, dict):
+                    w_pos, l_pos = winner.get("positions"), loser.get("positions")
+                    if isinstance(w_pos, dict) or isinstance(l_pos, dict):
+                        merged_pos = dict(l_pos if isinstance(l_pos, dict) else {})
+                        merged_pos.update(w_pos if isinstance(w_pos, dict) else {})
+                        out[sid] = {**winner, "positions": merged_pos}
         return out
 
     if key == "settings" and isinstance(client, dict) and isinstance(server, dict):

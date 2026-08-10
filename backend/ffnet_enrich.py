@@ -158,7 +158,14 @@ def _fichub_fallback(site_id: str) -> dict | None:
         "language": d.get("language"),
         "published_at": d.get("published_at"),
         "updated_at": d.get("updated_at"),
-        "complete": d.get("status") == "complete",
+        # None when the source said nothing, so it is not mistaken for "not
+        # complete". `d.get("status") == "complete"` returned a bare False for
+        # both "explicitly still going" and "no status field at all", and now
+        # that False actually writes in_progress, conflating them would invent a
+        # verdict out of missing data — the precise mistake the `unknown` status
+        # exists to avoid.
+        "complete": (None if d.get("status") in (None, "", "unknown")
+                     else d.get("status") == "complete"),
     }
 
 
@@ -246,6 +253,27 @@ def parse_ffn_meta(page_text: str) -> dict | None:
             # Characters are comma- or &-separated, and quoted nicknames are common.
             chars = [c.strip() for c in re.split(r",|\s&\s", plain) if c.strip()]
             out["characters"] = [c for c in chars if 1 < len(c) <= 60][:8]
+
+    # Absence of a completion marker on a parsed FF.net metadata line is
+    # evidence, not silence.
+    #
+    # FF.net prints "Status: Complete" on finished works and prints nothing at
+    # all on unfinished ones — there is no "Status: In Progress". So having
+    # successfully parsed the line, not finding the marker means the work is
+    # ongoing. crawlers/ffnet.py has always drawn exactly that conclusion
+    # (`_extract_status`); this parser only ever recorded the positive case, so
+    # the negative was thrown away and the row stayed `unknown` forever even
+    # though we had just read the page.
+    #
+    # That is why FanFiction.net has 1.29M works marked complete and literally
+    # zero marked in-progress, which makes the "In Progress" filter silently
+    # AO3-only. Recording False here lets enrichment close that gap over time.
+    #
+    # Guarded on `seen_counts`: the metadata line always carries counts
+    # ("Words: 1,234"), so if none were found we did not really parse a line and
+    # must claim nothing either way.
+    if seen_counts and "complete" not in out:
+        out["complete"] = False
     return out
 
 
@@ -436,8 +464,21 @@ def _write_batch(items: list[tuple]) -> int:
 
             # "Complete" on the page IS evidence, unlike the dump's silence that
             # everything else defaults to `unknown` for.
+            #
+            # Three states, not two. `complete` is now True, False or absent, and
+            # they mean different things: absent is "we learned nothing", False
+            # is "the page said it is still going". Only the first should leave
+            # the row alone.
+            #
+            # in_progress is written only over `unknown`, never over an existing
+            # verdict. A work that was recorded complete and later shows an
+            # archived snapshot from before it finished must not be dragged
+            # backwards by the older evidence.
             if meta.get("complete") and story.status != StatusEnum.complete:
                 story.status = StatusEnum.complete
+            elif (meta.get("complete") is False
+                  and story.status in (None, StatusEnum.unknown)):
+                story.status = StatusEnum.in_progress
 
             # Parsed already and previously discarded; only fills gaps.
             if meta.get("words") and not (story.word_count or 0):
