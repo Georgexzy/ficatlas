@@ -2192,10 +2192,64 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   inset: 0;
   z-index: -1;
 }
+/* ── Reader themes redefine the design tokens, scoped to the shell ──────────
+   The reader's theme is chosen independently of the site's. That means every
+   element inside the reader that reads a site token — var(--text-faint),
+   var(--surface2) and so on — resolves against the WRONG palette whenever the
+   two disagree: light site with a dark reader painted "All chapters" in a
+   near-black faint grey on a near-black page, and the reading-settings sheet
+   came through in site colours entirely.
+
+   Twenty-four classes were affected: the settings sheet and every control in
+   it, all three error states, the loading line, the progress bar, the hint and
+   the chapter-nav index. Overriding them one at a time is twenty-four rules
+   that have to be repeated per theme and remembered for every element added
+   later — the bolt-on version of this fix.
+
+   Custom properties inherit, so redefining the tokens on the shell itself
+   reaches every descendant at once and covers anything added in future for
+   free. The explicit per-element rules further down still win where they exist
+   and still agree with these values; they are now belt-and-braces rather than
+   the only thing holding the theme together.
+
+   --accent is deliberately NOT redefined: the gold carries enough contrast on
+   all three papers and it is the one colour that should stay constant, so a
+   link looks like a link wherever you are. */
+/* Redefining the tokens fixes every element that sets a colour explicitly, but
+   not one that simply inherits: those still took `color` from <body>, i.e. the
+   site palette. Anchoring the shell's own colour to the reader's --text makes
+   inheritance land in the right palette too, which covers unclassed markup
+   inside the settings sheet and anything added later without a rule of its own. */
+.reader-shell[data-theme] { color: var(--text); }
+
 .reader-shell[data-theme="sepia"]::before { background: #f4ecd8; }
-.reader-shell[data-theme="sepia"] { --reader-chrome: #f4ecd8; }
+.reader-shell[data-theme="sepia"] {
+  --reader-chrome: #f4ecd8;
+  --bg:         #f4ecd8;
+  --surface:    #efe6cd;
+  --surface2:   #ebe0c4;
+  --surface3:   #e2d5b4;
+  --border:     rgba(74,63,47,0.18);
+  --border2:    rgba(74,63,47,0.30);
+  --text:       #4a3f2f;
+  --text-dim:   #6b5d45;
+  --text-faint: rgba(74,63,47,0.62);
+  --text-ghost: rgba(74,63,47,0.38);
+}
 .reader-shell[data-theme="dark"]::before  { background: #0e0e10; }
-.reader-shell[data-theme="dark"] { --reader-chrome: #0e0e10; }
+.reader-shell[data-theme="dark"] {
+  --reader-chrome: #0e0e10;
+  --bg:         #0e0e10;
+  --surface:    #141416;
+  --surface2:   #18181b;
+  --surface3:   #232327;
+  --border:     #26262a;
+  --border2:    #34343a;
+  --text:       #e6e3dc;
+  --text-dim:   #c9c6c0;
+  --text-faint: #9a978f;
+  --text-ghost: rgba(230,227,220,0.34);
+}
 
 /* Light — the reader's own light page.
    This theme had NO rules at all. "Light" in the reading settings maps to
@@ -2213,7 +2267,21 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   z-index: -1;
   background: #fdfcf9;
 }
-.reader-shell[data-theme="default"] { --reader-chrome: #fdfcf9; }
+.reader-shell[data-theme="default"] {
+  --reader-chrome: #fdfcf9;
+  /* Same token scoping as sepia and dark above — this is the theme where it
+     matters most, since "Light" is what someone picks to escape a dark site. */
+  --bg:         #fdfcf9;
+  --surface:    #f7f4ee;
+  --surface2:   #f2efe8;
+  --surface3:   #e9e5db;
+  --border:     #e3ded4;
+  --border2:    #c3bcac;
+  --text:       #1f1d1a;
+  --text-dim:   #5a564e;
+  --text-faint: rgba(31,29,26,0.58);
+  --text-ghost: rgba(31,29,26,0.34);
+}
 .reader-shell[data-theme="default"] .reader,
 .reader-shell[data-theme="default"] .reader__content,
 .reader-shell[data-theme="default"] .reader__title,
