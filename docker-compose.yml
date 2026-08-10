@@ -143,6 +143,26 @@ services:
     # regardless: defence in depth, and nothing outside this host needs it.
     ports:
       - "127.0.0.1:8000:8000"
+    # So `docker compose ps` tells the truth.
+    #
+    # Only the database had a healthcheck, which meant a wedged API — process
+    # alive, answering nothing — still reported "Up", and that is exactly the
+    # state you are trying to identify when something is wrong. watchdog.sh
+    # already probes this endpoint every five minutes and restarts on failure,
+    # so this adds no recovery; it adds visibility, which is the half that was
+    # missing while diagnosing.
+    #
+    # /health is a static dict with no database work, so it cannot itself become
+    # load. start_period is generous because init_db() runs its idempotent DDL at
+    # every startup and can take a while under lock contention — without it a
+    # slow-but-fine boot would report unhealthy.
+    # urllib rather than curl: the image is python:3.12-slim and has no curl.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)\""]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 90s
     environment:
       DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:-ficatlas}@db:5432/ficatlas
     depends_on:
