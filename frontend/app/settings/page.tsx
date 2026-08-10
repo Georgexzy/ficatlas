@@ -6,6 +6,7 @@ import BackLink from "../BackLink"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 import { writePref, mergePrefs, type Prefs } from "@/lib/prefs"
+import { fetchJson } from "@/lib/errors"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -82,14 +83,20 @@ export default function SettingsPage() {
   const [autoDisabled, setAutoDisabled] = useState<{ ao3: boolean; ffnet: boolean }>({ ao3: false, ffnet: false })
   const [pendingTakedowns, setPendingTakedowns] = useState(0)
 
+  // These three go through fetchJson purely for its timeout. Their failure
+  // handling is already right — a settings page whose server call fails is still
+  // a usable settings page, because the preferences that matter to a reader live
+  // on this device — but a raw fetch cannot fail, it can only hang, and a
+  // settings screen stuck behind a spinner is not usable at all.
   const loadCrawlStatus = () =>
-    fetch(`${API_BASE}/api/library/crawl-status`).then(r => r.json())
-      .then(d => setAutoDisabled(d.auto_disabled || { ao3: false, ffnet: false })).catch(() => {})
+    fetchJson(`${API_BASE}/api/library/crawl-status`)
+      .then(d => setAutoDisabled(d.auto_disabled || { ao3: false, ffnet: false }))
+      .catch(() => {})
 
   useEffect(() => {
     // The server row is the INSTANCE default; this device's own choices win over
     // it. Same read order the reader has always used for font and width.
-    fetch(`${API_BASE}/api/settings`).then(r => r.json()).then(s => {
+    fetchJson(`${API_BASE}/api/settings`).then(s => {
       setPrefs({ ...PREF_FALLBACK, ...s, ...mergePrefs({}) } as Prefs)
       const loaded = Object.fromEntries(ADMIN_KEYS.map(k => [k, s[k] ?? ""])) as AdminSettings
       setAdmin(loaded); setAdminSaved(loaded)
@@ -103,8 +110,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!isAdmin) return
-    fetch(`${API_BASE}/api/takedown/pending-count`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : null)
+    fetchJson(`${API_BASE}/api/takedown/pending-count`, { credentials: "include" })
       .then(d => d && setPendingTakedowns(d.pending || 0))
       .catch(() => {})
   }, [isAdmin])

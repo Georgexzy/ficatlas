@@ -2,7 +2,24 @@ import type { SearchParams, SearchResponse } from "./types"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
-export async function searchStories(params: SearchParams): Promise<SearchResponse> {
+// How long to wait for a search before giving up on it.
+//
+// There was no limit at all, which is the worst thing a search box can do when
+// the index is unwell: fetch() without a signal waits on the browser's own
+// network timeout, which is minutes. A backend that was restarting, saturated or
+// wedged did not produce an error — it produced a spinner that ran until the
+// reader gave up and reloaded, and reloading fires the same request again. That
+// is how a struggling index turns into a hammered one.
+//
+// The ceiling is the backend's own statement_timeout (60s in db/session.py) plus
+// a little, so an honestly-slow query still gets its answer and only a genuinely
+// unresponsive server trips this.
+const SEARCH_TIMEOUT_MS = 65_000
+
+export async function searchStories(
+  params: SearchParams,
+  opts?: { signal?: AbortSignal },
+): Promise<SearchResponse> {
   const qs = new URLSearchParams()
 
   for (const [key, val] of Object.entries(params)) {
@@ -10,22 +27,33 @@ export async function searchStories(params: SearchParams): Promise<SearchRespons
     qs.set(key, String(val))
   }
 
-  const res = await fetch(`${API_BASE}/api/search?${qs.toString()}`, {
-    next: { revalidate: 60 },
-  })
+  // The caller's signal (a superseded search) and our timeout both have to be
+  // able to abort this one request.
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(new DOMException("timeout", "TimeoutError")),
+                           SEARCH_TIMEOUT_MS)
+  const relay = () => ctl.abort()
+  opts?.signal?.addEventListener("abort", relay)
 
-  if (!res.ok) {
-    const body = await res.text()
-    // Carries the status so the caller can say WHICH failure this was. It used
-    // to throw a bare Error, so a 500 and an unreachable server produced the
-    // same "something went wrong" — and the reader could not tell whether to
-    // retry, narrow the search, or check their connection.
-    const err: any = new Error(`Search failed: ${res.status} ${body.slice(0, 200)}`)
-    err.status = res.status
-    throw err
+  try {
+    const res = await fetch(`${API_BASE}/api/search?${qs.toString()}`, { signal: ctl.signal })
+
+    if (!res.ok) {
+      const body = await res.text()
+      // Carries the status so the caller can say WHICH failure this was. It used
+      // to throw a bare Error, so a 500 and an unreachable server produced the
+      // same "something went wrong" — and the reader could not tell whether to
+      // retry, narrow the search, or check their connection.
+      const err: any = new Error(`Search failed: ${res.status} ${body.slice(0, 200)}`)
+      err.status = res.status
+      throw err
+    }
+
+    return await res.json()
+  } finally {
+    clearTimeout(timer)
+    opts?.signal?.removeEventListener("abort", relay)
   }
-
-  return res.json()
 }
 
 export function buildSearchParams(raw: Record<string, string | string[] | undefined>): SearchParams {
@@ -356,10 +384,48 @@ export const FIELD_COVERAGE: Record<string, Record<string, number>> = {
   categories:    { ao3: 0.65, ffnet: 0.016, fictionalley: 0.021 },
   relationships: { ao3: 0.59, ffnet: 0.013, fictionalley: 0.184 },
   characters:    { ao3: 0.65, ffnet: 0.017, fictionalley: 0.815 },
+  // Measured 2026-08-10. Completion is a special case — see statusNote below.
+  status:        { ao3: 0.994, ffnet: 0.197, fictionalley: 0.716 },
 }
 
+// Counted 2026-08-10. Used only to weight the coverage warnings, so being a few
+// thousand out changes nothing — but AO3 had drifted by ~150k, which is enough
+// to shift a borderline percentage.
 const SITE_SIZE: Record<string, number> = {
-  ao3: 13135071, ffnet: 6572234, fictionalley: 29949,
+  ao3: 13281389, ffnet: 6571972, fictionalley: 29949,
+}
+
+/** The completion filter, which does not behave like the other facets.
+ *
+ *  Coverage alone understates the problem, because the gap is per-VALUE rather
+ *  than per-field. Measured across the whole index:
+ *
+ *      site          complete   in_progress   unknown
+ *      ao3          7,568,883     5,638,120    74,386
+ *      ffnet        1,293,899             0 5,278,073
+ *      fictionalley    21,453             0     8,496
+ *
+ *  So "Complete" genuinely works across all three archives, while "In Progress"
+ *  exists on AO3 and nowhere else — not because the other archives have no
+ *  unfinished works (FanFiction.net is full of them) but because the bulk dump
+ *  it was imported from has no completion column at all, so those rows are
+ *  honestly recorded as unknown rather than guessed at.
+ *
+ *  A reader filtering for WIPs would otherwise get a silently AO3-only result
+ *  set and no way to tell why. That is the same failure the field coverage
+ *  warnings exist to prevent, so it is warned about the same way — pointedly,
+ *  because a percentage would not convey "this value is absent entirely".
+ */
+export function statusNote(selected: string[], sites: string[]): string | null {
+  const others = sites.filter(s => s !== "ao3")
+  if (selected.includes("in_progress") && others.length) {
+    const named = others.map(s => SITE_LABEL[s] ?? s).join(" and ")
+    return `Only AO3 records whether a work is still in progress, so this returns `
+      + `AO3 results only — ${named} came from bulk data with no completion `
+      + `field, and those works are recorded as "not stated" rather than guessed `
+      + `at. "Complete" does work across all archives.`
+  }
+  return coverageWarning("status", sites)
 }
 
 /** A warning for a filter that is mostly inert given the sites now selected,

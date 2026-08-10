@@ -102,12 +102,25 @@ export function describeError(e: unknown, status?: number): Failure {
 export async function fetchOrFail(
   input: string, init?: RequestInit & { timeoutMs?: number },
 ): Promise<Response> {
-  const { timeoutMs = 45_000, ...rest } = init ?? {}
+  const { timeoutMs = 45_000, signal: external, ...rest } = init ?? {}
   const ctl = new AbortController()
   // A request with no timeout does not fail, it hangs — and a spinner that
   // never resolves is the worst of the failure modes, because nothing tells the
   // reader to stop waiting.
-  const timer = setTimeout(() => ctl.abort(), timeoutMs)
+  const timer = setTimeout(
+    () => ctl.abort(new DOMException("timeout", "TimeoutError")), timeoutMs)
+
+  // The caller's signal and our timeout both have to be able to abort this one
+  // request, and AbortSignal.any is too new to rely on. Relaying keeps a
+  // component's unmount (or a superseded load) cancelling work that is genuinely
+  // in flight, rather than merely ignoring its result — which on this index
+  // means a 19.7M-row query keeps running for nobody.
+  const relay = () => ctl.abort()
+  if (external) {
+    if (external.aborted) ctl.abort()
+    else external.addEventListener("abort", relay)
+  }
+
   try {
     const r = await fetch(input, { ...rest, signal: ctl.signal })
     if (!r.ok) throw describeError(null, r.status)
@@ -117,5 +130,26 @@ export async function fetchOrFail(
     throw describeError(e)
   } finally {
     clearTimeout(timer)
+    external?.removeEventListener("abort", relay)
   }
+}
+
+/** `fetchOrFail` + `.json()`, which is what almost every call site actually
+ *  wants. Kept separate so a caller needing the Response (headers, blob) still
+ *  has one. */
+export async function fetchJson<T = any>(
+  input: string, init?: RequestInit & { timeoutMs?: number },
+): Promise<T> {
+  const r = await fetchOrFail(input, init)
+  return r.json() as Promise<T>
+}
+
+/** True when a rejection is just a cancelled request — a component unmounting or
+ *  a superseded load — and therefore must not be shown to anyone as an error. */
+export function isAbort(e: unknown): boolean {
+  const name = (e as any)?.name
+  if (name === "AbortError") return true
+  // fetchOrFail rethrows a classified Failure, so the original name is gone;
+  // an aborted request that was not our timeout carries no useful detail.
+  return (e as any)?.kind === "unknown" && /aborted/i.test(String((e as any)?.detail ?? ""))
 }

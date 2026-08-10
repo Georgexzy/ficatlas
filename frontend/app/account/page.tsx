@@ -5,6 +5,7 @@ import BackLink from "../BackLink"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth"
 import SiteHeader from "../SiteHeader"
+import { fetchJson } from "@/lib/errors"
 
 interface Session {
   current: boolean
@@ -53,11 +54,18 @@ function ManageAccounts({ selfId }: { selfId: string }) {
   const [msg, setMsg] = useState("")
   const [err, setErr] = useState("")
 
+  // Only an HTTP error was handled. A network throw — backend down, restarting,
+  // unreachable — rejected out of the effect that calls this as an unhandled
+  // rejection, so `users` stayed null forever behind its loading state with
+  // nothing on screen to say why. That is the failure mode most likely to occur
+  // and the only one that said nothing.
   const load = useCallback(async () => {
-    const r = await fetch("/api/auth/users", { credentials: "include" })
-    if (!r.ok) { setErr("Could not load accounts."); return }
-    const d = await r.json().catch(() => null)
-    if (d?.users) { setUsers(d.users); setErr("") }
+    try {
+      const d = await fetchJson("/api/auth/users", { credentials: "include" })
+      if (d?.users) { setUsers(d.users); setErr("") }
+    } catch (e: any) {
+      setErr(e?.message || "Could not load accounts.")
+    }
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -150,8 +158,7 @@ export default function AccountPage() {
 
   const loadSessions = async () => {
     try {
-      const r = await fetch("/api/auth/sessions", { credentials: "include" })
-      if (r.ok) setSessions((await r.json()).sessions || [])
+      setSessions((await fetchJson("/api/auth/sessions", { credentials: "include" })).sessions || [])
     } catch {}
   }
   useEffect(() => { if (user) loadSessions() }, [user])

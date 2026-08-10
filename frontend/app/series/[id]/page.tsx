@@ -4,7 +4,7 @@ import Link from "next/link"
 import BackLink from "../../BackLink"
 import { use, useEffect, useState } from "react"
 import SiteHeader from "../../SiteHeader"
-import { describeError, type Failure } from "@/lib/errors"
+import { describeError, fetchJson, isAbort, type Failure } from "@/lib/errors"
 
 // A series, in reading order.
 //
@@ -42,20 +42,22 @@ export default function SeriesPage({ params }: { params: Promise<{ id: string }>
   const [error, setError] = useState<Failure | null>(null)
 
   useEffect(() => {
-    fetch(`/api/stories/series/${id}`)
-      .then(async r => {
-        if (!r.ok) throw describeError(null, r.status)
-        return r.json()
-      })
+    const ctl = new AbortController()
+    setError(null)
+    fetchJson<Series>(`/api/stories/series/${id}`, { signal: ctl.signal })
       .then(setData)
-      .catch(e => setError(e?.kind ? e : describeError(e)))
+      .catch(e => { if (!isAbort(e)) setError(e?.kind ? e : describeError(e)) })
+    return () => ctl.abort()
   }, [id])
 
   if (error) return (
     <div className="page-prose">
       <SiteHeader />
       <BackLink fallback="/" fallbackLabel="Back to search" />
-      <h1>Not found</h1>
+      {/* "Not found" was the heading for every failure, including a timeout and
+          a 500 — telling someone the series does not exist when in fact we could
+          not ask. The classification already knows the difference. */}
+      <h1>{error.kind === "notfound" ? "Not found" : "Couldn’t load this series"}</h1>
       <p>{error.message}</p>
       <p><Link href="/" className="card-btn card-btn--primary">Back to search</Link></p>
     </div>

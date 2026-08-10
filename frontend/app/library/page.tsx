@@ -3,11 +3,15 @@ import { useEffect, useState, useRef } from "react"
 import Link from "next/link"
 import BackLink from "../BackLink"
 import OfflineLink from "../OfflineLink"
-import { listOfflineStories, deleteOfflineStory, isStoryOffline, downloadStoryForOffline } from "@/lib/offline"
+import { fetchJson, isAbort, describeError, type Failure } from "@/lib/errors"
+import {
+  listOfflineStories, deleteOfflineStory, isStoryOffline, downloadStoryForOffline,
+  persistenceState, storageEstimate, fmtBytes,
+  type PersistState, type StorageEstimate,
+} from "@/lib/offline"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 import { pollJob } from "@/lib/pollJob"
-import { describeError } from "@/lib/errors"
 
 // Turn a failed import response into a message a reader can act on. Prefer the
 // backend's own `detail` (e.g. "FicHub is throttling us right now"); fall back
@@ -169,6 +173,11 @@ export default function LibraryPage() {
   const [progress, setProgress] = useState<Record<string, ProgressEntry>>({})
   const [hosted, setHosted] = useState<HostedStory[]>([])
   const [hostedTotal, setHostedTotal] = useState(0)
+  // Distinguishes "this shelf is empty" from "this shelf could not be loaded".
+  const [hostedError, setHostedError] = useState<Failure | null>(null)
+  const [mineError, setMineError] = useState<Failure | null>(null)
+  // "My shelf" loads off `user`, so retrying needs its own trigger.
+  const [mineReload, setMineReload] = useState(0)
   // The reader's own shelf. Separate state from `hosted` rather than a filter
   // over it, because they come from different endpoints and mean different
   // things: `hosted` is what anyone may read, `mine` is what only you may.
@@ -188,20 +197,58 @@ export default function LibraryPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [tab, setTab] = useState<Tab>("hosted")
   const [offlineStories, setOfflineStories] = useState<any[]>([])
+  // Loaded on mount, not when the Offline tab is opened.
+  //
+  // The tab's badge renders `offlineStories.length`, so gating the load on
+  // `tab === "offline"` meant the count read 0 until you clicked through to it —
+  // the one number whose whole job is to tell you there is something in there
+  // without clicking. It is a local IndexedDB read of metadata, not a network
+  // call, so there is nothing to defer.
+  //
+  // Re-read on `tab` as well, because saving a story offline elsewhere in the
+  // app (the cover toggle, the story page) should be reflected when you come
+  // back to this screen.
   useEffect(() => {
-    if (tab === "offline") listOfflineStories().then(setOfflineStories).catch(() => {})
+    let alive = true
+    const load = () => listOfflineStories()
+      .then(s => { if (alive) setOfflineStories(s) })
+      .catch(() => {})
+    load()
+    // Another tab of the same site saving or removing a story is worth picking
+    // up too — IndexedDB has no change event, so this is the cheap approximation.
+    const onFocus = () => load()
+    window.addEventListener("focus", onFocus)
+    return () => { alive = false; window.removeEventListener("focus", onFocus) }
   }, [tab])
+
+  // Whether the browser will protect these from eviction, and how much room is
+  // left. Read-only — the request to persist is made when a story is saved, at
+  // the moment the reader has shown intent, which is when browsers are most
+  // likely to grant it.
+  const [persist, setPersist] = useState<PersistState>("unsupported")
+  const [storage, setStorage] = useState<StorageEstimate | null>(null)
+  useEffect(() => {
+    persistenceState().then(setPersist).catch(() => {})
+    storageEstimate().then(setStorage).catch(() => {})
+  }, [offlineStories.length])
 
   // Reloaded whenever the signed-in identity changes, not just on mount: the
   // shelf is per-account, and a stale list after signing in as someone else
   // would show one reader another's library.
   useEffect(() => {
     if (!user) { setMine([]); setMineTotal(0); return }
-    fetch(`${API_BASE}/api/library/mine?limit=100`, { credentials: "include" })
-      .then(r => r.json())
+    const ctl = new AbortController()
+    setMineError(null)
+    fetchJson(`${API_BASE}/api/library/mine?limit=100`,
+              { credentials: "include", signal: ctl.signal })
       .then(d => { setMine(d.items ?? []); setMineTotal(d.total ?? 0) })
-      .catch(() => {})
-  }, [user])
+      // A shelf that fails to load must not render as a shelf with nothing on
+      // it. `.catch(() => {})` here meant an unreachable backend and an empty
+      // library were the same screen — and the empty one tells you, confidently
+      // and wrongly, that you have saved nothing.
+      .catch(e => { if (!isAbort(e)) setMineError(e?.kind ? e : describeError(e)) })
+    return () => ctl.abort()
+  }, [user, mineReload])
 
   const removeMine = async (id: string) => {
     const r = await fetch(`${API_BASE}/api/library/mine/${id}`,
@@ -333,10 +380,16 @@ export default function LibraryPage() {
   const loadHosted = () => {
     // The endpoint now returns {total, items}; it used to return a bare list,
     // so the tab showed the page size (100) as though it were the whole shelf.
-    fetch(`${API_BASE}/api/library/hosted?limit=100`).then(r => r.json()).then(d => {
+    setHostedError(null)
+    fetchJson(`${API_BASE}/api/library/hosted?limit=100`).then(d => {
       setHosted(Array.isArray(d) ? d : (d.items ?? []))
       setHostedTotal(Array.isArray(d) ? d.length : (d.total ?? 0))
-    }).catch(() => {})
+    }).catch(e => {
+      // Hosted is the tab the Library opens on, so this is the single most
+      // visible place the site could claim "nothing here" when it means
+      // "couldn't ask".
+      if (!isAbort(e)) setHostedError(e?.kind ? e : describeError(e))
+    })
   }
 
   const deleteHosted = async (id: string, title: string) => {
@@ -811,7 +864,9 @@ export default function LibraryPage() {
 
       {tab === "hosted" && (
         <div className="books-shelf">
-          {hosted.length === 0
+          {hostedError
+            ? <ShelfError failure={hostedError} onRetry={loadHosted} />
+            : hosted.length === 0
             ? (user?.can_import
                 ? <p className="library-empty">
                     No stories readable here yet. Use the <strong>Import</strong> tab to
@@ -861,7 +916,9 @@ export default function LibraryPage() {
             otherwise — can open them. Removing one gives up your copy; it does
             not delete anything anyone else relies on.
           </p>
-          {mine.length === 0 ? (
+          {mineError ? (
+            <ShelfError failure={mineError} onRetry={() => setMineReload(n => n + 1)} />
+          ) : mine.length === 0 ? (
             <div className="library-empty">
               <p>Nothing on your shelf yet.</p>
               <p className="library-empty__hint">
@@ -953,6 +1010,21 @@ export default function LibraryPage() {
                   Saved on this device and readable with no connection. Stored in your browser —
                   clearing site data removes them.
                 </p>
+                {/* What the browser will actually guarantee.
+                    "Stored in your browser" was true and insufficient: browsers
+                    evict storage under disk pressure, oldest origin first, and
+                    iOS clears it after seven days for a site that has not been
+                    added to the home screen. Someone who saved six novels for a
+                    flight is entitled to know which of those applies to them
+                    before they are on the plane. */}
+                <p className={`offline-tab__persist offline-tab__persist--${persist}`}>
+                  {persist === "persisted"
+                    ? "✓ This browser has marked these as protected — they won't be cleared to free up space."
+                    : persist === "denied"
+                    ? "⚠ These are not protected: your browser may clear them if the device runs low on space. Installing FicAtlas to your home screen usually earns protection."
+                    : "This browser doesn't report whether saved stories are protected from being cleared to free up space."}
+                  {storage && ` · ${fmtBytes(storage.usage)} used of ${fmtBytes(storage.quota)} available.`}
+                </p>
                 {offlineSorted.map((s: any) => {
                   const p = progress[s.id]
                   const href = p?.chapter ? `/story/${s.id}/chapter/${p.chapter}` : `/story/${s.id}/chapter/1`
@@ -963,6 +1035,10 @@ export default function LibraryPage() {
                       <p className="library-item__meta">
                         by {s.author} · {s.chapter_count} ch · {(s.word_count || 0).toLocaleString()} words ·
                         saved {new Date(s.savedAt).toLocaleDateString()}
+                        {/* Only shown when known: records saved before sizes
+                            were recorded have none, and inventing one would
+                            make the total not add up. */}
+                        {s.bytes ? ` · ${fmtBytes(s.bytes)}` : ""}
                         {p?.chapter ? ` · resume ch ${p.chapter}` : ""}
                       </p>
                     </OfflineLink>
@@ -1496,6 +1572,25 @@ const COVER_GRADIENTS = [
 // entirely, which on a shelf — where the ordering IS the interface — makes the
 // one setting that matters the least visible thing on the page. Five short
 // options fit on a phone row and wrap when they do not.
+// A shelf that could not be loaded, said plainly.
+//
+// The distinction this exists to draw: an empty shelf and an unreachable server
+// used to render the same screen, and the empty one is a confident claim — "you
+// have saved nothing" — made at exactly the moment it is least likely to be
+// true. Retry is offered only where retrying could plausibly work; `Failure`
+// already carries that judgement, so it is not re-decided here.
+function ShelfError({ failure, onRetry }: { failure: Failure; onRetry: () => void }) {
+  return (
+    <div className="library-empty" role="alert">
+      <p><strong>This shelf couldn’t be loaded.</strong></p>
+      <p className="library-empty__hint">{failure.message}</p>
+      {failure.retryable && (
+        <button className="card-btn card-btn--primary" onClick={onRetry}>Try again</button>
+      )}
+    </div>
+  )
+}
+
 function ShelfSort({ value, onChange, hasProgress }: {
   value: SortKey; onChange: (k: SortKey) => void; hasProgress: boolean
 }) {
