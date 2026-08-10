@@ -113,6 +113,34 @@ ALTER TABLE stories ADD COLUMN IF NOT EXISTS delisted_reason TEXT;
 -- adds "AND delisted_at IS NULL", so the useful index is the one over the few
 -- rows that are set.
 CREATE INDEX IF NOT EXISTS ix_stories_delisted ON stories (id) WHERE delisted_at IS NOT NULL;
+
+-- Give the planner statistics for the columns added by ALTER TABLE above.
+--
+-- ADD COLUMN does not create statistics and does not move the row-modification
+-- counter, so autoanalyze never fires for it: a column added to an existing
+-- table can stay unanalysed indefinitely. With no stats the planner falls back
+-- to a default selectivity for `IS NOT NULL` and decides a sequential scan is
+-- cheaper than the partial index built specifically for that predicate.
+--
+-- Measured on the live index: `count(*) WHERE delisted_at IS NOT NULL` took
+-- 15.0 SECONDS as a parallel seq scan over 19.9M rows, against 0.026ms as an
+-- index-only scan once the column had been analysed. The admin page wraps that
+-- count in a 4s timeout, so it silently rendered "—" instead of a number, and
+-- the failure looked like the health panel being broken rather than a missing
+-- ANALYZE.
+--
+-- Guarded on pg_stats so it runs once rather than on every startup: sampling
+-- these columns takes ~10s on a table this size, which is not something to pay
+-- for on each restart. A fresh install analyses an empty table instantly and
+-- autoanalyze handles it from there.
+DO $ANALYSE$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_stats
+                   WHERE tablename = 'stories' AND attname = 'delisted_at') THEN
+        ANALYZE stories (delisted_at, text_withdrawn_at);
+    END IF;
+END
+$ANALYSE$;
 CREATE INDEX IF NOT EXISTS ix_stories_cross_post_urls ON stories USING gin (cross_post_urls);
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
