@@ -1,7 +1,7 @@
 {
   "name": "FicAtlas",
   "short_name": "FicAtlas",
-  "description": "Unified fanfiction search and offline reader",
+  "description": "Search AO3, FanFiction.net and FicAlley at once, and read on the archive that hosts each work.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0e0e10",

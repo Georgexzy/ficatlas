@@ -6,9 +6,24 @@ import PreviewBanner from "./PreviewBanner"
 import HealthBanner from "./HealthBanner"
 import "./globals.css"
 
+// What the site says it is, in the two places people meet it before they see it:
+// a browser tab and a shared link.
+//
+// "Search all fanfiction" overpromised in one direction and undersold in the
+// other. It is not all fanfiction — it is three archives, and naming them is
+// both more accurate and more persuasive, because a reader who uses two of them
+// immediately understands what the third buys. And "search" alone leaves out the
+// half that matters: this finds work and sends you to the archive that hosts it.
 export const metadata: Metadata = {
-  title: "FicAtlas — Search all fanfiction",
-  description: "Find fanfiction across AO3, FF.net, and more in one search.",
+  title: "FicAtlas — search AO3, FanFiction.net and FicAlley at once",
+  description:
+    // "19+ million", not a precise figure: this string is baked at build time
+    // and cannot read the live count the way the landing page does, and the
+    // index only ever grows — so a "+" stays true indefinitely where "19.8M"
+    // starts going stale the moment a worker adds a row.
+    "Search 19+ million fanworks across Archive of Our Own, FanFiction.net and "
+    + "FicAlley in one place, then read them on the archive that hosts them. "
+    + "No adverts, no tracking, no AI trained on fic.",
   manifest: "/manifest.json",
 }
 
