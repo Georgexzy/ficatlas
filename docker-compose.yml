@@ -29,9 +29,44 @@ services:
     # 10GB). shared_buffers was 512MB when the host only had ~2GB free during the
     # bulk imports; with those done there is room to keep far more of the hot
     # index pages resident, which is where fandom/tag browsing spends its time.
+    # shared_buffers 1GB -> 3GB, measured rather than guessed.
+    #
+    # `stories` is 16GB of heap and 21GB of indexes, and search lives almost
+    # entirely in the trigram/FTS indexes: tags_trgm 3.2GB, doc_fts 2.7GB,
+    # summary_trgm 1.6GB, characters_trgm 1.5GB. Against that, 1GB of shared
+    # buffers gave a cache hit ratio of 51.4% — sampled as a delta across eight
+    # live searches, so this is current behaviour and not an artifact of the bulk
+    # import. Half of every search's block reads were going to disk, which is why
+    # ten concurrent searches tripled latency while neither container exceeded
+    # 28% of its CPU limit. The bottleneck was never CPU.
+    #
+    # 3GB, not more, because this box runs a desktop and a browser on 15GB and
+    # has to stay usable. Measured headroom at the time of the change: 10.2GB
+    # available. 3GB triples the resident hot set and still leaves ~7GB, which
+    # survives the ~8GB transient a frontend build takes.
+    #
+    # effective_cache_size is a planner hint, not an allocation — it tells the
+    # planner how much of the index it may assume is cached between shared
+    # buffers and the OS page cache, and costs nothing to raise.
+    # 1.5GB. This was raised to 3GB on measured evidence — cache hit ratio on
+    # never-run queries went 51.4% -> 61.5% and ten concurrent searches went from
+    # 2.94s to 1.01s wall — and then backed off, because the host could not pay
+    # for it. At 3GB the machine reached 438MB available with swap 100% full and
+    # a load average of 34, and the desktop stuttered.
+    #
+    # The reason a too-large shared_buffers is actively harmful here, rather than
+    # merely unhelpful: shared_buffers is pinned shared memory. The OS page cache
+    # is not — it is reclaimable under pressure. So on a box that is short of
+    # RAM, memory given to shared_buffers is memory the desktop can never get
+    # back, and worse, the buffers themselves can be swapped out, which turns
+    # "cached page" into "page fault to disk" and inverts the entire point.
+    #
+    # 1.5GB keeps a modest gain over the original 1GB while leaving the page
+    # cache room to do the rest of the work. If FicAtlas ever gets a box that
+    # owns its RAM, 3GB+ is the right number and the measurements above say so.
     command: >
       postgres
-      -c shared_buffers=1GB
+      -c shared_buffers=1536MB
       -c effective_cache_size=4GB
       -c work_mem=32MB
       -c maintenance_work_mem=512MB
@@ -61,8 +96,17 @@ services:
     # symptom lands on whoever is using the machine rather than on FicAtlas.
     # shared_buffers also came down from 2GB, which was sized for a box that
     # owns its memory.
-    mem_limit: 4g
-    cpus: 1.0
+    # 5g to hold the 3GB of shared buffers plus work_mem and per-connection
+    # overhead — this is the figure docker-compose.prod.yml already sanctions for
+    # this service. cpus 1.0 -> 3.0 on a 12-core host: a cap, not a reservation,
+    # so it costs the desktop nothing until the database is genuinely busy, and
+    # it is what lets concurrent searches overlap instead of queueing.
+    # 3g: 1.5GB of shared buffers plus work_mem and per-connection overhead, with
+    # room to spare but not so much that the container can quietly grow into the
+    # desktop's memory. cpus stays raised — a CPU cap costs nothing when idle,
+    # unlike a memory reservation.
+    mem_limit: 3g
+    cpus: 3.0
     shm_size: "1gb"
     ports:
       - "127.0.0.1:5432:5432"
@@ -102,7 +146,11 @@ services:
     volumes:
       - ./backend:/app
     mem_limit: 1500m
-    cpus: 0.75
+    # 0.75 of a core was the hard ceiling on how many readers could be served at
+    # once, regardless of how fast the database answered. Handlers are blocking
+    # psycopg2 running in AnyIO's thread pool, so concurrency here is real work,
+    # not just waiting. A cap, not a reservation — 2 of 12 cores.
+    cpus: 2.0
 
   frontend:
     build: ./frontend
