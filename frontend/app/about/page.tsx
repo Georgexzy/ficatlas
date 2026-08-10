@@ -89,6 +89,14 @@ export default function About() {
         <strong>and anything you post later</strong> — so you only say it once.
       </p>
       <p>
+        The choice that matters most is whether FicAtlas may keep{" "}
+        <strong>a complete copy of your stories&apos; text</strong> on this
+        server and let people read it here, rather than only listing the work and
+        linking you to the archive. That is the one thing worth being asked
+        about, and the one thing this site will not do on the strength of an
+        unverified form.
+      </p>
+      <p>
         <strong>None of that needs proof</strong>, with one exception. Saying{" "}
         <em>no</em> — don&apos;t store my text, don&apos;t index me — is taken at
         face value, because a request that only ever removes permission cannot be
