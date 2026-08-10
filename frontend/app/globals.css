@@ -2672,10 +2672,13 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   .tabbar {
     display: flex;
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 180;
-    background: color-mix(in srgb, var(--surface) 92%, transparent);
-    -webkit-backdrop-filter: saturate(180%) blur(12px);
-    backdrop-filter: saturate(180%) blur(12px);
-    border-top: 1px solid var(--border);
+    /* Opaque, and no backdrop blur — the same call as the reader's toolbar.
+       At 92% the story scrolled visibly behind the bar, and pale text ghosting
+       over a dark ground is exactly what the eye catches. Frosting only earns
+       its compositing cost when there is something worth glimpsing underneath;
+       here the thing underneath is the text you are trying to read. */
+    background: var(--surface);
+    border-top: 1px solid var(--border2);
     /* Clear the home indicator on notched phones. */
     padding-bottom: env(safe-area-inset-bottom);
   }
@@ -2688,7 +2691,10 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
     -webkit-tap-highlight-color: transparent;
   }
   .tabbar__item--current { color: var(--accent); }
-  .tabbar__icon { font-size: 18px; line-height: 1; }
+  /* Sized here rather than by the font, now that these are SVG on a 24-grid.
+     A fixed box also stops the row shifting by a pixel between tabs, which is
+     what happened when each glyph brought its own metrics. */
+  .tabbar__icon { width: 21px; height: 21px; display: block; }
   .tabbar__label { font-weight: 600; }
 
   /* Room for the bar so the last row isn't trapped underneath it.
@@ -3820,6 +3826,34 @@ body.is-resizing * { cursor: col-resize !important; }
 .site-footer a { color: var(--text-faint); text-decoration: none; }
 .site-footer a:hover { color: var(--accent); text-decoration: underline; }
 .site-footer__sep { opacity: 0.4; }
+
+/* On a phone the separators stop separating.
+   This is one centred wrapping row with "·" between the items, which works on a
+   wide screen and falls apart on a narrow one: the links break across three
+   ragged lines, the dots end up stranded at the start and end of lines where
+   they divide nothing, and "Source" is left centred on a line of its own.
+   So on small screens the dots go and the links become an even two-column grid
+   — same links, same order, but each one lands somewhere predictable and the
+   whole block reads as a list rather than as a sentence that ran out of room. */
+@media (max-width: 700px) {
+  .site-footer {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px 16px;
+    justify-content: stretch;
+    text-align: left;
+    padding: 18px 20px;
+    line-height: 1.45;
+  }
+  /* The tagline is a sentence, not a link: it spans the row above them. */
+  .site-footer > span:first-child {
+    grid-column: 1 / -1; text-align: center;
+    margin-bottom: 4px; opacity: 0.8;
+  }
+  .site-footer__sep { display: none; }
+  /* Comfortably tappable without turning the footer into a menu. */
+  .site-footer a { padding: 3px 0; }
+}
 
 
 /* ── Page frame ────────────────────────────────────────────────────────────

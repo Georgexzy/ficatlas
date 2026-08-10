@@ -77,6 +77,46 @@ export default function SiteHeader(
       : <Link href={href} className={cls} title={title} prefetch>{label}</Link>
   }
 
+// Tab icons as inline SVG on one grid, at one stroke weight.
+//
+// These were Unicode glyphs — ⌕, ▤, ⚙ — pulled from three different blocks, so
+// they arrived at three different optical weights and sizes: a hairline
+// magnifier beside a solid filled block beside a gear. Nothing lines them up,
+// because each is whatever the system font happens to draw, and it differs again
+// on iOS. Three paths on a 24-unit grid with the same 1.7 stroke are the only
+// way this row reads as one set.
+//
+// Inline rather than an icon font or sprite: three shapes do not justify a
+// download, and this has to render with no network at all — the tab bar is how
+// you reach the offline library.
+const ICONS: Record<string, React.ReactNode> = {
+  search: (
+    <><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2" /></>
+  ),
+  library: (
+    <><path d="M4 5.5h6a2 2 0 0 1 2 2V19a2.5 2.5 0 0 0-2.5-2H4z" />
+      <path d="M20 5.5h-6a2 2 0 0 0-2 2V19a2.5 2.5 0 0 1 2.5-2H20z" /></>
+  ),
+  // Sliders, not a gear. A gear reduced to 21px with a 1.7 stroke loses its
+  // teeth and reads as a sun — which on this site means the theme toggle sitting
+  // in the header, so the two would have said the same thing.
+  settings: (
+    <><path d="M5 7h9M5 12h5M5 17h11" />
+      <circle cx="17" cy="7" r="2" /><circle cx="13" cy="12" r="2" />
+      <circle cx="19" cy="17" r="2" /></>
+  ),
+}
+
+function TabIcon({ name }: { name: string }) {
+  return (
+    <svg className="tabbar__icon" viewBox="0 0 24 24" aria-hidden="true"
+      fill="none" stroke="currentColor" strokeWidth="1.7"
+      strokeLinecap="round" strokeLinejoin="round">
+      {ICONS[name]}
+    </svg>
+  )
+}
+
   // Phone navigation is a bottom tab bar rather than more items in the header.
   // Six header items at 16px gaps overflowed a 375px screen, and putting the
   // primary destinations within thumb reach is what makes this read as an app
@@ -86,7 +126,7 @@ export default function SiteHeader(
     const cls = `tabbar__item ${current === key ? "tabbar__item--current" : ""}`
     const inner = (
       <>
-        <span className="tabbar__icon" aria-hidden="true">{icon}</span>
+        <TabIcon name={icon} />
         <span className="tabbar__label">{label}</span>
       </>
     )
@@ -126,9 +166,9 @@ export default function SiteHeader(
       </header>
 
       <nav className="tabbar" aria-label="Primary">
-        {tab("search", searchHref, "Search", "⌕")}
-        {tab("library", "/library", "Library", "▤", true)}
-        {tab("settings", "/settings", "Settings", "⚙")}
+        {tab("search", searchHref, "Search", "search")}
+        {tab("library", "/library", "Library", "library", true)}
+        {tab("settings", "/settings", "Settings", "settings")}
       </nav>
     </>
   )
