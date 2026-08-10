@@ -105,12 +105,15 @@ export default function About() {
         your work is only recorded once you have shown you control the account it
         was posted from, by putting a one-time code in your own profile.
       </p>
+      {/* One button. These were two — "See what is held under my name" and "Set
+          my terms" — pointing at the two author pages that have since become
+          one, so they now lead to the same place. And the first went via
+          /permissions/manage, which is only a redirect now: our own navigation
+          should not bounce through one, those exist for bookmarks and inbound
+          links. */}
       <p>
-        <Link href="/permissions/manage" className="card-btn card-btn--primary">
-          See what is held under my name
-        </Link>{" "}
-        <Link href="/permissions" className="card-btn">
-          Set my terms
+        <Link href="/permissions" className="card-btn card-btn--primary">
+          See my work and set my terms
         </Link>
       </p>
       <p className="page-prose__muted">

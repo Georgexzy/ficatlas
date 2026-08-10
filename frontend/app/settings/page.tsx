@@ -340,7 +340,7 @@ export default function SettingsPage() {
                     : "Nothing waiting. Text comes down automatically when a request arrives; this is where you decide whether it stays down."}
                 </span>
               </div>
-              <Link href="/takedowns" className="btn btn--ghost">Open queue</Link>
+              <Link href="/admin?tab=takedowns" className="btn btn--ghost">Open queue</Link>
             </div>
           </section>
 
