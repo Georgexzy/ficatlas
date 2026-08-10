@@ -39,6 +39,32 @@ def test_tokens_are_unique_and_prefixed():
     assert all(t.startswith(ap.TOKEN_PREFIX) for t in seen)
 
 
+def test_tokens_survive_being_pasted_into_an_archive_profile():
+    """The first live verification failed on exactly this.
+
+    secrets.token_urlsafe() emits "-" and "_", and AO3 rewrote the underscore in
+    the pasted code to a hyphen — issued ...YOXH3_kHmeoabodA, profile showed
+    ...YOXH3-kHmeoabodA. Archives process these fields, so the random part must
+    contain nothing that lightweight markup or smart punctuation can touch.
+    """
+    for _ in range(200):
+        body = new_token()[len(ap.TOKEN_PREFIX):]
+        assert body.isalnum(), body
+        assert not (set(body) & set("-_+/=. ")), body
+
+
+def test_token_alphabet_avoids_characters_people_misread():
+    """0/O and 1/l/I get transcribed wrong from a phone screen, and the reader
+    then concludes the site is broken rather than that they typed an l."""
+    assert not (set(ap._TOKEN_ALPHABET) & set("0O1lI"))
+
+
+def test_tokens_carry_enough_entropy():
+    import math
+    bits = ap._TOKEN_LENGTH * math.log2(len(ap._TOKEN_ALPHABET))
+    assert bits > 100, bits
+
+
 def test_evidence_captures_context_and_strips_markup():
     t = new_token()
     page = f"<div class='bio'><p>I write things. {t} </p></div>"

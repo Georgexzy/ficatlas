@@ -536,12 +536,18 @@ CREATE INDEX IF NOT EXISTS ix_author_permissions_active
 CREATE TABLE IF NOT EXISTS author_permission_challenges (
     token       TEXT PRIMARY KEY,
     site        VARCHAR(24) NOT NULL,
+    -- author is the lowercased lookup key; author_display is what they typed.
+    -- Archive usernames are shown with case ("Georgexzy", not "georgexzy") and
+    -- the first real verification recorded the lowered form as the display name,
+    -- which is how an author's own name ends up written wrongly back at them.
     author      TEXT NOT NULL,
+    author_display TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at  TIMESTAMPTZ NOT NULL,
     attempts    INT NOT NULL DEFAULT 0,
     source_ip   TEXT
 );
+ALTER TABLE author_permission_challenges ADD COLUMN IF NOT EXISTS author_display TEXT;
 CREATE INDEX IF NOT EXISTS ix_apc_expiry ON author_permission_challenges (expires_at);
 
 CREATE TABLE IF NOT EXISTS source_gone (

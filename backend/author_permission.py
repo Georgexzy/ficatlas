@@ -63,8 +63,35 @@ UA = ("FicAtlas/1.0 (+https://github.com/Georgexzy/ficatlas) "
       "author-verification; one request per author")
 
 
+# Letters and digits only — no "-", "_", "+" or "/".
+#
+# The first live verification failed on this. secrets.token_urlsafe() emits "-"
+# and "_", and AO3 rewrote the underscore in the pasted code to a hyphen: the
+# issued token was ...YOXH3_kHmeoabodA and the profile showed ...YOXH3-kHmeoabodA.
+# Archives process these fields (markup, smart punctuation, sanitising), so any
+# character with meaning in lightweight markup is a character that may not
+# survive the round trip.
+#
+# The alternative — comparing loosely enough to forgive the substitution — is the
+# wrong repair. This comparison is the whole proof of identity, and every
+# character it agrees to ignore widens what counts as proof. Better that the
+# token cannot be mangled than that mangling be tolerated.
+#
+# 22 characters of this alphabet is ~131 bits, comfortably more than the 96 the
+# previous token carried.
+_TOKEN_ALPHABET = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_TOKEN_LENGTH = 22
+
+
 def new_token() -> str:
-    return TOKEN_PREFIX + secrets.token_urlsafe(12)
+    """A code that survives being pasted into an archive profile.
+
+    The alphabet also drops the characters people misread when copying by hand
+    from a phone — 0/O, 1/l/I — because the failure mode there is someone
+    concluding the site is broken when they have simply typed an l for a 1.
+    """
+    return TOKEN_PREFIX + "".join(
+        secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
 
 
 def normalise_author(name: str) -> str:
@@ -183,11 +210,15 @@ def extract_evidence(page_text: str, token: str, window: int = 200) -> str:
 
 def create_challenge(db: Session, site: str, author: str, source_ip: str | None) -> str:
     token = new_token()
+    # Both forms: the lowercased key for lookup, and the spelling the author
+    # actually used for display. Keeping only the key meant their own name was
+    # later shown back to them in the wrong case.
     db.execute(sql_text("""
         INSERT INTO author_permission_challenges
-            (token, site, author, expires_at, source_ip)
-        VALUES (:t, :s, :a, :e, :ip)
+            (token, site, author, author_display, expires_at, source_ip)
+        VALUES (:t, :s, :a, :ad, :e, :ip)
     """), {"t": token, "s": site, "a": normalise_author(author),
+           "ad": (author or "").strip(),
            "e": datetime.now(timezone.utc) + CHALLENGE_TTL, "ip": source_ip})
     db.commit()
     return token
@@ -195,7 +226,7 @@ def create_challenge(db: Session, site: str, author: str, source_ip: str | None)
 
 def load_challenge(db: Session, token: str) -> dict | None:
     row = db.execute(sql_text("""
-        SELECT token, site, author, expires_at, attempts
+        SELECT token, site, author, author_display, expires_at, attempts
         FROM author_permission_challenges WHERE token = :t
     """), {"t": token}).mappings().first()
     return dict(row) if row else None
