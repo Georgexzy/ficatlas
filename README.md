@@ -18,6 +18,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Tag autocomplete** — fandom, relationship, character and tag filter inputs suggest real values from the index as you type (with story counts), backed by a precomputed facets table so it's instant even on millions of rows
 - **Search-first discovery** — you don't need the Import tab to get fics: when a search returns few or no indexed results and AO3 is selected, the app auto-pulls a deeper live batch (and the no-results screen has a one-click "Search AO3 directly" button). The Import tab remains the full power-user control panel for bulk scrapes
 - **Canonical-tag autocomplete in Import** — the Import tab's fandom fields autocomplete index-first, then fall back to AO3's canonical fandom names (`/api/stats/suggest-canonical`) so you can discover and correctly spell new fandoms to scrape, avoiding malformed-tag errors. That vocabulary is synced into our own facets table by `ao3_canonical_fandoms.py` — 73,732 canonical names in 12 requests against AO3's public `/media/<category>/fandoms` listings, refreshed occasionally. It is deliberately **not** AO3's `/autocomplete/` endpoint, which their robots.txt disallows and which this box would otherwise have called on every keystroke
+- **Per-archive result breakdown** — the results bar reads `187 stories · 124 AO3 + 63 FF.net`, which is the one thing no single archive can tell you: that a search found work in more than one place, and how much of it you would have missed searching only the archive you usually use. Counted over the same bounded candidate set as the total, so it costs nothing measurable, and **withheld when the count is capped** — the candidate set behind a capped total is not exactly that size, so the parts would not sum to the headline
 - **Click-to-search tags** — every fandom, ship, character, freeform tag and warning is a link that pre-fills the corresponding filter
 - **"Surprise me"** — random discovery on the landing page (real stories only, no drabbles/art), optionally scoped to your active fandom filter
 - **Cross-site filter correctness** — fandom is matched strictly while secondary facets (character/ship/tag) and missing metadata (word count, status, rating, language) are matched permissively, so dump rows with sparse metadata surface correctly without flooding fandom searches
@@ -67,7 +68,8 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Reader accessibility** — text size is set in `rem`, so it scales with the reader's own browser font-size setting (a `px` size ignores it, which is the setting people with low vision rely on); `lang` and `dir` are set from the story's language, so screen readers stop applying English pronunciation to the large non-English share of the index and RTL scripts render correctly; a skip link jumps past the toolbar to the prose; the progress bar is a real `progressbar` role; toggles carry `aria-pressed` and labels describing the action rather than the current value; focus stays visible and `prefers-reduced-motion` is honoured
 - **Sanitised chapter HTML** — chapter bodies come from four scrapers and from user-supplied EPUBs, and the reader injects them as HTML. Everything is filtered through an allowlist on the way out (`backend/html_sanitize.py`): scripts, event handlers, `javascript:`/`data:` URLs and inline styles are dropped, outbound links get `rel="noopener"`. It doubles as a readability fix — scrapers captured page navigation and ad text as if it were prose, and unwrapping layout tags keeps the words while dropping the scaffolding
 - **EPUB export / offline reading** — any hosted story has a `↓ EPUB` button that builds a valid EPUB 2 file on the fly (stdlib only, no dependencies) for reading offline in any e-reader app
-- **In-app offline reading** — tap `⤓ Save offline` on any readable story to download its chapters into the browser's IndexedDB. The reader falls back to that saved copy when the network is unreachable (e.g. away from your Tailscale connection), an **Offline** tab in the library lists everything saved on the device, and a service worker caches the app shell so it boots with no connection. Pre-save on wifi, read anywhere
+- **In-app offline reading** — tap `⤓ Save offline` on any readable story to download its chapters into the browser's IndexedDB. The reader *and the story page* fall back to that saved copy when the network is unreachable (e.g. away from your Tailscale connection), an **Offline** tab in the library lists everything saved on the device with its size, and a service worker caches the app shell so it boots with no connection. Pre-save on wifi, read anywhere
+- **Offline saves that survive** — browsers evict origin storage under disk pressure, oldest origin first, and iOS clears it after seven days for a site not added to the home screen. So "saved" was, by default, a promise the browser was free to break silently — which is the most-reported failure of comparable reader apps. FicAtlas now requests persistent storage at the moment you save (when browsers are most likely to grant it), checks the quota *before* downloading so a long work fails up front with real numbers instead of part-way through, and the Offline tab states plainly whether your saves are protected or may be cleared
 - **Similar stories** — every story detail page shows an "If you like this, try…" section, recommending reads by shared fandoms/ships/tags with overlap scoring (ships weighted highest, then fandom, then freeform tags, with a small popularity tiebreaker)
 - **Scroll-position reading progress** — debounced save of chapter + scroll position; opening a chapter you've partly read jumps back to where you left off
 - **iOS Books-style hosted library** — book covers with hashed gradients, hover lift, drop shadow. Each shows an amber progress bar across the bottom and `Ch N/M · X%` when you've started reading. Clicking deep-links to your saved chapter, not chapter 1
@@ -369,6 +371,35 @@ with no ship at all.
 Tick **"Include stories with missing info"** in the sidebar (or pass
 `include_unknown=true`) to widen a search back to rows whose metadata was never
 captured.
+
+#### Completion status is the uneven one
+
+Most sparse fields are uneven by *degree*. Completion is uneven by *value*, which
+is worse, because it makes one half of the filter look like it works while the
+other silently does not:
+
+| site | complete | in progress | not stated |
+|---|---:|---:|---:|
+| AO3 | 7,568,883 | 5,638,120 | 74,386 |
+| FanFiction.net | 1,293,899 | **0** | 5,278,073 |
+| FicAlley | 21,453 | **0** | 8,496 |
+
+"Complete" genuinely works across all three archives. "In Progress" is AO3-only —
+not because the other archives have no unfinished works (FanFiction.net is full of
+them) but because the bulk dump has no completion column at all, so those rows are
+honestly recorded as *not stated* rather than guessed at. The sidebar says so when
+you select it, rather than quietly handing back an AO3-only result set.
+
+This is narrowing rather than permanent. FF.net prints "Status: Complete" on a
+finished work and nothing at all on an unfinished one, so on a page we have
+actually fetched, the absence of that marker is evidence — and `ffnet_enrich.py`
+now records it, where it used to keep only the positive case and leave the row
+*not stated* forever. Enrichment is Wayback-paced, so the gap closes slowly.
+
+There is no **Abandoned** filter. The status exists in the schema but nothing has
+ever written it — it matched 0 rows out of 19.8M — and a filter guaranteed to
+empty your results is worse than a missing one. It comes back when something
+populates it.
 
 ### Character and ship aliases
 
