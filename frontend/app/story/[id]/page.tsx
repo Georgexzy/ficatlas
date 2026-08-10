@@ -3,7 +3,9 @@ import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import BackLink from "../../BackLink"
-import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory } from "@/lib/offline"
+import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory, getOfflineStory } from "@/lib/offline"
+import { describeError, type Failure } from "@/lib/errors"
+import OfflineLink from "@/app/OfflineLink"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SiteHeader from "@/app/SiteHeader"
 
@@ -39,7 +41,10 @@ export default function StoryPage() {
   const params = useParams()
   const id = params?.id as string
   const [story, setStory] = useState<StoryDetail | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Failure | null>(null)
+  // True when what is on screen came from the offline copy rather than the API.
+  const [fromCache, setFromCache] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const [bookmarked, setBookmarked] = useState(false)
   const [importing, setImporting] = useState(false)
   const [similar, setSimilar] = useState<any[]>([])
@@ -49,22 +54,82 @@ export default function StoryPage() {
   const [offlineProgress, setOfflineProgress] = useState<{ done: number; total: number } | null>(null)
   const [offlineMsg, setOfflineMsg] = useState<string | null>(null)
 
+  // Loading the story.
+  //
+  // The offline fallback is the point of the rewrite. This page only ever asked
+  // the API, so a story you had explicitly saved for offline reading showed
+  // "Failed to fetch" on its own page the moment the network went — and since
+  // this page is the only route to its chapters, saving a story offline did not
+  // in practice make it readable offline. The service worker was serving the
+  // shell correctly; the shell then refused to render.
+  //
+  // Also given a timeout. `setError(String(e))` on a bare rejection printed
+  // `Failed to fetch` or, worse, an empty string from `r.statusText` on an HTTP/2
+  // response — where statusText is always empty — so a 500 rendered a blank
+  // error box.
   useEffect(() => {
     if (!id) return
     // Abort on unmount or when the id changes, so a stale response for a
     // previous story can never overwrite the current one mid-navigation.
     const ctl = new AbortController()
-    fetch(`${API_BASE}/api/stories/${id}`, { signal: ctl.signal })
-      .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
-      .then(setStory)
-      .catch(e => { if (!ctl.signal.aborted) setError(String(e)) })
+    const timer = setTimeout(() => ctl.abort(), 20_000)
+    let done = false
+
+    const fromOffline = async () => {
+      const saved = await getOfflineStory(id)
+      if (!saved || done) return false
+      // Marked so the page can say the reader is looking at a saved copy rather
+      // than silently presenting a stale one as current.
+      setStory({
+        ...(saved as any),
+        chapter_count: saved.chapters.length,
+        chapters: saved.chapters.map(c => ({
+          id: `${saved.id}-${c.number}`, number: c.number, title: c.title, word_count: 0,
+        })),
+        fandoms: saved.fandoms ?? [], relationships: [], characters: [], tags: [],
+        warnings: [], categories: [],
+        status: "unknown", language: "English", is_hosted: true,
+        kudos: 0, hits: 0, bookmarks: 0, comments: 0,
+        word_count: saved.word_count ?? 0,
+      } as StoryDetail)
+      setFromCache(true)
+      return true
+    }
+
+    ;(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/stories/${id}`, { signal: ctl.signal })
+        if (!r.ok) throw describeError(null, r.status)
+        const data = await r.json()
+        if (done) return
+        setStory(data)
+        setFromCache(false)
+      } catch (e: any) {
+        if (done) return
+        if (await fromOffline()) return
+        if (done) return
+        setError(e?.kind ? e : describeError(e))
+      } finally {
+        clearTimeout(timer)
+      }
+    })()
+
     // Fetch similar stories in parallel (non-blocking; failures are silent)
     fetch(`${API_BASE}/api/stories/${id}/similar?count=6`, { signal: ctl.signal })
       .then(r => r.ok ? r.json() : [])
       .then(d => setSimilar(Array.isArray(d) ? d : []))
       .catch(() => {})
-    return () => ctl.abort()
-  }, [id])
+
+    return () => { done = true; clearTimeout(timer); ctl.abort() }
+  }, [id, reloadKey])
+
+  // Coming back online should get the real record rather than leave the reader
+  // on the saved copy.
+  useEffect(() => {
+    const retry = () => setReloadKey(k => k + 1)
+    window.addEventListener("online", retry)
+    return () => window.removeEventListener("online", retry)
+  }, [])
 
   // Bookmark state from localStorage
   useEffect(() => {
@@ -156,8 +221,27 @@ export default function StoryPage() {
       .catch(() => {})
   }, [story?.id])
 
-  if (error) return <div className="reader-shell"><SiteHeader />
-      <BackLink fallback="/" fallbackLabel="Back to search" /><div className="alert alert--error">{error}</div></div>
+  if (error) return (
+    <div className="reader-shell"><SiteHeader />
+      <BackLink fallback="/" fallbackLabel="Back to search" />
+      <div className="reader-error" role="alert">
+        <h1 className="reader-error__title">
+          {error.kind === "offline" ? "Not saved on this device" : "Couldn't load this story"}
+        </h1>
+        <p className="reader-error__body">
+          {error.kind === "offline"
+            ? "You're offline and this story isn't saved here. Your saved stories are in your Library."
+            : error.message}
+        </p>
+        <div className="reader-error__actions">
+          {error.retryable && (
+            <button className="btn btn--primary" onClick={() => setReloadKey(k => k + 1)}>Try again</button>
+          )}
+          <OfflineLink href="/library" className="btn btn--ghost">My library</OfflineLink>
+        </div>
+      </div>
+    </div>
+  )
   if (!story) return <div className="reader-shell"><SiteHeader />
       <BackLink fallback="/" fallbackLabel="Back to search" /><p className="loading">Loading…</p></div>
 
@@ -166,6 +250,15 @@ export default function StoryPage() {
     <div className="reader-shell">
       <SiteHeader />
       <BackLink fallback="/" fallbackLabel="Back to search" />
+
+      {/* Say so rather than presenting a saved copy as the live record. The tags,
+          counts and chapter list below are whatever was true when it was saved,
+          and the difference matters on a work still being updated. */}
+      {fromCache && (
+        <p className="story-detail__cached" role="status">
+          Showing the copy saved on this device — the index couldn’t be reached.
+        </p>
+      )}
 
       <article className="story-detail">
         <header className="story-detail__header">
@@ -258,28 +351,41 @@ export default function StoryPage() {
         </header>
 
         <div className="story-detail__actions">
+          {/* OfflineLink, not Link, on every route into the reader. Next's client
+              router fetches an RSC payload before it will navigate, which fails
+              with no connection — so these buttons did nothing offline, on the
+              one page whose whole job offline is to get you into a saved story.
+
+              "first" rather than a hard-coded chapter 1, and membership rather
+              than `<= chapters.length`, because stored chapter numbers are not
+              guaranteed contiguous and an offline copy holds only what actually
+              downloaded. A story whose first chapter is numbered 0, or whose
+              chapter 3 failed to save, was offered a link to a chapter that
+              could not load. */}
           {story.is_hosted && story.chapters.length > 0 && (() => {
+            const numbers = story.chapters.map(c => c.number).sort((a, b) => a - b)
+            const first = numbers[0]
             let savedChapter = 0
             try {
               const p = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
               savedChapter = p[story.id]?.chapter ?? 0
             } catch {}
-            if (savedChapter > 1 && savedChapter <= story.chapters.length) {
+            if (savedChapter !== first && numbers.includes(savedChapter)) {
               return (
                 <>
-                  <Link href={`/story/${story.id}/chapter/${savedChapter}`} className="btn btn--primary">
-                    Continue Chapter {savedChapter}
-                  </Link>
-                  <Link href={`/story/${story.id}/chapter/1`} className="btn btn--ghost">
+                  <OfflineLink href={`/story/${story.id}/chapter/${savedChapter}`} className="btn btn--primary">
+                    {`Continue Chapter ${savedChapter}`}
+                  </OfflineLink>
+                  <OfflineLink href={`/story/${story.id}/chapter/${first}`} className="btn btn--ghost">
                     Start over
-                  </Link>
+                  </OfflineLink>
                 </>
               )
             }
             return (
-              <Link href={`/story/${story.id}/chapter/1`} className="btn btn--primary">
-                Read Chapter 1
-              </Link>
+              <OfflineLink href={`/story/${story.id}/chapter/${first}`} className="btn btn--primary">
+                {`Read Chapter ${first}`}
+              </OfflineLink>
             )
           })()}
           {/* Seed rows are excluded: there is no real page for FicHub to fetch. */}
@@ -287,13 +393,20 @@ export default function StoryPage() {
             && (story.site === "ao3" || story.site === "ffnet") && (() => {
               const { href, label } = storyLink(story, SITE_LABELS)
               return (
+                // The archive first, copying second. This had "Import & Read
+                // here" as the primary action and the link to the archive as a
+                // ghost button — offering to make a copy of a work that is
+                // perfectly readable where its author put it, in preference to
+                // sending the reader there. For a search engine that is both the
+                // wrong emphasis and the wrong default: kudos, comments and
+                // subscriptions only work at the source.
                 <div className="btn-row">
-                  <button className="btn btn--primary" onClick={importAndRead} disabled={importing}>
-                    {importing ? "Importing…" : "Import & Read here"}
-                  </button>
-                  <a href={href} target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="btn btn--primary">
                     {label}
                   </a>
+                  <button className="btn btn--ghost" onClick={importAndRead} disabled={importing}>
+                    {importing ? "Importing…" : "Import & read here"}
+                  </button>
                 </div>
               )
             })()}
@@ -469,11 +582,16 @@ export default function StoryPage() {
             <ol>
               {story.chapters.map(ch => (
                 <li key={ch.id}>
-                  <Link href={`/story/${story.id}/chapter/${ch.number}`}>
+                  <OfflineLink href={`/story/${story.id}/chapter/${ch.number}`}>
                     <span className="chapter-list__num">{ch.number}.</span>
                     <span className="chapter-list__title">{ch.title || `Chapter ${ch.number}`}</span>
-                    <span className="chapter-list__words">{ch.word_count.toLocaleString()} words</span>
-                  </Link>
+                    {/* Word counts are not kept in the offline copy, and
+                        `ch.word_count.toLocaleString()` on the undefined that
+                        left threw during render — blanking the entire page. */}
+                    {ch.word_count > 0 && (
+                      <span className="chapter-list__words">{ch.word_count.toLocaleString()} words</span>
+                    )}
+                  </OfflineLink>
                 </li>
               ))}
             </ol>

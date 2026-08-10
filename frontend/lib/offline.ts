@@ -29,10 +29,23 @@ export interface OfflineStory {
   chapter_count: number
   chapters: OfflineChapter[]
   savedAt: string   // ISO timestamp
+  /** Approximate bytes this record occupies. Absent on records written by v1. */
+  bytes?: number
+  /** Schema version that wrote this record, so migrations can be selective. */
+  schema?: number
 }
 
+/** Bumped whenever the record shape changes; written into each record. */
+export const SCHEMA_VERSION = 2
+
 const DB_NAME = "ficatlas-offline"
-const DB_VERSION = 1
+// Version 2 exists to establish that migrating is possible at all, before it is
+// needed. v1 shipped with an onupgradeneeded that only created the store if it
+// was missing, so there was no path to changing the record shape later — and the
+// only way out of that is to discard what readers already have, which is the
+// exact failure this whole module exists to prevent. The upgrade below is a
+// no-op for existing records by design; it is the hinge, not the change.
+const DB_VERSION = 2
 const STORE = "stories"
 
 function openDB(): Promise<IDBDatabase> {
@@ -42,15 +55,93 @@ function openDB(): Promise<IDBDatabase> {
       return
     }
     const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE, { keyPath: "id" })
+        return
+      }
+      // Migrations run in order from whatever version this device holds. Each
+      // step must be safe to apply to a record written by any earlier version,
+      // because a device can be arbitrarily far behind.
+      const from = event.oldVersion
+      if (from < 2) {
+        // v1 -> v2: stamp existing records with the schema version that wrote
+        // them, so a future migration can tell them apart without guessing.
+        const store = req.transaction!.objectStore(STORE)
+        store.openCursor().onsuccess = (e) => {
+          const cur = (e.target as IDBRequest<IDBCursorWithValue>).result
+          if (!cur) return
+          const rec = cur.value
+          if (rec && rec.schema == null) { rec.schema = 1; cur.update(rec) }
+          cur.continue()
+        }
       }
     }
     req.onsuccess = () => resolve(req.result)
     req.onerror = () => reject(req.error)
+    // Another tab holding an old-version connection blocks the upgrade forever
+    // and the save silently hangs. Fail loudly instead.
+    req.onblocked = () =>
+      reject(new Error("Another FicAtlas tab is open with an older version. "
+                     + "Close it and try again."))
   })
+}
+
+// ── Durability ──────────────────────────────────────────────────────────────
+//
+// Browsers evict origin storage under disk pressure, least-recently-used origin
+// first, and iOS additionally clears storage for a PWA that has not been added
+// to the home screen after seven days. So "saved for offline" was, by default, a
+// promise the browser was free to break without telling anybody — which is the
+// single most-reported failure of comparable reader apps: people lose whole
+// downloaded libraries and only find out when they are offline and it matters.
+//
+// navigator.storage.persist() asks for exemption. Chrome grants it automatically
+// for installed PWAs, bookmarked sites, or sites with push permission; Firefox
+// prompts; Safari does not implement it. It cannot be forced, so the honest
+// design is to ask, then tell the reader what the answer was.
+
+export type PersistState = "persisted" | "denied" | "unsupported"
+
+export async function requestPersistentStorage(): Promise<PersistState> {
+  try {
+    if (typeof navigator === "undefined" || !navigator.storage?.persist) return "unsupported"
+    if (await navigator.storage.persisted?.()) return "persisted"
+    return (await navigator.storage.persist()) ? "persisted" : "denied"
+  } catch {
+    return "unsupported"
+  }
+}
+
+/** Current persistence state without asking for it. */
+export async function persistenceState(): Promise<PersistState> {
+  try {
+    if (typeof navigator === "undefined" || !navigator.storage?.persisted) return "unsupported"
+    return (await navigator.storage.persisted()) ? "persisted" : "denied"
+  } catch {
+    return "unsupported"
+  }
+}
+
+/** Byte sizes for people, not for machines. */
+export function fmtBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 MB"
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`
+  if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`
+  return `${Math.max(1, Math.round(n / 1024))} KB`
+}
+
+export interface StorageEstimate { usage: number; quota: number; available: number }
+
+export async function storageEstimate(): Promise<StorageEstimate | null> {
+  try {
+    if (typeof navigator === "undefined" || !navigator.storage?.estimate) return null
+    const { usage = 0, quota = 0 } = await navigator.storage.estimate()
+    return { usage, quota, available: Math.max(0, quota - usage) }
+  } catch {
+    return null
+  }
 }
 
 export async function saveStoryOffline(story: OfflineStory): Promise<void> {
@@ -59,7 +150,16 @@ export async function saveStoryOffline(story: OfflineStory): Promise<void> {
     const tx = db.transaction(STORE, "readwrite")
     tx.objectStore(STORE).put(story)
     tx.oncomplete = () => { db.close(); resolve() }
-    tx.onerror = () => { db.close(); reject(tx.error) }
+    tx.onerror = () => {
+      db.close()
+      // A quota failure here is the one error a reader can actually act on, and
+      // `tx.error` stringifies to nothing useful in the UI. Name it.
+      const e = tx.error
+      reject(e?.name === "QuotaExceededError"
+        ? new Error("This device is out of space for saved stories. Remove one "
+                  + "from your Library's Offline tab and try again.")
+        : e)
+    }
   })
 }
 
@@ -118,9 +218,38 @@ export async function downloadStoryForOffline(
   storyId: string,
   onProgress?: (done: number, total: number) => void,
 ): Promise<number> {
+  // Ask for persistent storage on the first save. Doing it here rather than at
+  // app start matters: Chrome weighs engagement signals, and a request made at
+  // the moment the reader deliberately saves something is both more likely to be
+  // granted and easier to explain if it is not.
+  await requestPersistentStorage()
+
   const metaRes = await fetch(`/api/stories/${storyId}`)
   if (!metaRes.ok) throw new Error(`Couldn't load story (HTTP ${metaRes.status})`)
   const meta = await metaRes.json()
+
+  // Refuse up front rather than partway through.
+  //
+  // Nothing checked the quota, so saving a long work on a nearly-full device
+  // failed on whichever chapter happened to cross the limit — after minutes of
+  // downloading, with a QuotaExceededError the UI reported as "Couldn't save
+  // offline: undefined". Estimating first turns that into one honest sentence
+  // with real numbers, before any work is done.
+  //
+  // The estimate is deliberately generous: word_count is the only size signal
+  // available before downloading, HTML markup roughly doubles the plain text,
+  // and IndexedDB stores strings as UTF-16. ~6 bytes per word is conservative
+  // and errs toward warning rather than toward failing halfway.
+  const est = await storageEstimate()
+  if (est) {
+    const needed = Math.max(1, (meta.word_count || 0)) * 6
+    if (est.quota > 0 && needed > est.available) {
+      throw new Error(
+        `Not enough space on this device: this story needs about `
+        + `${fmtBytes(needed)} and only ${fmtBytes(est.available)} is free. `
+        + `Remove a saved story from your Library's Offline tab and try again.`)
+    }
+  }
 
   // Iterate the chapters the story ACTUALLY has, not its declared chapter_count.
   // Those disagree on real rows (a story can claim 50 chapters while 30 are
@@ -156,6 +285,13 @@ export async function downloadStoryForOffline(
     throw new Error("No chapters could be downloaded for this story.")
   }
 
+  // Measured, not estimated. The reader needs to be able to see which saved
+  // story is worth removing when space runs short, and a per-story figure is the
+  // only thing that answers that. UTF-16 in IndexedDB, hence the doubling.
+  const bytes = chapters.reduce(
+    (n, c) => n + 2 * ((c.content?.length ?? 0) + (c.start_note?.length ?? 0)
+                     + (c.end_note?.length ?? 0) + (c.summary?.length ?? 0)), 0)
+
   await saveStoryOffline({
     id: meta.id,
     title: meta.title,
@@ -167,6 +303,8 @@ export async function downloadStoryForOffline(
     word_count: meta.word_count,
     chapter_count: chapters.length,   // what we actually hold, not what was claimed
     chapters,
+    bytes,
+    schema: SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
   })
   // Cache the reader shell so this story opens offline with no prior online

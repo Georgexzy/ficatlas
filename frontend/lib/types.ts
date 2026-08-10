@@ -55,6 +55,10 @@ export interface SearchResponse {
   per_page: number
   results: StoryCard[]
   sites_searched: string[]
+  /** Matches per archive, e.g. {ao3: 124, ffnet: 63}. Present only when the
+   *  total is exact and more than one archive was searched — see the note on
+   *  site_counts in backend/api/search.py for why it is withheld otherwise. */
+  site_counts?: Record<string, number>
   live_count?: number
   parsed_tokens?: any[]
 }
@@ -98,6 +102,8 @@ export interface SearchParams {
   include_unknown?: boolean
   /** Minimum DarkLordPotter community star rating (0-5). */
   dlp_min_rating?: number
+  /** Restrict to works that are (true) or are not (false) part of a series. */
+  in_series?: boolean
   search_within?: string
   // Pagination
   sort?: string
