@@ -227,7 +227,7 @@ export default function TakedownPage() {
           is a thing people mean and this form cannot express. */}
       <p className="takedown-alt">
         Want this to cover everything you write, not just one story? You can{" "}
-        <Link href="/permissions/manage">see everything held under your name</Link>{" "}
+        <Link href="/permissions">see everything held under your name</Link>{" "}
         and set a standing choice. That needs no proof either, unless you are
         giving permission rather than withdrawing it.
       </p>

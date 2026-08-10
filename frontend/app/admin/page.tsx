@@ -165,7 +165,7 @@ export default function AdminPage() {
             <Tile label="Readable here" value={data.hosted_public} />
             <Tile label="Delisted" value={data.delisted} />
             <Tile label="Takedowns waiting" value={data.takedowns_pending}
-                  href={data.takedowns_pending > 0 ? "/takedowns" : undefined} />
+                  onClick={data.takedowns_pending > 0 ? () => setTab("takedowns") : undefined} />
           </div>
 
           {data.cached && (data.age_s ?? 0) > 0 && (
@@ -354,8 +354,9 @@ export default function AdminPage() {
   )
 }
 
-function Tile({ label, value, approx, href }: {
+function Tile({ label, value, approx, href, onClick }: {
   label: string; value: number | null; approx?: boolean; href?: string
+  onClick?: () => void
 }) {
   const body = (
     <>
@@ -366,6 +367,12 @@ function Tile({ label, value, approx, href }: {
       <span className="admin-tile__label">{label}</span>
     </>
   )
+  // onClick before href: the takedown tile now switches to a tab on this very
+  // page, so routing away to /takedowns and being redirected back would be a
+  // round trip to arrive where we already are.
+  if (onClick) {
+    return <button type="button" onClick={onClick} className="admin-tile admin-tile--link">{body}</button>
+  }
   return href
     ? <Link href={href} className="admin-tile admin-tile--link">{body}</Link>
     : <div className="admin-tile">{body}</div>
