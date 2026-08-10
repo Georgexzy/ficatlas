@@ -54,7 +54,41 @@ MAX_ATTEMPTS = 12
 
 SITES = ("ao3", "ffnet")
 
+# Which archives can actually be verified by reading a profile.
+#
+# FanFiction.net cannot, and this is not a limitation worth papering over.
+# Every request from this server — profile, home page, any User-Agent — comes
+# back 403 behind Cloudflare's "Just a moment..." interstitial. The rest of this
+# project already routes around it: ffnet_enrich.py reads FF.net metadata out of
+# the Wayback Machine rather than from FF.net. Wayback is no help for
+# verification, because a code pasted into a profile today is not in an archived
+# snapshot of it.
+#
+# There is a second, independent problem even if the fetch worked. FF.net
+# profiles are keyed by numeric id (/u/12345/PenName) while stories carry a pen
+# name, and all 6,571,972 FF.net rows have author_url NULL — the bulk dump
+# carried no ids at all — so there is nothing stored to join a verified profile
+# to its works.
+#
+# Offering an FF.net option that always fails would be worse than not offering
+# one, so the UI says AO3 only, and says why.
+VERIFIABLE_SITES = ("ao3",)
+
 POLICIES = ("host", "metadata_only", "deny")
+
+# Policies that only ever REDUCE what the site may do.
+#
+# The asymmetry that governs removal governs these too: proof is required to
+# GRANT something, because an unverified "yes" could licence someone else's
+# writing. Refusing costs nobody anything they are entitled to — the worst an
+# unverified "deny" achieves is that we stop indexing a work we could have
+# indexed, which its author could demand through the takedown form anyway,
+# without proof, at any time.
+#
+# So an FF.net author is not shut out. They cannot grant hosting, but they can
+# restrict, which is the direction that matters most to someone who has just
+# found their work somewhere they did not put it.
+RESTRICTIVE_POLICIES = ("deny", "metadata_only")
 
 # A profile page is small, but a hung fetch here would hold a request thread.
 FETCH_TIMEOUT = httpx.Timeout(connect=6.0, read=20.0, write=6.0, pool=6.0)
@@ -253,8 +287,10 @@ def purge_expired_challenges(db: Session) -> int:
 
 
 def record_permission(db: Session, *, site: str, author: str, author_display: str,
-                      policy: str, token: str, evidence_url: str,
-                      evidence_text: str, contact_email: str | None) -> None:
+                      policy: str, token: str | None, evidence_url: str | None,
+                      evidence_text: str | None, contact_email: str | None,
+                      method: str = "profile_token",
+                      source_ip: str | None = None) -> None:
     """Store a verified permission, replacing any previous one for this author.
 
     ON CONFLICT rather than insert-only: an author changing their mind is the
@@ -264,11 +300,14 @@ def record_permission(db: Session, *, site: str, author: str, author_display: st
     db.execute(sql_text("""
         INSERT INTO author_permissions
             (site, author, author_display, policy, token, evidence_url,
-             evidence_text, contact_email, verified_at, created_at, updated_at)
-        VALUES (:s, :a, :ad, :p, :t, :eu, :et, :em, now(), now(), now())
+             evidence_text, contact_email, method, source_ip,
+             verified_at, created_at, updated_at)
+        VALUES (:s, :a, :ad, :p, :t, :eu, :et, :em, :m, :ip, now(), now(), now())
         ON CONFLICT (site, author) DO UPDATE SET
             policy        = EXCLUDED.policy,
             author_display= EXCLUDED.author_display,
+            method        = EXCLUDED.method,
+            source_ip     = EXCLUDED.source_ip,
             token         = EXCLUDED.token,
             evidence_url  = EXCLUDED.evidence_url,
             evidence_text = EXCLUDED.evidence_text,
@@ -278,8 +317,9 @@ def record_permission(db: Session, *, site: str, author: str, author_display: st
             revoked_at    = NULL
     """), {"s": site, "a": normalise_author(author), "ad": author_display,
            "p": policy, "t": token, "eu": evidence_url, "et": evidence_text,
-           "em": contact_email})
+           "em": contact_email, "m": method, "ip": source_ip})
     db.commit()
+    invalidate_verified_cache()
 
 
 def get_permission(db: Session, site: str, author: str) -> dict | None:
@@ -295,6 +335,53 @@ def get_permission(db: Session, site: str, author: str) -> dict | None:
         WHERE site = :s AND author = :a AND revoked_at IS NULL
     """), {"s": site, "a": normalise_author(author)}).mappings().first()
     return dict(row) if row else None
+
+
+# ── Verified-author set, cached ──────────────────────────────────────────────
+#
+# The UI marks results whose author has verified their account, and a search
+# returns twenty of them. Looking each one up would be twenty queries per search
+# against a 19.9M-row index, to answer a question about a table holding a
+# handful of rows.
+#
+# So the whole set is held in memory instead. It is (site, author) pairs of
+# active permissions — measured in tens today and unlikely ever to reach a size
+# where this is the wrong shape; if it did, the fix is a join, not a bigger
+# cache. Refreshed on a short TTL rather than invalidated on write, because
+# being sixty seconds stale about a badge costs nothing and invalidation across
+# processes is a problem this does not need to have.
+_VERIFIED: set[tuple[str, str]] | None = None
+_VERIFIED_AT = 0.0
+_VERIFIED_TTL = 60.0
+
+
+def verified_authors(db: Session) -> set[tuple[str, str]]:
+    """(site, lowercased author) for every author with an active permission."""
+    global _VERIFIED, _VERIFIED_AT
+    import time
+    now = time.monotonic()
+    if _VERIFIED is not None and (now - _VERIFIED_AT) < _VERIFIED_TTL:
+        return _VERIFIED
+    try:
+        rows = db.execute(sql_text(
+            "SELECT site, author FROM author_permissions "
+            "WHERE revoked_at IS NULL AND policy = 'host'")).all()
+        _VERIFIED = {(r[0], r[1]) for r in rows}
+        _VERIFIED_AT = now
+    except Exception as e:
+        # A badge is not worth failing a search for. Keep whatever we had; an
+        # empty set on first failure simply means nothing is marked.
+        log.warning("verified-author cache refresh failed: %s: %s",
+                    type(e).__name__, e)
+        if _VERIFIED is None:
+            _VERIFIED = set()
+    return _VERIFIED
+
+
+def invalidate_verified_cache() -> None:
+    """Called after a write so the author sees their own change immediately."""
+    global _VERIFIED_AT
+    _VERIFIED_AT = 0.0
 
 
 def decide_hosting(db: Session, *, site: str, author: str, summary: str | None,
@@ -353,4 +440,5 @@ def revoke_permission(db: Session, site: str, author: str) -> bool:
         WHERE site = :s AND author = :a AND revoked_at IS NULL
     """), {"s": site, "a": normalise_author(author)})
     db.commit()
+    invalidate_verified_cache()
     return (r.rowcount or 0) > 0

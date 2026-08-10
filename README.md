@@ -102,6 +102,31 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   proof is required only for saying *yes*, and revoking needs no proof either —
   it can only ever reduce what the site may do.
 
+  **AO3 only, and that is a real limitation rather than a preference.** Every
+  request to FanFiction.net from this server — profile, home page, any
+  User-Agent — returns 403 behind Cloudflare's "Just a moment…" interstitial, so
+  their profile cannot be read to check a code. (The rest of the project already
+  works around this: `ffnet_enrich.py` reads FF.net metadata out of the Wayback
+  Machine, which is no help here, because a code pasted today is not in an
+  archived snapshot.) Independently, FF.net profiles are keyed by numeric id
+  while stories carry a pen name, and all 6.5M FF.net rows have `author_url`
+  NULL — so there is nothing stored to join a verified profile to its works.
+
+  FF.net authors are **not** shut out, though: the restrictive policies need no
+  verification at all, because proof exists to stop someone licensing writing
+  that is not theirs, and has nothing to protect against when a statement only
+  ever *removes* permission. So they can say "never store my text" or "don't
+  index me", just not "host my work"
+
+- **Authors can see and manage everything held under their name** — `/permissions/manage`
+  lists every indexed work, whether its text is stored here, and lets them take
+  down individual works or set a standing restriction. Usable **without**
+  verifying, for the same reason: everything on it is either already public on
+  the author's own results page or is a removal. Verified authors are marked on
+  result cards with a quiet "✓ author verified" — deliberately not a badge, since
+  it states a fact about consent rather than quality and must not read as a
+  ranking
+
   It does **not** read consent out of prose. Fandom's "blanket statement"
   convention lives in the very profile field this reads, but those statements
   are written about transformative works (podfic, translation, remix), "archive"

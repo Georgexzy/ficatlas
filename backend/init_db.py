@@ -526,6 +526,7 @@ CREATE TABLE IF NOT EXISTS author_permissions (
     -- not deleted, so "they once said yes and later said no" stays legible.
     revoked_at    TIMESTAMPTZ
 );
+ALTER TABLE author_permissions ADD COLUMN IF NOT EXISTS source_ip TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_author_permissions_site_author
     ON author_permissions (site, author);
 CREATE INDEX IF NOT EXISTS ix_author_permissions_active

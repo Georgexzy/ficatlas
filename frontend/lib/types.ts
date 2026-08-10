@@ -34,6 +34,9 @@ export interface StoryCard {
   published_at?: string
   updated_at?: string
   is_live?: boolean
+  /** The author verified control of their archive account and asked us to host
+   *  their work. See backend/api/permissions.py. */
+  author_verified?: boolean
   is_hosted?: boolean
   /** Only ever true for an admin: the API removes these rows for everyone else. */
   delisted?: boolean

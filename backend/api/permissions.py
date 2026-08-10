@@ -67,6 +67,13 @@ def start_challenge(request: Request,
     if not author:
         raise HTTPException(400, "Tell us your username on that archive.")
 
+    if site not in ap.VERIFIABLE_SITES:
+        raise HTTPException(400,
+            "FanFiction.net can't be verified this way — it blocks automated "
+            "requests, so we cannot read your profile to check a code. You can "
+            "still restrict what we do with your work without proving anything, "
+            "and you can always use the removal form.")
+
     url = ap.profile_url(site, author)
     if not url:
         raise HTTPException(400,
@@ -148,6 +155,46 @@ def verify(request: Request,
     )
 
 
+@router.post("/restrict")
+def restrict(request: Request, site: str = Form(...), author: str = Form(...),
+             policy: str = Form(...), db: Session = Depends(get_db)):
+    """Reduce what FicAtlas may do with an author's work, without verification.
+
+    Only the restrictive policies are reachable here, and that is the whole
+    point. Proof exists to stop someone licensing writing that is not theirs; it
+    has nothing to protect against when the statement only ever takes permission
+    away. The worst an unverified "deny" achieves is that we stop indexing a work
+    we were allowed to index — an outcome its author could demand through the
+    takedown form at any time, also without proof.
+
+    This is what keeps FanFiction.net authors from being shut out entirely. They
+    cannot grant hosting, because their profiles cannot be read (see
+    VERIFIABLE_SITES), but the direction that matters most to someone who has
+    just found their work somewhere unexpected is open to them.
+    """
+    site = _check_site(site)
+    policy = (policy or "").strip().lower()
+    if policy not in ap.RESTRICTIVE_POLICIES:
+        raise HTTPException(400,
+            "Only restrictions can be set without verifying. To let FicAtlas "
+            "host your work, verify your account first.")
+    if not (author or "").strip():
+        raise HTTPException(400, "Tell us the name your work is published under.")
+
+    ap.record_permission(
+        db, site=site, author=author, author_display=(author or "").strip(),
+        policy=policy, token=None, evidence_url=None,
+        evidence_text=None, contact_email=None,
+        # Recorded as what it is. Calling an unverified restriction
+        # "profile_token" in the audit trail would make the one column that says
+        # how much to trust a row lie about exactly the rows worth checking.
+        method="unverified_restriction", source_ip=_client_ip(request),
+    )
+    log.info("author restriction recorded (unverified): %s/%s -> %s",
+             site, author, policy)
+    return {"ok": True, "site": site, "author": author.strip(), "policy": policy}
+
+
 @router.get("/lookup")
 def lookup(site: str, author: str, db: Session = Depends(get_db)):
     """What has this author said, if anything.
@@ -185,6 +232,67 @@ def revoke(site: str = Form(...), author: str = Form(...),
     changed = ap.revoke_permission(db, site, author)
     log.info("author permission revoked: %s/%s (existed=%s)", site, author, changed)
     return {"ok": True, "revoked": changed}
+
+
+@router.get("/works")
+def my_works(site: str, author: str, limit: int = 200,
+             db: Session = Depends(get_db)):
+    """Everything FicAtlas holds under this name, and what state each work is in.
+
+    Public, and that is deliberate: it lists nothing that is not already on the
+    author's own results page, and requiring a login to see what a site holds
+    about you would be a strange thing to ask of someone who has just found out
+    it holds anything at all.
+    """
+    site = _check_site(site)
+    from sqlalchemy import text as sql_text
+    rows = db.execute(sql_text("""
+        SELECT id::text, title, url, is_hosted,
+               text_withdrawn_at IS NOT NULL AS text_withdrawn,
+               delisted_at IS NOT NULL AS delisted,
+               word_count, chapter_count
+        FROM stories
+        WHERE site = :s AND lower(author) = :a
+        ORDER BY coalesce(updated_at, published_at) DESC NULLS LAST
+        LIMIT :l
+    """), {"s": site, "a": ap.normalise_author(author),
+           "l": max(1, min(limit, 500))}).mappings().all()
+    perm = ap.get_permission(db, site, author)
+    return {
+        "site": site,
+        "author": (perm or {}).get("author_display") or author,
+        "policy": (perm or {}).get("policy"),
+        "verified": bool(perm),
+        "count": len(rows),
+        "works": [dict(r) for r in rows],
+    }
+
+
+@router.post("/works/{story_id}/withdraw")
+def withdraw_work(story_id: str, delist: bool = Form(False),
+                  db: Session = Depends(get_db)):
+    """Take one work down, without proving anything.
+
+    Same rule as everywhere else here: removing needs no proof. This is the
+    per-work version of the takedown form and behaves identically — the text is
+    hidden immediately, nothing is deleted, and it can be undone. `delist` also
+    hides the listing for an author who wants their name off the index entirely.
+    """
+    from sqlalchemy import text as sql_text
+    r = db.execute(sql_text("""
+        UPDATE stories
+           SET text_withdrawn_at = now(),
+               text_withdrawn_reason = 'author request (self-service)',
+               delisted_at = CASE WHEN :d THEN now() ELSE delisted_at END,
+               delisted_reason = CASE WHEN :d THEN 'author request (self-service)'
+                                      ELSE delisted_reason END
+         WHERE id = CAST(:i AS uuid)
+    """), {"i": story_id, "d": bool(delist)})
+    db.commit()
+    if not r.rowcount:
+        raise HTTPException(404, "No such work.")
+    log.info("self-service withdrawal: story=%s delist=%s", story_id, delist)
+    return {"ok": True, "delisted": bool(delist)}
 
 
 @router.get("/admin/list")

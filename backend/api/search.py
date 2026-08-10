@@ -18,6 +18,7 @@ import re
 from character_aliases import character_variants, relationship_variants
 from language_aliases import language_variants
 from provenance import content_tags, source_labels
+import author_permission
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -220,6 +221,9 @@ class StoryCard(BaseModel):
     published_at: Optional[str] = None
     updated_at: Optional[str] = None
     is_live: bool = False          # true = came from live fetch, not index
+    # The author proved control of their archive account and asked us to host
+    # their work. Shown as a mark on the card — see api/permissions.py.
+    author_verified: bool = False
     is_hosted: bool = False        # true = full text stored locally, one-click reader
     # Series membership, attached after the page is selected — see _attach_series.
     # Not part of the main query: most works are in none, so joining for every
@@ -1111,7 +1115,9 @@ def search(          # NOT async — see below
     except Exception as e:
         log.debug(f"series attach failed: {type(e).__name__}")
 
-    indexed_cards = [_to_card(s) for s in indexed]
+    # One cached set for the whole page of results, rather than a lookup per row.
+    _verified = author_permission.verified_authors(db)
+    indexed_cards = [_to_card(s, _verified) for s in indexed]
 
     # ── Live AO3 fetch ───────────────────────────────────────────────────────
     # This used to run inline and block the response. AO3's /works/search is a
@@ -1206,7 +1212,7 @@ def random_stories(
         ).scalars())
         if len(ids) >= count:
             rows = db.query(Story).filter(Story.id.in_(ids)).all()
-            return [_to_card(s) for s in rows]
+            return [_to_card(s, author_permission.verified_authors(db)) for s in rows]
 
     # Fallback: whole-table scan. Only reached for filters too rare to show up in a
     # 3% page sample, where correctness matters more than the latency.
@@ -1216,13 +1222,17 @@ def random_stories(
         q = q.filter(or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
     if fandom_pat:
         q = q.filter(_arr_text(Story.fandoms).ilike(fandom_pat))
-    return [_to_card(s) for s in q.order_by(func.random()).limit(count).all()]
+    return [_to_card(s, author_permission.verified_authors(db))
+            for s in q.order_by(func.random()).limit(count).all()]
 
 
 # ── Serialisers ───────────────────────────────────────────────────────────────
 
-def _to_card(s: Story) -> StoryCard:
+def _to_card(s: Story, verified: set | None = None) -> StoryCard:
     return StoryCard(
+        author_verified=bool(
+            verified and (getattr(s.site, "value", s.site),
+                          (s.author or "").strip().lower()) in verified),
         id=str(s.id), site=s.site.value, url=s.url,
         title=s.title, author=s.author or "Anonymous", author_url=s.author_url,
         summary=s.summary, language=s.language or "English",
