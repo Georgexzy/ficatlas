@@ -26,6 +26,8 @@ Disallow: /library
 Disallow: /login
 Disallow: /settings
 Disallow: /api/
+# Owner-only. Gated server-side, but there is no reason for it to be crawled.
+Disallow: /admin
 
 # Full text of works hosted here. See note 2 above.
 Disallow: /story/*/chapter/
@@ -42,6 +44,23 @@ Crawl-delay: 10
 # Training crawlers get nothing. The index is assembled from other archives, and
 # the works in it are not ours to hand over in bulk — the same position the OTW
 # takes for AO3.
+#
+# This list was six agents and had drifted. Cloudflare Radar's May 2026 figures
+# put Amazonbot at 3.23% of AI crawler traffic, Meta-ExternalAgent at 3.22% and
+# Applebot-Extended at 2.98% — all larger than several agents already named here,
+# and none of them listed. A blocklist that names GPTBot and misses Amazonbot is
+# not the position it claims to be.
+#
+# Two things worth knowing about this list rather than treating it as magic:
+#
+#   * Google-Extended and Applebot-Extended are not crawlers. They are opt-out
+#     tokens with nothing behind them — blocking them does not stop a fetch, it
+#     changes what Google and Apple may do with pages their ordinary crawlers
+#     already have. Included for that reason, not as traffic control.
+#   * Bytespider and Meta's agents are widely reported not to honour robots.txt
+#     reliably. Nothing here enforces anything; it is a request. If that matters,
+#     it has to be an edge rule — Cloudflare has a one-click AI-scraper block,
+#     and the tunnel in docker-compose.prod.yml is where that would apply.
 User-agent: GPTBot
 Disallow: /
 
@@ -51,11 +70,59 @@ Disallow: /
 User-agent: ClaudeBot
 Disallow: /
 
-User-agent: Google-Extended
-Disallow: /
-
 User-agent: anthropic-ai
 Disallow: /
 
 User-agent: Bytespider
+Disallow: /
+
+User-agent: Amazonbot
+Disallow: /
+
+User-agent: Meta-ExternalAgent
+Disallow: /
+
+User-agent: Meta-ExternalFetcher
+Disallow: /
+
+User-agent: PerplexityBot
+Disallow: /
+
+User-agent: Applebot-Extended
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: cohere-ai
+Disallow: /
+
+User-agent: Diffbot
+Disallow: /
+
+User-agent: Omgilibot
+Disallow: /
+
+User-agent: AI2Bot
+Disallow: /
+
+# Retrieval agents, which fetch a page because a person asked a question rather
+# than to train on it. Blocking these is a genuinely different decision from the
+# list above: it costs discovery, since it is how the site would be cited in an
+# AI answer. They are blocked anyway, because AO3 blocks ChatGPT-User and this
+# file claims to hold the OTW's position — and because the works being fetched
+# are not ours to serve into someone else's product, whatever the purpose.
+User-agent: ChatGPT-User
+Disallow: /
+
+User-agent: OAI-SearchBot
+Disallow: /
+
+User-agent: Claude-User
+Disallow: /
+
+User-agent: Claude-SearchBot
+Disallow: /
+
+User-agent: Perplexity-User
 Disallow: /
