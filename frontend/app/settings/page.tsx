@@ -321,41 +321,32 @@ export default function SettingsPage() {
             see this section.
           </p>
 
-          {/* First, because it is the only part of the admin surface where a
-              person is waiting for an answer. Everything below it is a
-              preference that can sit unchanged for months. */}
+          {/* One entry, because there is now one page.
+              These were two sections — "Requests from authors" and "Index
+              health" — pointing into what became a single tabbed admin page when
+              those two routes were merged, so Settings still presented the
+              takedown queue as a destination of its own alongside the page that
+              contains it. The pending count stays: it is the only part of the
+              admin surface where a person is waiting on an answer, and it is
+              worth seeing without opening anything. */}
           <section className="settings-group">
-            <h2 className="settings-group__title">Requests from authors</h2>
+            <h2 className="settings-group__title">Operator tools</h2>
             <div className="setting-row">
               <div className="setting-row__label">
                 <span className="setting-row__name">
-                  Takedown requests
+                  Index health and author requests
                   {pendingTakedowns > 0 && (
                     <span className="settings-badge">{pendingTakedowns} waiting</span>
                   )}
                 </span>
                 <span className="setting-row__hint">
                   {pendingTakedowns > 0
-                    ? "The text is already down — what is outstanding is your decision, and replying to the person who asked."
-                    : "Nothing waiting. Text comes down automatically when a request arrives; this is where you decide whether it stays down."}
+                    ? "Someone is waiting on a decision — the text is already down, but the reply is not sent. Also: what is thin, what the crawler is pointed at next, and whether AO3 is throttling us."
+                    : "What is thin, what the crawler is pointed at next, whether AO3 is throttling us, and any takedown requests — previously only visible by reading container logs."}
                 </span>
               </div>
-              <Link href="/admin?tab=takedowns" className="btn btn--ghost">Open queue</Link>
-            </div>
-          </section>
-
-          <section className="settings-group">
-            <h2 className="settings-group__title">Index health</h2>
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">Coverage, crawl state and rate limits</span>
-                <span className="setting-row__hint">
-                  What is thin, what the crawler is pointed at next, and whether
-                  AO3 is currently throttling us — previously only visible by
-                  reading container logs.
-                </span>
-              </div>
-              <Link href="/admin" className="btn btn--ghost">Open</Link>
+              <Link href={pendingTakedowns > 0 ? "/admin?tab=takedowns" : "/admin"}
+                className="btn btn--ghost">Open</Link>
             </div>
           </section>
 
