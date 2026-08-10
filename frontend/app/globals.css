@@ -91,6 +91,11 @@ input, select { font-family: inherit; }
 /* ── Header ────────────────────────────────────────────────────────────────── */
 .header {
   display: flex;
+  /* Wraps for the same reason .header__right does: on a narrow shell the logo
+     plus the whole right-hand group cannot fit one line, and the alternative to
+     wrapping is overflowing the page furniture. */
+  flex-wrap: wrap;
+  row-gap: 8px;
   align-items: center;
   justify-content: space-between;
   /* space-between alone guarantees nothing when the row is full: on pages where
@@ -130,7 +135,23 @@ input, select { font-family: inherit; }
   color: var(--text);
 }
 .logo em { color: var(--accent); font-style: italic; }
-.header__right { display: flex; align-items: center; gap: 16px; }
+/* Wraps rather than overflowing.
+   The header sits inside shells of different widths — .settings-shell is 720px
+   against the search page's full width — and this row could not shrink, so on
+   the narrow ones it ran straight out of the header's background: measured on
+   /account at [426..1069] against a header ending at 976, leaving the index
+   chip floating 93px outside the page furniture entirely. Adding "Browse" to
+   the nav is what pushed it over.
+   min-width:0 lets it shrink, wrap lets it drop to a second line instead of
+   escaping, and the row-gap keeps that legible when it does. */
+.header__right {
+  display: flex; align-items: center; gap: 16px;
+  /* nowrap deliberately: the OUTER .header wraps, so on a narrow shell the whole
+     right-hand group drops to its own line intact. Letting this wrap too broke
+     it into three ragged rows — logo, links, then the index chip stranded on a
+     line of its own. One group, one line, wherever it lands. */
+  min-width: 0; flex-wrap: nowrap; justify-content: flex-end;
+}
 
 /* ── Explicit toggle ───────────────────────────────────────────────────────── */
 .toggle-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); user-select: none; }
@@ -1263,11 +1284,21 @@ kbd {
 .setting-row__label { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .setting-row__name { font-size: 14px; color: var(--text); font-weight: 500; }
 .setting-row__hint { font-size: 12px; color: var(--text-dim); line-height: 1.45; }
+/* Sized with width, not flex-basis.
+   `flex: 0 1 320px` was on the base class, and flex-basis means the MAIN axis:
+   width inside .setting-row, which is a row, and HEIGHT inside any column flex.
+   The account page's .account-form is a column, so its password fields rendered
+   320px TALL — huge squares instead of lines. Whether a control is the right
+   shape should not depend on which direction its container happens to run. */
 .setting-input {
-  flex: 0 1 320px; background: var(--surface2); border: 1px solid var(--border2);
+  width: 100%; max-width: 320px;
+  background: var(--surface2); border: 1px solid var(--border2);
   border-radius: var(--radius); padding: 9px 12px; font-size: 14px;
   color: var(--text); outline: none; font-family: var(--font-sans);
 }
+/* In the settings rows it still shares a line with its label, so it keeps the
+   flex sizing there — scoped, where the axis is known. */
+.setting-row > .setting-input { flex: 0 1 320px; width: auto; }
 .setting-input:focus { border-color: var(--accent); }
 .setting-select {
   background: var(--surface2); border: 1px solid var(--border2);
