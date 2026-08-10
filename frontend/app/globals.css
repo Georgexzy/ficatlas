@@ -1978,6 +1978,16 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 }
 .perm-work__actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
 
+/* The removal route at the top of the author page. Given weight deliberately:
+   it is the urgent case, it asks nothing of the reader, and it must be
+   actionable before any of the permission machinery is read. */
+.perm-urgent {
+  border: 1px solid var(--accent-dim); background: var(--accent-bg);
+  border-radius: var(--radius); padding: 15px 17px; margin: 22px 0 18px;
+}
+.perm-urgent p { font-size: 13.5px; line-height: 1.65; color: var(--text-dim); margin-bottom: 12px; }
+.perm-urgent strong { color: var(--text); }
+
 /* ── Author permission page ────────────────────────────────────────────────── */
 /* The reassurance block. Visually calmer than a warning — this page exists to
    make someone comfortable, not alert them. */
@@ -3761,6 +3771,17 @@ body.is-resizing * { cursor: col-resize !important; }
 .page-prose strong { color: var(--text); font-weight: 600; }
 .page-prose a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .page-prose a.card-btn { text-decoration: none; display: inline-block; margin-top: 4px; }
+/* A link styled as a button must keep the button's colours.
+   `.page-prose a` above is (0,1,1) and comes late, so it beat `.btn--primary`
+   at (0,1,0) — which sets `color: var(--bg)` for dark text on a gold fill. The
+   result was gold text on a gold button: the "Remove my work" action rendered as
+   an empty rectangle, which is a bad thing for the most urgent control on the
+   page to be. The same trap was already patched for .card-btn on the line above
+   and never for .btn. Restated at matching specificity rather than by bumping
+   the button rules, so the fix stays local to prose pages. */
+.page-prose a.btn { text-decoration: none; color: var(--text-dim); }
+.page-prose a.btn--primary { color: var(--bg); }
+.page-prose a.btn--ghost { color: var(--text-dim); }
 .page-prose__muted { color: var(--text-faint); font-size: 14px; }
 .page-prose__back { font-family: var(--font-mono); font-size: 12px; margin-bottom: 28px; }
 .page-prose__back a { color: var(--text-faint); text-decoration: none; }
