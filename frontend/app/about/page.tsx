@@ -77,6 +77,40 @@ export default function About() {
         well, email <strong>admin@ficatlas.app</strong> and say so.
       </p>
 
+      {/* Placed immediately after the takedown section on purpose. An author
+          reading this page is usually here because they found their work and
+          want it gone; the other options only make sense once they know that
+          door is open and costs them nothing. */}
+      <h2 id="authors">If you would rather set your own terms</h2>
+      <p>
+        Removal is not the only option. You can see everything FicAtlas holds
+        under your name, take down individual works, or set a standing choice
+        that applies to your whole back catalogue{" "}
+        <strong>and anything you post later</strong> — so you only say it once.
+      </p>
+      <p>
+        <strong>None of that needs proof</strong>, with one exception. Saying{" "}
+        <em>no</em> — don&apos;t store my text, don&apos;t index me — is taken at
+        face value, because a request that only ever removes permission cannot be
+        used to take anything from anyone. Saying <em>yes</em> is different:
+        anyone can type an author&apos;s name into a form, so permission to host
+        your work is only recorded once you have shown you control the account it
+        was posted from, by putting a one-time code in your own profile.
+      </p>
+      <p>
+        <Link href="/permissions/manage" className="card-btn card-btn--primary">
+          See what is held under my name
+        </Link>{" "}
+        <Link href="/permissions" className="card-btn">
+          Set my terms
+        </Link>
+      </p>
+      <p className="page-prose__muted">
+        Verifying works for Archive of Our Own only. FanFiction.net blocks
+        automated requests outright, so their profiles cannot be read to check a
+        code — FF.net authors can still restrict and remove, just not grant.
+      </p>
+
       <h2>Source code</h2>
       <p>
         FicAtlas is open source. You can read every line, run your own copy, or
