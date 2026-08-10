@@ -20,8 +20,19 @@ DATABASE_URL = os.getenv(
 # uvicorn workers = 60, plus the background worker's own, leaves headroom for
 # psql and maintenance scripts. All overridable, because a bigger box wants
 # bigger numbers and a smaller one cannot afford these.
-POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
-MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+# Per PROCESS, not per deployment. Each uvicorn worker builds its own engine and
+# therefore its own pool, so the connection count is (pool + overflow) x workers
+# x services. At the previous 20+10 that is 30 per worker: four workers plus the
+# background worker's own pool is 150 against a max_connections of 100, and the
+# failure is not gradual — the pool that loses the race raises
+# "FATAL: sorry, too many clients already" on every request.
+#
+# So the configured numbers are a budget for the whole API and are divided by
+# the worker count. The default drops to 12+6 per worker at WEB_CONCURRENCY=4,
+# which leaves room for the worker service, psql and maintenance scripts.
+WORKERS = max(1, int(os.getenv("WEB_CONCURRENCY", "1")))
+POOL_SIZE = max(2, int(os.getenv("DB_POOL_SIZE", "32")) // WORKERS)
+MAX_OVERFLOW = max(1, int(os.getenv("DB_MAX_OVERFLOW", "16")) // WORKERS)
 POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
 
 # A query that runs forever holds a connection forever, and thirty of those is

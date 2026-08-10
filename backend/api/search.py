@@ -1,7 +1,7 @@
 """Search API — unified search across all indexed sites with hybrid live fetch"""
 import logging
 from functools import lru_cache
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session, aliased
 import os
 from sqlalchemy import and_, or_, func, literal_column, cast, case, Text, text as sql_text
@@ -13,6 +13,11 @@ from db.session import get_db
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 from models.user import User, ROLE_ADMIN
 from api.auth import get_current_user
+from search_cache import CACHE, cache_key
+
+# Shorter than the 60s session default — see the note in search() on why a long
+# timeout is what turns a slow search into a failed one.
+SEARCH_TIMEOUT_MS = int(os.getenv("SEARCH_STATEMENT_TIMEOUT_MS", "20000"))
 from query_parser import parse_query, parsed_to_search_params
 import re
 from character_aliases import character_variants, relationship_variants
@@ -450,6 +455,7 @@ def search(          # NOT async — see below
     live:                  bool          = Query(True, description="Enable hybrid live fetch"),
     db: Session = Depends(get_db),
     viewer: Optional[User] = Depends(get_current_user),
+    request: Request = None,
 ):
     # ── Parse q for embedded operators ───────────────────────────────────────
     parsed_tokens = []
@@ -511,6 +517,36 @@ def search(          # NOT async — see below
     is_operator = viewer is not None and viewer.at_least(ROLE_ADMIN)
     if not is_operator:
         filters.append(Story.delisted_at.is_(None))
+
+    # Fail fast rather than holding a connection for a minute.
+    #
+    # The session default is a 60s statement timeout, which is right for a bulk
+    # script and wrong here: a search that is going to be slow holds one of the
+    # pool's connections for that whole minute, and twelve of those wedge a
+    # worker. Load testing at 8 concurrent searches returned 500 for 375 of 612
+    # requests — not slow, failed — because the pool filled with queries nobody
+    # was still waiting for.
+    #
+    # A shorter ceiling turns that into load shedding: the query is abandoned
+    # while the reader is still plausibly waiting, the connection goes back, and
+    # the next request gets it. SET LOCAL so it applies to this transaction only
+    # and cannot leak to whatever reuses the connection.
+    try:
+        db.execute(text("SET LOCAL statement_timeout = :ms"),
+                   {"ms": SEARCH_TIMEOUT_MS})
+    except Exception:
+        pass  # a missing timeout is slower, not broken
+
+    # Search is the one endpoint bound by disk rather than CPU (see
+    # search_cache.py), so a repeated query is the only cheap capacity there is.
+    # Keyed on the visibility flag as well as the parameters: an operator sees
+    # delisted rows and must never share an entry with the public.
+    _ck = None
+    if request is not None:
+        _ck = cache_key(str(request.url.query), is_operator)
+        _hit = CACHE.get(_ck)
+        if _hit is not None:
+            return _hit
 
     if site_enums:
         filters.append(Story.site.in_(site_enums))
@@ -1153,7 +1189,7 @@ def search(          # NOT async — see below
     # page 1 only; pagination through `total` is driven purely by the indexed count.
     merged = live_cards + indexed_cards
 
-    return SearchResponse(
+    _response = SearchResponse(
         total=total,                          # stable across pages — indexed count only
         count_is_capped=count_is_capped,
         site_counts=site_counts,
@@ -1164,6 +1200,9 @@ def search(          # NOT async — see below
         live_count=len(live_cards),
         parsed_tokens=[ParsedToken(**t) for t in parsed_tokens],
     )
+    if _ck is not None:
+        CACHE.put(_ck, _response)
+    return _response
 
 
 @router.get("/random", response_model=List[StoryCard])

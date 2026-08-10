@@ -35,10 +35,32 @@ ENABLED = os.getenv("RATE_LIMIT", "true").lower() in ("1", "true", "yes")
 # also the one a real person hits repeatedly while refining a query, hence a
 # limit that is generous per minute but still far below what a script does.
 WINDOW = int(os.getenv("RATE_WINDOW_SEC", "60"))
+
+# Counters live in this process, so with N uvicorn workers there are N of them
+# and a client is spread across all N by the accept queue. Left alone, running
+# four workers would silently quadruple every limit — the numbers below would
+# stop meaning what they say the moment concurrency was raised for performance.
+#
+# Dividing by the worker count keeps the aggregate roughly at the configured
+# figure. Roughly is the right word and always was: this is a fixed-window
+# counter that already admits up to 2x across a boundary, and the distribution
+# across workers is only approximately even. It guards against a crude flood,
+# and for that being wrong at the margin costs nothing. A shared Redis counter
+# would be exact and is not worth a second service — see the module docstring.
+#
+# Floored at 1 so a large worker count cannot round a limit down to zero and
+# lock everybody out.
+WORKERS = max(1, int(os.getenv("WEB_CONCURRENCY", "1")))
+
+
+def _per_worker(total: int) -> int:
+    return max(1, total // WORKERS)
+
+
 LIMITS = {
-    "auth":   int(os.getenv("RATE_AUTH", "10")),      # signup/login — brute force
-    "search": int(os.getenv("RATE_SEARCH", "90")),    # expensive queries
-    "read":   int(os.getenv("RATE_READ", "300")),     # everything else
+    "auth":   _per_worker(int(os.getenv("RATE_AUTH", "10"))),    # brute force
+    "search": _per_worker(int(os.getenv("RATE_SEARCH", "90"))),  # expensive
+    "read":   _per_worker(int(os.getenv("RATE_READ", "300"))),   # everything else
 }
 
 # Trusting a client-supplied header for the caller's identity is only safe when

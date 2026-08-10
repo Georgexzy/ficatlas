@@ -1,8 +1,12 @@
 """FicAtlas Backend — FastAPI entry point"""
+import logging
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from api import (search, stories, stats, library, settings, auth, userdata,
                  takedown, password_reset, admin, permissions, hubs)
 
@@ -93,6 +97,20 @@ if _origins:
         allow_headers=["*"],
     )
 
+# Compress responses. Search results are the big ones — twenty stories with
+# summaries, tag arrays and relationship lists is tens of kilobytes of JSON, and
+# JSON of that shape compresses by roughly 8-10x. The CPU spent is trivial next
+# to the query that produced it.
+#
+# This matters more here than on a normal deployment: the site is served from a
+# domestic connection, where UPLOAD bandwidth is the scarce direction and is
+# shared with everything else in the house. Bytes not sent are the cheapest
+# capacity there is.
+#
+# minimum_size skips the small responses, where the header and the compression
+# would cost more than they save.
+app.add_middleware(GZipMiddleware, minimum_size=800)
+
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(stories.router, prefix="/api/stories", tags=["stories"])
 app.include_router(stats.router,  prefix="/api/stats", tags=["stats"])
@@ -108,6 +126,29 @@ app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(auth.router,     prefix="/api/auth",     tags=["auth"])
 app.include_router(password_reset.router, prefix="/api/auth", tags=["auth"])
 app.include_router(userdata.router, prefix="/api/userdata", tags=["userdata"])
+
+# ── Degrade honestly when the database is saturated ─────────────────────────
+#
+# A statement timeout or an exhausted connection pool raises OperationalError,
+# which without this becomes a bare HTTP 500: "Internal Server Error", no
+# Retry-After, and indistinguishable from a bug. Load testing at 8 concurrent
+# searches produced 375 of those in 612 requests.
+#
+# 503 is what the condition actually is — the server is temporarily unable to
+# handle the request — and it carries Retry-After, so a client and any cache in
+# front of it both know to come back rather than treating the answer as final.
+# The message says which part is busy, because "search is busy" is something a
+# reader can act on and "Internal Server Error" is not.
+@app.exception_handler(OperationalError)
+async def _db_overloaded(request: Request, exc: OperationalError):
+    logging.getLogger(__name__).warning(
+        "database overloaded on %s: %s", request.url.path, str(exc)[:200])
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": "5"},
+        content={"detail": "The index is busy right now. Try again in a moment."},
+    )
+
 
 @app.get("/health")
 async def health():
