@@ -4487,3 +4487,17 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   .hub__az { columns: 1; }
   .hub__grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 }
+
+/* ── Never show me (settings) ────────────────────────────────────────────── */
+/* Stacks rather than sitting in the label/control row: a mute field grows a
+   list of chips underneath it, which a two-column row has nowhere to put. */
+.setting-row--stack { display: block; }
+.setting-row--stack .setting-row__label { margin-bottom: 8px; }
+.mute-field .setting-input { width: 100%; max-width: 420px; }
+.mute-field .tag-input__chips { margin-top: 8px; }
+.data-row__actions { display: flex; align-items: center; gap: 12px; }
+.data-row__size {
+  font-size: 12px; font-family: var(--font-mono); color: var(--text-faint);
+  min-width: 68px; text-align: right;
+}
+.btn--sm { padding: 5px 12px; font-size: 12px; }
