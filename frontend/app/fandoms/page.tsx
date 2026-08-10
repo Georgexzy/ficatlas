@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 import Link from "next/link"
+import SiteHeader from "../SiteHeader"
 
 // The index of fandom hubs — one crawlable page that reaches every hub, which
 // in turn reaches the story pages. This is the root of the only path a search
@@ -68,6 +69,7 @@ export default async function FandomsIndex() {
 
   return (
     <div className="page-prose hub">
+      <SiteHeader />
       <h1>Browse fandoms</h1>
       <p className="hub__lede">
         {hubs.length.toLocaleString()} fandoms indexed across Archive of Our Own,

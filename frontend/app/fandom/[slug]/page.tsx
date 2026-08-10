@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 import Link from "next/link"
+import SiteHeader from "../../SiteHeader"
 import { notFound } from "next/navigation"
 
 // A fandom hub: the crawlable way into the index, and a genuinely useful page
@@ -31,11 +32,13 @@ interface Work {
   site?: string
   complete?: boolean
 }
+interface SiteSection { site: string; works: Work[] }
 interface Hub {
   slug: string
   name: string
   work_count: number
   works: Work[]
+  sections?: SiteSection[]
 }
 
 const SITE_LABELS: Record<string, string> = {
@@ -89,8 +92,15 @@ export default async function FandomHub(
   const hub = await fetchHub(slug)
   if (!hub) notFound()
 
+  // Fall back to one merged section if an older hub row has no per-site data,
+  // so a page still renders between a deploy and the next rebuild.
+  const sections: SiteSection[] = hub.sections?.length
+    ? hub.sections
+    : hub.works.length ? [{ site: "", works: hub.works }] : []
+
   return (
     <div className="page-prose hub">
+      <SiteHeader />
       <nav className="hub__crumbs" aria-label="Breadcrumb">
         <Link href="/fandoms">All fandoms</Link>
       </nav>
@@ -107,35 +117,43 @@ export default async function FandomHub(
         </Link>
       </p>
 
-      <h2 className="hub__heading">
-        Most popular {hub.name} works
-      </h2>
-
-      {hub.works.length === 0 ? (
+      {/* One section per archive rather than one merged list.
+          A single ranking put AO3 in every slot on every hub, because kudos is
+          the popularity column and it exists on 239,588 AO3 rows against 1,470
+          of FanFiction.net's 6.57M. Ranking across archives was not meaningful
+          either way — an AO3 kudos and a FanFiction.net favourite are different
+          units — so each archive gets its own list, and the heading says which
+          archive you are looking at. */}
+      {sections.length === 0 ? (
         <p className="hub__empty">Nothing to show here yet.</p>
-      ) : (
-        <ol className="hub__list">
-          {hub.works.map(w => (
-            <li key={w.id} className="hub__item">
-              <Link href={`/story/${w.id}`} className="hub__title">{w.title}</Link>
-              <p className="hub__meta">
-                {w.author && (
-                  <>
-                    by <Link href={`/?author=${encodeURIComponent(w.author)}`}>{w.author}</Link>
-                  </>
-                )}
-                {w.site && <span className={`badge badge--site-${w.site}`}>
-                  {SITE_LABELS[w.site] ?? w.site}
-                </span>}
-                {fmt(w.word_count) && <span>{fmt(w.word_count)} words</span>}
-                {w.chapter_count ? <span>{w.chapter_count} ch</span> : null}
-                {w.complete && <span className="badge badge--complete">Complete</span>}
-              </p>
-              {w.summary && <p className="hub__summary">{w.summary}</p>}
-            </li>
-          ))}
-        </ol>
-      )}
+      ) : sections.map(section => (
+        <section key={section.site}>
+          <h2 className="hub__heading">
+            {section.site
+              ? `Most popular on ${SITE_LABELS[section.site] ?? section.site}`
+              /* The pre-rebuild fallback has no archive to name. */
+              : `Most popular ${hub.name} works`}
+          </h2>
+          <ol className="hub__list">
+            {section.works.map(w => (
+              <li key={w.id} className="hub__item">
+                <Link href={`/story/${w.id}`} className="hub__title">{w.title}</Link>
+                <p className="hub__meta">
+                  {w.author && (
+                    <>
+                      by <Link href={`/?author=${encodeURIComponent(w.author)}`}>{w.author}</Link>
+                    </>
+                  )}
+                  {fmt(w.word_count) && <span>{fmt(w.word_count)} words</span>}
+                  {w.chapter_count ? <span>{w.chapter_count} ch</span> : null}
+                  {w.complete && <span className="badge badge--complete">Complete</span>}
+                </p>
+                {w.summary && <p className="hub__summary">{w.summary}</p>}
+              </li>
+            ))}
+          </ol>
+        </section>
+      ))}
 
       <p className="hub__foot">
         FicAtlas indexes what these archives publish and links you back to them.

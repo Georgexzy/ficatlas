@@ -10,6 +10,28 @@ from typing import Optional
 from datetime import datetime
 from urllib.parse import quote, urlencode
 
+
+def _parse_chapters_text(txt) -> tuple[int, int | None]:
+    """AO3's dd.chapters is "posted/total", not a number.
+
+    Every other stat on a blurb is a decimal with commas and stray labels, so the
+    way to read those is "strip everything that is not a digit". Applied here
+    that silently concatenates the two halves: "70/70" became 7070 and "188/188"
+    became 188188. Roughly 2,000 rows in the live index carried a count like
+    that, and because this path runs for works people actually search for, they
+    skewed towards popular works — which is where they became visible, on the
+    fandom hub pages.
+
+    Returns (posted, total); total is None for an unfinished "12/?".
+    """
+    import re as _re
+    if not txt:
+        return 1, None
+    posted_raw, _, total_raw = str(txt).replace("\xa0", " ").partition("/")
+    posted = _re.sub(r"[^\d]", "", posted_raw)
+    total = _re.sub(r"[^\d]", "", total_raw)
+    return (int(posted) if posted else 1) or 1, (int(total) if total else None)
+
 log = logging.getLogger(__name__)
 
 BASE = "https://archiveofourown.org"
@@ -158,15 +180,20 @@ def _parse_blurb(item) -> Optional[dict]:
         rating_el = item.select_one("span.rating")
         rating = AO3_RATING_MAP.get(rating_el.get("title", "") if rating_el else "", "NR")
 
-        def stat(cls):
+        def _stat_text(cls):
             el = item.select_one(f"dd.{cls}")
-            if not el:
-                return 0
-            # AO3 stats can contain nbsp, commas, and trailing labels. Pull digits only.
+            return el.get_text(strip=True).replace("\xa0", " ") if el else ""
+
+        def stat(cls):
+            # AO3 stats can contain nbsp, commas, and trailing labels, so digits
+            # only — but see chapters() below: this is WRONG for dd.chapters and
+            # must not be used for it.
             import re as _re
-            txt = el.get_text(strip=True).replace("\xa0", " ")
-            digits = _re.sub(r"[^\d]", "", txt)
+            digits = _re.sub(r"[^\d]", "", _stat_text(cls))
             return int(digits) if digits else 0
+
+        def chapters():
+            return _parse_chapters_text(_stat_text("chapters"))
 
         status_el = item.select_one("dt.status")
         status = "complete" if status_el and "Completed" in status_el.get_text() else "in_progress"
@@ -182,6 +209,8 @@ def _parse_blurb(item) -> Optional[dict]:
             except Exception:
                 pass
 
+        _chapters_posted, _chapters_total = chapters()
+
         return {
             "id": f"live_ao3_{work_id}",
             "site": "ao3",
@@ -194,8 +223,8 @@ def _parse_blurb(item) -> Optional[dict]:
             "rating": rating,
             "status": status,
             "word_count": stat("words"),
-            "chapter_count": stat("chapters") or 1,
-            "chapter_count_total": None,
+            "chapter_count": _chapters_posted,
+            "chapter_count_total": _chapters_total,
             "kudos": stat("kudos"),
             "hits": stat("hits"),
             "bookmarks": stat("bookmarks"),

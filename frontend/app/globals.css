@@ -549,6 +549,29 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   border-radius: 6px; padding: 14px 16px; z-index: 200;
   box-shadow: 0 10px 40px rgba(0,0,0,0.5);
 }
+
+/* On a phone the panel could not fit where it was anchored.
+   It is 290px wide and pinned to the RIGHT edge of its button, so it grows
+   leftwards — and the button is not at the edge of the screen, it sits in the
+   middle of the header row with the user menu and page controls beside it. On a
+   320px viewport the button's right edge is at x=205, so a 290px panel started
+   at x=-85 and 85px of it was off-screen. Measured at 320, 360 and 390: 85px,
+   85px and 3px over.
+   Anchoring to the button is the problem, not the width, so below the width
+   where that can work the panel is anchored to the VIEWPORT instead: fixed,
+   inset on both sides, so it fits by construction at any size. The header is
+   sticky at the top, so a fixed offset lands just under it. */
+@media (max-width: 560px) {
+  .index-status__panel {
+    position: fixed;
+    top: 62px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-height: calc(100dvh - 80px);
+    overflow-y: auto;
+  }
+}
 .index-status__heading { font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 10px; }
 .index-status__row { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 .index-status__row:last-of-type { border-bottom: none; margin-bottom: 0; }

@@ -37,6 +37,7 @@ so the hubs collapse the same way search does.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import unicodedata
@@ -49,11 +50,28 @@ from api.search import fandom_base
 
 log = logging.getLogger(__name__)
 
-# How many works a hub links to. Enough to be a genuinely useful page and to
-# give a crawler a real sample of the index; small enough that hubs x works
-# stays a number we chose. At the default threshold this is ~323k reachable
-# story pages, against 19.9M if every story were listed.
-WORKS_PER_HUB = 60
+# How many works a hub links to PER SITE. Three archives at 20 each is the same
+# ~60 links a hub carried when it was one global list, so the reachable-pages
+# arithmetic is unchanged — but every archive now gets represented instead of
+# one of them taking all sixty places.
+WORKS_PER_SITE = 20
+
+# Ranked within a site, never across them.
+#
+# kudos is the popularity column and its coverage is wildly uneven: 239,588 AO3
+# rows have it against 1,470 of FanFiction.net's 6.57M, and FicAlley records
+# hits on 29,864 of its 29,949 rows and kudos on 27. A single ORDER BY kudos
+# across all three therefore returned AO3 and only AO3 — which is exactly what
+# the hubs showed.
+#
+# Sorting them against each other was never meaningful anyway: an AO3 kudos and
+# a FanFiction.net favourite are different units counted by different
+# populations. So each archive is ranked on its own and shown in its own
+# section, and the fallbacks run kudos -> hits -> word_count so that a site with
+# no popularity data at all still produces a sensible list rather than an empty
+# one.
+_RANK = ("kudos DESC NULLS LAST, hits DESC NULLS LAST, "
+         "word_count DESC NULLS LAST")
 
 # Minimum works for a fandom to get a hub. 92,018 fandom tags exist; most are
 # one-off freeform noise. The thresholds measured on this index:
@@ -106,7 +124,7 @@ def _collapse(rows: Iterable[tuple[str, int]]) -> dict[str, dict]:
 
 
 def build_hubs(db: Session, min_works: int = MIN_WORKS_FOR_HUB,
-               per_hub: int = WORKS_PER_HUB, limit: int | None = None) -> int:
+               per_hub: int = WORKS_PER_SITE, limit: int | None = None) -> int:
     """Rebuild fandom_hubs from the facets table. Returns the number written.
 
     Offline by design — this is minutes of work, not a request path.
@@ -126,17 +144,36 @@ def build_hubs(db: Session, min_works: int = MIN_WORKS_FOR_HUB,
     for slug, hub in ordered:
         variants = hub["variants"]
         try:
-            # Ranked by kudos: the works most likely to be worth a stranger's
-            # first click, which is also what makes the hub worth indexing.
-            # NULLS LAST so unrated works do not lead the page.
-            top = db.execute(text("""
-                SELECT id FROM stories
-                 WHERE fandoms && :variants
-                   AND delisted_at IS NULL
-                   AND source_restricted_at IS NULL
-                 ORDER BY kudos DESC NULLS LAST, word_count DESC NULLS LAST
-                 LIMIT :n
-            """), {"variants": variants, "n": per_hub}).scalars().all()
+            # One pass, partitioned by site: a window function ranks within each
+            # archive so a single scan produces all three lists. Three separate
+            # queries would triple the cost of a rebuild that already takes
+            # minutes over 17.7M matching rows.
+            ranked = db.execute(text(f"""
+                SELECT site, id FROM (
+                    SELECT site, id,
+                           row_number() OVER (PARTITION BY site
+                                              ORDER BY {_RANK}) AS rn
+                      FROM stories
+                     WHERE fandoms && :variants
+                       AND delisted_at IS NULL
+                       AND source_restricted_at IS NULL
+                ) ranked
+                 WHERE rn <= :n
+                 ORDER BY site, rn
+            """), {"variants": variants, "n": per_hub}).fetchall()
+
+            by_site: dict[str, list[str]] = {}
+            for site, sid in ranked:
+                by_site.setdefault(str(site), []).append(str(sid))
+
+            # top_ids stays populated as a flat interleave of the per-site lists,
+            # so anything reading the old column still gets a sensible, and now
+            # cross-archive, ordering.
+            top = []
+            for i in range(per_hub):
+                for site in sorted(by_site):
+                    if i < len(by_site[site]):
+                        top.append(by_site[site][i])
 
             exact = db.execute(text("""
                 SELECT count(*) FROM stories
@@ -152,14 +189,17 @@ def build_hubs(db: Session, min_works: int = MIN_WORKS_FOR_HUB,
             continue
 
         db.execute(text("""
-            INSERT INTO fandom_hubs (slug, name, variants, work_count, top_ids, built_at)
-            VALUES (:slug, :name, :variants, :wc, :top, now())
+            INSERT INTO fandom_hubs (slug, name, variants, work_count, top_ids,
+                                     top_by_site, built_at)
+            VALUES (:slug, :name, :variants, :wc, :top,
+                    CAST(:by_site AS jsonb), now())
             ON CONFLICT (slug) DO UPDATE SET
                 name = EXCLUDED.name, variants = EXCLUDED.variants,
                 work_count = EXCLUDED.work_count, top_ids = EXCLUDED.top_ids,
+                top_by_site = EXCLUDED.top_by_site,
                 built_at = EXCLUDED.built_at
         """), {"slug": slug, "name": hub["name"], "variants": variants,
-               "wc": exact, "top": [str(i) for i in top]})
+               "wc": exact, "top": top, "by_site": json.dumps(by_site)})
         written += 1
         if written % 200 == 0:
             db.commit()
@@ -187,7 +227,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     ap = argparse.ArgumentParser(description="Rebuild fandom hub pages.")
     ap.add_argument("--min-works", type=int, default=MIN_WORKS_FOR_HUB)
-    ap.add_argument("--per-hub", type=int, default=WORKS_PER_HUB)
+    ap.add_argument("--per-site", type=int, default=WORKS_PER_SITE,
+                    dest="per_hub", help="Top works kept per archive.")
     ap.add_argument("--limit", type=int, default=None,
                     help="Only build the N largest fandoms (for a trial run).")
     args = ap.parse_args()

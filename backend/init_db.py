@@ -584,6 +584,16 @@ CREATE TABLE IF NOT EXISTS fandom_hubs (
     variants    TEXT[] NOT NULL,
     work_count  INTEGER NOT NULL DEFAULT 0,
     top_ids     TEXT[] NOT NULL DEFAULT '{}',
+    -- Top works PER SITE: {"ao3": [id, ...], "ffnet": [...], ...}.
+    --
+    -- One global ranking could only ever return AO3. kudos is the popularity
+    -- column and it is present on 239,588 AO3 rows against 1,470 FanFiction.net
+    -- rows out of 6.57M — so "most popular" sorted by kudos meant "AO3", every
+    -- time, on every hub. Ranking within each site instead gives each archive
+    -- its own list, which is also the honest presentation: a kudos count and a
+    -- FanFiction.net favourite count are not the same unit and should never
+    -- have been sorted against each other.
+    top_by_site JSONB NOT NULL DEFAULT '{}'::jsonb,
     built_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 -- The index listing orders by size, which is the only way it is ever read.
