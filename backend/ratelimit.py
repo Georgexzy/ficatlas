@@ -20,6 +20,7 @@ Buckets are (ip, class) with a fixed window. Fixed windows can let through up to
 avoids keeping a timestamp list per client.
 """
 
+import hmac
 import os
 import threading
 import time
@@ -46,6 +47,39 @@ LIMITS = {
 # it is trustworthy behind the tunnel and forgeable without it — which is why
 # this is off unless the deployment says otherwise.
 TRUST_PROXY = os.getenv("TRUST_PROXY_HEADER", "false").lower() in ("1", "true", "yes")
+
+
+# Server-side rendering calls this API from inside the compose network, and so
+# does every browser request to /api/* — the frontend rewrites those to the
+# backend. Both therefore arrive from the frontend container's address, which
+# makes the source address useless as a discriminator:
+#
+#   * count them as one client and the entire site shares ONE bucket. Story
+#     pages, fandom hubs, /fandoms and the sitemap all render server-side, so
+#     the deployment caps at RATE_READ renders a minute regardless of hardware.
+#     Under load that looks like hub pages failing while direct API calls are
+#     fine — which is how it was found: 839 errors, zero successes, in a load
+#     run against /fandom/.
+#   * exempt them by private source address and the limiter stops applying to
+#     proxied browser traffic too, which is all of it. That is worse.
+#
+# So the discriminator is a shared secret the render code sends and a browser
+# cannot: INTERNAL_RENDER_TOKEN, held only in server environments. Proxied
+# browser requests carry no such header and stay limited per client.
+#
+# A header alone would be forgeable — the proxy passes client headers through —
+# so the value has to be a real secret. Unset means no exemption: the safe
+# direction is over-limiting our own rendering, not under-limiting the public.
+INTERNAL_RENDER_TOKEN = os.getenv("INTERNAL_RENDER_TOKEN", "").strip()
+
+
+def is_internal_render(request: Request) -> bool:
+    """True for our own server-side rendering, which is not a client."""
+    if not INTERNAL_RENDER_TOKEN:
+        return False
+    sent = request.headers.get("x-internal-render", "")
+    # Constant-time: this is a secret comparison on a public path.
+    return hmac.compare_digest(sent, INTERNAL_RENDER_TOKEN)
 
 
 def client_ip(request: Request) -> str:
@@ -122,6 +156,10 @@ COUNTER = _Counter()
 
 async def rate_limit_middleware(request: Request, call_next):
     if not ENABLED or not request.url.path.startswith("/api/"):
+        return await call_next(request)
+
+    # Our own rendering is not a client. See INTERNAL_RENDER_TOKEN above.
+    if is_internal_render(request):
         return await call_next(request)
 
     cls = path_class(request.url.path)
