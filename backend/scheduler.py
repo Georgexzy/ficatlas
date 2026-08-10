@@ -90,6 +90,40 @@ def _site_crawl_disabled(db, site: str) -> bool:
         return False
 
 
+def _consecutive_blocked(db, site: str, look: int = 12) -> int:
+    """How many of this site's most recent crawls failed as blocked, in a row.
+
+    The window-based count below could not catch the case it most needed to.
+    A permanently blocked site does not fail in a burst — it fails once per
+    crawl interval, forever. With a threshold of 5 failures in 6 hours and a
+    crawl every few hours, at most one or two ever landed in a window, so the
+    breaker never tripped: FanFiction.net accumulated 63 consecutive 403s over
+    a fortnight, retried on schedule the whole time, and stayed "enabled".
+
+    Consecutive failures are the right signal for a permanent block because they
+    are independent of how often we try. A single success resets it, so a site
+    that is merely flaky is never disabled.
+    """
+    from models.story import CrawlJob, SiteEnum
+    try:
+        recent = (db.query(CrawlJob)
+                  .filter(CrawlJob.site == SiteEnum(site),
+                          CrawlJob.job_type == "incremental")
+                  .order_by(CrawlJob.created_at.desc())
+                  .limit(look).all())
+    except Exception:
+        return 0
+    run = 0
+    for job in recent:
+        if job.status == "failed" and (job.error or "").startswith("[blocked]"):
+            run += 1
+        elif job.status == "done":
+            break        # a success ends the streak
+        # A transient failure neither extends nor breaks the streak: AO3 being
+        # slow in the middle of a run of 403s says nothing either way.
+    return run
+
+
 def _recent_blocked_count(db, site: str) -> int:
     """Count this site's BLOCKED crawl failures within the breaker window.
     Slow/transient failures (tagged "[transient]") are deliberately excluded so
@@ -194,9 +228,15 @@ async def _run_crawl(site: str):
             # (ReadTimeout = AO3 just slow, 502/503/504, single retryable 525)
             # must not disable a site that's actually reachable.
             if kind == "blocked":
-                fails = _recent_blocked_count(db, site)
-                if fails >= CRAWL_FAIL_THRESHOLD and not _site_crawl_disabled(db, site):
-                    _trip_breaker(db, site, fails)
+                # Two ways in. The window catches a sudden burst; the streak
+                # catches a site that is simply blocked and will stay blocked,
+                # which the window alone provably could not — see
+                # _consecutive_blocked.
+                burst = _recent_blocked_count(db, site)
+                streak = _consecutive_blocked(db, site)
+                if (burst >= CRAWL_FAIL_THRESHOLD or streak >= CRAWL_FAIL_THRESHOLD) \
+                        and not _site_crawl_disabled(db, site):
+                    _trip_breaker(db, site, max(burst, streak))
 
     finally:
         # Both crawlers close their HTTP client at the END of run(), so a crawl
