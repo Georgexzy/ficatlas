@@ -48,14 +48,18 @@ export function storyLink(
     }
     return {
       href: `https://web.archive.org/web/2010/${u}`,
-      label: "Open on Wayback ↗",
+      label: "Read on Wayback ↗",
       isSearch: false,
     }
   }
 
+  // "Read on AO3", not "Open on AO3". The button is the primary action on most
+  // result cards, and it should name what the reader is about to do rather than
+  // describe a mechanism. "Find on AO3" is kept above for seed rows precisely
+  // because those go to a search, not to the work — the two must not read alike.
   return {
     href: story.url,
-    label: `Open on ${siteLabels[story.site] ?? story.site} ↗`,
+    label: `Read on ${siteLabels[story.site] ?? story.site} ↗`,
     isSearch: false,
   }
 }

@@ -8,7 +8,7 @@ import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
-         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, FICALLEY_SECTIONS, coverageWarning } from "@/lib/api"
+         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, FICALLEY_SECTIONS, coverageWarning, statusNote } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
@@ -517,24 +517,39 @@ function StoryCard({ story }: { story: StoryCard }) {
         </div>
       )}
 
+      {/* The archive link is the primary action for anything we do not host,
+          which is 99.85% of the index.
+          It used to be a plain secondary button while "Details" took the primary
+          slot — so the most prominent thing on a result card was a page about
+          the story rather than the story. That reads as an archive that has
+          mislaid its texts. FicAtlas is a way of FINDING work across three
+          archives and sending you to it; on a card for a story that lives on
+          AO3, going to AO3 is the point, and the button says so. */}
       <div className="card__actions">
         {story.is_hosted ? (
-          <Link href={`/story/${story.id}/chapter/1`} className="card-btn card-btn--primary">
-            Read here
-          </Link>
-        ) : canImport ? (
-          <button className="card-btn card-btn--primary" onClick={importToRead} disabled={importing}>
-            {importing ? "Importing…" : importedId ? "✓ Opening…" : "Import & Read"}
-          </button>
+          <>
+            <Link href={`/story/${story.id}/chapter/1`} className="card-btn card-btn--primary">
+              Read here
+            </Link>
+            <a href={externalUrl} target="_blank" rel="noopener noreferrer" className="card-btn">
+              {externalLabel}
+            </a>
+            <Link href={`/story/${story.id}`} className="card-btn">Details</Link>
+          </>
         ) : (
-          <Link href={`/story/${story.id}`} className="card-btn card-btn--primary">Details</Link>
+          <>
+            <a href={externalUrl} target="_blank" rel="noopener noreferrer"
+              className="card-btn card-btn--primary">
+              {externalLabel}
+            </a>
+            <Link href={`/story/${story.id}`} className="card-btn">Details</Link>
+            {canImport && (
+              <button className="card-btn" onClick={importToRead} disabled={importing}>
+                {importing ? "Importing…" : importedId ? "✓ Opening…" : "Import & Read"}
+              </button>
+            )}
+          </>
         )}
-        {story.is_hosted && (
-          <Link href={`/story/${story.id}`} className="card-btn">Details</Link>
-        )}
-        <a href={externalUrl} target="_blank" rel="noopener noreferrer" className="card-btn">
-          {externalLabel}
-        </a>
         <button className={`card-btn ${bookmarked ? "card-btn--on" : ""}`} onClick={toggleBookmark}
                 aria-label={bookmarked ? "Remove bookmark" : "Bookmark"}>
           {bookmarked ? "★" : "☆"}
@@ -627,7 +642,11 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
 
   return (
     <div className="empty">
-      <p className="empty__title">Search the fanfiction internet</p>
+      {/* Names the job, not the noun. "Search the fanfiction internet" is a
+          gesture; what this actually does is find a work you cannot name across
+          three archives at once, which is the thing no single archive can do
+          for you. */}
+      <p className="empty__title">Find fic across three archives at once</p>
       {/* Accurate about what the live fetch does. It runs AFTER the response is
           sent — indexed results come back in milliseconds and the fresh works
           land in the index for next time — so "pulled in as you search" was
@@ -640,6 +659,17 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
         {total ? `${fmtCount(total)} works` : "Millions of works"} from AO3,
         FanFiction.net and FicAlley — one search across all three, instead of
         three searches that each miss two.
+      </p>
+      {/* Says where reading happens, on the screen where someone decides whether
+          to trust the site. FicAtlas is a way of finding work, not a place that
+          keeps it: for all but a fraction of a percent of the index it holds a
+          title, a summary, some tags and a link, and the reading happens at the
+          archive the author chose — where their kudos, comments and
+          subscriptions are. Saying so up front is both the honest framing and
+          the reassuring one. */}
+      <p className="empty__sub empty__sub--secondary">
+        Every result links straight to the archive that hosts it, so authors keep
+        their readers, their kudos and their comments.
       </p>
       <p className="empty__nudge">
         Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
@@ -656,13 +686,19 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
           Every claim here is enforced somewhere real rather than asserted: the
           licence is PolyForm Noncommercial, robots.txt refuses the AI training
           crawlers, and there is no analytics script in the bundle. */}
+      {/* Reordered so the first item is the one that says what FicAtlas is,
+          rather than the fourth. "Links out to the original archive" was buried
+          between two promises about advertising; it is not really a promise
+          about conduct at all, it is the shape of the product, and it answers
+          the question an author or a wary reader asks first — what does this
+          site do with the work it has found. */}
       <ul className="empty__promises">
+        <li>Always links out to the original archive</li>
         <li>No adverts, ever</li>
         <li>No tracking, no analytics</li>
+        <li>No AI trained on fic — <a href="/about#ai">what that means</a></li>
         <li>Non-commercial &amp; <a href="https://github.com/Georgexzy/ficatlas"
               target="_blank" rel="noopener noreferrer">open source</a></li>
-        <li>Links out to the original archive</li>
-        <li>No AI trained on fic — <a href="/about#ai">what that means</a></li>
       </ul>
     </div>
   )
@@ -902,6 +938,10 @@ function SearchPageInner() {
   // Monotonic token so a slow, stale search response can never overwrite a
   // newer one (rapid paging / filter changes used to race and win out of order).
   const searchSeqRef = useRef(0)
+  // The in-flight search, so a superseded one can be cancelled outright rather
+  // than merely ignored — the query keeps running on the server otherwise.
+  const searchAbortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => searchAbortRef.current?.abort(), [])
   const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Mobile filter drawer (sidebar becomes a slide-out panel on phones)
   const [filtersOpen,  setFiltersOpen]  = useState(false)
@@ -1349,19 +1389,28 @@ function SearchPageInner() {
       localStorage.setItem("ficatlas:recent-searches", JSON.stringify(next))
     }
 
+    // Cancel whatever search this one replaces. Ignoring a superseded response
+    // was not enough: the request kept running, and on this index a request is a
+    // 19.7M-row query holding a connection from a pool of thirty. Clicking
+    // through four pages left four of them running, three for results nobody
+    // would ever see. That is fine with one person testing and is the shape of
+    // the problem with fifty.
+    searchAbortRef.current?.abort()
+    const ctl = new AbortController()
+    searchAbortRef.current = ctl
+
     try {
-      let data
-      try {
-        data = await searchStories({ ...p, live: true } as any)
-      } catch (liveErr) {
-        // The live-AO3 augmentation can occasionally make the request fail
-        // (e.g. AO3 timing out hard upstream). Fall back to an index-only search
-        // so the user still gets indexed results instead of an error screen.
-        // If THAT fails too, the error thrown is the index-only one, which is
-        // the honest thing to report — the live top-up is an extra, and blaming
-        // it for an index outage would send someone looking in the wrong place.
-        data = await searchStories({ ...p, live: false } as any)
-      }
+      // One request, not two.
+      //
+      // This used to search with live:true and, on any failure, search again
+      // with live:false — on the theory that the live-AO3 top-up could be what
+      // failed. It cannot: `live` only decides whether the backend schedules a
+      // background AO3 fetch AFTER the response has been sent (see
+      // _fetch_and_persist_live in api/search.py), and no live result has ever
+      // been merged into the response. So the retry could not fix anything, and
+      // it doubled the load in precisely the circumstance where the index was
+      // already struggling — every user's every failed search became two.
+      const data = await searchStories({ ...p, live: true } as any, { signal: ctl.signal })
       if (seq !== searchSeqRef.current) return   // a newer search superseded this one
       setResults(data)
       setParsedTokens((data as any).parsed_tokens ?? [])
@@ -1810,9 +1859,17 @@ function SearchPageInner() {
             </div>
           </FilterSection>
 
-          <FilterSection label="Completion Status" highlighted={!!parsedLive.status} count={status.length}>
+          {/* "Abandoned" is gone: it matched 0 rows out of 19.8M. Nothing has
+              ever written that status — no importer or crawler sets it — so it
+              was a pill guaranteed to empty your results, which is worse than a
+              missing option. The general rule here is to warn rather than remove
+              (see FIELD_COVERAGE), but that rule is about filters that find
+              *few* things; one that can find nothing at all is not a filter.
+              Put it back the moment something populates it. */}
+          <FilterSection label="Completion Status" note={statusNote(status, sites)}
+            highlighted={!!parsedLive.status} count={status.length}>
             <Pills
-              options={[{ id: "complete", label: "Complete" }, { id: "in_progress", label: "In Progress" }, { id: "abandoned", label: "Abandoned" }]}
+              options={[{ id: "complete", label: "Complete" }, { id: "in_progress", label: "In Progress" }]}
               selected={status} onToggle={id => tog(status, setStatus, id)}
               highlighted={parsedLive.status ? [parsedLive.status] : []} />
           </FilterSection>
@@ -1905,11 +1962,27 @@ function SearchPageInner() {
           </FilterSection>
 
           <hr className="sidebar__rule" />
+          {/* Says what it actually matches.
+              "Search within results" invited the reading that it searches the
+              stories — the feature readers most often ask an archive for and the
+              one AO3 is best known for lacking. It does not: the predicate is
+              `title ILIKE '%x%' OR summary ILIKE '%x%'` (api/search.py), so it
+              matches titles and summaries only. Leaving that ambiguous meant
+              someone searching for a line of dialogue got nothing and had no way
+              to tell whether the story was absent or the field was never
+              searched. Story text exists for well under 1% of the index, so
+              there is no version of this that could search prose. */}
           <div className="sidebar__group">
-            <label className="sidebar__label">Search within results</label>
-            <input type="text" placeholder="Narrow current results…"
+            <label className="sidebar__label" htmlFor="search-within">
+              Filter by title or summary
+            </label>
+            <input id="search-within" type="text" placeholder="Narrow current results…"
               value={searchWithin} onChange={e => setSearchWithin(e.target.value)}
               className="input-sm w-full" />
+            <p className="sidebar__hint">
+              Matches words in the title and summary of the results above — not
+              the text of the stories themselves.
+            </p>
           </div>
 
           {/* Mobile-only: apply filters and close the drawer */}
@@ -2120,7 +2193,40 @@ function SearchPageInner() {
                                 results.count_is_capped ? 5000 : results.total).toLocaleString()}
                     </span>
                   )}
-                  {results.sites_searched.length > 0 && ` · ${results.sites_searched.map(s => SITE_LABELS[s] ?? s).join(" + ")}`}
+                  {/* The archive split, which is the whole point of this site.
+                      This line used to be a bare list of the archives searched
+                      ("AO3 + FF.net") — an assertion that FicAtlas spans them,
+                      with nothing to show for it. The counts turn it into
+                      evidence the reader can check: these 187 works are 124 from
+                      AO3 and 63 from FanFiction.net, and no search on either
+                      archive would have found the other 63.
+
+                      Falls back to the plain list whenever the backend omits the
+                      breakdown — a single-archive search, where the split is
+                      just the total, or a capped count, where the numbers would
+                      not add up to the headline. See api/search.py. */}
+                  {(() => {
+                    const counts = results.site_counts ?? {}
+                    const named = results.sites_searched
+                      .filter(s => counts[s] > 0)
+                      .sort((a, b) => counts[b] - counts[a])
+                    if (named.length > 1) {
+                      return (
+                        <span className="results-bar__split">
+                          {" · "}
+                          {named.map((s, i) => (
+                            <span key={s}>
+                              {i > 0 && " + "}
+                              <strong>{counts[s].toLocaleString()}</strong> {SITE_LABELS[s] ?? s}
+                            </span>
+                          ))}
+                        </span>
+                      )
+                    }
+                    return results.sites_searched.length > 0
+                      ? ` · ${results.sites_searched.map(s => SITE_LABELS[s] ?? s).join(" + ")}`
+                      : null
+                  })()}
 
                   {/* Without this it looks like the filters are broken: results
                       appear that have no value for the field being filtered. */}

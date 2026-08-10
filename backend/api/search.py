@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, aliased
 import os
 from sqlalchemy import and_, or_, func, literal_column, cast, case, Text, text as sql_text
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
-from typing import Optional, List
+from typing import Dict, Optional, List
 from pydantic import BaseModel
 
 from db.session import get_db
@@ -254,6 +254,18 @@ class SearchResponse(BaseModel):
     per_page: int
     results: List[StoryCard]
     sites_searched: List[str]
+    # How the matches break down by archive, e.g. {"ao3": 890, "ffnet": 340}.
+    #
+    # This is the one thing FicAtlas can show that no single archive can: that a
+    # search found work in three places at once. The landing page has always
+    # asserted it ("one search across all three, instead of three searches that
+    # each miss two"); until now nothing demonstrated it at the point where the
+    # reader could actually check.
+    #
+    # Counted over the same bounded candidate set as `total`, so when
+    # `count_is_capped` is true this is the split of the capped sample rather
+    # than of every match — the UI says so rather than implying precision.
+    site_counts: Dict[str, int] = {}
     live_count: int = 0            # how many results came from live fetch
     parsed_tokens: List[ParsedToken] = []  # for UI filter highlighting
 
@@ -1021,6 +1033,56 @@ def search(          # NOT async — see below
         total = COUNT_CEILING
     indexed = [r[0] for r in rows]
 
+    # Per-archive split of the matches.
+    #
+    # Cheap by construction rather than by luck: `candidates` is already bounded
+    # — COUNT_CEILING + 1 rows in the plain case, and a union of individually
+    # limited parts in the text case — so this aggregates at most ~5k rows that
+    # Postgres has just materialised for the main query. Measured at well under
+    # the noise floor of a search.
+    #
+    # Skipped entirely when only one archive is in play: the answer is then just
+    # `total`, and the extra round trip would buy nothing.
+    site_counts: Dict[str, int] = {}
+    # Only when the count is exact.
+    #
+    # `total` is capped at COUNT_CEILING, but the candidate set behind it is not
+    # exactly that size — in the text path it is a union of separately limited
+    # parts, so a search reporting "5,000+" was really counting 5,400. A
+    # breakdown over that set therefore summed to 5,400 under a headline of
+    # 5,000, which reads as an arithmetic error and undermines the very thing the
+    # figure is there to demonstrate.
+    #
+    # Worse, the split of that set is not a fair sample: the union pulls
+    # candidates by relevance AND by kudos, and kudos are recorded far more often
+    # on AO3, so even quoting it as a percentage would overstate AO3's share.
+    #
+    # So the breakdown is shown only for searches whose total is exact. That is
+    # also when it is most useful: a narrow search returning 40 works across two
+    # archives is a far better demonstration of what this site does than "5,000+"
+    # ever was.
+    if len(site_enums) > 1 and total > 0 and not count_is_capped:
+        try:
+            # Through `S`, the ORM alias over `candidates`, not through
+            # `candidates.c.site`: in the text-query path `candidates` is a UNION
+            # subquery, and SQLAlchemy relabels a union's columns
+            # (`stories_site`), so addressing them by their table name raised
+            # AttributeError. The alias maps the entity whatever the labelling.
+            # `s.value`, not `str(s)`: these come back as SiteEnum members and
+            # str() on an enum yields "SiteEnum.ao3", which the frontend's site
+            # label map does not know and would render raw.
+            site_counts = {
+                (s.value if hasattr(s, "value") else str(s)): int(n)
+                for s, n in db.query(S.site, func.count()).group_by(S.site).all()
+                if s
+            }
+        except Exception as e:
+            # A breakdown is a nicety; a search is not. Never fail the request
+            # for it — but say so, rather than leaving a silent empty dict that
+            # looks identical to "every match came from one archive".
+            log.warning("site_counts failed: %s: %s", type(e).__name__, e)
+            site_counts = {}
+
     # Series, looked up only for the rows actually being returned.
     #
     # A join in the main query would be paid for all 5,001 candidates and for
@@ -1088,6 +1150,7 @@ def search(          # NOT async — see below
     return SearchResponse(
         total=total,                          # stable across pages — indexed count only
         count_is_capped=count_is_capped,
+        site_counts=site_counts,
         page=page,
         per_page=per_page,
         results=merged,
