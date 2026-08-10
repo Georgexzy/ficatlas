@@ -38,11 +38,20 @@ class HubWork(BaseModel):
     complete: Optional[bool] = None
 
 
+class SiteSection(BaseModel):
+    """One archive's top works. Ranked within the site — see fandom_hubs.py for
+    why a single cross-archive ranking could only ever return AO3."""
+    site: str
+    works: list[HubWork]
+
+
 class HubDetail(BaseModel):
     slug: str
     name: str
     work_count: int
+    # Flat, interleaved across archives. Kept for anything reading the old shape.
     works: list[HubWork]
+    sections: list[SiteSection]
 
 
 @router.get("", response_model=list[HubSummary])
@@ -63,7 +72,8 @@ def list_hubs(
 @router.get("/{slug}", response_model=HubDetail)
 def get_hub(slug: str, db: Session = Depends(get_db)):
     hub = db.execute(text(
-        "SELECT slug, name, work_count, top_ids FROM fandom_hubs WHERE slug = :s"
+        "SELECT slug, name, work_count, top_ids, top_by_site "
+        "  FROM fandom_hubs WHERE slug = :s"
     ), {"s": slug}).fetchone()
     if not hub:
         raise HTTPException(status_code=404, detail="No such fandom")
@@ -94,4 +104,17 @@ def get_hub(slug: str, db: Session = Depends(get_db)):
             for r in rows
         ]
 
-    return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2], works=works)
+    # Group into per-archive sections using the stored per-site ordering. Built
+    # from the same `works` list, so the delisted/restricted re-check above
+    # applies to the sections too rather than being done twice.
+    by_id = {w.id: w for w in works}
+    sections: list[SiteSection] = []
+    for site, site_ids in (hub[4] or {}).items():
+        picked = [by_id[i] for i in site_ids if i in by_id]
+        if picked:
+            sections.append(SiteSection(site=site, works=picked))
+    # Largest archive first, so the biggest list leads the page.
+    sections.sort(key=lambda s: -len(s.works))
+
+    return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2],
+                     works=works, sections=sections)
