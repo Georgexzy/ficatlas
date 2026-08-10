@@ -15,7 +15,14 @@ import "./globals.css"
 // immediately understands what the third buys. And "search" alone leaves out the
 // half that matters: this finds work and sends you to the archive that hosts it.
 export const metadata: Metadata = {
-  title: "FicAtlas — search AO3, FanFiction.net and FicAlley at once",
+  // `template` applies to pages that set their own title — a story page supplies
+  // "Title — Author" and gets " · FicAtlas" appended, so a browser tab or a
+  // shared link says whose site it is without the story page repeating it.
+  // `default` is what every page without a title of its own still gets.
+  title: {
+    default: "FicAtlas — search AO3, FanFiction.net and FicAlley at once",
+    template: "%s · FicAtlas",
+  },
   description:
     // "19+ million", not a precise figure: this string is baked at build time
     // and cannot read the live count the way the landing page does, and the

@@ -3,7 +3,7 @@ import BackLink from "../BackLink"
 import SiteHeader from "../SiteHeader"
 
 export const metadata = {
-  title: "About & contact — FicAtlas",
+  title: "About & contact",   // layout.tsx appends " · FicAtlas"
   description:
     "What FicAtlas is, how it treats fanworks and AI, where its data comes from, and how to ask for a story to be taken down.",
 }

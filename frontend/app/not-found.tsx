@@ -4,7 +4,7 @@ import Link from "next/link"
 // the only visitors were on the tailnet; on a public site it is the page every
 // dead link, stale bookmark and scanner lands on, and it should look like the
 // rest of the app and offer the way back.
-export const metadata = { title: "Not found — FicAtlas" }
+export const metadata = { title: "Not found" }   // suffixed by the layout template
 
 export default function NotFound() {
   return (

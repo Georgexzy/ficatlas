@@ -118,6 +118,11 @@ class StoryDetail(BaseModel):
     published_at: Optional[str]
     updated_at: Optional[str]
     is_hosted: bool
+    # The author has locked this work to registered users at its source. Exposed
+    # so the story page can mark itself noindex: a work whose author has taken it
+    # out of public view must not be pushed into a search engine by us. See
+    # withdraw_deleted.py for how this is detected.
+    source_restricted: bool = False
     wayback_url: Optional[str]
     cross_post_urls: List[str] = []
     sources: List[str] = []
@@ -238,6 +243,7 @@ def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get
     ]
 
     return StoryDetail(
+        source_restricted=story.source_restricted_at is not None,
         id=str(story.id),
         site=story.site.value,
         url=story.url,

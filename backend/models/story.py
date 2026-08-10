@@ -93,6 +93,10 @@ class Story(Base):
     delisted_at       = Column(DateTime(timezone=True))
     delisted_reason   = Column(Text)
     text_withdrawn_reason = Column(Text)
+    # Not a request to us: the author locked the work to registered users on
+    # their own archive, which we can see because a restricted work redirects to
+    # /users/login. Recorded so nothing pushes it into a search engine.
+    source_restricted_at = Column(DateTime(timezone=True))
     wayback_url = Column(Text)                                # archive.org fallback
     # URLs where this same story is cross-posted on other sites (FFN/AO3/etc).
     # Populated when a curator (DLP, manual) tells us "these point to the same work".
