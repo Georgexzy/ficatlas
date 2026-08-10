@@ -104,6 +104,24 @@ input, select { font-family: inherit; }
   border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 100;
 }
+/* The same roof the reader's toolbar has, for the same reason.
+   A phone pins sticky elements to the LAYOUT viewport while the visible area
+   moves independently as the address bar retracts, so for those frames the bar
+   is drawn below the true top of the screen and the page shows through above
+   it. The reader was fixed and every other page was not — which is most of the
+   site, since this header is on all of them.
+   Painted in the header's own colour and reaching past where the screen can
+   begin, so it is invisible when the bar is where it should be and already
+   covering the gap when it is not. Kept to the header's width rather than
+   full-bleed: -50vw pushed body's scrollWidth from 390 to 561 on a phone when
+   that was tried on the reader. */
+.header::before {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 100%;
+  height: 120px;
+  background: var(--surface);
+  pointer-events: none;
+}
 .logo {
   font-family: var(--font-serif);
   font-size: 22px;
@@ -551,11 +569,18 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .index-status__hint code { font-family: var(--font-mono); background: var(--surface3); padding: 1px 4px; border-radius: 2px; font-size: 10px; }
 
 /* ── Header link ──────────────────────────────────────────────────────────── */
-.header__link { color: var(--text-dim); padding: 5px 11px;
+/* nowrap, because "Sign in" was breaking across two lines.
+   The header is a flex row and these are the only multi-word items in it, so
+   whenever the shell is narrow — the settings, about, takedown and permission
+   pages all use the ~660px prose column — they are what gives. A two-line link
+   in a one-line bar drags the header taller and reads as a rendering fault. Two
+   short words should never be a wrap point. */
+.header__link {
+  color: var(--text-dim); padding: 5px 11px;
   border-radius: var(--radius); transition: color 0.12s;
+  white-space: nowrap;
 }
-.header__link:hover {
-}
+.header__link:hover { color: var(--text); }
 
 /* ── Card actions ─────────────────────────────────────────────────────────── */
 .card__actions {
@@ -1880,7 +1905,12 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
    z-index instead. The toolbar sits at 50 and its roof is painted inside that
    stacking context, so anything above 50 is safe from it. .preview-banner was
    already at 300 and never needed the guard at all. */
-.health-banner { position: relative; z-index: 60; }
+/* Above every sticky bar's roof, not just the reader's.
+   Was z-index 60, which cleared the reader toolbar (50) but not the site header
+   (100) — so once the header got a roof of its own, the banner announcing that
+   the index is unreachable would have been painted over on every page that has
+   a header, which is all of them. 310 also clears .preview-banner at 300. */
+.health-banner { position: relative; z-index: 310; }
 .reader-fab {
   position: fixed; bottom: 24px; right: 24px; z-index: 60;
   width: 48px; height: 48px; border-radius: 50%;
