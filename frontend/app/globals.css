@@ -4401,7 +4401,22 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .hub-page {
   max-width: 1100px; margin: 0 auto; padding: 20px 24px 80px;
   font-size: 15px; line-height: 1.6; color: var(--text);
+  /* <body> is a column flex, so this is a flex item, and a flex item defaults
+     to min-width:auto — it refuses to shrink below its content's min-content
+     width. One long unwrapped title ("Draco Malfoy and the Mortifying Ordeal of
+     Being in Love") therefore set the page's width: 671px inside a 390px phone,
+     dragging the header off-screen with it. It LOOKED like it fitted only
+     because html/body use overflow-x: clip, which hides the scrollbar without
+     fixing the layout.
+     min-width:0 lets it shrink to the viewport; the wrapping rules below then
+     make the long titles behave once they actually have to. */
+  min-width: 0;
+  width: 100%;
 }
+/* Long titles and unbroken strings wrap rather than widen the page. */
+.hub-page .hub__title,
+.hub-page .hub__summary,
+.hub-page h1 { overflow-wrap: anywhere; }
 .hub-page h1 {
   font-family: var(--font-serif); font-size: 28px; font-weight: 600;
   color: var(--text); margin: 0 0 14px; line-height: 1.25;
