@@ -955,6 +955,7 @@ function SearchPageInner() {
   const [loading,      setLoading]      = useState(false)
   const [parsedTokens, setParsedTokens] = useState<ParsedToken[]>([])
   const [refreshing,   setRefreshing]   = useState(false)
+
   // Tracks which query we've already auto-deepened for, so a thin-result search
   // pulls fresh AO3 data once without looping on every re-render.
   const autoDeepenedRef = useRef<string>("")
@@ -1207,6 +1208,34 @@ function SearchPageInner() {
     (incRatings.length && incRatings.length < (explicit ? 5 : 4) ? 1 : 0) +
     (sites.length < 3 ? 1 : 0)
   const searchIsActive = query.trim().length > 0 || activeFilters > 0 || !!results
+
+  // Reset every filter in one action.
+  //
+  // activeFilters above has always known how many filters are narrowing the
+  // results — the results bar says "Browsing with 2 filters" — but there was no
+  // way to act on it. Arriving from a fandom hub link is the case that made it
+  // matter: the link sets fandoms AND sites=ao3, so two thirds of the index
+  // vanishes, and undoing it meant removing a chip and then knowing to
+  // re-enable two archive pills in a sidebar you may never have opened.
+  //
+  // Explicit assignments rather than a navigation to "/": that is the same route
+  // and the same mounted component, so a router push does not re-run the
+  // useState initialisers and the filters would survive their own removal.
+  //
+  // Deliberately does NOT clear the query text. "Clear filters" means the
+  // narrowing, not the search — someone who typed "time travel" and wants the
+  // archive restriction gone should not lose their words with it.
+  const clearFilters = useCallback(() => {
+    barEditedRef.current = true
+    setSites(["ao3", "ffnet", "fictionalley"])
+    setIncFandoms([]); setIncChars([]); setIncShips([]); setIncTags([])
+    setIncWarnings([]); setIncCats([]); setSections([]); setStatus([])
+    setExcFandoms([]); setExcChars([]); setExcShips([]); setExcTags([])
+    setAuthorFilter(""); setLanguage(""); setUpdatedAfter("")
+    setWordMin(undefined); setWordMax(undefined); setDlpMinRating(undefined)
+    setCrossovers("include"); setIncludeUnknown(false); setInSeries("any")
+    setPage(1)
+  }, [])
 
   const exitSearch = useCallback(() => {
     // Same target as the wordmark, so the two cannot disagree about what home
@@ -2199,6 +2228,16 @@ function SearchPageInner() {
           {results && (
             <>
               <div className="results-bar">
+                {/* Visible in the results bar rather than buried in the sidebar:
+                    the person who needs it arrived from a link that applied
+                    filters they never chose, so it has to be where they are
+                    already looking. */}
+                {activeFilters > 0 && (
+                  <button className="results-bar__clear" onClick={clearFilters}
+                    title="Remove every filter and search the whole index">
+                    ✕ Clear {activeFilters} filter{activeFilters === 1 ? "" : "s"}
+                  </button>
+                )}
                 <span className="results-bar__count">
                   {/* The backend counts to a ceiling of 5000 and stops, so a
                       capped total literally arrives as 5001. Printing that as

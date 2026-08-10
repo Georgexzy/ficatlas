@@ -324,6 +324,17 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   margin-bottom: 12px; font-size: 12px; color: var(--text-dim); font-family: var(--font-mono);
 }
 .results-bar strong { color: var(--text); }
+/* The way out of a filtered search.
+   Styled as an action rather than a label, and coloured with the accent so it
+   reads as the thing to press when the results are narrower than expected. */
+.results-bar__clear {
+  background: var(--surface2); border: 1px solid var(--border2);
+  color: var(--accent); border-radius: 999px;
+  padding: 4px 12px; margin-right: 12px;
+  font-size: 12px; font-family: var(--font-mono); cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.results-bar__clear:hover { border-color: var(--accent); background: var(--surface3); }
 /* Reminder that the filters were deliberately widened, and a one-click undo. */
 .results-bar__loose { color: var(--text-faint); margin-left: 6px; background: none;
   border: none; padding: 0; font: inherit; font-size: 11px; cursor: pointer; }
