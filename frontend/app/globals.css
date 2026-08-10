@@ -4350,6 +4350,25 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   border-color: var(--accent);
 }
 
+/* Browse uses the app's proportions, not the essay's.
+   These pages were built on .page-prose — the About/takedown container: 660px
+   wide, serif headings, dimmed body text. That is right for a page of prose and
+   wrong for a list of works, and it made Browse look like a different site from
+   the search results it sits beside in the nav. Same width and typography as
+   .main, so moving between Search and Browse does not feel like leaving. */
+.hub-page {
+  max-width: 1100px; margin: 0 auto; padding: 20px 24px 80px;
+  font-size: 15px; line-height: 1.6; color: var(--text);
+}
+.hub-page h1 {
+  font-family: var(--font-serif); font-size: 28px; font-weight: 600;
+  color: var(--text); margin: 0 0 14px; line-height: 1.25;
+}
+@media (max-width: 640px) {
+  .hub-page { padding: 16px 16px 90px; }
+  .hub-page h1 { font-size: 23px; }
+}
+
 /* ── Fandom hubs ─────────────────────────────────────────────────────────────
    The crawlable entry points: /fandoms lists them, /fandom/[slug] shows one.
    Both are server-rendered, so these styles are the whole presentation — there
