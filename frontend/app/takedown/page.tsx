@@ -75,7 +75,21 @@ export default function TakedownPage() {
             will still read your message.
           </p>
         )}
-        <p>We will email you when someone has looked at it.</p>
+        {/* Does not promise an email, because none is sent.
+            takedown.py stores the address and never mails it, and no SMTP is
+            configured on this deployment at all — so "we will email you when
+            someone has looked at it" was a promise the system could not keep,
+            made to someone who has just found their writing somewhere they did
+            not put it. The password-reset flow already settled this for the same
+            situation: "check your inbox" when nothing was sent is how a flow
+            becomes a support burden.
+            What replaces it is better news anyway — the thing they wanted has
+            already happened and they are not waiting on anyone. */}
+        <p>
+          You do not need to wait for a reply, and nothing further is required
+          from you. A person reviews these, but the removal has already taken
+          effect.
+        </p>
         <p><Link href="/" className="card-btn card-btn--primary">Back to search</Link></p>
       </div>
     )
@@ -180,7 +194,8 @@ export default function TakedownPage() {
 
         <label>
           <span>Your email</span>
-          <input name="email" type="email" required placeholder="So we can tell you what happened" />
+          <input name="email" type="email" required
+            placeholder="In case we need to ask you something" />
         </label>
 
         <label>
