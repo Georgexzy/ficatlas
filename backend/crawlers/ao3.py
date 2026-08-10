@@ -141,7 +141,9 @@ class AO3Crawler(BaseCrawler):
             status_el = soup.select_one("dt.status")
             if status_el and "Completed" in status_el.get_text():
                 status = StatusEnum.complete
-            elif chapter_count_total and chapter_count >= chapter_count_total:
+            # Exact equality: >= also swallows 37/36, which is not a finished
+            # work but damaged data. 35/36 is excluded either way.
+            elif chapter_count_total and chapter_count == chapter_count_total:
                 status = StatusEnum.complete
             else:
                 status = StatusEnum.in_progress

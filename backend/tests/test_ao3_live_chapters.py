@@ -10,6 +10,7 @@ they became visible, on the fandom hub pages.
 """
 import pytest
 
+from live_fetch.ao3_live import _is_complete as done
 from live_fetch.ao3_live import _parse_chapters_text as parse
 
 
@@ -60,3 +61,46 @@ class TestMessyInput:
 
     def test_never_returns_zero_posted(self):
         assert parse("0/0")[0] == 1
+
+
+class TestCompletionInference:
+    """"36/36" means finished, and this path used not to notice.
+
+    An AO3 blurb shows "Completed:" for a finished work and "Updated:" otherwise
+    — and sometimes neither, on a work posted once and never touched. The live
+    path read only that label, so 92,350 works sat at n/n while being shown to
+    readers as still in progress. The bulk importer and the crawler had always
+    used the chapter counter as the second signal; only this one did not, and it
+    could not have, because it hardcoded the total to None.
+    """
+    def test_label_alone_is_enough(self):
+        assert done("Completed: 2026-07-13", 5, None)
+
+    def test_all_declared_chapters_posted(self):
+        """The case the user spotted: 36/36 is finished, whatever the label says."""
+        assert done("Updated: 2026-08-09", 36, 36)
+
+    def test_a_single_chapter_work(self):
+        assert done("", 1, 1)
+
+    def test_one_chapter_short_is_not_finished(self):
+        """35/36. The whole point of requiring equality."""
+        assert not done("Updated: 2026-08-09", 35, 36)
+
+    def test_unknown_total_decides_nothing(self):
+        """"36/?" — the author has not said how long it will be."""
+        assert not done("Updated: 2026-08-09", 36, None)
+
+    def test_more_posted_than_declared_is_not_completion(self):
+        """37/36 is impossible, so it is damaged data rather than a finished
+        work — 1,245 rows were in that shape after the chapter-count bug. An
+        earlier `>=` would have marked every one of them complete."""
+        assert not done("Updated: 2026-08-09", 37, 36)
+
+    def test_the_label_still_wins_over_a_short_count(self):
+        """If AO3 says Completed, believe it: an author can finish a work while
+        leaving the declared total higher than what they posted."""
+        assert done("Completed: 2026-07-13", 35, 36)
+
+    def test_empty_label_and_no_counts(self):
+        assert not done("", 1, None)
