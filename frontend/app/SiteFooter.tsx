@@ -8,6 +8,14 @@ export default function SiteFooter() {
     <footer className="site-footer">
       <span>FicAtlas — search AO3, FanFiction.net and FicAlley together</span>
       <span className="site-footer__sep">·</span>
+      {/* The footer is on every page from the root layout, which makes this the
+          one link that puts /fandoms — and through it every story page — inside
+          the crawl graph. Without it the hubs are as unreachable as the story
+          pages were, and the whole exercise achieves nothing.
+          It earns its place for readers too: the search box needs you to know
+          what you are looking for, and this is the answer to "what's in here?" */}
+      <Link href="/fandoms">Browse fandoms</Link>
+      <span className="site-footer__sep">·</span>
       <Link href="/about">About</Link>
       <span className="site-footer__sep">·</span>
       <Link href="/about#ai">AI policy</Link>
