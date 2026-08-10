@@ -133,11 +133,29 @@ CREATE INDEX IF NOT EXISTS ix_stories_delisted ON stories (id) WHERE delisted_at
 -- these columns takes ~10s on a table this size, which is not something to pay
 -- for on each restart. A fresh install analyses an empty table instantly and
 -- autoanalyze handles it from there.
+-- Keyed on each column, not on one of them.
+--
+-- The first version of this guard asked whether `delisted_at` had statistics and
+-- analysed the whole set if not. That works exactly once: after it runs,
+-- delisted_at has stats, the guard never fires again, and any column added later
+-- is silently skipped. source_restricted_at was added an hour after this was
+-- written and immediately reproduced the 15-second seq scan the guard exists to
+-- prevent — the same defect, by way of the fix for it.
+--
+-- Now each column is checked on its own and only the ones actually missing
+-- statistics are analysed, so adding a name to the list is enough.
 DO $ANALYSE$
+DECLARE
+    missing text;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_stats
-                   WHERE tablename = 'stories' AND attname = 'delisted_at') THEN
-        ANALYZE stories (delisted_at, text_withdrawn_at);
+    SELECT string_agg(quote_ident(col), ', ')
+      INTO missing
+      FROM unnest(ARRAY['delisted_at', 'text_withdrawn_at',
+                        'source_restricted_at']) AS col
+     WHERE NOT EXISTS (SELECT 1 FROM pg_stats
+                        WHERE tablename = 'stories' AND attname = col);
+    IF missing IS NOT NULL THEN
+        EXECUTE format('ANALYZE stories (%s)', missing);
     END IF;
 END
 $ANALYSE$;
