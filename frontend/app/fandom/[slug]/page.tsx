@@ -99,7 +99,7 @@ export default async function FandomHub(
     : hub.works.length ? [{ site: "", works: hub.works }] : []
 
   return (
-    <div className="page-prose hub">
+    <div className="hub-page hub">
       {/* Not current="browse": that suppresses the link, and from a single
           fandom the index of all of them is somewhere you actually want to go. */}
       <SiteHeader />

@@ -68,7 +68,7 @@ export default async function FandomsIndex() {
   const letters = [...groups.keys()].sort()
 
   return (
-    <div className="page-prose hub">
+    <div className="hub-page hub">
       <SiteHeader current="browse" />
       <h1>Browse fandoms</h1>
       <p className="hub__lede">
