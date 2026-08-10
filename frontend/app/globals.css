@@ -2214,7 +2214,19 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 
    --accent is deliberately NOT redefined: the gold carries enough contrast on
    all three papers and it is the one colour that should stay constant, so a
-   link looks like a link wherever you are. */
+   link looks like a link wherever you are.
+
+   Defined on <body> rather than on the shell, via :has(), because the reader
+   paints the ENTIRE viewport: its ::before is fixed at inset 0. The site footer
+   is a sibling of the reader in the root layout, so it sat on the reader's
+   paper while still reading site tokens — dark site under a light reader gave
+   rgba(236,232,223,0.55) on #fdfcf9, a ratio of 1.19:1, and the light/dark
+   pairing was invisible the same way in reverse.
+
+   Scoping to the shell would have fixed the reader and left the footer wrong.
+   Anything painted on the reader's background should use the reader's palette,
+   and <body> is where that is true of everything. :has() is already relied on
+   for footer layout further down this file. */
 /* Redefining the tokens fixes every element that sets a colour explicitly, but
    not one that simply inherits: those still took `color` from <body>, i.e. the
    site palette. Anchoring the shell's own colour to the reader's --text makes
@@ -2223,7 +2235,7 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 .reader-shell[data-theme] { color: var(--text); }
 
 .reader-shell[data-theme="sepia"]::before { background: #f4ecd8; }
-.reader-shell[data-theme="sepia"] {
+body:has(.reader-shell[data-theme="sepia"]) {
   --reader-chrome: #f4ecd8;
   --bg:         #f4ecd8;
   --surface:    #efe6cd;
@@ -2237,7 +2249,7 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   --text-ghost: rgba(74,63,47,0.38);
 }
 .reader-shell[data-theme="dark"]::before  { background: #0e0e10; }
-.reader-shell[data-theme="dark"] {
+body:has(.reader-shell[data-theme="dark"]) {
   --reader-chrome: #0e0e10;
   --bg:         #0e0e10;
   --surface:    #141416;
@@ -2267,7 +2279,7 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   z-index: -1;
   background: #fdfcf9;
 }
-.reader-shell[data-theme="default"] {
+body:has(.reader-shell[data-theme="default"]) {
   --reader-chrome: #fdfcf9;
   /* Same token scoping as sepia and dark above — this is the theme where it
      matters most, since "Light" is what someone picks to escape a dark site. */
