@@ -1,4 +1,5 @@
 """Auth — signup/login/logout/me with bcrypt + httponly cookie sessions."""
+import hashlib
 import os
 import re
 import secrets
@@ -64,10 +65,31 @@ def _new_token() -> str:
     return secrets.token_urlsafe(48)
 
 
+def _token_hash(token: str) -> str:
+    """What actually goes in the database.
+
+    The session token is a bearer credential: whoever holds it *is* the user,
+    with no second factor and no further check. Storing it verbatim meant the
+    `user_sessions` table was a list of working credentials — so a database
+    backup, a stray pg_dump, or read access to that one table was enough to
+    resume every live session on the site. There is a `backups/` directory in
+    this repo, which makes that a realistic path rather than a theoretical one.
+
+    A hash removes the class entirely: the column becomes useless to anyone who
+    reads it, while lookup stays a single indexed equality on the primary key.
+    Plain SHA-256 rather than bcrypt is correct here, unlike for passwords —
+    the input is 48 bytes from `secrets`, so there is no low-entropy guess to
+    slow down, and this runs on every authenticated request.
+
+    Hex digest is 64 chars and the column is String(80), so nothing migrates.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def _create_session(db: Session, user: User, user_agent: str | None = None) -> str:
     token = _new_token()
     sess = UserSession(
-        token=token, user_id=user.id,
+        token=_token_hash(token), user_id=user.id,
         created_at=datetime.utcnow(),
         expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS),
         last_used=datetime.utcnow(),
@@ -127,11 +149,39 @@ def get_current_user(
     row = (
         db.query(UserSession, User)
         .join(User, User.id == UserSession.user_id)
-        .filter(UserSession.token == sat)
+        .filter(UserSession.token == _token_hash(sat))
         .first()
     )
     if not row:
-        return None
+        # Transitional: sessions created before tokens were hashed are stored
+        # verbatim. Rather than invalidating everyone's login on deploy, accept
+        # a legacy row once and rewrite it to its hash in place, so it is stored
+        # correctly from here on. Every active session converts itself the next
+        # time it is used, and the rest expire.
+        #
+        # Delete this once no legacy rows remain — they cannot outlive
+        # SESSION_DAYS from the deploy that introduced hashing.
+        legacy = (
+            db.query(UserSession, User)
+            .join(User, User.id == UserSession.user_id)
+            .filter(UserSession.token == sat)
+            .first()
+        )
+        if not legacy:
+            return None
+        s_old, user_old = legacy
+        # token is the primary key, so this is a delete plus an insert.
+        db.delete(s_old)
+        db.flush()
+        s_new = UserSession(
+            token=_token_hash(sat), user_id=s_old.user_id,
+            created_at=s_old.created_at, expires_at=s_old.expires_at,
+            last_used=s_old.last_used, user_agent=s_old.user_agent,
+            view_as=s_old.view_as,
+        )
+        db.add(s_new)
+        db.commit()
+        row = (s_new, user_old)
     s, user = row
     now = datetime.utcnow()
     if s.expires_at < now:
@@ -322,7 +372,12 @@ def logout(
     db: Session = Depends(get_db),
 ):
     if sat:
-        db.query(UserSession).filter(UserSession.token == sat).delete()
+        # Both forms, so a session that has not yet been converted to its hash
+        # is still genuinely destroyed. A logout that silently leaves the
+        # session alive is the worst possible bug in this function.
+        db.query(UserSession).filter(
+            UserSession.token.in_([_token_hash(sat), sat])).delete(
+                synchronize_session=False)
         db.commit()
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"ok": True}
@@ -375,7 +430,10 @@ def change_password(
     # Drop every session except the one making this request
     q = db.query(UserSession).filter(UserSession.user_id == user.id)
     if sat:
-        q = q.filter(UserSession.token != sat)
+        # notin_ both forms: matching only the hash would sign the caller out of
+        # the very device they are changing their password on, if that session
+        # happened not to have been converted yet.
+        q = q.filter(UserSession.token.notin_([_token_hash(sat), sat]))
     q.delete(synchronize_session=False)
     db.commit()
     return {"ok": True, "message": "Password changed. Other devices were signed out."}
@@ -399,7 +457,8 @@ def set_view_as(role: str = Form(""), sat: Optional[str] = Cookie(default=None, 
     """
     from models.user import ROLE_RANK, ROLE_READER, ROLE_ADMIN, ROLE_OWNER
 
-    sess = db.query(UserSession).filter(UserSession.token == sat).first() if sat else None
+    sess = db.query(UserSession).filter(
+        UserSession.token.in_([_token_hash(sat), sat])).first() if sat else None
     if not sess:
         raise HTTPException(401, "Not authenticated")
     user = db.query(User).filter(User.id == sess.user_id).first()
@@ -498,7 +557,7 @@ def logout_all(
     signed in; otherwise the cookie is cleared too."""
     q = db.query(UserSession).filter(UserSession.user_id == user.id)
     if keep_current and sat:
-        q = q.filter(UserSession.token != sat)
+        q = q.filter(UserSession.token.notin_([_token_hash(sat), sat]))
     q.delete(synchronize_session=False)
     db.commit()
     if not keep_current:
