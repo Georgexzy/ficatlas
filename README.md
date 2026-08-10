@@ -82,6 +82,34 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   DLP's list is already curated, so the rating separates the best of it from the
   merely-included
 - **DLP badge & cross-post links** — DLP-curated stories show a purple "DLP" badge; cross-posted works show a "+N copies" badge in results and "Also on AO3 / FF.net / SquidgeWorld" links on the detail page
+- **Authors can verify their account and say what they permit** — an AO3 or
+  FanFiction.net writer can prove they control their account and record a
+  standing choice: host the full text, list it but never store the writing, or
+  do not index it at all. It applies to their whole back catalogue **and
+  everything they post later**, so it is a once-only thing.
+
+  Proof is control of the account, not a login. Neither archive has an API or
+  OAuth, and AO3 has publicly told its users never to give a third-party app
+  their password — so a one-time token goes in the author's own profile and is
+  read back from the public page. AO3's `robots.txt` disallows `/works?`,
+  `/autocomplete/`, `/downloads/` and the search endpoints; `/users/` is not
+  disallowed, which is the path this uses.
+
+  **Removal never requires any of this.** The two are deliberately asymmetric:
+  getting a removal wrong hides a work that need not have been hidden, which is
+  recoverable; getting a permission wrong means hosting someone's writing
+  without consent, which is not recoverable by the person it happens to. So
+  proof is required only for saying *yes*, and revoking needs no proof either —
+  it can only ever reduce what the site may do.
+
+  It does **not** read consent out of prose. Fandom's "blanket statement"
+  convention lives in the very profile field this reads, but those statements
+  are written about transformative works (podfic, translation, remix), "archive"
+  in them commonly means a personal copy, and there is no standard format.
+  Treating one as permission to rehost would be the mistake the opt-out detector
+  exists to avoid, pointed the other way. A verified statement does outrank the
+  opt-out heuristic, which is the only way a false positive there can be
+  corrected — by the one person entitled to correct it
 - **Author opt-outs are honoured** — some authors state in a work's summary that
   they do not want it reposted or redistributed on other sites. FicAtlas treats
   that as an explicit no-index notice: such works are skipped at ingest and
