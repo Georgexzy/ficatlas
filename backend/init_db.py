@@ -482,6 +482,27 @@ ALTER TABLE stories ADD COLUMN IF NOT EXISTS text_withdrawn_reason TEXT;
 CREATE INDEX IF NOT EXISTS ix_stories_text_withdrawn ON stories (id)
     WHERE text_withdrawn_at IS NOT NULL;
 
+-- The author locked the work to registered users at its source.
+--
+-- Distinct from text_withdrawn_at (we were asked to take it down) and from
+-- delisted_at (we were asked to unlist it). This one is not a request to us at
+-- all: it is a decision the author made on their own archive, which happens to
+-- be visible to us because a restricted work redirects to /users/login instead
+-- of loading. Roughly 966,000 of AO3's ~11.7M works are locked this way.
+--
+-- Recorded rather than acted on. The work still exists, so it stays indexed and
+-- the listing still points at it — but "this author has taken the work out of
+-- public view" is a fact worth holding, and withdraw_deleted.py was the only
+-- thing in the system that could see it and threw it away. It is what any future
+-- sitemap has to exclude: robots.txt permitting a crawl is passive, submitting a
+-- URL is a positive act, and doing that for a work its author has hidden would
+-- be indefensible.
+--
+-- Nullable and cleared on re-check, so unlocking a work undoes it.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS source_restricted_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS ix_stories_source_restricted ON stories (id)
+    WHERE source_restricted_at IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS takedowns (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     story_id     UUID REFERENCES stories(id) ON DELETE SET NULL,

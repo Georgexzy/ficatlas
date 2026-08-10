@@ -97,12 +97,27 @@ def check_source(url: str) -> str:
     if r.status_code in (404, 410):
         return "gone"
 
-    # AO3 sends adult/restricted works to a login or confirmation page. Those are
+    # AO3 sends adult and restricted works to a gate rather than a 404. Those are
     # live works, and treating the redirect as deletion would withdraw exactly
     # the mature fic most likely to be gated.
+    #
+    # The two gates are NOT the same thing and are no longer collapsed together:
+    #
+    #   view_adult   an age confirmation. Anyone can click through, logged in or
+    #                not, so the work is as public as any other. Nothing to record.
+    #   users/login  registered users only. The author has deliberately taken the
+    #                work out of public view — roughly 966,000 of AO3's ~11.7M
+    #                works are locked this way, largely in response to scraping
+    #                and AI fears.
+    #
+    # Both stay in the index, because both still exist. But the second is an
+    # author decision about visibility, and this was the only place in the system
+    # that could see it and threw it away. Distinguishing them costs one branch.
     if r.status_code in (301, 302, 303, 307, 308):
         target = r.headers.get("location", "")
-        if "users/login" in target or "restricted" in target or "view_adult" in target:
+        if "users/login" in target or "restricted" in target:
+            return "restricted"
+        if "view_adult" in target:
             return "alive"
         return "unknown"
 
@@ -124,7 +139,7 @@ def run_pass(db, limit: int = BATCH, dry_run: bool = False) -> dict:
 
     rows = db.execute(CANDIDATES, {"gap": CONFIRM_GAP_HOURS, "lim": limit,
                                    "dead": list(DEAD_ARCHIVES)}).fetchall()
-    seen = withdrawn = cleared = unknown = 0
+    seen = withdrawn = cleared = unknown = restricted = 0
 
     for story_id, url, site, strikes, last_gone in rows:
         if "archiveofourown.org" in (url or ""):
@@ -141,9 +156,31 @@ def run_pass(db, limit: int = BATCH, dry_run: bool = False) -> dict:
             """), {"id": str(story_id)})
             continue
 
+        if verdict == "restricted":
+            restricted += 1
+            # Alive for withdrawal purposes — strikes reset exactly as for any
+            # other live work — but the visibility decision is recorded.
+            db.execute(sql_text("""
+                UPDATE stories SET source_restricted_at = COALESCE(source_restricted_at, now())
+                WHERE id = CAST(:id AS uuid)
+            """), {"id": str(story_id)})
+            db.execute(sql_text("""
+                INSERT INTO source_gone (story_id, strikes, last_checked)
+                VALUES (:id, 0, now())
+                ON CONFLICT (story_id) DO UPDATE
+                  SET strikes = 0, last_checked = now(), last_seen_gone = NULL
+            """), {"id": str(story_id)})
+            continue
+
         if verdict == "alive":
             if strikes:
                 cleared += 1
+            # An author who unlocks a work has changed their mind back, and the
+            # flag has to clear or it becomes a one-way door.
+            db.execute(sql_text("""
+                UPDATE stories SET source_restricted_at = NULL
+                WHERE id = CAST(:id AS uuid) AND source_restricted_at IS NOT NULL
+            """), {"id": str(story_id)})
             db.execute(sql_text("""
                 INSERT INTO source_gone (story_id, strikes, last_checked)
                 VALUES (:id, 0, now())
@@ -174,4 +211,4 @@ def run_pass(db, limit: int = BATCH, dry_run: bool = False) -> dict:
 
     db.commit()
     return {"checked": seen, "withdrawn": withdrawn,
-            "cleared": cleared, "unknown": unknown}
+            "cleared": cleared, "unknown": unknown, "restricted": restricted}
