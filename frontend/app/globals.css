@@ -1913,6 +1913,14 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   color: var(--green); white-space: nowrap;
 }
 
+/* Alternatives offered at the foot of the removal form. Muted, so it cannot be
+   mistaken for a step someone has to complete before their story comes down. */
+.takedown-alt {
+  margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border);
+  font-size: 12.5px; line-height: 1.6; color: var(--text-faint);
+}
+.takedown-alt a { color: var(--accent); text-decoration: underline; }
+
 /* ── Author works management ───────────────────────────────────────────────── */
 .perm-ok {
   font-size: 13px; color: var(--green); margin: 12px 0;

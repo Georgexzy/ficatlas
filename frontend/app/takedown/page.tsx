@@ -220,6 +220,17 @@ export default function TakedownPage() {
           {busy ? "Sending…" : "Take this story down"}
         </button>
       </form>
+
+      {/* Offered after the form, never instead of it. Someone who arrived here
+          wants their work down and should not have to read about alternatives
+          first — but "all of it, permanently, including anything I write later"
+          is a thing people mean and this form cannot express. */}
+      <p className="takedown-alt">
+        Want this to cover everything you write, not just one story? You can{" "}
+        <Link href="/permissions/manage">see everything held under your name</Link>{" "}
+        and set a standing choice. That needs no proof either, unless you are
+        giving permission rather than withdrawing it.
+      </p>
     </div>
   )
 }
