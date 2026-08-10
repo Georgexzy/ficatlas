@@ -47,6 +47,25 @@
   --green-bg:    rgba(90,185,120,0.1);
   --red-bg:      rgba(220,80,80,0.1);
   --red:         rgba(220,110,90,0.9);
+  /* --danger was never defined.
+   *
+   * Ten rules already referenced it as `var(--danger, #d9534f)` — the takedown
+   * cards, the settings save error, the offline error state, the health banner —
+   * so every one of them silently fell through to that hardcoded hex. Which
+   * meant the site had an eleventh colour that belonged to no palette and did
+   * not change with the theme: in light mode it sat unadjusted against a cream
+   * background while everything around it had been retuned.
+   *
+   * Defined as an alias of --red rather than a new value, because the palette
+   * already had a considered red for exactly this job and a second one would be
+   * the same mistake with a definition attached. */
+  --danger:      var(--red);
+  /* Same story as --danger: referenced only as `var(--warn, #d08a3a)`
+   * by the coverage-warning callout, so that hex was the real value and
+   * it never changed with the theme. Amber rather than an alias of
+   * --accent, because a caution and a brand highlight must not read
+   * alike; --accent is the gold used for links and emphasis. */
+  --warn:        #d9a34a;
   --font-sans:   'DM Sans', system-ui, sans-serif;
   --font-serif:  'Playfair Display', Georgia, serif;
   --font-mono:   'DM Mono', monospace;
@@ -128,6 +147,9 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .sidebar__top { padding: 0 14px 10px; }
 .sidebar__group { padding: 0 14px 10px; }
 .sidebar__label { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; display: block; margin-bottom: 6px; }
+/* Says what a control actually does, where the label alone would be read as
+   promising more. Deliberately quiet — it is a clarification, not a warning. */
+.sidebar__hint { font-size: 11px; line-height: 1.45; color: var(--text-faint); margin-top: 6px; }
 .sidebar__rule { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
 /* Checkbox + label row inside the filter sidebar. 18px touch target and a
    wrapping label so the text stays readable in the mobile drawer. */
@@ -402,6 +424,14 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   /* ~62 characters, the readable measure for a single paragraph. */
   max-width: 46ch; margin: 0 auto 28px;
 }
+/* The second line of the pitch. Quieter and tighter to the first, so the two
+   read as one claim with its consequence rather than as two competing headlines
+   — the eye should reach the search box, not stall in a wall of prose. */
+.empty__sub--secondary {
+  margin-top: -18px; margin-bottom: 30px;
+  font-size: 13px; color: var(--text-faint);
+  max-width: 44ch;
+}
 
 /* ── Syntax help ───────────────────────────────────────────────────────────── */
 .syntax-help { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); z-index: 10; }
@@ -547,6 +577,11 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 /* ── Reader / story detail ────────────────────────────────────────────────── */
 .reader-shell {
   max-width: 760px; margin: 0 auto; padding: 24px 24px 80px;
+  /* The colour the reader's chrome is painted, per theme.
+     The toolbar background and the fade beneath it must match exactly or the
+     fade shows as a band; naming it once removes the chance of them drifting.
+     Overridden in the sepia/dark blocks further down. */
+  --reader-chrome: var(--bg);
 }
 .back-link {
   display: inline-block; color: var(--text-dim); font-size: 13px;
@@ -1317,10 +1352,22 @@ kbd {
 .reader[data-font="serif"] .reader__body { font-family: var(--font-serif); }
 
 /* ── Reader progress bar + width/font (override fixed max-width by data attr) ─ */
+/* Pinned to the TOP of the toolbar, not the bottom.
+   Staying inside the toolbar is right — as position:fixed it drifted whenever
+   the toolbar and the window disagreed. But the bottom edge was the wrong edge,
+   and a screenshot showed why: prose scrolling under a sticky toolbar is clipped
+   at that exact line, so the bar landed on top of a half-visible line of text and
+   read as a strikethrough through the story. Nobody looking at it would guess it
+   was a progress indicator.
+   The top edge has no such conflict — the toolbar's own opaque background is
+   always behind it, at any scroll position, in every theme. It is also where
+   readers expect a progress bar, which is the incidental benefit. */
 .reader-progress {
-  position: fixed; top: 0; left: 0; height: 3px;
-  background: var(--accent); z-index: 100;
+  position: absolute; left: 0; top: 0; height: 2px;
+  background: var(--accent); z-index: 1;
   transition: width 0.1s linear;
+  pointer-events: none;
+  border-bottom-right-radius: 2px;
 }
 .reader[data-width="wide"] { max-width: 860px; }
 .reader[data-width="narrow"] { max-width: 720px; }
@@ -1663,11 +1710,20 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   padding: 24px 16px; gap: 28px;
   background: var(--bg);
 }
+/* The wordmark on the sign-in page.
+   It asked for `var(--font-display)`, which has never been defined and carried
+   no fallback — so `font-family` resolved to nothing and the browser used its
+   default serif. The one element on the page whose whole job is to look like
+   the brand was the one element not set in the brand's typeface, on the screen
+   people meet before they have an account.
+   --font-serif is what .logo in the header uses; weight and italic follow it
+   too, so the mark is the same mark at a larger size rather than a second
+   interpretation of it. */
 .auth-logo {
-  font-family: var(--font-display); font-size: 36px; font-weight: 700;
+  font-family: var(--font-serif); font-size: 36px; font-weight: 600;
   color: var(--text); text-decoration: none; letter-spacing: -0.02em;
 }
-.auth-logo em { color: var(--accent); font-style: normal; font-weight: 400; }
+.auth-logo em { color: var(--accent); font-style: italic; }
 .auth-card {
   width: min(420px, 100%);
   background: var(--surface); border: 1px solid var(--border);
@@ -1739,11 +1795,87 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 }
 
 /* ── Reader: sticky topbar + floating exit button ────────────────────────── */
+/* The progress bar is an absolutely-positioned child, so the toolbar has to be
+   its containing block. Sticky already is one, but say so explicitly: if the
+   toolbar ever stops being sticky the bar must still ride its edge and not jump
+   to the page corner. Vertical padding gives the bar room to sit on the border
+   without crowding the back-link. */
 .reader-topbar--sticky {
   position: sticky; top: 0; z-index: 50;
-  background: var(--bg); backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border);
+  /* Opaque, and no backdrop blur.
+     This was `0.92` alpha plus `backdrop-filter: blur(8px)` — a frosted panel.
+     Frosting works when there is something worth glimpsing behind it; here the
+     only thing behind it is the chapter you are reading, so the toolbar showed a
+     moving haze of text and the progress bar on its lower edge read as floating
+     above a gap. It was reported in dark mode and not sepia, which is a
+     perceptual asymmetry rather than a difference in the CSS: the two themes are
+     styled identically at 0.92, but pale text ghosting over near-black is far
+     easier for the eye to catch than dark text ghosting over cream.
+     The blur was doing no work regardless — the theme layer behind the toolbar
+     is painted the same colour as the toolbar — while costing a compositing pass
+     on every scroll frame, which is felt most on the phones people read on. */
+  background: var(--reader-chrome);
+  /* A border the reader can actually see, and room beneath it.
+     --border is rgba(240,235,225,0.08), which against a near-black reading page
+     is no line at all — so prose being clipped as it passed under the toolbar
+     looked like a rendering fault rather than content sliding beneath chrome.
+     --border2 is the same hue at 0.14 and reads as a deliberate edge.
+     The lower padding matters as much as the line: without it the first visible
+     line of the story is sheared through the middle of its letterforms right
+     against the toolbar. A few pixels of breathing room turn "broken" into
+     "scrolling". */
+  border-bottom: 1px solid var(--border2);
+  padding: 8px 0 10px;
+  /* Depth, so the shear reads as layering.
+     A sticky bar always cuts whatever scrolls beneath it — that is unavoidable,
+     scrolling is continuous. What decides whether it looks deliberate or broken
+     is whether the bar is distinguishable from the page at all. Here it is
+     painted the reader's own background colour, so there was nothing to say the
+     text was going UNDER something: it just stopped, mid-letterform, in empty
+     space.
+     A gradient fade was tried instead and was worse. A line of type is ~29px at
+     this size and the fade was 22px, so a whole line landed inside it and came
+     out a flat, entirely legible mid-grey — which is precisely the "text showing
+     through a gap" this was meant to cure. Screenshots of four scroll positions
+     made that obvious and nothing in the CSS would have.
+     A shadow is the honest fix: the bar sits above the page, the text passes
+     beneath it, and the cut is the edge of an object rather than a defect. */
+  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.65);
 }
+/* A roof above the toolbar, so nothing can ever show over its top edge.
+   On a phone this bar is pinned to the LAYOUT viewport, but the visible area
+   moves independently while the browser's address bar retracts and returns
+   during a scroll. For those frames the bar is painted lower than the true top
+   of the screen, and the strip above it showed the story scrolling past — a gap
+   that opens and closes as you read, which is exactly what was reported and what
+   a headless browser cannot reproduce (measured: pinned at top:0, hit-testing
+   the toolbar at every y from 0 to 16).
+   Rather than chase the viewport, extend the toolbar's own colour upwards past
+   where the screen can begin. When the bar is against the top the roof is simply
+   off-screen and costs nothing; when the browser puts it lower, the roof is
+   already covering the gap. Same colour as the bar, so it is invisible either
+   way, and it sits behind the bar's content.
+
+   The toolbar's own width is enough. A full-bleed version was tried, to cover
+   the shell's 24px side padding where the revealed band showed the near-black
+   body colour as two dark corners. It worked and cost too much: `left/right:
+   -50vw` pushed body's scrollWidth from 390 to 561 on a phone. The corners are
+   handled properly instead, by colouring the canvas itself — see the body
+   background effect in the reader component. */
+.reader-topbar--sticky::before {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 100%;
+  height: 120px;
+  background: var(--reader-chrome);
+  pointer-events: none;
+}
+/* ...except when a banner is on screen. The banners sit above the reader in the
+   document, so at the top of the page the roof would paint straight over them —
+   and the health banner is precisely the thing you must be able to read when it
+   appears, since it means the index is unreachable. The roof exists for the
+   scrolled state, where no banner is in view anyway. */
+body:has(.health-banner) .reader-topbar--sticky::before,
+body:has(.preview-banner) .reader-topbar--sticky::before { content: none; }
 .reader-fab {
   position: fixed; bottom: 24px; right: 24px; z-index: 60;
   width: 48px; height: 48px; border-radius: 50%;
@@ -1755,6 +1887,26 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   transition: opacity 0.2s, transform 0.2s, background 0.15s;
 }
 .reader-fab:hover { opacity: 1; background: var(--surface); transform: scale(1.05); }
+.reader-fab:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Chapter failed to load. Sits where the prose would be, so the toolbar and the
+   exit button above it stay exactly where the reader expects them. */
+.reader-error { padding: 56px 0 40px; text-align: center; }
+.reader-error__title { font-size: 20px; font-weight: 600; margin-bottom: 10px; }
+.reader-error__body {
+  font-size: 14px; color: var(--text-dim); line-height: 1.6;
+  max-width: 42ch; margin: 0 auto 22px;
+}
+.reader-error__actions {
+  display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
+}
+
+/* "This came from your device, not the index." */
+.story-detail__cached {
+  font-size: 12.5px; color: var(--text-dim);
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 8px 12px; margin-bottom: 16px;
+}
 @media (max-width: 640px) {
   .reader-fab { bottom: 16px; right: 16px; width: 44px; height: 44px; }
 }
@@ -1831,7 +1983,60 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   z-index: -1;
 }
 .reader-shell[data-theme="sepia"]::before { background: #f4ecd8; }
+.reader-shell[data-theme="sepia"] { --reader-chrome: #f4ecd8; }
 .reader-shell[data-theme="dark"]::before  { background: #0e0e10; }
+.reader-shell[data-theme="dark"] { --reader-chrome: #0e0e10; }
+
+/* Light — the reader's own light page.
+   This theme had NO rules at all. "Light" in the reading settings maps to
+   data-theme="default", and default meant "whatever the app palette is" — so
+   with the site in dark mode, choosing Light left the reader entirely dark. The
+   control appeared to do nothing, which is what was reported.
+   Sepia and dark each paint their own page and recolour their own chrome; light
+   has to do the same rather than borrow the app's, or it is only light for
+   people who had a light site anyway. Near-white paper rather than the site's
+   tinted #ebe7dd: this is a page of prose, not a page of cards. */
+.reader-shell[data-theme="default"]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: #fdfcf9;
+}
+.reader-shell[data-theme="default"] { --reader-chrome: #fdfcf9; }
+.reader-shell[data-theme="default"] .reader,
+.reader-shell[data-theme="default"] .reader__content,
+.reader-shell[data-theme="default"] .reader__title,
+.reader-shell[data-theme="default"] .reader__content p,
+.reader-shell[data-theme="default"] .reader-nav {
+  color: #1f1d1a;
+}
+.reader-shell[data-theme="default"] .reader__content em,
+.reader-shell[data-theme="default"] .reader__content i,
+.reader-shell[data-theme="default"] .reader__summary,
+.reader-shell[data-theme="default"] .reader__breadcrumb { color: #605c54; }
+.reader-shell[data-theme="default"] .reader-topbar--sticky,
+.reader-shell[data-theme="default"] .reader-topbar {
+  background: #fdfcf9;
+  border-bottom-color: #e3ded4;
+}
+.reader-shell[data-theme="default"] .reader-ctrl {
+  background: #f2efe8; color: #5a564e; border-color: #e3ded4;
+}
+.reader-shell[data-theme="default"] .reader-ctrl:hover,
+.reader-shell[data-theme="default"] .reader-ctrl.is-on { color: #1f1d1a; border-color: #c3bcac; }
+.reader-shell[data-theme="default"] .back-link { color: #5a564e; }
+.reader-shell[data-theme="default"] .reader__note {
+  background: #f4f1ea; border-color: #e3ded4; color: #1f1d1a;
+}
+.reader-shell[data-theme="default"] .reader-fab {
+  background: #f2efe8; border-color: #d8d2c6; color: #1f1d1a;
+  box-shadow: 0 6px 20px rgba(31, 29, 26, 0.18);
+}
+.reader-shell[data-theme="default"] .reader-fab:hover { background: #fdfcf9; }
+.reader-shell[data-theme="default"] .reader-nav__btn {
+  background: #f2efe8; border-color: #e3ded4; color: #5a564e;
+}
 
 /* Sepia */
 .reader-shell[data-theme="sepia"] .reader,
@@ -1847,13 +2052,40 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 .reader-shell[data-theme="sepia"] .reader__breadcrumb { color: #6b5d45; }
 .reader-shell[data-theme="sepia"] .reader-topbar--sticky,
 .reader-shell[data-theme="sepia"] .reader-topbar {
-  background: rgba(244, 236, 216, 0.92);
+  /* Opaque — see .reader-topbar--sticky. Matches the sepia page layer
+     exactly, so the toolbar reads as part of the page rather than over it. */
+  background: #f4ecd8;
   border-bottom-color: #ddd0b0;
 }
-.reader-shell[data-theme="sepia"] .reader-ctrl,
-.reader-shell[data-theme="sepia"] .back-link { color: #6b5d45; border-color: #ddd0b0; }
+/* background too, not just colour and border.
+   These set only the foreground, so the "Aa" button kept `background:
+   var(--surface2)` from the SITE palette — a near-black box sitting on a
+   cream toolbar whenever the site was in dark mode and the reader in sepia.
+   Visible in a screenshot, invisible in the CSS unless you go looking. */
+.reader-shell[data-theme="sepia"] .reader-ctrl {
+  background: #ebe0c4; color: #6b5d45; border-color: #ddd0b0;
+}
+.reader-shell[data-theme="sepia"] .reader-ctrl:hover,
+.reader-shell[data-theme="sepia"] .reader-ctrl.is-on { color: #4a3f2f; border-color: #b9a67c; }
+.reader-shell[data-theme="sepia"] .back-link { color: #6b5d45; }
 .reader-shell[data-theme="sepia"] .reader__note {
   background: #ebe0c4; border-color: #ddd0b0; color: #4a3f2f;
+}
+
+/* The floating exit button and the chapter nav follow the READER theme, not the
+   site palette.
+   They were the only reader chrome left on --surface3/--border2, which belong to
+   the app around the reader rather than to the page you are reading. So with the
+   site in dark mode and the reader in sepia you got a near-black circle floating
+   on a cream page — the most prominent control on the screen, visibly borrowed
+   from somewhere else. */
+.reader-shell[data-theme="sepia"] .reader-fab {
+  background: #ebe0c4; border-color: #ddd0b0; color: #4a3f2f;
+  box-shadow: 0 6px 20px rgba(74, 63, 47, 0.22);
+}
+.reader-shell[data-theme="sepia"] .reader-fab:hover { background: #f4ecd8; }
+.reader-shell[data-theme="sepia"] .reader-nav__btn {
+  background: #ebe0c4; border-color: #ddd0b0; color: #6b5d45;
 }
 
 /* Dark (warmer/dimmer than the app chrome, easier on the eyes for long reads) */
@@ -1870,13 +2102,29 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 .reader-shell[data-theme="dark"] .reader__breadcrumb { color: #9a978f; }
 .reader-shell[data-theme="dark"] .reader-topbar--sticky,
 .reader-shell[data-theme="dark"] .reader-topbar {
-  background: rgba(14, 14, 16, 0.92);
+  /* Opaque — this is the one that was reported. Matches the dark page
+     layer exactly, so no chapter text can show through the toolbar. */
+  background: #0e0e10;
   border-bottom-color: #26262a;
 }
-.reader-shell[data-theme="dark"] .reader-ctrl,
-.reader-shell[data-theme="dark"] .back-link { color: #9a978f; border-color: #26262a; }
+/* Same as the sepia block above. */
+.reader-shell[data-theme="dark"] .reader-ctrl {
+  background: #18181b; color: #9a978f; border-color: #26262a;
+}
+.reader-shell[data-theme="dark"] .reader-ctrl:hover,
+.reader-shell[data-theme="dark"] .reader-ctrl.is-on { color: #c9c6c0; border-color: #3a3a40; }
+.reader-shell[data-theme="dark"] .back-link { color: #9a978f; }
 .reader-shell[data-theme="dark"] .reader__note {
   background: #18181b; border-color: #26262a; color: #c9c6c0;
+}
+
+/* Same for the dark reader theme — see the sepia block above. */
+.reader-shell[data-theme="dark"] .reader-fab {
+  background: #18181b; border-color: #26262a; color: #c9c6c0;
+}
+.reader-shell[data-theme="dark"] .reader-fab:hover { background: #232327; }
+.reader-shell[data-theme="dark"] .reader-nav__btn {
+  background: #18181b; border-color: #26262a; color: #9a978f;
 }
 
 /* ── Bulk URL import ─────────────────────────────────────────────────────── */
@@ -2079,6 +2327,23 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   padding: 8px 10px; background: var(--surface2); border-radius: 6px;
   border: 1px solid var(--border);
 }
+
+/* Whether the browser will protect saved stories from eviction. Coloured by
+   answer, because "protected" and "may be cleared without warning" are not the
+   same news and should not look the same. */
+.offline-tab__persist {
+  font-size: 12px; line-height: 1.5; margin: -6px 0 14px;
+  padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text-dim);
+}
+.offline-tab__persist--persisted { border-color: var(--accent-dim); }
+/* --warn, not --danger: saves that are merely unprotected are a caution, not a
+   failure. Nothing has gone wrong yet. */
+.offline-tab__persist--denied {
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface2));
+  color: var(--text);
+}
 .offline-item {
   display: flex; align-items: center; gap: 8px;
 }
@@ -2264,8 +2529,23 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 }
 
 /* Nothing may scroll the page sideways — the single most common way a mobile
-   layout feels broken. Wide content scrolls inside its own container instead. */
-html, body { overflow-x: hidden; max-width: 100%; }
+   layout feels broken. Wide content scrolls inside its own container instead.
+
+   `clip`, not `hidden`. This rule used `hidden`, and that quietly disabled every
+   position:sticky on the site — the site header, the reader toolbar, the sidebar
+   section headings, the settings save bar. The mechanism: when overflow-x is
+   hidden and overflow-y is visible, overflow-y computes to `auto`. Because <html>
+   is then no longer `visible`, <body>'s own overflow stops propagating to the
+   viewport and applies to <body> itself, making body a scroll container. Body's
+   height is content-driven, so that container never actually scrolls — and a
+   sticky element sticks to its nearest scroll container. Sticking to a box that
+   never scrolls means never moving. So the reader's toolbar scrolled away with
+   the text while the fixed progress bar stayed pinned at the top of the window,
+   which is the "bar floating with a gap above it" that started this.
+
+   `overflow: clip` clips exactly the same way but is explicitly defined NOT to
+   create a scroll container, so sticky keeps working. */
+html, body { overflow-x: clip; max-width: 100%; }
 .card, .book, .story-detail, .settings-group { min-width: 0; }
 
 /* ── Book cover titles scale with the cover ─────────────────────────────────
@@ -2299,6 +2579,14 @@ html, body { overflow-x: hidden; max-width: 100%; }
    truncated to one ellipsised line at 60vw, so on a phone you often could not
    read which story you were in. Two lines, and the width it actually has. */
 @media (max-width: 700px) {
+  /* Left wrapping, deliberately. A two-line clamp was tried here to stop a very
+     long title taking three lines out of every screenful now that this toolbar
+     is sticky. It had to be reverted: `display: -webkit-box` (which
+     -webkit-line-clamp requires) changes the element's intrinsic min-content
+     contribution, so the flex row demanded the title's full unwrapped width —
+     676px — and dragged the whole page to 724px on a 390px phone. Measured, not
+     guessed. Any future attempt needs to clamp without leaving the block
+     formatting: max-height plus overflow:hidden is the direction. */
   .reader-topbar .back-link {
     max-width: none; white-space: normal; overflow: visible; text-overflow: clip;
     display: block; -webkit-line-clamp: unset;
@@ -2357,6 +2645,10 @@ html, body { overflow-x: hidden; max-width: 100%; }
 
 /* Which slice of the results you're on — quieter than the total itself. */
 .results-bar__range { color: var(--text-faint); }
+/* The per-archive split. The counts carry the weight, so they inherit the bar's
+   colour while the archive names stay quiet. */
+.results-bar__split { color: var(--text-faint); }
+.results-bar__split strong { color: var(--text-dim); font-weight: 600; }
 
 /* ── Index status: proportion, not just counts ──────────────────────────────
    The panel listed three raw numbers, which doesn't convey that AO3 is two
@@ -3562,6 +3854,11 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   --green-bg:    rgba(31,122,61,0.13);
   --red:         #a32c22;
   --red-bg:      rgba(163,44,34,0.11);
+  /* See the note in :root — an alias, so it retunes with the theme. */
+  --danger:      var(--red);
+  /* Darkened for a cream background; the dark theme's amber is too light
+   * to clear AA against it. */
+  --warn:        #8a5a12;
   --shadow-sm:   0 1px 2px rgba(26,24,21,0.07);
   --shadow-md:   0 2px 8px rgba(26,24,21,0.09);
   --shadow-lg:   0 10px 28px rgba(26,24,21,0.12);
