@@ -103,8 +103,13 @@ services:
     # it is what lets concurrent searches overlap instead of queueing.
     # 3g: 1.5GB of shared buffers plus work_mem and per-connection overhead, with
     # room to spare but not so much that the container can quietly grow into the
-    # desktop's memory. cpus stays raised — a CPU cap costs nothing when idle,
-    # unlike a memory reservation.
+    # desktop's memory.
+    #
+    # Memory is the floor that stops the thrash and is fixed here. cpus is only a
+    # STARTING value: autotune.sh runs from cron every two minutes and rewrites it
+    # live with `docker update --cpus`, widening when the host is idle and
+    # tightening under memory pressure. So this does not peg the database at three
+    # cores — it sets where it begins, and where a restart returns it to.
     mem_limit: 3g
     cpus: 3.0
     shm_size: "1gb"

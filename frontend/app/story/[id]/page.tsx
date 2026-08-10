@@ -615,6 +615,32 @@ export default function StoryPage() {
             </div>
           </section>
         )}
+
+        {/* The removal route, on the page where an author actually finds their
+            work.
+            It existed only in the site footer and on /about — so someone who
+            came across their own story here had to work out that this site has
+            a takedown process, then go looking for it. That is the wrong way
+            round: the person most entitled to act quickly was the one made to
+            search hardest. The address is carried across so they do not have to
+            copy it back.
+            Worded plainly and without deterrence. The form behind it removes
+            hosted text immediately, before any review, and it should not read
+            like a request that has to be argued for. */}
+        <p className="story-detail__claim">
+          Is this your work?{" "}
+          <Link href={`/takedown?url=${encodeURIComponent(
+            typeof window !== "undefined"
+              ? window.location.href
+              : `/story/${story.id}`)}`}>
+            {story.is_hosted
+              ? "Ask us to remove it"
+              : "Ask us to remove this listing"}
+          </Link>
+          {story.is_hosted
+            ? " — the text comes down straight away, no explanation needed."
+            : " — we hold only a summary and a link, and will take both down."}
+        </p>
       </article>
     </div>
   )
