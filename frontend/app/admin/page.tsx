@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import TakedownQueue from "./TakedownQueue"
 import BackLink from "../BackLink"
 import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
@@ -82,6 +83,11 @@ function pct(missing: number, total: number): number {
 }
 
 export default function AdminPage() {
+  const [tab, setTab] = useState<"health" | "takedowns">("health")
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("tab") === "takedowns")
+      setTab("takedowns")
+  }, [])
   const { user, loading: authLoading } = useAuth()
   const isAdmin = !!user?.can_manage
   const [data, setData] = useState<Overview | null>(null)
@@ -131,6 +137,22 @@ export default function AdminPage() {
     <div className="settings-shell">
       <SiteHeader />
       <BackLink fallback="/settings" fallbackLabel="Settings" />
+
+      {/* Two owner-only surfaces, one page.
+          Index health and the takedown queue were separate routes reached only
+          from Settings, each re-implementing the same shell, the same back link
+          and — more importantly — the same "not an operator" gate. Two copies of
+          an access check is one too many: they can drift, and the one that
+          drifts laxer is the bug. /takedowns is kept as a redirect. */}
+      <div className="admin-tabs">
+        <button className={`library-tab ${tab === "health" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("health")}>Index health</button>
+        <button className={`library-tab ${tab === "takedowns" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("takedowns")}>Takedown requests</button>
+      </div>
+
+      {tab === "takedowns" ? <TakedownQueue /> : (
+      <>
       <h1 className="settings-title">Index health</h1>
 
       {error && <p className="settings-save-error" role="alert">{error}</p>}
@@ -325,6 +347,8 @@ export default function AdminPage() {
             <button className="btn btn--ghost" onClick={() => load(true)}>Refresh</button>
           </div>
         </>
+      )}
+      </>
       )}
     </div>
   )
