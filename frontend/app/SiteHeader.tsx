@@ -17,7 +17,7 @@ import { lastSearchHref } from "@/lib/lastSearch"
 //
 // `current` suppresses the link to the page you're already on and marks it.
 
-export type NavKey = "search" | "library" | "settings" | "account"
+export type NavKey = "search" | "browse" | "library" | "settings" | "account"
 
 function UserMenu() {
   const { user, logout, loading, syncing } = useAuth()
@@ -109,6 +109,14 @@ const ICONS: Record<string, React.ReactNode> = {
     <><path d="M4 5.5h6a2 2 0 0 1 2 2V19a2.5 2.5 0 0 0-2.5-2H4z" />
       <path d="M20 5.5h-6a2 2 0 0 0-2 2V19a2.5 2.5 0 0 1 2.5-2H20z" /></>
   ),
+  // Stacked shelves — the fandom index is a list of collections, and this reads
+  // as one next to the magnifier without borrowing the library book shape.
+  browse: (
+    <><rect x="4" y="4.5" width="7" height="7" rx="1.5" />
+      <rect x="13" y="4.5" width="7" height="7" rx="1.5" />
+      <rect x="4" y="13.5" width="7" height="6" rx="1.5" />
+      <rect x="13" y="13.5" width="7" height="6" rx="1.5" /></>
+  ),
   // Sliders, not a gear. A gear reduced to 21px with a 1.7 stroke loses its
   // teeth and reads as a sun — which on this site means the theme toggle sitting
   // in the header, so the two would have said the same thing.
@@ -167,6 +175,11 @@ function TabIcon({ name }: { name: string }) {
           <span className="header__nav-links">
             {link("search", searchHref, "Search",
                   false, backToResults ? "Back to your results" : undefined)}
+            {/* Next to Search because it is the other way of starting: search
+                needs you to know what you want, browse answers "what is in
+                here?". It was only reachable from the footer, which is where
+                links go to be found by nobody. */}
+            {link("browse", "/fandoms", "Browse")}
             {link("library", "/library", "Library", true)}
             {link("settings", "/settings", "Settings")}
           </span>
@@ -179,6 +192,7 @@ function TabIcon({ name }: { name: string }) {
 
       <nav className="tabbar" aria-label="Primary">
         {tab("search", searchHref, "Search", "search")}
+        {tab("browse", "/fandoms", "Browse", "browse")}
         {tab("library", "/library", "Library", "library", true)}
         {tab("settings", "/settings", "Settings", "settings")}
       </nav>

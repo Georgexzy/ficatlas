@@ -4366,6 +4366,30 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   color: var(--text-faint); font-weight: 600;
   margin: 36px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
 }
+/* When the heading is a link it has to read as one. The quiet faint-grey
+   treatment above is right for a label and wrong for the main way into search
+   from this page: bigger, brighter, and with the affordance spelled out rather
+   than left to a hover state nobody on a phone will ever see. */
+.hub__heading--link { padding-bottom: 0; border-bottom: none; }
+.hub__heading--link a {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  color: var(--text); font-size: 17px; font-weight: 700;
+  letter-spacing: 0.04em;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.hub__heading--link a:hover {
+  color: var(--accent); border-bottom-color: var(--accent-dim, var(--accent));
+}
+.hub__heading-more {
+  font-size: 11px; font-family: var(--font-mono); font-weight: 400;
+  letter-spacing: 0.06em; text-transform: none; color: var(--accent);
+  flex-shrink: 0;
+}
+.hub__section-more {
+  margin: 14px 0 0; font-size: 13px;
+}
+.hub__section-more a { color: var(--accent); }
 .hub__empty { color: var(--text-faint); }
 
 /* Chips: the biggest fandoms, sized to be scannable rather than read. */

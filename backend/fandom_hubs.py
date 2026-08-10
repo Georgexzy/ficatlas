@@ -50,11 +50,18 @@ from api.search import fandom_base
 
 log = logging.getLogger(__name__)
 
-# How many works a hub links to PER SITE. Three archives at 20 each is the same
-# ~60 links a hub carried when it was one global list, so the reachable-pages
-# arithmetic is unchanged — but every archive now gets represented instead of
-# one of them taking all sixty places.
-WORKS_PER_SITE = 20
+# How many works a hub links to PER SITE.
+#
+# 50, up from 20. Three archives at 50 is up to 150 links a hub, which takes the
+# reachable set from ~302k story pages to ~750k — still a fraction of 19.9M, and
+# still a number chosen rather than implied by the size of the index.
+#
+# The costs are real but small: a hub page's HTML grows to roughly 40-60KB
+# (gzipped well under 10KB), and a crawler following every link on every hub has
+# more to fetch. Neither is close to the limits that made a full sitemap the
+# wrong answer. The build cost is unchanged — the ranking query already scans the
+# same rows and only the row_number cutoff moves.
+WORKS_PER_SITE = 50
 
 # Ranked within a site, never across them.
 #

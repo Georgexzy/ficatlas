@@ -1,7 +1,7 @@
 """Search API — unified search across all indexed sites with hybrid live fetch"""
 import logging
 from functools import lru_cache
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session, aliased
 import os
 from sqlalchemy import and_, or_, func, literal_column, cast, case, Text, text as sql_text
@@ -18,6 +18,15 @@ from search_cache import CACHE, cache_key
 # Shorter than the 60s session default — see the note in search() on why a long
 # timeout is what turns a slow search into a failed one.
 SEARCH_TIMEOUT_MS = int(os.getenv("SEARCH_STATEMENT_TIMEOUT_MS", "20000"))
+
+# How many matching rows a search materialises before ranking and counting.
+# See the note at its use in search() — this is the dominant term in how much
+# disk a search touches.
+SEARCH_COUNT_CEILING = int(os.getenv("SEARCH_COUNT_CEILING", "5000"))
+
+# Matches the in-process TTL, so the two layers cannot disagree about how stale
+# a result may be.
+SEARCH_CACHE_SECONDS = int(os.getenv("SEARCH_CACHE_SECONDS", "120"))
 from query_parser import parse_query, parsed_to_search_params
 import re
 from character_aliases import character_variants, relationship_variants
@@ -456,6 +465,7 @@ def search(          # NOT async — see below
     db: Session = Depends(get_db),
     viewer: Optional[User] = Depends(get_current_user),
     request: Request = None,
+    response: Response = None,
 ):
     # ── Parse q for embedded operators ───────────────────────────────────────
     parsed_tokens = []
@@ -831,7 +841,11 @@ def search(          # NOT async — see below
         if wanted:
             db_query = db_query.filter(Story.archive_section.in_(wanted))
 
-    COUNT_CEILING = 5000
+    # Env-configurable so it can be measured rather than argued about. Lowering
+    # it is the one lever that attacks the actual bottleneck — search is bound by
+    # heap reads, and this is exactly how many rows get read — at the cost of a
+    # lower "N+" figure and a ranker that sees fewer candidates.
+    COUNT_CEILING = SEARCH_COUNT_CEILING
     # Enough to hold every work sharing a title — 73 are called "All the Young
     # Dudes" — without letting a generic prefix flood the ranked set.
     TITLE_CANDIDATES = 300
@@ -1202,6 +1216,29 @@ def search(          # NOT async — see below
     )
     if _ck is not None:
         CACHE.put(_ck, _response)
+
+    # Let a shared cache in front of us do the work the per-worker cache can
+    # only do four times over.
+    #
+    # The in-process cache (search_cache.py) lives in one uvicorn worker, so with
+    # four workers the same query is computed up to four times before it is warm
+    # everywhere, and nothing is shared between users at all. An HTTP cache in
+    # front — Cloudflare, in the deployment this is heading for — is ONE cache
+    # shared by every visitor, which is the same Zipf-shaped win multiplied by
+    # the whole audience instead of by one process.
+    #
+    # Only for anonymous readers. A signed-in viewer may be an operator, whose
+    # results include delisted works, and even an ordinary account is a viewer
+    # whose response should never be handed to somebody else by a shared proxy.
+    # `private` on that branch says exactly that: the browser may keep it, no
+    # shared cache may.
+    if response is not None:
+        if viewer is None:
+            response.headers["Cache-Control"] = (
+                f"public, max-age={SEARCH_CACHE_SECONDS}, "
+                f"stale-while-revalidate={SEARCH_CACHE_SECONDS * 4}")
+        else:
+            response.headers["Cache-Control"] = "private, no-store"
     return _response
 
 
