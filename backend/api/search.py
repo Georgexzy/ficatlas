@@ -143,9 +143,23 @@ FACET_VARIANT_CAP = {
     "tag": int(os.getenv("FACET_VARIANT_CAP_TAG", "8")),
 }
 
+# Expand a term to every spelling of it that the index actually contains.
+#
+# This was `value ILIKE :pat`, which folds case and not punctuation — so
+# searching Hurt/Comfort never matched the 33 works tagged hurt-comfort,
+# hurt comfort, hurt & comfort or hurt|comfort, and "Fluff" missed "fluff!",
+# "#fluff" and "F.L.U.F.F.". The normalised key (see init_db.py) catches those:
+# same letters and digits, any punctuation.
+#
+# The ILIKE arm is kept alongside it, because the two find different things.
+# Normalised equality finds other SPELLINGS of the same tag; ILIKE finds tags
+# that CONTAIN the term, which is what makes searching "Fluff" also reach
+# "Fluff and Angst". Dropping either one loses results.
 _VARIANT_SQL = sql_text("""
     SELECT value FROM facets
-    WHERE kind = :kind AND value ILIKE :pat
+    WHERE kind = :kind
+      AND (value ILIKE :pat
+           OR norm = regexp_replace(lower(:term), '[^a-z0-9]+', '', 'g'))
     ORDER BY count DESC LIMIT :cap
 """)
 
@@ -193,7 +207,7 @@ def _facet_variants(db, col_name: str, term: str) -> list[str]:
     try:
         cap = FACET_VARIANT_CAP.get(kind, 8)
         rows = db.execute(_VARIANT_SQL, {"kind": kind, "pat": f"%{term}%",
-                                         "cap": cap}).fetchall()
+                                         "term": term, "cap": cap}).fetchall()
         return [r[0] for r in rows]
     except Exception:
         return []       # vocabulary unavailable -> caller falls back to trigram

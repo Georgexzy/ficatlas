@@ -412,6 +412,28 @@ CREATE TABLE IF NOT EXISTS facets (
     count  INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (kind, value)
 );
+-- The same tag, spelled 44 ways.
+--
+-- Freeform tags are whatever an author typed, and the variation is not mostly
+-- semantic — it is punctuation. "fluff" appears as Fluff, fluff!, fluff???,
+-- #fluff, F L U F F, F.L.U.F.F., "Fluff", fluff~ and 36 more; Hurt/Comfort as
+-- hurt comfort, hurt-comfort, hurt & comfort, hurt|comfort and 29 others.
+-- 132,714 of 1,574,508 tag values (8.4%) differ from another only by case and
+-- punctuation.
+--
+-- That splits a tag's count across its spellings, so autocomplete offers the
+-- same tag repeatedly and ranks it below tags that happen to be spelled
+-- consistently. Worse, search matched variants with ILIKE, which folds case and
+-- NOT punctuation — so "Hurt/Comfort" never matched "hurt-comfort" at all.
+--
+-- `norm` is the mechanical part of the problem and only that: strip everything
+-- that is not a letter or digit, lowercase the rest. It merges spellings; it
+-- does NOT attempt to merge meanings. FanFicFare's maintainer is right that the
+-- semantic half is impossible to automate (issue #1340: Naruto alone has ~300
+-- tags meaning the same thing, and Humor/Humour/Comedy cannot be settled by any
+-- rule) — this deliberately does not try.
+ALTER TABLE facets ADD COLUMN IF NOT EXISTS norm TEXT;
+CREATE INDEX IF NOT EXISTS ix_facets_kind_norm ON facets (kind, norm, count DESC);
 CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm ON facets USING gin (value gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC);
 
