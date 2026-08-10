@@ -66,7 +66,18 @@ const SECURITY_HEADERS = [
 ]
 
 const nextConfig: NextConfig = {
-  typescript: { ignoreBuildErrors: true },
+  // Type errors fail the build.
+  //
+  // This was `ignoreBuildErrors: true`, and the cost of that was not theoretical:
+  // `in_series` had been passed to searchStories for as long as the filter has
+  // existed without being on SearchParams, and a dependency array referencing a
+  // `const` declared further down the component — a temporal-dead-zone crash,
+  // not a style question — compiled happily. Both were sitting in a build that
+  // reported success. The tree typechecks clean, so this costs nothing today and
+  // catches the next one.
+  //
+  // eslint stays off during builds: it is a separate, noisier decision, and
+  // turning both on at once would make the first failure hard to attribute.
   eslint: { ignoreDuringBuilds: true },
   // Announcing the framework and version only helps someone matching us against
   // a CVE list.
