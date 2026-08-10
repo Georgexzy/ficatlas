@@ -132,7 +132,7 @@ def verify(request: Request,
             "to show the change.")
 
     ap.record_permission(
-        db, site=ch["site"], author=ch["author"], author_display=ch["author"],
+        db, site=ch["site"], author=ch["author"], author_display=ch.get("author_display") or ch["author"],
         policy=policy, token=ch["token"], evidence_url=url,
         evidence_text=ap.extract_evidence(page, ch["token"]),
         contact_email=(email or "").strip() or None,
