@@ -1906,6 +1906,36 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
 }
 
+/* Verified-author mark on a result card. Quiet on purpose: it states a fact
+   about consent, not quality, and must not read as an endorsement or a ranking. */
+.card__verified {
+  margin-left: 7px; font-size: 10.5px; font-family: var(--font-mono);
+  color: var(--green); white-space: nowrap;
+}
+
+/* ── Author works management ───────────────────────────────────────────────── */
+.perm-ok {
+  font-size: 13px; color: var(--green); margin: 12px 0;
+  background: var(--green-bg); border: 1px solid var(--green);
+  border-radius: var(--radius); padding: 9px 12px;
+}
+.perm-manage-link { font-size: 13px; color: var(--text-dim); margin-top: 18px; }
+.perm-manage-link a { color: var(--accent); text-decoration: underline; }
+.perm-bulk { margin: 4px 0 22px; }
+.perm-works { list-style: none; padding: 0; margin: 0 0 22px; }
+.perm-work {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.perm-work__main { min-width: 0; }
+.perm-work__title { font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.perm-work__title:hover { color: var(--accent); }
+.perm-work__meta {
+  font-size: 11.5px; font-family: var(--font-mono);
+  color: var(--text-faint); margin-top: 3px;
+}
+.perm-work__actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+
 /* ── Author permission page ────────────────────────────────────────────────── */
 /* The reassurance block. Visually calmer than a warning — this page exists to
    make someone comfortable, not alert them. */

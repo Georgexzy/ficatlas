@@ -186,8 +186,21 @@ export default function PermissionsPage() {
             You can change or withdraw this whenever you like, and withdrawing does
             not need proof — the same as removal never does.
           </p>
-          <p><Link href="/" className="btn btn--primary">Back to search</Link></p>
+          <p>
+            <Link href={`/permissions/manage?site=${result.site}&author=${encodeURIComponent(result.author_display || result.author)}`}
+              className="btn btn--primary">Manage my works</Link>{" "}
+            <Link href="/" className="btn btn--ghost">Back to search</Link>
+          </p>
         </div>
+      )}
+
+      {/* Reachable without verifying, because looking at what a site holds about
+          you — and taking it down — never needs proof here. */}
+      {step === "who" && (
+        <p className="perm-manage-link">
+          Already told us, or just want to see what FicAtlas holds under your
+          name? <Link href="/permissions/manage">Manage your works</Link>.
+        </p>
       )}
     </div>
   )

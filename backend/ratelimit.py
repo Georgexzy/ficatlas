@@ -77,7 +77,12 @@ TAKEDOWN_PATH = "/api/takedown"
 # shares the tight bucket for that reason rather than because it is risky in
 # itself. /revoke is NOT listed: withdrawing consent must never be the throttled
 # path, for the same reason it needs no proof.
-PERMISSION_PATHS = {"/api/permissions/challenge", "/api/permissions/verify"}
+PERMISSION_PATHS = {"/api/permissions/challenge", "/api/permissions/verify",
+                    # /restrict needs no proof, which makes it the one path here
+                    # that could be used to de-index other people's work at scale.
+                    # Same mitigation the takedown form uses: throttled, stamped
+                    # with a source address, and always reversible.
+                    "/api/permissions/restrict"}
 
 
 def path_class(path: str) -> str:

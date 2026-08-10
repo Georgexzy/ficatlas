@@ -418,6 +418,18 @@ function StoryCard({ story }: { story: StoryCard }) {
             className="card__author-link" title={`All works by ${story.author}`}>
             {story.author}
           </Link>
+          {/* The author proved they control this archive account and asked us to
+              host their work. Worth showing because it changes what the listing
+              MEANS: everything else here is indexed without the author knowing,
+              and this is the small set where they chose to be here. Deliberately
+              a quiet mark rather than a badge — it is a fact about consent, not a
+              quality rating, and it must not read as "better". */}
+          {story.author_verified && (
+            <span className="card__verified"
+              title="This author has verified their account and asked FicAtlas to host their work">
+              ✓ author verified
+            </span>
+          )}
           {story.author_url && (
             <a href={story.author_url} target="_blank" rel="noopener noreferrer"
               className="card__author-ext" title="Author's page on the original site">↗</a>
