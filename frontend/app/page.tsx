@@ -99,14 +99,27 @@ function Summary({ text }: { text: string }) {
 }
 
 // ── Tag list with expand/collapse ─────────────────────────────────────────────
-function TagList({ tags, className, kind = "tags", tagClass = "" }: {
+// `limit` is per row and deliberately not the same for each.
+//
+// Every row capped itself at five independently, which reads fine in isolation
+// and is far too much together: a well-tagged work printed five ships, five
+// characters and five freeform tags, so fifteen near-identical pills sat between
+// the summary and the buttons. On a 390px phone each pill is its own line, so a
+// single card ran past the fold before it reached anything actionable.
+//
+// The budget is spent where it earns most for someone deciding what to read:
+// ships are the strongest signal in this fandom space, freeform tags next, and
+// characters are largely redundant with the ships already shown. Nothing is
+// hidden — every row still expands on demand, and the story page lists them all.
+function TagList({ tags, className, kind = "tags", tagClass = "", limit = 5 }: {
   tags: string[]; className?: string
   kind?: "tags" | "fandoms" | "relationships" | "characters"
   tagClass?: string
+  limit?: number
 }) {
   const [expanded, setExpanded] = useState(false)
-  const shown = expanded ? tags : tags.slice(0, 5)
-  const extra = tags.length - 5
+  const shown = expanded ? tags : tags.slice(0, limit)
+  const extra = tags.length - limit
   return (
     <div className={`tag-list ${className ?? ""}`}>
       {shown.map(t => (
@@ -496,7 +509,7 @@ function StoryCard({ story }: { story: StoryCard }) {
           printed twenty rows before the reader reached anything else. TagList
           shows five and expands on demand. */}
       {story.relationships.length > 0 && (
-        <TagList tags={story.relationships} kind="relationships"
+        <TagList tags={story.relationships} kind="relationships" limit={3}
           className="card__ships" tagClass="tag--ship" />
       )}
       {/* dlp_stars is rendered as stars in the badge row above, so it must not
@@ -506,7 +519,7 @@ function StoryCard({ story }: { story: StoryCard }) {
           not be clicked to search. They sit above the freeform tags because
           that is the order AO3 lists them in and it is the more useful signal. */}
       {story.characters.length > 0 && (
-        <TagList tags={story.characters} kind="characters" className="card__chars" />
+        <TagList tags={story.characters} kind="characters" limit={3} className="card__chars" />
       )}
       {/* Freeform tags only.
           `tags` is stored as relationships + characters + freeforms, so
@@ -515,7 +528,7 @@ function StoryCard({ story }: { story: StoryCard }) {
           well-tagged work was three-quarters duplicate text. Subtract what is
           already shown above and only the genuine freeform tags remain. */}
       {freeformTags.length > 0 && (
-        <TagList tags={freeformTags} className="card__tags" />
+        <TagList tags={freeformTags} limit={4} className="card__tags" />
       )}
       {story.warnings.filter(w => w !== "No Archive Warnings Apply").length > 0 && (
         <div className="card__warnings">
