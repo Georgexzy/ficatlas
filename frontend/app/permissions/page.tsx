@@ -15,13 +15,22 @@ import SiteHeader from "../SiteHeader"
 // Three steps, one screen. Nothing is stored until the last one succeeds.
 type Step = "who" | "prove" | "done"
 
+// Worded so the thing being consented to is unmissable.
+//
+// "Host my work here" is what this used to say, and it is the kind of phrase
+// that can be read as "appear on your site" — which is what a listing already
+// does, without anyone's permission. The actual request is to keep a copy of the
+// complete text of someone's story on this server and serve it to readers. That
+// is a materially different thing to agree to, it is the ONLY option here that
+// requires proof, and it is the whole reason proof exists. So it says so, in the
+// label rather than the small print.
 const POLICIES = [
-  { id: "host", label: "Host my work here",
-    detail: "FicAtlas may store the full text so people can read it in the app. Your work still links back to the archive you posted it on." },
-  { id: "metadata_only", label: "List it, but don't store the text",
-    detail: "FicAtlas may show the title, summary and tags, and link out to the archive — but will never keep a copy of the writing itself." },
+  { id: "host", label: "Store the full text of my stories on FicAtlas",
+    detail: "A complete copy of each story is kept on FicAtlas and can be read here, in the app, without going to the archive. Your work still links back to where you posted it. This is the only option that needs you to verify." },
+  { id: "metadata_only", label: "List my work, but never store the text",
+    detail: "Title, summary and tags only, with a link out to the archive. No copy of the writing itself is kept." },
   { id: "deny", label: "Don't index my work at all",
-    detail: "FicAtlas will remove your works from the index and not add them again." },
+    detail: "Your works are removed from the index entirely and not added again." },
 ]
 
 export default function PermissionsPage() {
@@ -77,10 +86,16 @@ export default function PermissionsPage() {
 
       <h1>Your work, your call</h1>
       <p>
-        If you write on AO3 or FanFiction.net, you can tell FicAtlas what it may
-        do with your work — and it will apply to everything you have already
-        posted <strong>and everything you post later</strong>, so this is a
-        once-only thing.
+        FicAtlas indexes ~19.9 million works as a listing — title, summary, tags
+        and a link out. For a few thousand it also{" "}
+        <strong>keeps a complete copy of the text</strong> so it can be read here
+        without leaving the site. This page is where you decide which of those,
+        if either, may happen to yours.
+      </p>
+      <p>
+        Whatever you choose applies to everything you have already posted{" "}
+        <strong>and everything you post later</strong>, so it is a once-only
+        thing.
       </p>
 
       {/* Said plainly and early, because it is the question a reader of this page
@@ -102,6 +117,65 @@ export default function PermissionsPage() {
 
       {step === "who" && (
         <form onSubmit={start} className="takedown-form">
+          {/* The choice comes BEFORE the username, not after.
+              It used to appear only on the second screen, so someone entered
+              their name having been told nothing about what they were agreeing
+              to — and the option that needs proof is the one that puts a copy of
+              their writing on someone else's server. Deciding first, then
+              proving, is the honest order; it also means anyone who wants a
+              restriction can see immediately that it asks nothing of them. */}
+          <fieldset className="perm-choices">
+            <legend>What would you like FicAtlas to do with your work?</legend>
+            {POLICIES.map(pol => (
+              <label key={pol.id} className={`perm-choice ${policy === pol.id ? "is-on" : ""}`}>
+                <input type="radio" name="policy-first" value={pol.id}
+                  checked={policy === pol.id} onChange={() => setPolicy(pol.id)} />
+                <span>
+                  <strong>{pol.label}</strong>
+                  <em>{pol.detail}</em>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+
+          {policy !== "host" && (
+            <p className="perm-shortcut">
+              That one needs no proof at all — you can{" "}
+              <Link href="/permissions/manage">set it straight away</Link> without
+              verifying anything.
+            </p>
+          )}
+
+          {/* What verifying is, before they start it rather than after.
+              "Verify your account" sounds like a login, and the thing people
+              reasonably fear is being asked for archive credentials — which AO3
+              itself warns its users never to give a third-party app. Saying what
+              this is NOT is the part that reassures; saying what it is takes one
+              sentence. */}
+          {policy === "host" && (
+            <div className="perm-explain">
+              <p className="perm-explain__head">What verifying involves</p>
+              <p>
+                You paste a short code into your own archive profile, we read
+                that public page once and see it there, and that is the whole of
+                it. It proves you can edit that profile, which only its owner can.
+              </p>
+              <ul>
+                <li><strong>No password.</strong> You are never asked for your
+                  archive login, and there is nothing to sign in to. AO3 tells its
+                  users never to give a third-party app their password, and this
+                  does not ask you to.</li>
+                <li><strong>No access to your account.</strong> We cannot post,
+                  edit, read your drafts, or see anything that is not already on
+                  your public profile page.</li>
+                <li><strong>One request.</strong> We fetch that page once, when
+                  you press check. Not on a schedule, not afterwards.</li>
+                <li><strong>The code is temporary.</strong> Delete it as soon as
+                  the check passes — it is only read that once.</li>
+              </ul>
+            </div>
+          )}
+
           <label>
             <span>Which archive</span>
             <select value={site} onChange={e => setSite(e.target.value)}>
@@ -125,25 +199,51 @@ export default function PermissionsPage() {
       {step === "prove" && (
         <>
           <h2>Show us it&apos;s your account</h2>
-          <p>
-            Put this code anywhere in your{" "}
-            <a href={profileUrl} target="_blank" rel="noopener noreferrer">profile</a>,
-            save it, then come back and press check. You can delete the code
-            again straight afterwards.
-          </p>
+          {/* Numbered, because "put this somewhere and come back" leaves people
+              guessing where, whether it matters what else is in the field, and
+              what happens to the code afterwards. Each step says what to do and
+              nothing else; the reasoning is above, on the previous screen. */}
+          <ol className="perm-steps">
+            <li>
+              Open{" "}
+              <a href={profileUrl} target="_blank" rel="noopener noreferrer">
+                your profile
+              </a>{" "}
+              and choose Edit.
+            </li>
+            <li>
+              Paste the code below <strong>anywhere</strong> in the bio or
+              &ldquo;About Me&rdquo; box. It can sit on its own line, among
+              whatever is already there — nothing else needs changing.
+            </li>
+            <li>Save your profile.</li>
+            <li>Come back here and press <strong>check</strong>.</li>
+            <li>
+              Delete the code from your profile. It is read once and never again.
+            </li>
+          </ol>
           {/* Neither site has a login we could use — AO3 has no public API and
               has told its users never to give a third-party app their password.
               Editing your own profile is proof we can check without ever asking
               for a credential. */}
           <p className="perm-token"><code>{token}</code></p>
+          {/* What is kept, said before the button rather than in a policy page
+              nobody opens. A record of consent that cannot be shown afterwards
+              is not much use, so something is stored — and the author should
+              know what, given they are the subject of it. */}
           <p className="perm-why">
-            Neither archive offers a way for other sites to log you in, and AO3
-            asks its users never to give their password to a third-party app —
-            so this is how we check without one.
+            When the check passes we record: your archive and username, the
+            choice below, the code, the address of the page it was found on, and
+            a short snippet of the surrounding text — so the permission can be
+            shown to have been given, rather than merely asserted. No password,
+            no email unless you add one below.
           </p>
 
+          {/* Repeated here, not merely carried forward. This is the moment the
+              permission is actually recorded, and the reader should be able to
+              see what it says without going back a screen. */}
           <fieldset className="perm-choices">
-            <legend>What are you allowing?</legend>
+            <legend>Confirm what you are allowing</legend>
             {POLICIES.map(p => (
               <label key={p.id} className={`perm-choice ${policy === p.id ? "is-on" : ""}`}>
                 <input type="radio" name="policy" value={p.id}

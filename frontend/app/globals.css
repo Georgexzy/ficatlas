@@ -1981,7 +1981,22 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 .perm-choice:hover { border-color: var(--border2); }
 .perm-choice.is-on { border-color: var(--accent); background: var(--accent-bg); }
 .perm-choice input { margin-top: 3px; }
-.perm-choice span { display: block; }
+/* Wins over `.takedown-form label > span`, which sets the small uppercase mono
+   used for field captions. These choices moved inside that form and inherited
+   it, rendering a sentence-length option as "STORE THE FULL TEXT OF MY STORIES
+   ON FICATLAS" — unreadable, and shouting at someone at the exact moment they
+   are being asked for consent. Field captions are two words; these are prose.
+
+   Needs `.takedown-form label.perm-choice` to win: the rule being overridden is
+   `.takedown-form label > span` at (0,1,2), and a bare `.perm-choice > span` is
+   only (0,1,1), so the first attempt lost on specificity and the labels stayed
+   shouting. */
+.perm-choice > span,
+.takedown-form label.perm-choice > span {
+  display: block; font-family: var(--font-sans);
+  font-size: 13.5px; letter-spacing: normal; text-transform: none;
+  color: var(--text-dim);
+}
 .perm-choice strong { display: block; font-size: 13.5px; color: var(--text); }
 .perm-choice em {
   display: block; margin-top: 3px; font-style: normal;
@@ -1991,6 +2006,42 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
    layout — the label and the input ended up side by side with the input crushed
    to a few characters. Stated here rather than by moving it into the form,
    because it is genuinely optional and should not look like the required ones. */
+/* "What verifying involves" — reassurance before commitment. Bordered in the
+   accent rather than a warning colour: this is explanation, not caution. */
+.perm-explain {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent-dim);
+  background: var(--surface2); border-radius: var(--radius);
+  padding: 13px 16px; margin: 0 0 20px;
+}
+.perm-explain__head {
+  font-size: 11px; font-family: var(--font-mono); text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 8px;
+}
+.perm-explain p { font-size: 13px; line-height: 1.6; color: var(--text-dim); }
+.perm-explain ul { margin: 10px 0 0; padding-left: 18px; }
+.perm-explain li {
+  font-size: 12.5px; line-height: 1.6; color: var(--text-dim); margin-bottom: 5px;
+}
+.perm-explain strong { color: var(--text); }
+
+/* The numbered process. Roomy line height because people read these while
+   switching between two tabs and lose their place. */
+.perm-steps { margin: 0 0 18px; padding-left: 22px; }
+.perm-steps li {
+  font-size: 13.5px; line-height: 1.7; color: var(--text-dim); margin-bottom: 7px;
+}
+.perm-steps strong { color: var(--text); }
+.perm-steps a { color: var(--accent); text-decoration: underline; }
+
+/* Shown when the chosen option needs no verification, so nobody works through a
+   proof flow they were never required to complete. */
+.perm-shortcut {
+  font-size: 12.5px; line-height: 1.6; color: var(--text-dim);
+  background: var(--green-bg); border: 1px solid var(--green);
+  border-radius: var(--radius); padding: 9px 12px; margin: -8px 0 18px;
+}
+.perm-shortcut a { color: var(--accent); text-decoration: underline; }
+
 .perm-email { display: block; margin-bottom: 18px; }
 .perm-email span {
   display: block; margin-bottom: 6px;

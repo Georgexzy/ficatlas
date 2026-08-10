@@ -648,7 +648,9 @@ export default function StoryPage() {
             <>
               {" "}Or{" "}
               <Link href={`/permissions?site=${story.site}&author=${encodeURIComponent(story.author || "")}`}>
-                tell us what you do allow
+                {story.is_hosted
+                  ? "set your terms for storing your text here"
+                  : "say whether we may store your text here"}
               </Link>.
             </>
           )}
