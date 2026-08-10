@@ -487,6 +487,9 @@ def search(          # NOT async — see below
         if not ratings       and parsed_params.get("ratings"):       ratings       = parsed_params["ratings"]
         if not status        and parsed_params.get("status"):        status        = parsed_params["status"]
         if not language      and parsed_params.get("language"):      language      = parsed_params["language"]
+        # `author:` from the search bar. An explicit ?author= still wins, the
+        # same rule every other operator follows.
+        if not author        and parsed_params.get("author"):        author        = parsed_params["author"]
         if word_count_min is None and parsed_params.get("word_count_min"): word_count_min = parsed_params["word_count_min"]
         if word_count_max is None and parsed_params.get("word_count_max"): word_count_max = parsed_params["word_count_max"]
         if not updated_after and parsed_params.get("updated_after"): updated_after = parsed_params["updated_after"]

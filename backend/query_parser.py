@@ -132,6 +132,14 @@ FIELD_ALIASES = {
     "lang": "language", "language": "language",
     "updated": "updated_after", "update": "updated_after", "since": "updated_after",
     "site": "sites",
+    # Author was missing entirely, which made `author:` worse than useless: with
+    # no alias the whole string fell through to free text, so the literal word
+    # "author" became a search term. `author:lightning on the wave` returned
+    # four works by other people, and `author:"lightning on the wave"` — the
+    # form a careful person types — returned NOTHING, because the stray token
+    # had to match too. The ?author= URL parameter has always worked, so the
+    # card links were fine and only the search bar lied.
+    "author": "author", "by": "author", "writer": "author",
     "crossover": "crossovers", "xover": "crossovers",
     "warn": "warnings", "warning": "warnings",
     "category": "categories", "cat": "categories",
@@ -168,6 +176,7 @@ class ParsedQuery:
     # Scalars
     status: Optional[str]         = None
     language: Optional[str]       = None
+    author: Optional[str]         = None
     word_count_min: Optional[int]  = None
     word_count_max: Optional[int]  = None
     updated_after: Optional[str]   = None
@@ -292,6 +301,12 @@ def parse_query(raw: str) -> ParsedQuery:
             d = _parse_date(value)
             if d: pq.updated_after = d
 
+        elif canonical == "author":
+            # Kept whole, spaces and all. The API matches it case-insensitively
+            # against the entire author column, so a pen name with spaces needs
+            # no quoting to work — quotes are still accepted, and are still the
+            # way to stop a trailing shorthand word being eaten.
+            pq.author = value
         elif canonical == "language":
             pq.language = value
 
@@ -369,6 +384,7 @@ def parsed_to_search_params(pq: ParsedQuery) -> dict:
         "exclude_characters":  csv(pq.exc_characters),
         "exclude_tags":        csv(pq.exc_tags),
         "status":              pq.status,
+        "author":              pq.author,
         "language":            pq.language,
         "word_count_min":      pq.word_count_min,
         "word_count_max":      pq.word_count_max,

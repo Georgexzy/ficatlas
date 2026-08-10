@@ -47,6 +47,7 @@ except ImportError:
 
 from sqlalchemy.exc import IntegrityError
 from db.session import db_session
+from completion_hints import declares_complete
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -222,7 +223,15 @@ def main():
                     # unknown as permissive, it hid 5.28M of them outright, 29% of
                     # the whole index. Nothing else ever writes in_progress from
                     # evidence either; persist.py only ever upgrades TO complete.
-                    status=StatusEnum.unknown.value,
+                    # The dataset has no completion column, but FanFiction.net
+                    # authors write it into the summary by hand — "COMPLETE!",
+                    # "[Oneshot: COMPLETE]" — because the archive gives them
+                    # nowhere else to put it. 53,240 rows already in the index
+                    # said so and were still showing as unknown. See
+                    # completion_hints.py for why this is deliberately narrow.
+                    status=(StatusEnum.complete.value
+                            if declares_complete(row.get("summary"))
+                            else StatusEnum.unknown.value),
                     word_count=_parse_int(row.get("words")),
                     chapter_count=max(1, _parse_int(row.get("chapters"), 1)),
                     fandoms=fandoms,
