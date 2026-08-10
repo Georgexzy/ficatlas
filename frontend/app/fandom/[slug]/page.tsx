@@ -100,6 +100,8 @@ export default async function FandomHub(
 
   return (
     <div className="page-prose hub">
+      {/* Not current="browse": that suppresses the link, and from a single
+          fandom the index of all of them is somewhere you actually want to go. */}
       <SiteHeader />
       <nav className="hub__crumbs" aria-label="Breadcrumb">
         <Link href="/fandoms">All fandoms</Link>
@@ -128,11 +130,23 @@ export default async function FandomHub(
         <p className="hub__empty">Nothing to show here yet.</p>
       ) : sections.map(section => (
         <section key={section.site}>
-          <h2 className="hub__heading">
-            {section.site
-              ? `Most popular on ${SITE_LABELS[section.site] ?? section.site}`
-              /* The pre-rebuild fallback has no archive to name. */
-              : `Most popular ${hub.name} works`}
+          {/* The heading is the link. Someone reading "Most popular on AO3" and
+              wanting more of it should not have to find their way back up to
+              the lede — the obvious thing to click is the thing they are
+              already looking at, and it lands on this fandom filtered to that
+              archive, in the real search UI with all the filters. */}
+          <h2 className="hub__heading hub__heading--link">
+            <Link href={section.site
+              ? `/?fandoms=${encodeURIComponent(hub.name)}&sites=${section.site}`
+              : `/?fandoms=${encodeURIComponent(hub.name)}`}>
+              {section.site
+                ? `Most popular on ${SITE_LABELS[section.site] ?? section.site}`
+                /* The pre-rebuild fallback has no archive to name. */
+                : `Most popular ${hub.name} works`}
+              <span className="hub__heading-more" aria-hidden="true">
+                see all →
+              </span>
+            </Link>
           </h2>
           <ol className="hub__list">
             {section.works.map(w => (
@@ -152,6 +166,13 @@ export default async function FandomHub(
               </li>
             ))}
           </ol>
+          {section.site && (
+            <p className="hub__section-more">
+              <Link href={`/?fandoms=${encodeURIComponent(hub.name)}&sites=${section.site}`}>
+                Search every {hub.name} work on {SITE_LABELS[section.site] ?? section.site} →
+              </Link>
+            </p>
+          )}
         </section>
       ))}
 

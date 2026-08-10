@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -56,11 +56,16 @@ class HubDetail(BaseModel):
 
 @router.get("", response_model=list[HubSummary])
 def list_hubs(
+    response: Response,
     limit: int = Query(2000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """Every hub, largest first. Backs the /fandoms index page and the sitemap."""
+    """Every hub, largest first. Backs the /fandoms index page and the sitemap.
+
+    Fully public and rebuilt offline, so a shared cache can hold it for a long
+    time — this is the request a crawler makes before walking every hub."""
+    response.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
     rows = db.execute(text("""
         SELECT slug, name, work_count FROM fandom_hubs
          ORDER BY work_count DESC, slug
@@ -70,7 +75,8 @@ def list_hubs(
 
 
 @router.get("/{slug}", response_model=HubDetail)
-def get_hub(slug: str, db: Session = Depends(get_db)):
+def get_hub(slug: str, response: Response, db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
     hub = db.execute(text(
         "SELECT slug, name, work_count, top_ids, top_by_site "
         "  FROM fandom_hubs WHERE slug = :s"

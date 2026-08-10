@@ -69,7 +69,7 @@ export default async function FandomsIndex() {
 
   return (
     <div className="page-prose hub">
-      <SiteHeader />
+      <SiteHeader current="browse" />
       <h1>Browse fandoms</h1>
       <p className="hub__lede">
         {hubs.length.toLocaleString()} fandoms indexed across Archive of Our Own,
