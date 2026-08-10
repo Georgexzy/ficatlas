@@ -692,11 +692,43 @@ def _split_statements(sql: str) -> list[str]:
     return [s.strip() for s in statements if s.strip()]
 
 
+# Arbitrary but fixed: the key that says "someone is running startup DDL".
+_INIT_LOCK_KEY = 8163264128
+
+
 def init():
     """Run each DDL statement in its own transaction so a single failure (e.g. a
     bad index on an older Postgres) can't roll back the creation of every table
     after it. Failures are logged, not fatal — the app should still boot with
-    whatever succeeded."""
+    whatever succeeded.
+
+    Only one process runs it. This is called from the FastAPI lifespan, and with
+    more than one uvicorn worker every worker has its own lifespan — so four
+    workers meant four processes issuing the same ALTER TABLE and CREATE INDEX
+    at once, each taking ACCESS EXCLUSIVE on `stories` and queueing behind the
+    others. The statements are idempotent, so the result was survivable, but
+    startup serialised on lock waits with a 5s lock_timeout underneath it.
+
+    A session-level advisory lock makes the first worker do the work and the
+    rest skip it. try_ rather than a blocking acquire: a worker that cannot get
+    the lock has nothing to wait for, because whoever holds it is running the
+    identical statements.
+    """
+    with engine.connect() as guard:
+        got = guard.execute(
+            text("SELECT pg_try_advisory_lock(:k)"), {"k": _INIT_LOCK_KEY}
+        ).scalar()
+        if not got:
+            print("Startup DDL already running in another worker; skipping.")
+            return
+        try:
+            _init_locked()
+        finally:
+            guard.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _INIT_LOCK_KEY})
+            guard.commit()
+
+
+def _init_locked():
     statements = _split_statements(SQL)
     failed = []
     for stmt in statements:

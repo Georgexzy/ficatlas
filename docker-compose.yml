@@ -129,10 +129,29 @@ services:
     # a second identical 2.7GB copy under its own service name.
     image: ficatlas-backend
     restart: unless-stopped
-    # --reload is a development convenience: it restarts the API on any file
-    # change, which also kills anything running inside the container. Drop it for
-    # an unattended box.
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    # Multiple worker processes, because one was the ceiling on every cheap
+    # endpoint. FastAPI runs sync route handlers — and search is deliberately
+    # sync — in a threadpool, but there is still one process, one GIL and
+    # therefore roughly one core doing Python work on a 12-core box.
+    #
+    # --reload is mutually exclusive with --workers: it is a development
+    # convenience that restarts the API on any file change, and it also kills
+    # anything running inside the container. Set UVICORN_RELOAD=true to get it
+    # back while working on the code; leave it off for an unattended box.
+    #
+    # WEB_CONCURRENCY is read by uvicorn for the worker count AND by
+    # db/session.py and ratelimit.py, which divide the connection-pool budget
+    # and the rate limits across workers. Those three have to agree, so it is
+    # one variable rather than three.
+    #
+    # Four, not twelve: the workers are not the scarce resource. Search is bound
+    # by disk reads against a 39GB database with ~2GB of cache, so more Python
+    # processes buy nothing there — and this box is also a desktop.
+    # See backend/start.sh: one WEB_CONCURRENCY knob drives the uvicorn worker
+    # count, the connection-pool budget (db/session.py) and the rate-limit
+    # divisor (ratelimit.py), which all have to agree. Set UVICORN_RELOAD=true
+    # for single-process live reload while working on the code.
+    command: ["sh", "/app/start.sh"]
     # Loopback only, matching the architecture in the README: clients reach the API
     # through the frontend's /api/* rewrite on port 3000, so 8000 never needs to be
     # externally reachable. http://localhost:8000/docs still works on this host.
@@ -167,6 +186,10 @@ services:
       # See backend/ratelimit.py — marks our own SSR traffic so it is not
       # counted as one very busy client. Same value in both services.
       INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
+      # Worker count, pool budget divisor and rate-limit divisor — see the
+      # command above.
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+      UVICORN_RELOAD: ${UVICORN_RELOAD:-false}
       DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:-ficatlas}@db:5432/ficatlas
     depends_on:
       db:
@@ -211,6 +234,12 @@ services:
     command: python worker.py
     environment:
       DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:-ficatlas}@db:5432/ficatlas
+      # Its own connection budget, smaller than the API's. Both pools are sized
+      # against one max_connections=100: the API takes 48 (4 workers x 12), this
+      # takes 18, and the rest is left for psql, maintenance scripts and the
+      # superuser reserve. Background jobs are sequential and do not need many.
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-12}
+      DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-6}
       RUN_SCHEDULER: "true"
       # The bulk AO3 dump stops at work id 63,178,258 (~mid-2024) while AO3 is
       # now issuing ~89.7M, so everything recent can only come from crawling.
