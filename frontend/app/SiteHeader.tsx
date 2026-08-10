@@ -51,6 +51,18 @@ function UserMenu() {
           </p>
           <Link href="/account" className="user-menu__link" onClick={() => setOpen(false)}>Account &amp; sync</Link>
           <OfflineLink href="/library" className="user-menu__link" onClick={() => setOpen(false)}>My library</OfflineLink>
+          {/* The admin page had exactly one link into it, buried in Settings
+              below Appearance, Reading and Search — so for the person who owns
+              the box it was effectively hidden, and reaching it meant typing the
+              URL. It belongs here: visible from every page, one click, and only
+              rendered for an account that can actually use it, which is the same
+              rule the Import tab follows. Showing a control that 403s teaches a
+              reader the site is broken rather than that it is not theirs. */}
+          {user?.can_manage && (
+            <Link href="/admin" className="user-menu__link" onClick={() => setOpen(false)}>
+              Index health &amp; requests
+            </Link>
+          )}
           <button onClick={async () => { await logout(); setOpen(false) }}>Sign out</button>
         </div>
       )}
