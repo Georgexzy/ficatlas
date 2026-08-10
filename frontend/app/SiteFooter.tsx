@@ -12,16 +12,16 @@ export default function SiteFooter() {
       <span className="site-footer__sep">·</span>
       <Link href="/about#ai">AI policy</Link>
       <span className="site-footer__sep">·</span>
-      <Link href="/takedown">Remove my story</Link>
-      <span className="site-footer__sep">·</span>
-      {/* Same reasoning as the takedown link beside it: an author should find
-          this without being told where to look. It was reachable only from the
-          foot of a story page, which assumes they already found their own work
-          here — and someone who has just heard the site exists has not.
-          Points at /permissions rather than /permissions/manage because that
-          page explains all three options, including the two that need nothing
-          from them, and links onward to the list. */}
-      <Link href="/permissions">I&apos;m an author</Link>
+      {/* One author link, not two.
+          "Remove my story" and "I'm an author" sat side by side pointing at the
+          two halves of the same job, which is the duplication this footer was
+          meant to avoid rather than create.
+          Merged toward removal, not away from it. This link exists because an
+          author must be able to find the takedown route without being told where
+          to look, and that is the urgent case — so the label leads with
+          "Remove", and the page it lands on opens with removal as a button
+          before it mentions anything else. */}
+      <Link href="/permissions">Remove or manage my work</Link>
       <span className="site-footer__sep">·</span>
       <a href="/robots.txt">Crawler policy</a>
       <span className="site-footer__sep">·</span>

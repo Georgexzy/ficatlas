@@ -153,15 +153,31 @@ export default function PermissionsPage() {
         your name, and decide which of those may happen to yours.
       </p>
 
+      {/* Removal as an action, above everything else.
+          This page is now the single author link in the footer, so it carries
+          the job that used to have its own: someone who has just found their
+          work here and wants it gone must not have to read a page about
+          permissions first, or work out that "manage" includes "remove".
+          A button, before any explanation, and it goes to the form that asks
+          nothing of them. */}
+      <div className="perm-urgent">
+        <p>
+          <strong>Want your work taken down?</strong> You do not need to verify
+          anything, explain yourself, or finish this page. The text comes down as
+          soon as you ask, and nothing is ever deleted, so a mistake can always
+          be undone.
+        </p>
+        <Link href="/takedown" className="btn btn--primary">Remove my work</Link>
+      </div>
+
       <div className="perm-note">
         <p>
-          <strong>You never need this to have something removed.</strong> Taking
-          work down asks nothing of you — not here, and not on the{" "}
-          <Link href="/takedown">removal form</Link>. Nothing is ever deleted, so
-          a mistake can always be undone.
+          Everything below is the <em>other</em> direction — telling FicAtlas
+          what it may do, rather than asking it to stop. You can also take down
+          individual works from the list further down, without proving anything.
         </p>
         <p>
-          Proof is only needed for the opposite: saying <em>yes</em>. Anyone can
+          Proof is only needed for one thing: saying <em>yes</em>. Anyone can
           type an author&apos;s name into a form, so permission that has not been
           verified would not be worth anything — least of all to you.
         </p>
