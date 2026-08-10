@@ -136,7 +136,9 @@ def _to_row(obj: dict) -> dict | None:
     # A work is complete when it says so, or when every chapter is posted.
     completed = bool(str(meta.get("completed") or "").strip())
     status = (StatusEnum.complete
-              if completed or (total is not None and posted >= total)
+              # Exact equality rather than >=: more chapters posted than
+              # declared is damaged data, not completion. 35/36 fails both.
+              if completed or (total is not None and posted == total)
               else StatusEnum.in_progress)
 
     rating = _RATING_MAP.get(str(meta.get("Rating") or "").strip().lower(),

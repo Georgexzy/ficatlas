@@ -11,6 +11,34 @@ from datetime import datetime
 from urllib.parse import quote, urlencode
 
 
+
+def _is_complete(status_text: str, posted: int, total: int | None) -> bool:
+    """Is this AO3 work finished?
+
+    Two signals, and the second is the one this path was missing. An AO3 blurb
+    shows "Completed:" for a finished work, but "Updated:" otherwise — and on a
+    work posted once and never touched, sometimes nothing at all. The chapter
+    counter carries the same fact: "36/36" means the author declared 36 chapters
+    and posted 36, which is AO3's own definition of finished. "36/?" leaves the
+    total unknown and decides nothing.
+
+    Exact equality, not >=. The two differ only when MORE chapters are posted
+    than declared — 37/36 — which is not a finished work but damaged data; 1,245
+    AO3 rows were in that shape, left over from the digit-concatenation bug this
+    file used to have. 35/36 is excluded by both forms; == also declines to
+    guess about the impossible one.
+
+    The bulk importer and the crawler have always done this. Only the live path
+    did not, and it could not have: it hardcoded the total to None until the
+    chapter parser was fixed. 92,350 AO3 works sat at n/n while being shown to
+    readers as works in progress.
+    """
+    if "Completed" in (status_text or ""):
+        return True
+    if total is None:
+        return False
+    return posted == total
+
 def _parse_chapters_text(txt) -> tuple[int, int | None]:
     """AO3's dd.chapters is "posted/total", not a number.
 
@@ -195,8 +223,28 @@ def _parse_blurb(item) -> Optional[dict]:
         def chapters():
             return _parse_chapters_text(_stat_text("chapters"))
 
+        _chapters_posted, _chapters_total = chapters()
+
+        # Complete when AO3 says so, OR when every declared chapter is posted.
+        #
+        # This path read dt.status alone, and dt.status is not always there: an
+        # AO3 blurb shows "Completed:" for a finished work but "Updated:" — or on
+        # a work posted once and never touched, nothing at all — otherwise. The
+        # chapter counter is the other half of the same fact, and "36/36" means
+        # the author declared 36 and posted 36, which is precisely AO3's own
+        # definition of finished. "36/?" leaves the total unknown and is left
+        # alone.
+        #
+        # The bulk importer (ao3_meta_importer.py) and the crawler
+        # (crawlers/ao3.py) have both always done this; only the live path did
+        # not, and it could not have — it hardcoded chapter_count_total to None
+        # until the parser was fixed. 92,350 AO3 works sat at n/n while still
+        # being shown to readers as works in progress.
         status_el = item.select_one("dt.status")
-        status = "complete" if status_el and "Completed" in status_el.get_text() else "in_progress"
+        _complete = _is_complete(
+            status_el.get_text() if status_el else "",
+            _chapters_posted, _chapters_total)
+        status = "complete" if _complete else "in_progress"
 
         lang_el = item.select_one("dd.language")
         language = lang_el.get_text(strip=True) if lang_el else "English"
@@ -208,8 +256,6 @@ def _parse_blurb(item) -> Optional[dict]:
                 updated_at = datetime.strptime(updated_el.get_text(strip=True), "%d %b %Y").isoformat()
             except Exception:
                 pass
-
-        _chapters_posted, _chapters_total = chapters()
 
         return {
             "id": f"live_ao3_{work_id}",
