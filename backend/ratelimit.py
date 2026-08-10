@@ -72,10 +72,17 @@ AUTH_PATHS = {"/api/auth/login", "/api/auth/signup",
 # just a cost. Shares the tight "auth" budget deliberately — a real author files
 # one request, not ten a minute.
 TAKEDOWN_PATH = "/api/takedown"
+# Verification makes an outbound request to AO3 or FanFiction.net on our behalf,
+# so an unbounded caller here would have us hammering someone else's server. It
+# shares the tight bucket for that reason rather than because it is risky in
+# itself. /revoke is NOT listed: withdrawing consent must never be the throttled
+# path, for the same reason it needs no proof.
+PERMISSION_PATHS = {"/api/permissions/challenge", "/api/permissions/verify"}
 
 
 def path_class(path: str) -> str:
-    if path.rstrip("/") in AUTH_PATHS or path.rstrip("/") == TAKEDOWN_PATH:
+    p = path.rstrip("/")
+    if p in AUTH_PATHS or p == TAKEDOWN_PATH or p in PERMISSION_PATHS:
         return "auth"
     if path.startswith("/api/search"):
         return "search"

@@ -640,6 +640,18 @@ export default function StoryPage() {
           {story.is_hosted
             ? " — the text comes down straight away, no explanation needed."
             : " — we hold only a summary and a link, and will take both down."}
+          {/* The other direction, offered second and phrased as the smaller ask.
+              Removal comes first deliberately: it is the thing someone arriving
+              here upset is looking for, and it is the one that needs nothing
+              from them. */}
+          {(story.site === "ao3" || story.site === "ffnet") && (
+            <>
+              {" "}Or{" "}
+              <Link href={`/permissions?site=${story.site}&author=${encodeURIComponent(story.author || "")}`}>
+                tell us what you do allow
+              </Link>.
+            </>
+          )}
         </p>
       </article>
     </div>

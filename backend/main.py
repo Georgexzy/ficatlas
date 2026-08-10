@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api import (search, stories, stats, library, settings, auth, userdata,
-                 takedown, password_reset, admin)
+                 takedown, password_reset, admin, permissions)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -99,6 +99,9 @@ app.include_router(stats.router,  prefix="/api/stats", tags=["stats"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(takedown.router, prefix="/api/takedown", tags=["takedown"])
+# Granting permission is a different act from asking for removal, and needs
+# evidence where removal deliberately needs none — see api/permissions.py.
+app.include_router(permissions.router, prefix="/api/permissions", tags=["permissions"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(auth.router,     prefix="/api/auth",     tags=["auth"])
 app.include_router(password_reset.router, prefix="/api/auth", tags=["auth"])

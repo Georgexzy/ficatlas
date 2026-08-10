@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from provenance import PROVENANCE_TAGS
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
-from external_optout import has_external_optout
+import author_permission
 
 log = logging.getLogger(__name__)
 
@@ -113,12 +113,22 @@ def persist_live_results(db: Session, live_results: list[dict],
         if not url:
             failed += 1
             continue
-        # Honour the author's opt-out: a summary that explicitly refuses having
-        # the work on external sites means it must not be indexed. Skip the
-        # insert, and if it already exists, drop it (cascades its hosted text).
-        # Only the live blurb carries a summary — the AO3 bulk dump has none —
-        # so this only ever sees works a fetch actually described.
-        if has_external_optout(d.get("summary")):
+        # Honour what the author has said: a verified statement, or failing that
+        # a summary that explicitly refuses having the work on external sites.
+        # Skip the insert, and if it already exists, drop it (cascades its hosted
+        # text). Only the live blurb carries a summary — the AO3 bulk dump has
+        # none — so the heuristic half only ever sees works a fetch described.
+        #
+        # decide_hosting rather than the raw heuristic, so an author who has
+        # verified control of their account and said "yes" is not blocked by a
+        # regex reading of their own summary — and one who has said "no" is
+        # blocked whatever the summary happens to contain. private=False because
+        # this path only ever writes to the shared index.
+        allowed, _reason = author_permission.decide_hosting(
+            db, site=("ao3" if "archiveofourown.org" in url else "ffnet"),
+            author=d.get("author") or "", summary=d.get("summary"), private=False,
+        )
+        if not allowed:
             if db.query(Story.id).filter(Story.url == url).first() is not None:
                 db.query(Story).filter(Story.url == url).delete(
                     synchronize_session=False)

@@ -475,6 +475,75 @@ CREATE INDEX IF NOT EXISTS ix_takedowns_state ON takedowns (state, created_at DE
 -- Strike record for withdraw_deleted.py. A single 404 during an AO3 deploy must
 -- not withdraw thousands of stories, so a work has to be confirmed gone twice on
 -- separate passes before its text is hidden.
+-- Author permissions: the opposite of a takedown, and deliberately not its mirror.
+--
+-- Removal and permission are not symmetrical, and treating them as one system
+-- would get one of them badly wrong:
+--
+--   REMOVAL needs no proof. Anyone can ask, the text hides immediately, and
+--     nothing is deleted (see the takedowns table above). Over-honouring a
+--     removal costs a work being hidden that need not have been — recoverable,
+--     and the person harmed by getting it wrong is the one asking.
+--
+--   PERMISSION needs proof. "Yes, host my work" from an unverified form is
+--     worthless: anyone could type any author's name and licence someone else's
+--     writing. Over-honouring a permission means hosting without consent, which
+--     is the harm this whole area exists to prevent, and it is not recoverable
+--     by the person it happens to — they may never know.
+--
+-- So this table only ever holds VERIFIED statements, and the verification is
+-- proof of control of the archive account: a nonce placed in the author's own
+-- profile, which only they can edit. Nothing here is inferred from prose. In
+-- particular, a fandom "blanket statement" is NOT consent — those are written
+-- about transformative works (podfic, translation, remix) and read as permission
+-- to rehost only if you want them to.
+--
+-- Keyed on (site, author) rather than per work, because that is what makes it
+-- scale: one verification covers an author's whole back catalogue AND everything
+-- they post later.
+CREATE TABLE IF NOT EXISTS author_permissions (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    site          VARCHAR(24) NOT NULL,          -- ao3 | ffnet
+    -- Lowercased for lookup; author_display keeps what they actually type.
+    author        TEXT NOT NULL,
+    author_display TEXT,
+    -- host          : full text may be stored and read here
+    -- metadata_only : index the listing, never store the text
+    -- deny          : do not index at all; existing rows are removed
+    policy        VARCHAR(16) NOT NULL,
+    -- Evidence, kept so a permission can be justified later rather than merely
+    -- asserted. A consent you cannot demonstrate is not much use.
+    verified_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    method        VARCHAR(24) NOT NULL DEFAULT 'profile_token',
+    token         TEXT,                          -- the nonce that was matched
+    evidence_url  TEXT,                          -- the page it was found on
+    evidence_text TEXT,                          -- surrounding text as fetched
+    contact_email TEXT,
+    note          TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Revocation must be at least as easy as granting. A revoked row is kept,
+    -- not deleted, so "they once said yes and later said no" stays legible.
+    revoked_at    TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_author_permissions_site_author
+    ON author_permissions (site, author);
+CREATE INDEX IF NOT EXISTS ix_author_permissions_active
+    ON author_permissions (site, author) WHERE revoked_at IS NULL;
+
+-- Outstanding verification challenges. Short-lived: a nonce that never expires
+-- is a nonce someone can find in an old profile edit and reuse.
+CREATE TABLE IF NOT EXISTS author_permission_challenges (
+    token       TEXT PRIMARY KEY,
+    site        VARCHAR(24) NOT NULL,
+    author      TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    attempts    INT NOT NULL DEFAULT 0,
+    source_ip   TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_apc_expiry ON author_permission_challenges (expires_at);
+
 CREATE TABLE IF NOT EXISTS source_gone (
     story_id       UUID PRIMARY KEY REFERENCES stories(id) ON DELETE CASCADE,
     strikes        INTEGER NOT NULL DEFAULT 0,
