@@ -37,6 +37,20 @@ Disallow: /*?
 Allow: /$
 Allow: /story/
 
+# Fandom hubs — the only route a crawler has into the index.
+#
+# Story pages were allowed above long before anything linked to them: search
+# results are the sole path to a work, they live at `/?q=` URLs, and those are
+# blocked directly above. So /story/ was permitted and unreachable at the same
+# time, which is the state this fixes.
+#
+# The hubs are a bounded alternative to a sitemap of all 19.9M works: a few
+# thousand pages, each listing a capped set of works, rather than an invitation
+# to crawl the whole index off a home connection. See backend/fandom_hubs.py.
+Allow: /fandoms
+Allow: /fandom/
+Allow: /sitemap.xml
+
 # Politeness. Google ignores this; most other crawlers honour it, and those are
 # the ones most likely to crawl without restraint.
 Crawl-delay: 10
@@ -126,3 +140,12 @@ Disallow: /
 
 User-agent: Perplexity-User
 Disallow: /
+
+# Sitemap: deliberately not declared.
+#
+# The directive needs an absolute URL and there is no domain yet, so anything
+# written here would be a guess that points nowhere. /sitemap.xml is served and
+# is allowed above; crawlers find it without being told. Add the line below,
+# with the real host, once a domain exists:
+#
+#   Sitemap: https://example.com/sitemap.xml

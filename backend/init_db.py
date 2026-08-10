@@ -568,6 +568,27 @@ CREATE INDEX IF NOT EXISTS ix_takedowns_state ON takedowns (state, created_at DE
 -- Keyed on (site, author) rather than per work, because that is what makes it
 -- scale: one verification covers an author's whole back catalogue AND everything
 -- they post later.
+-- Crawlable entry points, one per fandom. See fandom_hubs.py for why these
+-- exist at all (story pages had no inbound links a crawler could follow) and
+-- why the works are precomputed rather than ranked per request.
+--
+-- Nothing writes to this at startup: it is built offline by fandom_hubs.py.
+-- An empty table simply means no hubs are served, which is the correct
+-- behaviour for a fresh install with nothing indexed yet.
+CREATE TABLE IF NOT EXISTS fandom_hubs (
+    slug        TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    -- Every facet value that collapses to this fandom: "Harry Potter" and
+    -- "Harry Potter - J. K. Rowling" are one hub, matched with && against the
+    -- existing GIN index on stories.fandoms.
+    variants    TEXT[] NOT NULL,
+    work_count  INTEGER NOT NULL DEFAULT 0,
+    top_ids     TEXT[] NOT NULL DEFAULT '{}',
+    built_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- The index listing orders by size, which is the only way it is ever read.
+CREATE INDEX IF NOT EXISTS ix_fandom_hubs_count ON fandom_hubs (work_count DESC);
+
 CREATE TABLE IF NOT EXISTS author_permissions (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     site          VARCHAR(24) NOT NULL,          -- ao3 | ffnet
