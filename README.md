@@ -95,6 +95,13 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   `/autocomplete/`, `/downloads/` and the search endpoints; `/users/` is not
   disallowed, which is the path this uses.
 
+  **No email is sent, and nothing claims otherwise.** There is no SMTP configured
+  and no domain, so the takedown form does not promise a reply — it says the
+  removal has already taken effect, which is true and is the thing the author
+  wanted. The address it collects is only for the case where someone needs to ask
+  a question. If mail is ever wanted, `SMTP_HOST`/`SMTP_FROM` and the confirmation
+  copy are the pieces to reconnect, and the flow would need code to actually send.
+
   **Removal never requires any of this.** The two are deliberately asymmetric:
   getting a removal wrong hides a work that need not have been hidden, which is
   recoverable; getting a permission wrong means hosting someone's writing
@@ -118,14 +125,17 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   ever *removes* permission. So they can say "never store my text" or "don't
   index me", just not "host my work"
 
-- **Authors can see and manage everything held under their name** — `/permissions/manage`
+- **Authors can see and manage everything held under their name** — `/permissions`
   lists every indexed work, whether its text is stored here, and lets them take
-  down individual works or set a standing restriction. Usable **without**
-  verifying, for the same reason: everything on it is either already public on
-  the author's own results page or is a removal. Verified authors are marked on
-  result cards with a quiet "✓ author verified" — deliberately not a badge, since
-  it states a fact about consent rather than quality and must not read as a
-  ranking
+  down individual works or set a standing restriction, in one flow: who are you,
+  here is what we hold, decide, and prove it only if you are granting rather than
+  withdrawing. Usable **without** verifying, for the same reason as everything
+  else here: it shows nothing that is not already on that author's own results
+  page, and requiring proof before someone may look at what a site holds about
+  them would be the wrong way round. Reachable from the footer, from About, and
+  from the foot of every story page. Verified authors are marked on result cards
+  with a quiet "✓ author verified" — deliberately not a badge, since it states a
+  fact about consent rather than quality and must not read as a ranking
 
   It does **not** read consent out of prose. Fandom's "blanket statement"
   convention lives in the very profile field this reads, but those statements
@@ -145,7 +155,15 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   (dry-run by default; `--apply` deletes)
 
 ### Accounts & sync
-- **Optional accounts** — username + password (bcrypt), no email required. 90-day httponly cookie sessions
+- **Optional accounts** — username + password (bcrypt), no email required. 90-day httponly cookie sessions.
+  Session tokens are stored as a SHA-256 digest, not verbatim: the table would
+  otherwise be a list of working credentials, and a backup or a stray `pg_dump`
+  would hand over every live session
+- **One operator page** — `/admin` carries index health and the takedown queue as
+  tabs, reachable from the user menu for an account that can manage. They were
+  two routes reached only from Settings, each re-implementing the same shell and
+  the same "not an operator" gate; two copies of an access check is one too many,
+  since the one that drifts laxer is the bug
 - **Cross-device sync with merge** — bookmarks, reading progress, recents and settings sync to your account and **merge** across devices rather than overwriting: bookmarks union, progress keeps the most recently updated per story, recents union (capped). Using your phone and laptop together never silently drops data
 - **Resilient sync engine** — dirty-key retry queue, request coalescing, re-sync on tab focus / network reconnect / 60s interval, and a `sendBeacon` flush on page unload
 - **Account management** (`/account`) — active sessions list (see every signed-in device), change password (signs out other devices), sign out all other devices, delete account (password-confirmed, cascades)
