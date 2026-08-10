@@ -16,6 +16,8 @@ const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 // unresponsive server trips this.
 const SEARCH_TIMEOUT_MS = 65_000
 
+import { loadMutes, withMutes } from "./mutelist"
+
 export async function searchStories(
   params: SearchParams,
   opts?: { signal?: AbortSignal },
@@ -26,6 +28,18 @@ export async function searchStories(
     if (val === undefined || val === null || val === "") continue
     qs.set(key, String(val))
   }
+
+  // The reader's standing "never show me" list, merged into every search.
+  //
+  // Applied HERE rather than in the page's filter state, for two reasons:
+  //
+  //   * this is the one place every search passes through, so a mute cannot be
+  //     forgotten by a code path that builds its parameters differently;
+  //   * it keeps the mute list out of the URL. The address bar stays a clean,
+  //     shareable description of the search, and a link sent to a friend does
+  //     not carry a list of the ships and authors you refuse to read — which is
+  //     private in a way the rest of a query simply is not.
+  withMutes(qs, loadMutes())
 
   // The caller's signal (a superseded search) and our timeout both have to be
   // able to abort this one request.

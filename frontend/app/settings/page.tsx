@@ -1,4 +1,5 @@
 "use client"
+
 import ThemeToggle from "../ThemeToggle"
 import { useEffect, useState } from "react"
 import Link from "next/link"
@@ -7,6 +8,9 @@ import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 import { writePref, mergePrefs, type Prefs } from "@/lib/prefs"
 import { fetchJson } from "@/lib/errors"
+import { EMPTY_MUTES, loadMutes, muteCount, saveMutes, type MuteList } from "@/lib/mutelist"
+import { DATA_GROUPS, clearGroup, downloadExport, groupSize } from "@/lib/localdata"
+import { fmtBytes, storageEstimate, type StorageEstimate } from "@/lib/offline"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -46,6 +50,23 @@ const ADMIN_KEYS: (keyof AdminSettings)[] = [
   "feed_min_words", "feed_max_words", "feed_complete_only", "enable_direct_crawl",
 ]
 
+// The five things worth muting, in the order people reach for them. Ships and
+// tags lead because those are what a reader wants gone; authors last because
+// muting a person is a heavier act than muting a trope, and burying it slightly
+// is the right default.
+const MUTE_FIELDS: { key: keyof MuteList; name: string; hint: string; placeholder: string }[] = [
+  { key: "relationships", name: "Ships", placeholder: "e.g. Draco Malfoy/Harry Potter",
+    hint: "Relationship tags. Hidden wherever they appear." },
+  { key: "tags", name: "Tags", placeholder: "e.g. Character Death",
+    hint: "Any freeform or additional tag." },
+  { key: "fandoms", name: "Fandoms", placeholder: "e.g. Original Work",
+    hint: "Whole fandoms you never want in results." },
+  { key: "characters", name: "Characters", placeholder: "e.g. Umbridge",
+    hint: "Character tags." },
+  { key: "authors", name: "Authors", placeholder: "pen name, exactly as written",
+    hint: "Matched on the whole pen name, ignoring capitals." },
+]
+
 const SITE_OPTIONS = [
   { id: "ao3", label: "AO3" },
   { id: "ffnet", label: "FF.net" },
@@ -72,6 +93,43 @@ const PREF_FALLBACK: Prefs = {
 export default function SettingsPage() {
   const { user, loading: authLoading } = useAuth()
   const isAdmin = !!user?.can_manage
+
+  // The standing mute list. Saved on every edit, like the rest of this side of
+  // the page — there is no Save button for a reader's own settings.
+  const [mutes, setMutes] = useState<MuteList>(EMPTY_MUTES)
+  const [muteDrafts, setMuteDrafts] = useState<Record<string, string>>({})
+  useEffect(() => { setMutes(loadMutes()) }, [])
+  const muteTotal = muteCount(mutes)
+
+  const addMute = (key: keyof MuteList) => {
+    const value = (muteDrafts[key] ?? "").trim()
+    if (!value) return
+    // Case-insensitive: adding "Drarry" when "drarry" is already hidden should
+    // not produce two entries that both have to be removed later.
+    if (mutes[key].some(v => v.toLowerCase() === value.toLowerCase())) {
+      setMuteDrafts(d => ({ ...d, [key]: "" }))
+      return
+    }
+    const next = { ...mutes, [key]: [...mutes[key], value] }
+    setMutes(next); saveMutes(next)
+    setMuteDrafts(d => ({ ...d, [key]: "" }))
+  }
+
+  // How much of each kind of data is actually here, so "Clear" is never offered
+  // for something that is already empty.
+  const [dataSizes, setDataSizes] = useState<Record<string, number>>({})
+  const [storage, setStorage] = useState<StorageEstimate | null>(null)
+  const refreshSizes = () =>
+    setDataSizes(Object.fromEntries(DATA_GROUPS.map(g => [g.id, groupSize(g)])))
+  useEffect(() => {
+    refreshSizes()
+    storageEstimate().then(setStorage).catch(() => {})
+  }, [])
+
+  const removeMute = (key: keyof MuteList, value: string) => {
+    const next = { ...mutes, [key]: mutes[key].filter(v => v !== value) }
+    setMutes(next); saveMutes(next)
+  }
 
   const [prefs, setPrefs] = useState<Prefs | null>(null)
   const [admin, setAdmin] = useState<AdminSettings | null>(null)
@@ -305,6 +363,125 @@ export default function SettingsPage() {
           <Toggle on={prefs.show_explicit === "true"}
             label="Show explicit works"
             onToggle={v => setPref("show_explicit", String(v))} />
+        </div>
+      </section>
+
+      {/* ── Never show me ───────────────────────────────────────────────────
+          Exclusions have always existed, but only for the search you are
+          running: type them, get results, and they are gone next time. What a
+          reader actually wants from an index this size is standing — a ship
+          they will never read, a trope they bounce off, an author they would
+          rather not see — applied to every search without being retyped.
+
+          Per device and never sent anywhere but the search itself. A list of
+          things someone refuses to read is revealing in a way a search query is
+          not, and the safest place for it is a machine we cannot see. */}
+      <section className="settings-group">
+        <h2 className="settings-group__title">Never show me</h2>
+        <p className="settings-group__hint">
+          Anything listed here is filtered out of every search, automatically.
+          Kept on this device only — it is never uploaded, and it is not included
+          when you share a search link.
+          {muteTotal > 0 && <> Currently hiding <strong>{muteTotal}</strong>{" "}
+            {muteTotal === 1 ? "thing" : "things"}.</>}
+        </p>
+
+        {MUTE_FIELDS.map(f => (
+          <div className="setting-row setting-row--stack" key={f.key}>
+            <div className="setting-row__label">
+              <span className="setting-row__name">{f.name}</span>
+              <span className="setting-row__hint">{f.hint}</span>
+            </div>
+            <div className="mute-field">
+              <form onSubmit={e => { e.preventDefault(); addMute(f.key) }}>
+                <input className="setting-input" placeholder={f.placeholder}
+                  value={muteDrafts[f.key] ?? ""}
+                  onChange={e => setMuteDrafts(d => ({ ...d, [f.key]: e.target.value }))} />
+              </form>
+              {mutes[f.key].length > 0 && (
+                <div className="tag-input__chips">
+                  {mutes[f.key].map(v => (
+                    <button key={v} className="chip" title="Stop hiding this"
+                      onClick={() => removeMute(f.key, v)}>{v} ✕</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </section>
+
+      {/* ── Your data ───────────────────────────────────────────────────────
+          This site is account-optional: progress, bookmarks, searches, reader
+          preferences and the mute list all live on this device, and saved works
+          live in IndexedDB. Good for privacy, but nineteen keys had accumulated
+          with no page that admitted they existed, no way to clear any one of
+          them, and no way to take them with you.
+
+          "It never leaves your device" is only half a promise. The other half is
+          being able to see it and delete it. */}
+      <section className="settings-group">
+        <h2 className="settings-group__title">Your data</h2>
+        <p className="settings-group__hint">
+          Everything below is stored on this device and never uploaded. Clearing
+          your browser data removes it too.
+        </p>
+
+        {DATA_GROUPS.map(g => {
+          const size = dataSizes[g.id] ?? 0
+          return (
+            <div className="setting-row" key={g.id}>
+              <div className="setting-row__label">
+                <span className="setting-row__name">{g.name}</span>
+                <span className="setting-row__hint">{g.hint}</span>
+              </div>
+              <div className="data-row__actions">
+                <span className="data-row__size">
+                  {size ? fmtBytes(size) : "empty"}
+                </span>
+                <button className="btn btn--ghost btn--sm" disabled={!size}
+                  onClick={() => {
+                    // Confirmed because these are not recoverable and one of
+                    // them is your place in every story you are reading.
+                    if (!confirm(`Clear ${g.name.toLowerCase()}? This cannot be undone.`)) return
+                    clearGroup(g); refreshSizes()
+                    if (g.id === "mutes") setMutes(EMPTY_MUTES)
+                  }}>
+                  Clear
+                </button>
+              </div>
+            </div>
+          )
+        })}
+
+        <div className="setting-row">
+          <div className="setting-row__label">
+            <span className="setting-row__name">Saved for offline</span>
+            <span className="setting-row__hint">
+              Full text of works you downloaded, stored separately.
+            </span>
+          </div>
+          <div className="data-row__actions">
+            <span className="data-row__size">
+              {storage ? `${fmtBytes(storage.usage)} used` : "—"}
+            </span>
+            {/* Managing them individually already exists on the shelf, and a
+                second list here would be a second thing to keep in step. */}
+            <Link href="/library" className="btn btn--ghost btn--sm">Manage</Link>
+          </div>
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-row__label">
+            <span className="setting-row__name">Export everything</span>
+            <span className="setting-row__hint">
+              A JSON file of everything above, so you can read it yourself rather
+              than take our word for what is here.
+            </span>
+          </div>
+          <button className="btn btn--ghost btn--sm" onClick={downloadExport}>
+            Download
+          </button>
         </div>
       </section>
 

@@ -420,6 +420,11 @@ def search(          # NOT async — see below
     exclude_ratings:       Optional[str] = Query(None),
     exclude_warnings:      Optional[str] = Query(None),
     exclude_categories:    Optional[str] = Query(None),
+    # Authors, which the array excludes above cannot express: author is a scalar
+    # column, not a tag array. Needed for a reader's persistent mute list, where
+    # "never show me this writer" is one of the two things people actually want
+    # (the other being ships, which exclude_relationships already covers).
+    exclude_authors:       Optional[str] = Query(None),
     status:                Optional[str] = Query(None),
     # Comma-separated archive sections, e.g. "Schnoogle,The Dark Arts".
     sections:              Optional[str] = Query(None),
@@ -746,6 +751,15 @@ def search(          # NOT async — see below
     ]:
         f = arr_exc(col, val)
         if f is not None: filters.append(f)
+
+    # Case-insensitive and exact: a mute list holds pen names as typed, and
+    # "MsKingBean89" must not also hide "mskingbean89_archive". NULL authors are
+    # kept — an unattributed row is not the muted author.
+    if exclude_authors:
+        muted = [a.strip().lower() for a in exclude_authors.split(",") if a.strip()]
+        if muted:
+            filters.append(or_(Story.author.is_(None),
+                               func.lower(Story.author).notin_(muted)))
 
     # Scalar filters follow the same rule as the facet filters: a story only matches
     # if it actually carries the value. `include_unknown` re-admits rows where the
