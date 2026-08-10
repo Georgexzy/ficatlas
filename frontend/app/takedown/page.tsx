@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import BackLink from "../BackLink"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
 
 // The person filling this in is an author who has found their work somewhere
@@ -18,6 +18,19 @@ export default function TakedownPage() {
   const [hosted, setHosted] = useState<any[]>([])
   const [checked, setChecked] = useState(false)
   const [checking, setChecking] = useState(false)
+
+  // Arriving from "Is this your work?" on a story page, the address is already
+  // known — asking the author to fetch it themselves is asking them to go back,
+  // copy a URL and return, at the one moment they are least inclined to.
+  //
+  // Read from window rather than useSearchParams(): that hook opts the whole
+  // route into dynamic rendering unless it is wrapped in Suspense, and this page
+  // must stay reachable even when things are going wrong.
+  const [storyUrl, setStoryUrl] = useState("")
+  useEffect(() => {
+    const u = new URLSearchParams(window.location.search).get("url")
+    if (u) setStoryUrl(u)
+  }, [])
   const [delist, setDelist] = useState(false)
 
   async function runCheck() {
@@ -155,7 +168,9 @@ export default function TakedownPage() {
       <form onSubmit={submit} className="takedown-form">
         <label>
           <span>Address of the story</span>
-          <input name="story_url" required placeholder="A FicAtlas link, or the story's page on AO3 or FFN" />
+          <input name="story_url" required value={storyUrl}
+            onChange={e => setStoryUrl(e.target.value)}
+            placeholder="A FicAtlas link, or the story's page on AO3 or FFN" />
         </label>
 
         <label>

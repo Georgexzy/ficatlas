@@ -1869,13 +1869,18 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   background: var(--reader-chrome);
   pointer-events: none;
 }
-/* ...except when a banner is on screen. The banners sit above the reader in the
-   document, so at the top of the page the roof would paint straight over them —
-   and the health banner is precisely the thing you must be able to read when it
-   appears, since it means the index is unreachable. The roof exists for the
-   scrolled state, where no banner is in view anyway. */
-body:has(.health-banner) .reader-topbar--sticky::before,
-body:has(.preview-banner) .reader-topbar--sticky::before { content: none; }
+/* The banners are lifted above the toolbar instead of the roof being switched
+   off for them.
+   Turning the roof off was the first attempt and it was a bad one: the health
+   banner appears after two failed polls of /api/stats/totals — a restart, a slow
+   query, a dropped packet — so the gap it was meant to cure came back every time
+   the backend so much as hiccuped, and reading it as "the fix randomly regresses"
+   is exactly right, because from the reader's side it is random. A fix that
+   disables itself under transient failure is not a fix.
+   z-index instead. The toolbar sits at 50 and its roof is painted inside that
+   stacking context, so anything above 50 is safe from it. .preview-banner was
+   already at 300 and never needed the guard at all. */
+.health-banner { position: relative; z-index: 60; }
 .reader-fab {
   position: fixed; bottom: 24px; right: 24px; z-index: 60;
   width: 48px; height: 48px; border-radius: 50%;
@@ -1900,6 +1905,17 @@ body:has(.preview-banner) .reader-topbar--sticky::before { content: none; }
 .reader-error__actions {
   display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
 }
+
+/* The "is this your work?" line at the foot of a story page. Quiet — it should
+   be findable without competing with the story, and it must not read as a
+   warning notice. */
+.story-detail__claim {
+  margin-top: 28px; padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px; line-height: 1.6; color: var(--text-faint);
+}
+.story-detail__claim a { color: var(--accent); text-decoration: underline; }
+.story-detail__claim a:hover { color: var(--text); }
 
 /* "This came from your device, not the index." */
 .story-detail__cached {
