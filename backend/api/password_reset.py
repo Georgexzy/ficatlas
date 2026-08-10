@@ -55,7 +55,11 @@ SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
-SMTP_FROM = os.getenv("SMTP_FROM", "FicAtlas <no-reply@ficatlas.app>")
+# No default sender: the old one was no-reply@ficatlas.app, a domain nobody
+# owns, so any deployment that enabled SMTP without setting this would have
+# sent from an address that cannot receive bounces and would likely be
+# rejected outright. Mail is off unless a deployment configures both.
+SMTP_FROM = os.getenv("SMTP_FROM", "")
 SITE_URL = os.getenv("SITE_URL", "")
 
 
@@ -65,7 +69,12 @@ def _hash(token: str) -> str:
 
 def _send_email(to: str, code: str) -> bool:
     """Best-effort delivery. Returns whether it actually went out."""
-    if not SMTP_HOST:
+    # Both, not just the host. SMTP_FROM no longer defaults to a domain nobody
+    # owns, so a deployment that sets a host and forgets the sender would
+    # otherwise build a message with an empty From — rejected by most servers,
+    # and the failure would look like the reset flow being broken rather than
+    # unconfigured.
+    if not SMTP_HOST or not SMTP_FROM:
         return False
     link = f"{SITE_URL}/reset?code={code}" if SITE_URL else None
     body = (

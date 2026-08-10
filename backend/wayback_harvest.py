@@ -91,7 +91,12 @@ RECOVER_EVERY = float(os.getenv("WAYBACK_RECOVER_EVERY", "120"))
 NET_ERRORS_BEFORE_BACKOFF = int(os.getenv("WAYBACK_NET_ERRORS", "2"))
 
 HEADERS = {
-    "User-Agent": "FicAtlas/0.1 (fanfiction search index; contact: admin@ficatlas.app)",
+    # A bot's User-Agent is where a site operator looks to reach whoever is
+# making the requests, so the contact in it has to be one that works. This
+# said admin@ficatlas.app, an address on a domain nobody owns — worse than
+# no contact at all, because it claims to be reachable. The repository is a
+# real channel and needs no domain.
+    "User-Agent": "FicAtlas/0.1 (fanfiction search index; +https://github.com/Georgexzy/ficatlas)",
     "Accept": "text/html,application/xhtml+xml",
 }
 

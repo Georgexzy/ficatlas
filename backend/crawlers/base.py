@@ -12,7 +12,12 @@ class BaseCrawler(ABC):
     RATE_LIMIT_DELAY = 2.0          # seconds between requests (be polite)
     MAX_RETRIES = 3
     HEADERS = {
-        "User-Agent": "FicAtlas/0.1 (fanfiction discovery; contact: admin@ficatlas.app)",
+        # A bot's User-Agent is where a site operator looks to reach whoever is
+# making the requests, so the contact in it has to be one that works. This
+# said admin@ficatlas.app, an address on a domain nobody owns — worse than
+# no contact at all, because it claims to be reachable. The repository is a
+# real channel and needs no domain.
+        "User-Agent": "FicAtlas/0.1 (fanfiction discovery; +https://github.com/Georgexzy/ficatlas)",
         "Accept": "text/html,application/xhtml+xml",
     }
 

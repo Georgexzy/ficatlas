@@ -73,8 +73,10 @@ export default function About() {
         case a request was mistaken.
       </p>
       <p className="page-prose__muted">
-        If you would rather write to a person, or you want the listing removed as
-        well, email <strong>admin@ficatlas.app</strong> and say so.
+        If you want the listing removed as well, there is a box on the form for
+        that. There is no contact address yet — this runs on a home machine and
+        has no domain of its own — so the form is the way to reach whoever
+        maintains it.
       </p>
 
       {/* Placed immediately after the takedown section on purpose. An author
@@ -185,8 +187,8 @@ export default function About() {
       </ul>
       <p>
         If something here still feels wrong for your work, use the{" "}
-        <Link href="/takedown">takedown form</Link> or write to{" "}
-        <strong>admin@ficatlas.app</strong>. Authors come first.
+        <Link href="/takedown">takedown form</Link> — it reaches whoever
+        maintains this, and it asks nothing of you. Authors come first.
       </p>
     </div>
   )
