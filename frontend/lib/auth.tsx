@@ -36,7 +36,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null)
 
 // Keys mirrored between localStorage and the server.
-const SYNC_KEYS = ["bookmarks", "progress", "recents", "settings"] as const
+const SYNC_KEYS = ["bookmarks", "progress", "recents", "settings", "offline"] as const
 type SyncKey = typeof SYNC_KEYS[number]
 
 const LS = (k: string) => `ficatlas:${k}`
@@ -53,6 +53,10 @@ const STORAGE_KEY: Record<SyncKey, string> = {
   progress:  "progress",
   recents:   "recent-searches",
   settings:  "settings",          // synthesised below from the individual prefs
+  // The SHELF, not the chapters. Written by lib/offline.ts whenever a work is
+  // saved or removed, so the choice travels between devices while the megabytes
+  // stay where they were downloaded.
+  offline:   "offline-shelf",
 }
 
 // Preferences are stored one key per setting, which is convenient for the

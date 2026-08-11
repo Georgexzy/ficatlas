@@ -4557,3 +4557,14 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px;
   font-size: 13px; line-height: 1.5; color: var(--text);
 }
+/* Works chosen for offline on another device. Presented as a prompt rather than
+   a list of failures: nothing is wrong, they simply are not here yet. */
+.offline-elsewhere {
+  border: 1px dashed var(--border2); border-radius: var(--radius);
+  padding: 12px 14px; margin-bottom: 14px;
+}
+.offline-elsewhere__head { font-size: 13px; color: var(--text-dim); margin: 0 0 8px; }
+.offline-elsewhere__list { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+.offline-elsewhere__list li { padding: 4px 0; }
+.offline-elsewhere__by { color: var(--text-faint); font-size: 13px; }
+.offline-elsewhere__hint { font-size: 12px; color: var(--text-faint); margin: 8px 0 0; }
