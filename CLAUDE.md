@@ -93,3 +93,24 @@ Author opt-out handling + Phase-1 audit fixes, deployed and tested. All uncommit
   lowercases internally. Keep them aligned with `api/search.py` predicates.
 - README figures are checked by `python3 tests/check-readme.py` — run it after
   editing README numbers.
+- **Do not re-add `ix_stories_tags_trgm` / `ix_stories_relationships_trgm`.** They
+  were 4.4GB with zero scans and zero code references (tag and relationship
+  filtering uses facet resolution + array containment `&&`, served by the plain
+  GIN indexes). Dropping them took the DB 40GB → 36GB. `ix_stories_fandoms_trgm`
+  and `ix_stories_characters_trgm` are still used and must stay.
+- Never put a `:param` token inside a `--` comment in a `text()` query.
+  SQLAlchemy binds it there too and psycopg2 substitutes into the comment, so any
+  value containing a newline escapes into executable SQL. This stalled series
+  detection indefinitely (`syntax error at or near "twitter"`, from a Blogger
+  share widget scraped as an author name). `tests/test_series_detect_sql.py`
+  guards it at source.
+- The search cache is two-tier: in-process L1 plus a shared UNLOGGED
+  `search_cache_entries` table, because the per-worker cache meant four uvicorn
+  workers each paid a ~10s miss for the same popular query. Bump
+  `SCHEMA_VERSION` in `search_cache.py` when the search response shape changes.
+- `tests/conftest.py` applies `init_db.py`'s DDL to the test database, so new
+  tables are covered automatically. Before that, the schema was whatever had been
+  created by hand and drifted silently.
+- The AO3 stale-WIP refresh reads from `ao3_refresh_queue` rather than ranking on
+  every cycle — the ranking query measured 36.3s and ~8.6GB of reads to pick 40
+  works, hourly. Change the scoring freely; just keep it behind the queue.
