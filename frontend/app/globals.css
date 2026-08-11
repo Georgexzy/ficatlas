@@ -1574,6 +1574,11 @@ kbd {
 .book__cover-author {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em;
   font-family: var(--font-mono); color: rgba(255,255,255,0.75);
+  /* Keeps the author clear of the action buttons now sharing this corner. The
+     cluster reaches 66px in from the cover's edge and this box already stops
+     14px short of it, so 54px is the actual overlap, rounded up. Padding rather
+     than truncation, so a long name still wraps and stays readable. */
+  padding-right: 56px;
 }
 .book__meta {
   margin-top: 12px; padding: 0 2px;
@@ -3417,15 +3422,28 @@ body.is-resizing * { cursor: col-resize !important; }
   background: var(--accent); color: #fff;
 }
 
-/* Per-book actions, top-right of a cover. Always present rather than
+/* Per-book actions, BOTTOM-right of a cover. Always present rather than
    hover-revealed: there is no hover on a phone, and a control you cannot find
-   is one that does not exist. */
+   is one that does not exist.
+
+   Bottom rather than top because the cover is a book jacket with the title set
+   at the top of it, and a 60px cluster of buttons parked in that corner sat
+   directly on the words — on a narrow card, over the title of anything with
+   more than a couple of short words in it. The bottom of the jacket carries
+   only the author line, which is one short line of small caps, so the controls
+   have somewhere to be that is not on top of anything. The 4px progress strip
+   is at bottom:0, and 10px clears it. */
 .book__actions {
-  position: absolute; top: 6px; right: 6px;
+  position: absolute; bottom: 10px; right: 6px;
   display: flex; gap: 4px; z-index: 2;
 }
 .book__offline, .book__actions .book__remove {
   position: static;
+  /* .book__remove is opacity:0 until .book:hover, from back when it was a
+     hover-revealed control in the corner. Inside .book__actions it is not: that
+     rule left the ✕ permanently invisible on every touch device, which is the
+     exact failure the comment above says this layout exists to avoid. */
+  opacity: 1;
   width: 28px; height: 28px; min-width: 28px;
   display: flex; align-items: center; justify-content: center;
   border-radius: 999px; border: 1px solid var(--border);
@@ -3449,6 +3467,9 @@ body.is-resizing * { cursor: col-resize !important; }
 @media (max-width: 700px) {
   /* Comfortably tappable without covering the title on a 2-column grid. */
   .book__offline, .book__actions .book__remove { width: 32px; height: 32px; min-width: 32px; }
+  /* Bigger buttons need proportionally more clearance, or the author line slides
+     back under them on exactly the narrow screens the larger targets are for. */
+  .book__cover-author { padding-right: 64px; }
 }
 
 /* The way out of a search. Quiet until you look for it: this is an escape
