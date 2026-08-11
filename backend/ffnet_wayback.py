@@ -103,7 +103,11 @@ def _date(value: str | None):
     """FF.net prints m/d/yyyy, and sometimes a relative form we cannot use."""
     if not value:
         return None
-    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+    # FF.net printed m-d-yy for years and switched to m/d/yyyy later; the
+    # archive spans both, so a parser that only knows one silently drops the
+    # publication date of every older capture — and publication date is what
+    # orders a series when nothing else can.
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%m-%d-%y"):
         try:
             return datetime.strptime(value.strip(), fmt)
         except ValueError:
@@ -126,8 +130,13 @@ def parse_story_snapshot(html_text: str, story_id: int) -> dict | None:
     # <div> on others, and FF.net's markup has changed over the twenty years the
     # archive covers. Terminate on whichever closing tag arrives first, or the
     # end of the document.
-    stats_m = re.search(r"Rated:(?P<stats>.{0,700}?)(?:</div>|</span>|<div|\Z)",
-                        html_text, re.S)
+    # A fixed window after "Rated:", tags stripped afterwards — NOT a capture
+    # that stops at the first closing tag. FF.net wraps individual fields in
+    # their own elements on some captures, so terminating at </span> or <div>
+    # truncated the line mid-way: "Updated" survived while "Published" and
+    # "Status: Complete" were cut off, losing both the publication date that
+    # orders a series and the completion flag.
+    stats_m = re.search(r"Rated:(?P<stats>.{0,1400})", html_text, re.S)
     if not stats_m:
         return None
     stats = _strip(stats_m.group("stats")) or ""
@@ -141,12 +150,17 @@ def parse_story_snapshot(html_text: str, story_id: int) -> dict | None:
     if not title:
         return None
 
-    author_m = re.search(r"href=['\"]/u/(?P<uid>\d+)/(?P<slug>[^'\"]{0,80})['\"]", html_text)
+    # Matched anywhere rather than anchored to href="/u/…": the link is absolute
+    # on some captures ("http://www.fanfiction.net/u/…") and rewritten by the
+    # archive on others, and anchoring missed both. Author is not optional —
+    # every series detector groups by it.
+    author_m = re.search(r"/u/(?P<uid>\d+)/(?P<slug>[A-Za-z0-9][A-Za-z0-9._-]{0,60})",
+                         html_text)
     author = None
     if author_m:
         # The visible name is the link text; the slug is a URL-safe version of it
         # and is the reliable fallback.
-        vis = re.search(r"href=['\"]/u/\d+/[^'\"]*['\"][^>]*>([^<]{1,80})</a>", html_text)
+        vis = re.search(r"/u/\d+/[^'\"]{0,60}['\"][^>]*>([^<]{1,80})</a>", html_text)
         author = _strip(vis.group(1)) if vis else author_m.group("slug").replace("-", " ")
 
     summary = None
@@ -160,10 +174,13 @@ def parse_story_snapshot(html_text: str, story_id: int) -> dict | None:
         return m.group(1).strip() if m else None
 
     chapters = _int(field(r"Chapters:\s*([\d,]+)"))
-    published = _date(field(r"Published:\s*([\d/]+)"))
-    updated = _date(field(r"Updated:\s*([\d/]+)"))
+    published = _date(field(r"Published:\s*([\d/-]+)"))
+    updated = _date(field(r"Updated:\s*([\d/-]+)"))
 
     return {
+        # Same shape live_fetch produces, because persist_live_results is what
+        # saves both and keys on these.
+        "id": f"wayback_ffnet_{story_id}",
         "site": "ffnet",
         "site_id": str(story_id),
         "url": f"https://www.fanfiction.net/s/{story_id}/1/",
@@ -183,5 +200,148 @@ def parse_story_snapshot(html_text: str, story_id: int) -> dict | None:
         "published_at": published,
         "updated_at": updated or published,
         # "Complete" appears in the stats line when the author marked it so.
-        "status": "complete" if re.search(r"\bComplete\b", stats) else "unknown",
+        # "- Complete" on modern pages, "Status: Complete" on older ones.
+        "status": "complete" if re.search(r"(?:Status:\s*)?\bComplete\b", stats,
+                                          re.IGNORECASE) else "unknown",
     }
+
+
+# ── Fetching, on archive.org's terms ─────────────────────────────────────────
+#
+# The budget, backpressure handling and retry rules all come from
+# wayback_harvest: it is the same host, the same rate limit and the same
+# behaviour of refusing connections rather than answering 429. Sharing the
+# budget object is the point — two loops each politely obeying their own budget
+# would together be twice as impolite as either.
+
+def fetch_story(story_id: int, ts: str, timeout: float = 90.0) -> dict | None:
+    """Fetch one archived FF.net story page.
+
+    Returns parsed metadata, None when the capture holds no usable story page,
+    and raises wayback_harvest.Transient when archive.org asks us to back off.
+    """
+    import httpx
+
+    from wayback_harvest import BACKPRESSURE, BUDGET, HEADERS, Transient, note_response
+
+    url = f"https://www.fanfiction.net/s/{story_id}/1/"
+    # Accept-Encoding: identity, because `id_` serves the ORIGINAL bytes with the
+    # ORIGINAL headers. A capture taken when FF.net sent gzip carries
+    # Content-Encoding: gzip while the archive may hand back a body that is
+    # already decompressed, and the client then fails on a header that no longer
+    # describes the payload: "Error -3 while decompressing data: incorrect header
+    # check". Asking for no encoding removes the mismatch.
+    #
+    # Without this EVERY fetch raised DecodingError, which the loop reads as
+    # archive.org applying backpressure — so it would have retried the same
+    # snapshots forever and ingested nothing, while looking like a rate limit.
+    headers = {**HEADERS, "Accept-Encoding": "identity"}
+    BUDGET.wait()
+    try:
+        r = httpx.get(SNAPSHOT.format(ts=ts, url=url), headers=headers,
+                      timeout=timeout, follow_redirects=True)
+    except httpx.DecodingError:
+        # Not backpressure, and the distinction matters: treated as Transient
+        # this is retried forever, never succeeds, and looks exactly like a rate
+        # limit in the logs.
+        #
+        # `id_` replays the ORIGINAL bytes with the ORIGINAL headers, so a
+        # capture taken when FF.net sent gzip claims Content-Encoding: gzip even
+        # where the stored body is not — and the client fails on a header that no
+        # longer describes the payload. It happens on some captures and not
+        # others. The rewritten replay carries the same metadata (stats line and
+        # title survive; only links and assets are rewritten), so it is a clean
+        # fallback.
+        BUDGET.wait()
+        try:
+            r = httpx.get(SNAPSHOT.format(ts=ts, url=url).replace("id_/", "/"),
+                          headers=headers, timeout=timeout, follow_redirects=True)
+        except httpx.DecodingError:
+            return None          # this capture is unreadable; retire it
+        except httpx.RequestError as e:
+            BUDGET.network_error()
+            raise Transient(type(e).__name__) from e
+    except httpx.RequestError as e:
+        BUDGET.network_error()
+        raise Transient(type(e).__name__) from e
+    note_response(r.status_code, r.headers.get("Retry-After"))
+    if r.status_code in BACKPRESSURE:
+        raise Transient(f"HTTP {r.status_code}")
+    if r.status_code != 200:
+        return None
+    return parse_story_snapshot(r.text, story_id)
+
+
+def cdx_page(resume: str | None = None, since: str = "20260101",
+             limit: int = 5000) -> tuple[list[tuple[int, str]], str | None]:
+    """One page of the CDX index. Returns [(story_id, timestamp)], resume key."""
+    import httpx
+
+    from wayback_harvest import BUDGET, HEADERS, Transient
+
+    BUDGET.wait()
+    try:
+        r = httpx.get(CDX_URL, params=cdx_params(since, limit, resume),
+                      headers=HEADERS, timeout=180)
+    except httpx.RequestError as e:
+        BUDGET.network_error()
+        raise Transient(type(e).__name__) from e
+    if r.status_code != 200:
+        raise Transient(f"cdx HTTP {r.status_code}")
+
+    import json
+    try:
+        rows = json.loads(r.text or "[]")
+    except ValueError:
+        return [], None
+    if not rows:
+        return [], None
+
+    # A resume key arrives as a blank row followed by the key.
+    next_key = None
+    if len(rows) >= 2 and rows[-2] == []:
+        next_key = rows[-1][0] if rows[-1] else None
+        rows = rows[:-2]
+
+    out: list[tuple[int, str]] = []
+    for row in rows[1:]:               # row 0 is the header
+        if len(row) < 2:
+            continue
+        ts, original = row[0], row[1]
+        sid = story_id_from_url(original)
+        if sid:
+            out.append((sid, ts))
+    return out, next_key
+
+
+def queue_ids(db, pairs: list[tuple[int, str]]) -> int:
+    """Add discovered stories to the queue, newest snapshot winning."""
+    from sqlalchemy import text as sql_text
+
+    if not pairs:
+        return 0
+    added = 0
+    for sid, ts in pairs:
+        added += db.execute(sql_text("""
+            INSERT INTO ffnet_wayback_queue (story_id, snapshot_ts)
+            VALUES (:s, :t)
+            ON CONFLICT (story_id) DO UPDATE
+                SET snapshot_ts = GREATEST(ffnet_wayback_queue.snapshot_ts,
+                                           EXCLUDED.snapshot_ts)
+              WHERE ffnet_wayback_queue.done_at IS NULL
+        """), {"s": sid, "t": ts}).rowcount or 0
+    db.commit()
+    return added
+
+
+def next_batch(db, limit: int = 20) -> list[tuple[int, str]]:
+    from sqlalchemy import text as sql_text
+    return [(r[0], r[1]) for r in db.execute(sql_text(
+        "SELECT story_id, snapshot_ts FROM ffnet_wayback_queue "
+        "WHERE done_at IS NULL ORDER BY story_id LIMIT :l"), {"l": limit})]
+
+
+def mark_done(db, story_id: int, ok: bool) -> None:
+    from sqlalchemy import text as sql_text
+    db.execute(sql_text("UPDATE ffnet_wayback_queue SET done_at = now(), ok = :o "
+                        "WHERE story_id = :s"), {"o": ok, "s": story_id})
