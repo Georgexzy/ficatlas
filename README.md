@@ -200,13 +200,13 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 ### Series detection
 Neither AO3's series field nor a shared title word reaches most of what readers
 call a series, and FanFiction.net has no series feature at all — its authors
-write the relationship into the summary by hand. 49,014 series are currently
-detected. Four detectors, each reading a different signal, and each refusing
-more than it accepts:
+write the relationship into the summary by hand. **119,671 series** are currently
+detected across 267,906 works. Four detectors, each reading a different signal,
+and each refusing more than it accepts:
 
 - **Shared titles** (`series_detect.py`) — the original: "Dangerverse Book 1" and its siblings. Useless where titles have nothing in common
 - **Declared position** (`series_from_summary.py`) — "part 7 of Sacrifices", "Book Two of the X". A positional declaration is what NAMES a series and proves the author thinks in sequence; a bare mention ("set in my X universe") is far too loose to group on alone and is only used to extend a series already established
-- **Sequel chains** (`series_from_sequels.py`) — 103,302 works say "Sequel to X" and ~10,000 say "Prequel to X". That is a *directed* statement, so chaining the edges orders the sequence. 73% of declarations resolve against the author's own catalogue. Branches (two sequels to one story) and cycles are dropped rather than resolved by guesswork — a fork is not a reading order
+- **Sequel chains** (`series_from_sequels.py`) — 103,302 works say "Sequel to X" and ~10,000 say "Prequel to X". That is a *directed* statement, so chaining the edges orders the sequence. 73% of declarations resolve against the author's own catalogue, and this is now the largest source: **70,595 series covering 146,843 works**. Branches (two sequels to one story) and cycles are dropped rather than resolved by guesswork — a fork is not a reading order
 - **Ordering** (`series_ordering.py`) — an explicit position wins; then a canon anchor ("AU of GoF" means the fourth book, so it sits fourth); then publication date, which only ever decides where an unplaced work falls *between* anchored ones. Date never orders anything alone: authors repost, backdate, and publish prequels years later. Each member records which signal placed it
 
 The worked example is Lightning on the Wave's Sacrifices Arc — seven works whose
