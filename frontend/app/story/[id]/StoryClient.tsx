@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import BackLink from "../../BackLink"
@@ -50,6 +50,40 @@ export default function StoryClient() {
   const [similar, setSimilar] = useState<any[]>([])
   // Offline save state
   const [offlineSaved, setOfflineSaved] = useState(false)
+  // Following this work.
+  //
+  // The one thing a cross-archive index can offer that no single archive can:
+  // AO3, FanFiction.net and FicAlley each have their own subscriptions, so a
+  // reader following a WIP on each keeps three lists in three places. This is
+  // one list.
+  //
+  // Signed-in only, and the button simply does not appear otherwise rather than
+  // appearing and then failing — showing a control that 401s teaches people the
+  // app is broken rather than that it is not theirs.
+  const [following, setFollowing] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (!id) return
+    fetch(`${API_BASE}/api/follows/${id}`)
+      .then(r => r.ok ? r.json() : null)
+      // null means "cannot follow" — signed out, or the check failed. The
+      // button is not rendered at all in that case.
+      .then(d => setFollowing(d && d.signed_in ? !!d.following : null))
+      .catch(() => setFollowing(null))
+  }, [id])
+
+  const toggleFollow = useCallback(async () => {
+    if (!id) return
+    const next = !following
+    setFollowing(next)                       // optimistic; corrected on failure
+    try {
+      const r = await fetch(`${API_BASE}/api/follows/${id}`,
+                            { method: next ? "POST" : "DELETE" })
+      if (!r.ok) setFollowing(!next)
+    } catch {
+      setFollowing(!next)
+    }
+  }, [id, following])
+
   const [savingOffline, setSavingOffline] = useState(false)
   const [offlineProgress, setOfflineProgress] = useState<{ done: number; total: number } | null>(null)
   const [offlineMsg, setOfflineMsg] = useState<string | null>(null)
@@ -459,6 +493,19 @@ export default function StoryClient() {
                   : "⤓ Save offline"}
               </button>
             )
+          )}
+
+          {/* Only rendered once we know the answer. `null` means signed out or
+              the check failed, and a Follow button that cannot follow is worse
+              than none. */}
+          {following !== null && (
+            <button className={`btn ${following ? "btn--on" : "btn--ghost"}`}
+              onClick={toggleFollow}
+              title={following
+                ? "You'll see new chapters in your Updates list — tap to stop"
+                : "Tell me when this work gets a new chapter"}>
+              {following ? "✓ Following" : "☆ Follow"}
+            </button>
           )}
           {/* One Wayback link, not two.
               This rendered both a derived link (for hosted FicAlley works) and

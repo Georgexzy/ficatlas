@@ -152,7 +152,14 @@ BEGIN
       INTO missing
       FROM unnest(ARRAY['delisted_at', 'text_withdrawn_at',
                         'source_restricted_at']) AS col
-     WHERE NOT EXISTS (SELECT 1 FROM pg_stats
+     -- Only columns that EXIST yet. This block runs at line ~150 while
+     -- source_restricted_at is added at ~540, so on a fresh install the whole
+     -- DO block failed with "column does not exist" and no column got analysed
+     -- — including delisted_at, which is the one the 15-second seq scan was
+     -- about. Idempotent DDL is order-independent only if each statement is.
+     WHERE EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'stories' AND column_name = col)
+       AND NOT EXISTS (SELECT 1 FROM pg_stats
                         WHERE tablename = 'stories' AND attname = col);
     IF missing IS NOT NULL THEN
         EXECUTE format('ANALYZE stories (%s)', missing);
@@ -602,6 +609,31 @@ CREATE INDEX IF NOT EXISTS ix_takedowns_state ON takedowns (state, created_at DE
 -- and an AO3 work id are different numbering spaces and would collide on a
 -- shared primary key. See ffnet_wayback.py for why the archive is the only
 -- route to FF.net at all.
+-- Works a reader wants to hear about when they change.
+--
+-- The one thing every archive offers and a cross-archive index otherwise cannot:
+-- "tell me when this updates", for works on AO3, FanFiction.net and FicAlley in
+-- one list rather than three sets of subscriptions.
+--
+-- No event fan-out. What the reader has already seen is recorded here, and an
+-- update is a COMPARISON against the story row at read time — so a work is
+-- correctly flagged whichever path updated it (live fetch, listing harvest,
+-- Wayback, a bulk import), and a missed event cannot leave a follow
+-- permanently stale. It also means no notification queue to drain, retry or
+-- deduplicate.
+CREATE TABLE IF NOT EXISTS follows (
+    user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    story_id     UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    followed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- The state at the moment the reader last looked. Both, because a work can
+    -- gain a chapter without its timestamp moving and vice versa.
+    seen_chapters INTEGER NOT NULL DEFAULT 0,
+    seen_updated  TIMESTAMPTZ,
+    PRIMARY KEY (user_id, story_id)
+);
+CREATE INDEX IF NOT EXISTS ix_follows_user ON follows (user_id, followed_at DESC);
+CREATE INDEX IF NOT EXISTS ix_follows_story ON follows (story_id);
+
 CREATE TABLE IF NOT EXISTS ffnet_wayback_queue (
     story_id    BIGINT PRIMARY KEY,
     snapshot_ts VARCHAR(20) NOT NULL,
