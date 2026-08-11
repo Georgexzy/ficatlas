@@ -42,7 +42,31 @@ export default function ServiceWorkerRegistration() {
       if (document.visibilityState === "visible") checkForUpdate()
     }
 
+    // Ask for persistent storage as soon as an INSTALLED app starts.
+    //
+    // It used to be requested only when a story was saved, on the belief that
+    // Safari did not implement it at all. WebKit does, and grants it on
+    // heuristics that include being a Home Screen Web App — which is exactly
+    // this case and exactly the platform that evicts most eagerly. Asking at
+    // launch means the protection is already in place before there is anything
+    // to protect, rather than being requested at the moment of the first save
+    // and possibly refused.
+    //
+    // Only when actually installed: in a browser tab the request is far more
+    // likely to be denied, and a denial is remembered.
+    const askToPersist = () => {
+      try {
+        const installed = window.matchMedia?.("(display-mode: standalone)")?.matches
+          || (navigator as any).standalone === true
+        if (!installed || !navigator.storage?.persist) return
+        navigator.storage.persisted?.().then(already => {
+          if (!already) navigator.storage.persist().catch(() => {})
+        }).catch(() => {})
+      } catch { /* nothing to do; saving still asks again later */ }
+    }
+
     const onLoad = () => {
+      askToPersist()
       navigator.serviceWorker.register("/sw.js")
         .then(reg => {
           registration = reg

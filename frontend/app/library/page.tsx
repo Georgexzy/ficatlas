@@ -207,8 +207,16 @@ export default function LibraryPage() {
   // in the false direction, and someone who came here deliberately while
   // offline should not have the tab moved under them when a flaky connection
   // reappears.
-  const [tab, setTab] = useState<Tab>(() =>
-    typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "hosted")
+  const [tab, setTab] = useState<Tab>("hosted")
+  // Switched AFTER mount, not in the initialiser. Reading navigator.onLine
+  // during render makes the server ("hosted", since there is no navigator) and
+  // the client ("offline") disagree, which is a hydration mismatch — React then
+  // throws away the server HTML and re-renders, and any state built during that
+  // pass is lost. The effect runs once, so someone who opened this deliberately
+  // while offline still keeps the tab if a flaky connection returns.
+  useEffect(() => {
+    if (!navigator.onLine) setTab("offline")
+  }, [])
   const [offlineStories, setOfflineStories] = useState<any[]>([])
   // Loaded on mount, not when the Offline tab is opened.
   //
@@ -239,9 +247,17 @@ export default function LibraryPage() {
   // the moment the reader has shown intent, which is when browsers are most
   // likely to grant it.
   const [persist, setPersist] = useState<PersistState>("unsupported")
+  // Saves that are gone or truncated. Browsers evict in best-effort mode —
+  // least-recently-used under storage pressure, over quota, or after prolonged
+  // inactivity — so the saved LIST is not proof anything is still readable. The
+  // difference between learning that here, online, and learning it on a plane.
+  const [broken, setBroken] = useState<{ id: string; title: string; reason: string }[]>([])
+  const [protecting, setProtecting] = useState(false)
   const [storage, setStorage] = useState<StorageEstimate | null>(null)
   useEffect(() => {
     persistenceState().then(setPersist).catch(() => {})
+    import("@/lib/offline").then(m => m.auditOfflineStories())
+      .then(a => setBroken(a.broken)).catch(() => {})
     storageEstimate().then(setStorage).catch(() => {})
   }, [offlineStories.length])
 
@@ -1019,6 +1035,34 @@ export default function LibraryPage() {
                 can read it with no connection (handy when you can&apos;t reach the server).
               </p>
             : <>
+                {broken.length > 0 && (
+                  <p className="offline-tab__broken" role="status">
+                    <strong>{broken.length} saved {broken.length === 1 ? "story is" : "stories are"} incomplete.</strong>{" "}
+                    {broken.map(b => b.title).slice(0, 3).join(", ")}
+                    {broken.length > 3 ? ` and ${broken.length - 3} more` : ""} — the
+                    browser removed part of {broken.length === 1 ? "it" : "them"} to free space.
+                    Save {broken.length === 1 ? "it" : "them"} again while you have a connection.
+                  </p>
+                )}
+                {persist === "denied" && (
+                  <p className="offline-tab__persist offline-tab__persist--denied">
+                    These downloads are not protected from being cleared.{" "}
+                    <button className="btn btn--ghost btn--sm" disabled={protecting}
+                      onClick={async () => {
+                        setProtecting(true)
+                        const m = await import("@/lib/offline")
+                        setPersist(await m.requestPersistentStorage())
+                        setProtecting(false)
+                      }}>
+                      {protecting ? "Asking…" : "Protect them"}
+                    </button>{" "}
+                    {/* Worth offering rather than assuming denial is final: the
+                        browser decides on heuristics that change as you use the
+                        site, and on iOS adding it to the Home Screen is itself
+                        one of them. */}
+                    Adding this site to your Home Screen makes it much more likely to be granted.
+                  </p>
+                )}
                 <p className="offline-tab__note">
                   Saved on this device and readable with no connection. Stored in your browser —
                   clearing site data removes them.
