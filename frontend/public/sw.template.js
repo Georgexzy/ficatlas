@@ -25,24 +25,74 @@
 const CACHE = "__CACHE_VERSION__"
 const PRECACHE = __PRECACHE_MANIFEST__
 
+// The entries without which the app cannot start at all: the shell HTML plus
+// the framework, webpack runtime and app-entry chunks. Everything else can be
+// missing and the app still boots and fetches it later; these cannot.
+//
+// Matched by prefix because the chunk names are content-hashed per build.
+const ESSENTIAL = ["/", "/_next/static/chunks/webpack-", "/_next/static/chunks/main-app-",
+                   "/_next/static/chunks/framework-", "/_next/static/chunks/app/layout-"]
+
+function isEssential(url) {
+  return ESSENTIAL.some((p) => url === p || url.startsWith(p))
+}
+
+// A precache that half-worked used to destroy a working one.
+//
+// The old install swallowed every failure — cache.add(u).catch(() => {}) — then
+// called skipWaiting() outside waitUntil, so it activated whatever happened.
+// Activate then deleted EVERY cache whose name differed from the new one.
+//
+// On a phone with a weak or dropping connection that is a disaster: the new
+// worker installs, most of its fetches fail silently, it activates anyway, and
+// it deletes the old cache that was working perfectly. The next time the app is
+// opened with no connection, nothing loads at all — the reported symptom, and
+// the reason it appeared "randomly": it needs a bad connection at exactly the
+// moment a new build is picked up.
+//
+// So: failures are counted rather than ignored, and if any ESSENTIAL entry did
+// not make it, install FAILS. A failed install leaves the previous worker in
+// control with its cache intact, and the browser retries later. A stale-but
+// working offline app beats a current-but-empty one.
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then((cache) =>
-      // addAll fails atomically if any URL 404s; add individually so one bad
-      // entry can't abort the whole precache.
-      Promise.all(PRECACHE.map((u) =>
-        cache.add(u).catch(() => {}))),
-    ),
-  )
-  self.skipWaiting()
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE)
+    const missing = []
+    await Promise.all(PRECACHE.map(async (u) => {
+      try {
+        await cache.add(u)
+      } catch {
+        missing.push(u)
+      }
+    }))
+    const criticalMissing = missing.filter(isEssential)
+    if (criticalMissing.length) {
+      // Leave nothing half-built behind for activate to promote.
+      await caches.delete(CACHE)
+      throw new Error("precache incomplete: " + criticalMissing.join(", "))
+    }
+    // Only take over once there is a complete cache to take over with.
+    await self.skipWaiting()
+  })())
 })
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim()),
-  )
+  event.waitUntil((async () => {
+    // Verified before anything is deleted. Reaching activate means install
+    // succeeded, but the cache is shared mutable state and a quota eviction
+    // between the two would otherwise leave the reader with nothing.
+    const cache = await caches.open(CACHE)
+    const holds = await Promise.all(ESSENTIAL.map(async (p) => {
+      if (await cache.match(p)) return true
+      const keys = await cache.keys()
+      return keys.some((r) => new URL(r.url).pathname.startsWith(p))
+    }))
+    if (holds.every(Boolean)) {
+      const keys = await caches.keys()
+      await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+    }
+    await self.clients.claim()
+  })())
 })
 
 // Serve a cached story shell for any /story/... URL when offline.
