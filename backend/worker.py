@@ -771,6 +771,23 @@ async def _listing_harvest_loop() -> None:
         await asyncio.sleep(interval)
 
 
+
+def _wayback_batch(nominal: int, cap_seconds: float = 600.0) -> int:
+    """Shrink a batch so one pass finishes inside a visible window.
+
+    The budget backs off hard when archive.org throttles — measured at 320s per
+    request — and at that interval a nominal batch of 20 takes an hour and three
+    quarters. Nothing is logged until a pass completes, so both harvest loops
+    looked dead for as long as they were merely slow, which is exactly when you
+    want to see them.
+    """
+    try:
+        from wayback_harvest import BUDGET
+        interval = max(float(BUDGET.interval), 0.1)
+    except Exception:
+        return nominal
+    return max(2, min(nominal, int(cap_seconds / interval)))
+
 async def _wayback_cdx_loop() -> None:
     """Walk archive.org's CDX index for AO3 work URLs and queue what it finds.
 
@@ -839,7 +856,10 @@ async def _wayback_fetch_loop() -> None:
     # connection drops from archive.org are normal; a run of them means it is
     # genuinely unavailable and grinding through the rest is pointless.
     STALL_TOLERANCE = int(_num("WAYBACK_STALL_TOLERANCE", 3))
-    yield_to_ffnet = _flag("WAYBACK_YIELD_TO_FFNET", "true")
+    # 1 pass in N goes to AO3 while FF.net has a backlog; the rest are skipped
+    # so FF.net can use the budget. 3 gives FF.net roughly two thirds.
+    yield_share = int(_num("WAYBACK_AO3_SHARE_EVERY", 3))
+    pass_no = 0
 
     while True:
         try:
@@ -854,18 +874,31 @@ async def _wayback_fetch_loop() -> None:
             # route for summaries the bulk dump omitted. FF.net has blocked
             # direct access since 2021, making the archive not a cheaper route
             # but the only one.
-            if yield_to_ffnet:
+            # A SHARE of the budget, not the whole thing.
+            #
+            # The first version stood aside whenever FF.net had any backlog at
+            # all, which sounded fair and starved this loop completely: the CDX
+            # discovery loop refills that queue continuously, so "any backlog"
+            # is the permanent state and AO3 never ran again. Measured after the
+            # change: zero AO3 Wayback passes in thirty minutes.
+            #
+            # FF.net still gets the larger share, for the reason it wins the
+            # tie — it has no other route, while AO3 is also fed by direct
+            # crawling, the listing harvest and live fetch. But "larger share"
+            # has to mean a ratio, not everything.
+            pass_no += 1
+            if yield_share > 1 and pass_no % yield_share != 0:
                 from sqlalchemy import text as _sql
                 with db_session() as db:
                     ffnet_pending = db.execute(_sql(
                         "SELECT count(*) FROM ffnet_wayback_queue "
                         "WHERE done_at IS NULL")).scalar() or 0
                 if ffnet_pending:
-                    await asyncio.sleep(interval * 4)
+                    await asyncio.sleep(interval)
                     continue
 
             with db_session() as db:
-                pending = next_batch(db, batch)
+                pending = next_batch(db, _wayback_batch(batch))
             if not pending:
                 await asyncio.sleep(interval * 10)
                 continue
@@ -1006,7 +1039,20 @@ async def _ffnet_wayback_cdx_loop() -> None:
 
     KEY = "ffnet_wayback_cdx_resume"
     interval = _num("FFNET_WAYBACK_CDX_INTERVAL_SEC", 120)
-    high_water = int(_num("FFNET_WAYBACK_QUEUE_MAX", 200_000))
+    # Deliberately small. Discovery and fetching draw on the SAME archive.org
+    # budget, and a CDX request costs one request whether it returns three rows
+    # or three thousand — so a discovery loop running flat out is not free, it is
+    # spending the quota the fetch loop needs.
+    #
+    # Measured with this set to 200,000: the queue reached 107,687 pending
+    # against 822 fetched while archive.org escalated us 80s -> 160s -> 320s per
+    # request. Discovery was queueing work at hundreds of times the rate anything
+    # could be fetched, and paying for the privilege with the throughput that
+    # would have fetched it.
+    #
+    # A few thousand is weeks of fetching at these intervals. The CDX index is
+    # still there when the queue drains.
+    high_water = int(_num("FFNET_WAYBACK_QUEUE_MAX", 5_000))
     # Only captures from this point on. The whole purpose is freshness; the
     # historical FF.net catalogue is already here from the bulk dump.
     since = os.getenv("FFNET_WAYBACK_SINCE", "20250101")
@@ -1019,7 +1065,10 @@ async def _ffnet_wayback_cdx_loop() -> None:
                 )).scalar() or 0
                 resume = get_setting(db, KEY) or None
             if pending >= high_water:
-                await asyncio.sleep(interval * 20)
+                # Long sleep, not a poll: re-checking every couple of minutes is
+                # itself a database query and a wakeup, and the queue takes days
+                # to drain at these intervals.
+                await asyncio.sleep(interval * 60)
                 continue
 
             pairs, next_key = await asyncio.to_thread(cdx_page, resume, since)
@@ -1051,7 +1100,7 @@ async def _ffnet_wayback_fetch_loop() -> None:
     while True:
         try:
             with db_session() as db:
-                pending = next_batch(db, batch)
+                pending = next_batch(db, _wayback_batch(batch))
             if not pending:
                 await asyncio.sleep(interval * 10)
                 continue

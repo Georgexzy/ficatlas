@@ -108,6 +108,13 @@ export async function requestPersistentStorage(): Promise<PersistState> {
   try {
     if (typeof navigator === "undefined" || !navigator.storage?.persist) return "unsupported"
     if (await navigator.storage.persisted?.()) return "persisted"
+    // Asked again on every save rather than only the first.
+    //
+    // Chrome decides this on engagement — an installed PWA, a bookmark, push
+    // permission, repeat visits — and none of those are true of someone on
+    // their first visit, which is exactly when the old code asked its one and
+    // only time. A reader who comes back and saves a third story has earned
+    // signals they did not have at the first, and the call is free.
     return (await navigator.storage.persist()) ? "persisted" : "denied"
   } catch {
     return "unsupported"
@@ -122,6 +129,54 @@ export async function persistenceState(): Promise<PersistState> {
   } catch {
     return "unsupported"
   }
+}
+
+/** Check every saved story is still there and still complete.
+ *
+ *  Downloads do not fail loudly; they disappear. Browsers evict IndexedDB under
+ *  storage pressure whenever persistence has not been granted, and Safari does
+ *  it on a timer — its tracking prevention clears storage for sites the reader
+ *  has not returned to in seven days, which is precisely the pattern of someone
+ *  who saves a long fic for a flight. Persistence is refused far more often than
+ *  granted: it is unimplemented in Safari and Chrome only grants it on
+ *  engagement signals like installing the site.
+ *
+ *  So the saved list cannot be trusted as a record of what is actually readable.
+ *  This reads each entry back and reports the ones that are gone or truncated —
+ *  the difference between finding out at the Library, online, and finding out on
+ *  a train.
+ */
+export interface OfflineAudit {
+  ok: string[]
+  broken: { id: string; title: string; reason: string }[]
+}
+
+export async function auditOfflineStories(): Promise<OfflineAudit> {
+  const out: OfflineAudit = { ok: [], broken: [] }
+  let saved: OfflineStory[]
+  try {
+    saved = await listOfflineStories()
+  } catch {
+    return out
+  }
+  for (const story of saved) {
+    const chapters = story.chapters ?? []
+    if (!chapters.length) {
+      out.broken.push({ id: story.id, title: story.title,
+                        reason: "no chapters saved" })
+      continue
+    }
+    // A chapter row with no text is a half-written save or a partially evicted
+    // one; either way it will read as a blank page offline.
+    const empty = chapters.filter(c => !c.content || !c.content.trim()).length
+    if (empty) {
+      out.broken.push({ id: story.id, title: story.title,
+                        reason: `${empty} of ${chapters.length} chapters are empty` })
+      continue
+    }
+    out.ok.push(story.id)
+  }
+  return out
 }
 
 /** Byte sizes for people, not for machines. */
@@ -307,6 +362,25 @@ export async function downloadStoryForOffline(
     schema: SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
   })
+
+  // Read it back before claiming success.
+  //
+  // An IndexedDB write can resolve and still leave nothing usable: the quota can
+  // be hit between the estimate and the commit, a transaction can be aborted by
+  // the browser reclaiming space, and Safari can evict mid-session. All of those
+  // end with the UI saying "Saved for offline" and the reader finding a blank
+  // page on a train, which is the worst possible moment to discover it.
+  //
+  // Reading the row back costs one transaction and turns a silent failure into
+  // an error the reader sees while they still have a connection to fix it.
+  const verify = await getOfflineStory(storyId)
+  if (!verify || !verify.chapters?.length
+      || verify.chapters.some(c => !c.content || !c.content.trim())) {
+    await deleteOfflineStory(storyId).catch(() => {})
+    throw new Error(
+      "Saved, but it could not be read back — this device may be out of space. "
+      + "Nothing was kept, so try again after removing a saved story.")
+  }
   // Cache the reader shell so this story opens offline with no prior online
   // visit. The service worker serves one cached reader shell for ANY
   // /story/.../chapter/... URL, so fetching one chapter page is enough — but we
