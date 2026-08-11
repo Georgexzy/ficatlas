@@ -195,7 +195,20 @@ export default function LibraryPage() {
     try { localStorage.setItem("ficatlas:shelf_sort", k) } catch {}
   }
   const [loadingMore, setLoadingMore] = useState(false)
-  const [tab, setTab] = useState<Tab>("hosted")
+  // Offline, open on the one tab that can work.
+  //
+  // The library defaulted to "Hosted", which needs the network, so someone who
+  // opened the app on a train landed on an empty list with a 0 beside it and
+  // every reason to conclude their downloads were gone — while the Offline tab
+  // one tap away held them. The whole point of saving a story is that this
+  // screen works when nothing else does.
+  //
+  // Read once at mount rather than watched: navigator.onLine is only reliable
+  // in the false direction, and someone who came here deliberately while
+  // offline should not have the tab moved under them when a flaky connection
+  // reappears.
+  const [tab, setTab] = useState<Tab>(() =>
+    typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "hosted")
   const [offlineStories, setOfflineStories] = useState<any[]>([])
   // Loaded on mount, not when the Offline tab is opened.
   //
