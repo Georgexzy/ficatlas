@@ -597,6 +597,20 @@ CREATE INDEX IF NOT EXISTS ix_takedowns_state ON takedowns (state, created_at DE
 -- Nothing writes to this at startup: it is built offline by fandom_hubs.py.
 -- An empty table simply means no hubs are served, which is the correct
 -- behaviour for a fresh install with nothing indexed yet.
+-- FanFiction.net stories seen in the Internet Archive's index, waiting to be
+-- fetched from there. Separate from wayback_queue because an FF.net story id
+-- and an AO3 work id are different numbering spaces and would collide on a
+-- shared primary key. See ffnet_wayback.py for why the archive is the only
+-- route to FF.net at all.
+CREATE TABLE IF NOT EXISTS ffnet_wayback_queue (
+    story_id    BIGINT PRIMARY KEY,
+    snapshot_ts VARCHAR(20) NOT NULL,
+    done_at     TIMESTAMPTZ,
+    ok          BOOLEAN
+);
+CREATE INDEX IF NOT EXISTS ix_ffnet_wayback_pending
+    ON ffnet_wayback_queue (story_id) WHERE done_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS fandom_hubs (
     slug        TEXT PRIMARY KEY,
     name        TEXT NOT NULL,

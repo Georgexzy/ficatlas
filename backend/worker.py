@@ -839,9 +839,31 @@ async def _wayback_fetch_loop() -> None:
     # connection drops from archive.org are normal; a run of them means it is
     # genuinely unavailable and grinding through the rest is pointless.
     STALL_TOLERANCE = int(_num("WAYBACK_STALL_TOLERANCE", 3))
+    yield_to_ffnet = _flag("WAYBACK_YIELD_TO_FFNET", "true")
 
     while True:
         try:
+            # Stand aside while FF.net has a backlog. Both loops share one budget
+            # against one host — correct, since two loops each obeying their own
+            # limit would together be twice as impolite — but sharing meant this
+            # one, with half a million queued works, took the whole allowance and
+            # the FF.net loop never completed a single fetch.
+            #
+            # FF.net wins that tie on the merits: AO3 can be crawled directly and
+            # is, at a quarter of a million works a week, so Wayback is a bonus
+            # route for summaries the bulk dump omitted. FF.net has blocked
+            # direct access since 2021, making the archive not a cheaper route
+            # but the only one.
+            if yield_to_ffnet:
+                from sqlalchemy import text as _sql
+                with db_session() as db:
+                    ffnet_pending = db.execute(_sql(
+                        "SELECT count(*) FROM ffnet_wayback_queue "
+                        "WHERE done_at IS NULL")).scalar() or 0
+                if ffnet_pending:
+                    await asyncio.sleep(interval * 4)
+                    continue
+
             with db_session() as db:
                 pending = next_batch(db, batch)
             if not pending:
@@ -969,6 +991,105 @@ async def _title_repair_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _ffnet_wayback_cdx_loop() -> None:
+    """Discover recently-archived FanFiction.net stories.
+
+    FF.net itself is unreachable — every endpoint returns a Cloudflare challenge
+    and has since 2021 — so the Internet Archive's index is the only route to
+    knowing a story exists or has changed. See ffnet_wayback.py.
+    """
+    from sqlalchemy import text as sql_text
+
+    from db.session import db_session
+    from api.settings import get_setting, put_setting
+    from ffnet_wayback import cdx_page, queue_ids
+
+    KEY = "ffnet_wayback_cdx_resume"
+    interval = _num("FFNET_WAYBACK_CDX_INTERVAL_SEC", 120)
+    high_water = int(_num("FFNET_WAYBACK_QUEUE_MAX", 200_000))
+    # Only captures from this point on. The whole purpose is freshness; the
+    # historical FF.net catalogue is already here from the bulk dump.
+    since = os.getenv("FFNET_WAYBACK_SINCE", "20250101")
+
+    while True:
+        try:
+            with db_session() as db:
+                pending = db.execute(sql_text(
+                    "SELECT count(*) FROM ffnet_wayback_queue WHERE done_at IS NULL"
+                )).scalar() or 0
+                resume = get_setting(db, KEY) or None
+            if pending >= high_water:
+                await asyncio.sleep(interval * 20)
+                continue
+
+            pairs, next_key = await asyncio.to_thread(cdx_page, resume, since)
+            with db_session() as db:
+                added = queue_ids(db, pairs)
+                # No resume key means the index is exhausted; start again from
+                # the beginning next pass to pick up newer captures.
+                put_setting(db, KEY, next_key or "")
+            log.info(f"ffnet wayback cdx: {len(pairs)} rows, {added} queued, "
+                     f"{pending:,} pending")
+            if not next_key:
+                await asyncio.sleep(interval * 30)
+        except Exception as e:
+            log.warning(f"ffnet wayback cdx failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
+async def _ffnet_wayback_fetch_loop() -> None:
+    """Fetch queued FF.net snapshots from archive.org and persist them."""
+    from db.session import db_session
+    from live_fetch.persist import persist_live_results
+    from ffnet_wayback import fetch_story, mark_done, next_batch
+    from wayback_harvest import Transient
+
+    batch = int(_num("FFNET_WAYBACK_BATCH", 20))
+    interval = _num("FFNET_WAYBACK_INTERVAL_SEC", 30)
+    max_run = int(_num("FFNET_WAYBACK_MAX_FAILS", 5))
+
+    while True:
+        try:
+            with db_session() as db:
+                pending = next_batch(db, batch)
+            if not pending:
+                await asyncio.sleep(interval * 10)
+                continue
+
+            entries, results, run = [], [], 0
+            for story_id, ts in pending:
+                try:
+                    entry = await asyncio.to_thread(fetch_story, story_id, ts)
+                except Transient as e:
+                    run += 1
+                    # Leave it queued: archive.org backing off says nothing about
+                    # whether this snapshot is any good.
+                    if run >= max_run:
+                        log.info(f"ffnet wayback: {run} failures in a row ({e}), "
+                                 f"ending batch")
+                        break
+                    continue
+                run = 0
+                results.append((story_id, entry is not None))
+                if entry:
+                    entries.append(entry)
+
+            counts: dict = {}
+            if entries:
+                with db_session() as db:
+                    persist_live_results(db, entries, counts)
+            with db_session() as db:
+                for story_id, ok in results:
+                    mark_done(db, story_id, ok)
+
+            log.info(f"ffnet wayback: {len(entries)}/{len(results)} parsed, "
+                     f"{counts.get('saved', 0)} new, "
+                     f"{counts.get('enriched', 0)} enriched")
+        except Exception as e:
+            log.warning(f"ffnet wayback fetch failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def main() -> None:
     # Schema/indexes may not exist yet on a first boot; the API does this too and
     # it is idempotent, so whichever wins the race is fine.
@@ -1020,6 +1141,11 @@ async def main() -> None:
     if _flag("WITHDRAW_DELETED", "true"):
         tasks.append(asyncio.create_task(_withdraw_deleted_loop()))
         log.info("source-deletion check enabled (auto-withdraw text authors removed)")
+
+    if _flag("FFNET_WAYBACK", "true"):
+        tasks.append(asyncio.create_task(_ffnet_wayback_cdx_loop()))
+        tasks.append(asyncio.create_task(_ffnet_wayback_fetch_loop()))
+        log.info("FF.net Wayback harvest enabled (the only route to FF.net)")
 
     if _flag("WAYBACK_HARVEST", "true"):
         tasks.append(asyncio.create_task(_wayback_cdx_loop()))
