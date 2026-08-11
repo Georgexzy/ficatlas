@@ -1024,6 +1024,39 @@ async def _title_repair_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _hubs_loop() -> None:
+    """Rebuild the fandom browse pages.
+
+    The per-archive top-50 lists are precomputed — serving a hub is a primary-key
+    lookup rather than the 3.7s ranked scan it would otherwise be over a million
+    matching rows. The cost of that choice is that the lists are a SNAPSHOT, and
+    nothing was rebuilding them: they were built once and would have shown the
+    same works indefinitely while ~29,000 AO3 rows a day arrived, none of which
+    could ever appear.
+
+    Daily by default. The rebuild scans ~17.7M matching rows and takes minutes,
+    so it is not something to run hourly, and "most popular in this fandom" does
+    not change meaningfully faster than that either.
+    """
+    from db.session import db_session
+    from fandom_hubs import build_hubs
+
+    interval = _num("HUBS_INTERVAL_HOURS", 24) * 3600
+    # A short delay at startup so a restart does not immediately spend minutes of
+    # database time before the API has settled.
+    await asyncio.sleep(_num("HUBS_START_DELAY_SEC", 300))
+    while True:
+        try:
+            def _go():
+                with db_session() as db:
+                    return build_hubs(db)
+            n = await asyncio.to_thread(_go)
+            log.info(f"fandom hubs rebuilt: {n:,} hubs")
+        except Exception as e:
+            log.warning(f"hub rebuild failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _ffnet_wayback_cdx_loop() -> None:
     """Discover recently-archived FanFiction.net stories.
 
@@ -1201,6 +1234,10 @@ async def main() -> None:
     if _flag("WITHDRAW_DELETED", "true"):
         tasks.append(asyncio.create_task(_withdraw_deleted_loop()))
         log.info("source-deletion check enabled (auto-withdraw text authors removed)")
+
+    if _flag("REBUILD_HUBS", "true"):
+        tasks.append(asyncio.create_task(_hubs_loop()))
+        log.info("fandom hub rebuild enabled (browse pages stay current)")
 
     if _flag("FFNET_WAYBACK", "true"):
         tasks.append(asyncio.create_task(_ffnet_wayback_cdx_loop()))
