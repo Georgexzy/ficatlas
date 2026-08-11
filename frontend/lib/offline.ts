@@ -287,6 +287,40 @@ export function removeFromShelf(id: string): void {
   writeShelf(readShelf().filter(e => e.id !== id))
 }
 
+/** Put anything already downloaded onto the shelf.
+ *
+ *  The shelf is written when a work is saved, which does nothing for works saved
+ *  BEFORE the shelf existed — and those are precisely the ones a reader has and
+ *  expects to see on their other device. Without this, syncing appears simply
+ *  not to work: the download is plainly there on the laptop and the phone shows
+ *  an empty tab.
+ *
+ *  Runs whenever the library is opened. Idempotent, and it only ADDS: a work on
+ *  the shelf that is not downloaded here is the normal cross-device state and
+ *  must not be pruned, or the device without the file would delete the entry for
+ *  the device that has it.
+ */
+export async function reconcileShelf(): Promise<number> {
+  let saved: OfflineStory[]
+  try {
+    saved = await listOfflineStories()
+  } catch {
+    return 0
+  }
+  const shelf = readShelf()
+  const known = new Set(shelf.map(e => e.id))
+  const missing = saved.filter(s => !known.has(s.id))
+  if (!missing.length) return 0
+  writeShelf([
+    ...missing.map(s => ({
+      id: s.id, title: s.title, author: s.author,
+      savedAt: s.savedAt || new Date().toISOString(),
+    })),
+    ...shelf,
+  ])
+  return missing.length
+}
+
 export async function saveStoryOffline(story: OfflineStory): Promise<void> {
   const db = await openDB()
   return new Promise((resolve, reject) => {
