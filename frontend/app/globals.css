@@ -4550,3 +4550,10 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   min-width: 68px; text-align: right;
 }
 .btn--sm { padding: 5px 12px; font-size: 12px; }
+/* A saved story that is no longer whole. Loud, because the reader needs to act
+   while they still have a connection. */
+.offline-tab__broken {
+  background: var(--surface2); border: 1px solid var(--warn, var(--accent));
+  border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px;
+  font-size: 13px; line-height: 1.5; color: var(--text);
+}

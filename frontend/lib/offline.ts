@@ -97,10 +97,24 @@ function openDB(): Promise<IDBDatabase> {
 // single most-reported failure of comparable reader apps: people lose whole
 // downloaded libraries and only find out when they are offline and it matters.
 //
-// navigator.storage.persist() asks for exemption. Chrome grants it automatically
-// for installed PWAs, bookmarked sites, or sites with push permission; Firefox
-// prompts; Safari does not implement it. It cannot be forced, so the honest
-// design is to ask, then tell the reader what the answer was.
+// navigator.storage.persist() asks for exemption from eviction.
+//
+// The comment here used to say "Safari does not implement it", and that belief
+// shaped the whole design — if the browser most likely to evict could not be
+// asked, there was no point asking early. It is out of date. WebKit's current
+// storage policy implements persist() and grants it on heuristics, listing
+// "whether the website is opened as a Home Screen Web App" as one of them. The
+// same policy gives an installed web app the same quota as a browser — up to
+// 60% of total disk per origin — not the 50MB figure that circulates.
+//
+// So on iOS the answer is very likely YES, and only if we ask. Without
+// persistence a site is in best-effort mode with no guarantees: WebKit evicts
+// least-recently-used data under storage pressure, over quota, or after
+// prolonged inactivity.
+//
+// Chrome grants it for installed PWAs, bookmarked sites or push permission;
+// Firefox prompts. It cannot be forced anywhere, so the honest design is to ask
+// at the moment most likely to succeed, and tell the reader what the answer was.
 
 export type PersistState = "persisted" | "denied" | "unsupported"
 
