@@ -337,6 +337,31 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
         log.info(f"examining {len(authors):,} authors")
         found = stored = 0
 
+        # The predicate below is `lower(author) = :a` with the PARAMETER already
+        # lowercased by the caller — not `author = :a`, and not
+        # `lower(author) = lower(:a)`. Three forms, three different outcomes:
+        #   author = :a               misses the index (it is on lower(author))
+        #                             AND, now that the caller lowercases,
+        #                             matches nothing for any author with a
+        #                             capital letter.
+        #   lower(author)=lower(:a)   Postgres cannot fold lower($1) in a generic
+        #                             prepared plan, so it stops using the index
+        #                             too: ~6s per author.
+        #   lower(author) = :a        an 8ms index scan.
+        #
+        # This explanation lives in Python, NOT in a -- comment inside the SQL,
+        # and that is load-bearing. text() binds every `:a` it finds anywhere in
+        # the string, comments included, and psycopg2 then substitutes the value
+        # at each one. An author name containing a NEWLINE therefore had its
+        # first line stay inside the -- comment while the remaining lines escaped
+        # onto their own lines as bare SQL tokens.
+        #
+        # Not hypothetical: the index holds authors scraped from page furniture,
+        # including a Blogger share widget stored as
+        # "Get link \n Facebook \n Twitter \n Pinterest \n Email \n Other Apps".
+        # It failed with `syntax error at or near "twitter"` and took the ENTIRE
+        # series pass down with it every run — seven comment mentions of :a,
+        # seven injection sites. Keep parameter tokens out of SQL comments.
         for i, author in enumerate(authors, 1):
             rows = db.execute(sql_text("""
                 SELECT id, title, summary, site, published_at,
@@ -344,17 +369,6 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                             THEN site_id::bigint ELSE NULL END AS numeric_id,
                        fandoms, characters, relationships
                 FROM stories
-                -- lower(author) = :a, with the PARAMETER already lowercased by
-                -- the caller — not author = :a, and not lower(author) =
-                -- lower(:a). Three forms, three different outcomes:
-                --   author = :a           misses the index (it is on
-                --                         lower(author)) AND, now that the
-                --                         caller lowercases, matches nothing
-                --                         for any author with a capital letter.
-                --   lower(author)=lower(:a)  Postgres cannot fold lower($1) in a
-                --                         generic prepared plan, so it stops
-                --                         using the index too: ~6s per author.
-                --   lower(author) = :a    an 8ms index scan.
                 WHERE lower(author) = :a AND title IS NOT NULL AND delisted_at IS NULL
             """), {"a": author}).fetchall()
             works = [{"id": str(r[0]), "title": r[1], "summary": r[2],
