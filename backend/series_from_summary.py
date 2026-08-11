@@ -34,6 +34,13 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
+from series_ordering import canon_position, order_members
+
+# An author small enough that a canon anchor is evidence rather than noise. Seven
+# works and one declared series is the Sacrifices shape; two hundred HP AUs and
+# one declared series is not.
+CANON_EXTEND_MAX_WORKS = 25
+
 # Words that are never a series name on their own. Extracted names are matched
 # against this AFTER normalisation, so "the series" and "The Series" both go.
 _JUNK_NAMES = {
@@ -265,13 +272,47 @@ def run(db, dry_run: bool = True, only_author: str | None = None,
                       LIMIT 400
                  """), {"a": author}).fetchall()]
         groups = group_by_declaration(works)
+
+        # Pull in the works an author placed by canon rather than by number.
+        #
+        # The Sacrifices Arc states one position across seven works; the rest say
+        # "AU of CoS", "AU of GoF", "AU of OoTP", "AU of HBP" — the canon book
+        # each diverges from, which is both membership and order for anyone who
+        # knows the source. See series_ordering.canon_position.
+        #
+        # Guarded, because "AU of GoF" on its own is one of the commonest phrases
+        # in this index and would otherwise sweep a prolific author's unrelated
+        # fics into whichever series they happened to declare:
+        #   * the author must have a small catalogue, so this cannot fire for
+        #     someone with hundreds of HP AUs;
+        #   * the work must not already belong to another of their series;
+        #   * two works claiming the same canon book is ambiguous, and both are
+        #     left out rather than guessed between.
+        if len(works) <= CANON_EXTEND_MAX_WORKS:
+            for name, members in groups.items():
+                have = {m["id"] for ms in groups.values() for m in ms}
+                anchored: dict[int, list[dict]] = {}
+                for w in works:
+                    if w["id"] in have:
+                        continue
+                    pos = canon_position(w.get("summary"))
+                    if pos is not None:
+                        anchored.setdefault(pos, []).append(w)
+                for pos, candidates in sorted(anchored.items()):
+                    if len(candidates) != 1:
+                        continue          # ambiguous; leave both out
+                    members.append({**candidates[0], "series_name": name,
+                                    "position": None, "canon": pos})
+                break     # only the author's first series is extended this way
+
         for name, members in groups.items():
             series += 1
             placed += len(members)
             if dry_run:
                 print(f"  {author} — {name}")
-                for m in members:
-                    print(f"      {m['position'] or '-'}. {m['title'][:60]}")
+                for m in order_members(members):
+                    print(f"      {m['position']}. {m['title'][:56]}"
+                          f"   [{m['position_source']}]")
                 continue
             sid = db.execute(_t("""
                 INSERT INTO series (name, author, site, source, confidence, work_count)
@@ -284,7 +325,7 @@ def run(db, dry_run: bool = True, only_author: str | None = None,
                    # An explicit positional declaration by the author is the
                    # strongest evidence available short of an archive field.
                    "c": 0.9, "w": len(members)}).scalar()
-            for m in members:
+            for m in order_members(members):
                 db.execute(_t("""
                     INSERT INTO series_works (series_id, story_id, position, role)
                     VALUES (:s, :w, :p, 'main')
