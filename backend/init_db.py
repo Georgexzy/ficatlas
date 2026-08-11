@@ -459,6 +459,38 @@ CREATE UNLOGGED TABLE IF NOT EXISTS search_cache_entries (
 CREATE INDEX IF NOT EXISTS ix_search_cache_expires
     ON search_cache_entries (expires_at);
 
+-- Ranking queue for the AO3 stale-WIP refresh (worker.py).
+--
+-- The refresh loop picks the works most worth re-reading by a score combining
+-- readership, how recently the work moved, and how long since we looked. That
+-- score depends on now(), so it cannot be indexed and the ranking query has to
+-- compute it for every candidate row and sort them.
+--
+-- Measured on live: EXPLAIN (ANALYZE, BUFFERS) put that at 36.3 SECONDS reading
+-- 1,122,372 blocks -- about 8.6GB off disk -- at a 5% buffer hit rate, over 5.4M
+-- candidate rows. It ran every REFRESH_INTERVAL_MIN (60) to choose
+-- REFRESH_BATCH (40) works. Scoring 5.4 million rows to pick forty, hourly.
+--
+-- On this box that is not merely wasteful, it is the likely cause of the symptom
+-- everything else was fighting: 8.6GB dragged through a page cache this size
+-- evicts essentially all of it, which is why the buffer hit ratio sat at 47.5%
+-- and why a cold search took ten seconds.
+--
+-- So the ranking is computed into this queue and consumed from it. The scoring
+-- SQL is unchanged -- same works, same order, same reasons -- it simply runs
+-- when the queue runs dry instead of every hour. At depth 2000 and 40 an hour
+-- that is roughly every two days rather than 24 times a day.
+--
+-- UNLOGGED: losing it costs one refill, and it is rebuilt from scratch anyway.
+CREATE UNLOGGED TABLE IF NOT EXISTS ao3_refresh_queue (
+    story_id  UUID PRIMARY KEY,
+    site_id   TEXT NOT NULL,
+    score     DOUBLE PRECISION,
+    queued_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_ao3_refresh_queue_score
+    ON ao3_refresh_queue (score DESC NULLS LAST);
+
 -- Facets table for tag autocomplete. Populated on demand by /api/stats/refresh-facets
 -- (or lazily). Holds distinct fandom/relationship/character/freeform values with
 -- their story counts so the suggest endpoint is instant instead of scanning 2.3M rows.

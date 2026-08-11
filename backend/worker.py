@@ -325,6 +325,18 @@ async def _refresh_stale_loop() -> None:
     #
     # And a nudge for works AO3 says are unfinished: chapter_count_total IS
     # NULL is the "12/?" form, an explicit statement that more is coming.
+    # The ranking is expensive and is therefore computed into a queue rather than
+    # per cycle. Measured with EXPLAIN (ANALYZE, BUFFERS) against live: 36.3
+    # seconds, 1,122,372 blocks read (~8.6GB) at a 5% buffer hit rate, scoring
+    # 5.4M candidate rows — to choose forty, every hour. On a box whose search
+    # latency is governed by whether the index is resident in page cache, that
+    # one query was evicting the cache 24 times a day.
+    #
+    # The scoring below is untouched: same candidates, same order, same
+    # reasoning. Only its cadence changes — it runs when the queue empties, which
+    # at depth 2000 and forty an hour is roughly every other day.
+    REFILL_DEPTH = int(_num("REFRESH_QUEUE_DEPTH", 2000))
+
     STALE_SQL = sql_text("""
         WITH scored AS (
             SELECT id, site_id,
@@ -344,18 +356,63 @@ async def _refresh_stale_loop() -> None:
               AND (crawled_at IS NULL
                    OR crawled_at < now() - (:min_age || ' days')::interval)
         )
-        SELECT id, site_id FROM scored
+        INSERT INTO ao3_refresh_queue (story_id, site_id, score)
+        SELECT id, site_id, refresh_score FROM scored
         ORDER BY refresh_score DESC NULLS LAST
         LIMIT :lim
+        ON CONFLICT (story_id) DO NOTHING
+    """)
+
+    # Taking work off the queue re-checks eligibility against stories rather than
+    # trusting what was true when the ranking was built. An entry can sit here
+    # for a day or two, and in that time the work may have been refreshed by
+    # another path, finished, or been delisted — re-reading it then would be a
+    # wasted request to AO3, which is the one cost worth caring about here.
+    POP_SQL = sql_text("""
+        DELETE FROM ao3_refresh_queue q
+         WHERE q.story_id IN (
+               SELECT q2.story_id
+                 FROM ao3_refresh_queue q2
+                 JOIN stories s ON s.id = q2.story_id
+                WHERE s.status = 'in_progress'
+                  AND s.delisted_at IS NULL
+                  AND (s.crawled_at IS NULL
+                       OR s.crawled_at < now() - (:min_age || ' days')::interval)
+                ORDER BY q2.score DESC NULLS LAST
+                LIMIT :lim)
+        RETURNING q.story_id, q.site_id
     """)
 
     while True:
         try:
             def _stalest():
                 with db_session() as db:
-                    return db.execute(STALE_SQL, {
-                        "lim": batch, "min_age": int(_num("REFRESH_MIN_AGE_DAYS", 7)),
-                    }).fetchall()
+                    min_age = int(_num("REFRESH_MIN_AGE_DAYS", 7))
+                    # Refill BEFORE popping, never after: popping first and
+                    # topping up on a short read would re-rank rows that were
+                    # just taken but not yet re-crawled, and hand them back a
+                    # second time in the same cycle.
+                    depth = db.execute(sql_text(
+                        "SELECT count(*) FROM ao3_refresh_queue")).scalar() or 0
+                    if depth < batch:
+                        # Cleared rather than topped up, so entries that are no
+                        # longer eligible cannot accumulate at the head of the
+                        # queue and block it forever.
+                        db.execute(sql_text("TRUNCATE ao3_refresh_queue"))
+                        db.execute(STALE_SQL, {"lim": REFILL_DEPTH, "min_age": min_age})
+                        db.commit()
+                        log.info(f"ao3 refresh queue refilled (depth {REFILL_DEPTH})")
+                    rows = db.execute(POP_SQL, {"lim": batch, "min_age": min_age}).fetchall()
+                    if not rows and depth >= batch:
+                        # A full queue that yields nothing means every entry has
+                        # become ineligible. Without this the depth check above
+                        # would see a healthy count forever and never rebuild,
+                        # and the refresh loop would stall silently — the whole
+                        # point of a queue being that it is allowed to go stale.
+                        db.execute(sql_text("TRUNCATE ao3_refresh_queue"))
+                        log.info("ao3 refresh queue was full but wholly stale; cleared")
+                    db.commit()
+                    return rows
 
             rows = await asyncio.to_thread(_stalest)
             if not rows:
