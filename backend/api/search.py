@@ -13,7 +13,7 @@ from db.session import get_db
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 from models.user import User, ROLE_ADMIN
 from api.auth import get_current_user
-from search_cache import CACHE, cache_key
+from search_cache import CACHE, cache_key, shared_get, shared_put
 
 # Shorter than the 60s session default — see the note in search() on why a long
 # timeout is what turns a slow search into a failed one.
@@ -579,6 +579,19 @@ def search(          # NOT async — see below
         _hit = CACHE.get(_ck)
         if _hit is not None:
             return _hit
+        # L1 missed. Before paying for the query, ask the shared tier: with four
+        # workers this is usually a sibling that has already done exactly this
+        # search. ~1ms to ask, ~10s to be wrong about it.
+        _shared = shared_get(db, _ck)
+        if _shared is not None:
+            try:
+                _hit = SearchResponse.model_validate_json(_shared)
+                CACHE.put(_ck, _hit)   # promote, so the next one skips both hops
+                return _hit
+            except Exception:
+                # A stale entry from before a response-shape change. Fall through
+                # and recompute rather than serving something malformed.
+                pass
 
     if site_enums:
         filters.append(Story.site.in_(site_enums))
@@ -1247,6 +1260,13 @@ def search(          # NOT async — see below
     )
     if _ck is not None:
         CACHE.put(_ck, _response)
+        # Share it, so the other three workers never recompute this one. Skipped
+        # when live results are mixed in: those are fetched per request and are
+        # the freshest thing in the response, and freezing them into a shared
+        # entry would hand another reader a stale copy of something whose whole
+        # point is that it is live.
+        if not live_cards:
+            shared_put(db, _ck, _response.model_dump_json(), SEARCH_CACHE_SECONDS)
 
     # Let a shared cache in front of us do the work the per-worker cache can
     # only do four times over.
