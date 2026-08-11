@@ -132,6 +132,21 @@ export default function StoryClient() {
     }
 
     ;(async () => {
+      // Offline, read the saved copy FIRST rather than racing a fetch that
+      // cannot succeed.
+      //
+      // The reader already did this; this page did not, and the difference is
+      // exactly the bug: tapping a story you have downloaded, with no
+      // connection, meant waiting on a doomed request and then — if it failed in
+      // a way the classifier did not read as "offline" — being told "Not saved
+      // on this device" about a story sitting in IndexedDB.
+      //
+      // navigator.onLine is trusted only in the false direction, as everywhere
+      // else here, and a miss falls through to the network attempt below rather
+      // than giving up on the strength of a flag.
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        if (await fromOffline()) { clearTimeout(timer); return }
+      }
       try {
         const r = await fetch(`${API_BASE}/api/stories/${id}`, { signal: ctl.signal })
         if (!r.ok) throw describeError(null, r.status)
