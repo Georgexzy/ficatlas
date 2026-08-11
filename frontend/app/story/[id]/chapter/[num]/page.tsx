@@ -176,7 +176,13 @@ export default function ChapterPage() {
       const saved = await getOfflineStory(storyId)
       if (!saved || cancelled) return false
       const ch = saved.chapters.find(c => c.number === Number(num))
-      if (!ch) return false
+      // The story is set even when THIS chapter is not among the saved ones.
+      //
+      // It used to return early, leaving `story` null, and a null story means no
+      // chapter list — so the error screen had no idea which chapters the device
+      // actually holds and offered no way to reach them. Offline, on a partly
+      // saved work, that is a dead end: "not saved on this device" with no route
+      // back to the six chapters sitting in IndexedDB.
       setStory({
         id: saved.id, title: saved.title, author: saved.author,
         // What is actually held, and the numbers held — see the note on
@@ -184,6 +190,7 @@ export default function ChapterPage() {
         chapter_count: saved.chapters.length,
         chapters: saved.chapters.map(c => ({ number: c.number, title: c.title })),
       } as any)
+      if (!ch) return false        // story known, this chapter not held
       setChapter({
         number: ch.number, title: ch.title, content: ch.content,
         start_note: ch.start_note, end_note: ch.end_note, summary: ch.summary,
@@ -433,11 +440,31 @@ export default function ChapterPage() {
   // evaluated during render, at the useEffect call, so listing a `const` from
   // further down the function body is a temporal-dead-zone error rather than a
   // late binding.
+  // Neighbours are the nearest chapters we KNOW ABOUT, not `num ± 1`.
+  //
+  // Stored chapter numbers are not guaranteed contiguous, and offline the list
+  // is whatever the save actually holds — so counting would offer a Next that
+  // leads nowhere.
+  //
+  // The case this used to get wrong is the one that matters offline. indexOf
+  // returns -1 when the chapter being READ is not in the list — you opened
+  // chapter 5 online, went offline, and the saved copy holds 1-4, so `story`
+  // comes back from IndexedDB with four chapters while `num` is 5. The old
+  // fallback only handled an EMPTY list, so a non-empty list that simply did not
+  // contain the current chapter left both prevNum and nextNum null and disabled
+  // both buttons. Previous is the one you notice, because going back is what you
+  // do when the chapter you are on will not load.
+  //
+  // Searching by value instead of by index gives the right answer in every case:
+  // the nearest saved chapter below, and the nearest above.
   const numbers = (story?.chapters ?? []).map(c => c.number).sort((a, b) => a - b)
-  const idx = numbers.indexOf(num)
-  const prevNum = idx > 0 ? numbers[idx - 1] : (numbers.length === 0 && num > 1 ? num - 1 : null)
-  const nextNum = idx >= 0 && idx < numbers.length - 1
-    ? numbers[idx + 1]
+  const below = numbers.filter(n => n < num)
+  const above = numbers.filter(n => n > num)
+  const prevNum = below.length ? below[below.length - 1]
+    // Nothing known at all: fall back to counting, which is better than a dead
+    // button on a story whose chapter list never loaded.
+    : (numbers.length === 0 && num > 1 ? num - 1 : null)
+  const nextNum = above.length ? above[0]
     : (numbers.length === 0 && story && num < story.chapter_count ? num + 1 : null)
 
   // Prefetch the neighbouring chapters into the router cache.
@@ -657,9 +684,34 @@ export default function ChapterPage() {
           </h1>
           <p className="reader-error__body">
             {loadError.kind === "offline"
-              ? "You're offline and this story isn't saved here. Open it while online, then tap “Save offline” on the story page to read it later."
+              ? (numbers.length
+                  ? `You're offline and this chapter isn't among the ${numbers.length} saved on this device.`
+                  : "You're offline and this story isn't saved here. Open it while online, then tap “Save offline” on the story page to read it later.")
               : loadError.message}
           </p>
+          {/* A way out, using what the device actually holds.
+              Without this the screen was a dead end: on a partly saved work you
+              were told the chapter is missing and given nothing but "Back",
+              while six other chapters sat in IndexedDB one tap away. The nearest
+              saved chapter on either side is what someone wants here — usually
+              the one before, since arriving at a gap means carrying on is what
+              just failed. */}
+          {(prevNum != null || nextNum != null) && (
+            <div className="reader-error__actions">
+              {prevNum != null && (
+                <button className="btn btn--primary"
+                  onClick={() => goChapter(prevNum)}>
+                  ← Chapter {prevNum}{numbers.length ? " (saved)" : ""}
+                </button>
+              )}
+              {nextNum != null && (
+                <button className="btn btn--ghost"
+                  onClick={() => goChapter(nextNum)}>
+                  Chapter {nextNum} →
+                </button>
+              )}
+            </div>
+          )}
           <div className="reader-error__actions">
             {loadError.retryable && (
               <button className="btn btn--primary" onClick={() => setReloadKey(k => k + 1)}>
