@@ -77,7 +77,18 @@ export default function ServiceWorkerRegistration() {
         .catch(() => {})
     }
 
+    // The scrollbar's width, for the full-bleed header. Without it the negative
+    // margin is computed against 100vw — which includes the scrollbar gutter —
+    // and the header sticks out by exactly that much, producing a horizontal
+    // scrollbar on every page that has one.
+    const setScrollbarWidth = () => {
+      const w = window.innerWidth - document.documentElement.clientWidth
+      document.documentElement.style.setProperty("--sbw", `${Math.max(0, w)}px`)
+    }
+
     const onLoad = () => {
+      setScrollbarWidth()
+      window.addEventListener("resize", setScrollbarWidth)
       askToPersist()
       onBackOnline()
       window.addEventListener("online", onBackOnline)
@@ -101,6 +112,7 @@ export default function ServiceWorkerRegistration() {
       window.removeEventListener("load", onLoad)
       document.removeEventListener("visibilitychange", onVisible)
       window.removeEventListener("online", onBackOnline)
+      window.removeEventListener("resize", setScrollbarWidth)
       navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange)
       if (interval) clearInterval(interval)
     }
