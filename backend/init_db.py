@@ -284,10 +284,29 @@ CREATE INDEX IF NOT EXISTS ix_stories_doc_fts ON stories USING gin (
 -- Facet filters use substring (ILIKE '%value%') matching so that a search for
 -- "Harry Potter" also matches AO3's canonical "Harry Potter - J. K. Rowling".
 -- Only a trigram index can serve a leading-wildcard LIKE.
+-- Only fandoms keeps a trigram index, and only because one query still needs it:
+-- the "Surprise me" endpoint filters with fic_arr(fandoms) ILIKE (see
+-- api/search.py). Everything else moved to facet resolution plus array
+-- containment years ago — the note below records that trigram cost 3,682ms
+-- against 516ms for containment — and the indexes for the other columns simply
+-- carried on being built and maintained with nothing reading them.
+--
+-- Measured before removing them: zero scans against 3,383MB for tags and
+-- 1,029MB for relationships. Dropping both took the database from 40GB to 36GB,
+-- which on a box where search is bound by cache misses is not housekeeping —
+-- every gigabyte not spent on a dead index is a gigabyte of page cache holding
+-- something a query will actually read, and one fewer index to maintain on
+-- every insert the harvests make.
+--
+-- If a query ever needs ILIKE over tags or relationships again, build it
+-- CONCURRENTLY on the live index rather than adding it back here: a
+-- non-concurrent GIN build over 19.9M rows blocks writes for the duration.
 CREATE INDEX IF NOT EXISTS ix_stories_fandoms_trgm       ON stories USING gin (fic_arr(fandoms) gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS ix_stories_relationships_trgm ON stories USING gin (fic_arr(relationships) gin_trgm_ops);
+-- characters keeps its trigram index too: it is being scanned in practice, so
+-- whatever reaches it, removing it from a fresh install would be a regression
+-- nobody would notice until a query went from milliseconds to a seq scan over
+-- 19.9M rows. Only the two with demonstrably ZERO scans were dropped.
 CREATE INDEX IF NOT EXISTS ix_stories_characters_trgm    ON stories USING gin (fic_arr(characters) gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS ix_stories_tags_trgm          ON stories USING gin (fic_arr(tags) gin_trgm_ops);
 
 -- search_within (api/search.py:557) is a leading-wildcard ILIKE over title OR
 -- summary. A btree cannot serve a '%term%' pattern, so without trigram indexes
@@ -409,6 +428,36 @@ CREATE TABLE IF NOT EXISTS user_data (
     PRIMARY KEY (user_id, key)
 );
 CREATE INDEX IF NOT EXISTS ix_user_data_user ON user_data (user_id);
+
+-- Shared search cache (see search_cache.py).
+--
+-- The in-process cache is per uvicorn worker, and WEB_CONCURRENCY is 4. Measured
+-- on this box: the same popular query cost 11.0s, 9.7s and 6.9s on three
+-- successive requests — each one warming a DIFFERENT worker — and only then
+-- settled at 3ms. Four separate readers pay the full disk-bound cost of the same
+-- search, and again every time the 120s TTL rolls over. The module docstring
+-- always named this trade; what it costed it against was a cheap miss, not ten
+-- seconds.
+--
+-- UNLOGGED on purpose, and the reason is not just speed:
+--   * no WAL, so putting a write on the read path does not add replication or
+--     fsync load to a box that is already disk-bound — which is the whole
+--     problem being solved, and it would be self-defeating to make it worse;
+--   * it is truncated after a crash, which for a cache is CORRECT. There is
+--     nothing here that cannot be recomputed, and nothing that should survive
+--     into a restarted database as stale truth.
+--
+-- Not Redis: a second service to hold recomputable data, competing for the page
+-- cache that the actual fix (more of the index resident in RAM) needs. Postgres
+-- is already there and already has all four workers connected to it.
+CREATE UNLOGGED TABLE IF NOT EXISTS search_cache_entries (
+    key        TEXT PRIMARY KEY,
+    payload    TEXT        NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+-- Sweeping expired rows is the only scan this table ever takes.
+CREATE INDEX IF NOT EXISTS ix_search_cache_expires
+    ON search_cache_entries (expires_at);
 
 -- Facets table for tag autocomplete. Populated on demand by /api/stats/refresh-facets
 -- (or lazily). Holds distinct fandom/relationship/character/freeform values with

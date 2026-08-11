@@ -36,16 +36,37 @@ served from here at all, because those change what an operator sees and
 operators are keyed separately, and because two minutes is shorter than any
 human notices.
 
-Per process, so with four workers there are four caches and the hit rate is
-correspondingly lower than a shared one. That is the same trade the rate limiter
-makes: a shared Redis would be exact and is not worth a second service.
+Two tiers, and why
+------------------
+L1 is per process. With WEB_CONCURRENCY=4 that is four caches, and measuring it
+on this box showed what that actually costs: the same popular query took 11.0s,
+9.7s and 6.9s on three successive requests — each warming a different worker —
+before settling at 3ms. Four readers each pay the full disk-bound price of one
+search, and it repeats every time the TTL rolls.
+
+So L1 is backed by L2, an UNLOGGED table in the database every worker is already
+connected to (DDL in init_db.py). A miss in L1 costs one indexed lookup on a
+small table, ~1ms, against ~10s to recompute. The first worker to run a query
+warms it for all of them, and the entry outlives a worker restart.
+
+L2 is deliberately not Redis. The bottleneck here is that 36GB of database is
+competing for a page cache it does not fit in; adding a second service to hold
+data that is by definition recomputable spends the exact resource that is scarce.
+
+Failure is always a miss, never an error. Every L2 path is wrapped: if the table
+is missing, the write fails, or the payload no longer parses after a deploy
+changed the response shape, the search recomputes. A cache that can take the
+endpoint down with it is worse than no cache.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import OrderedDict
 from typing import Any, Optional
+
+log = logging.getLogger(__name__)
 
 # Two minutes. Long enough that a burst of people searching the same popular
 # fandom collapses onto one query; short enough that a reader refining a search
@@ -120,3 +141,66 @@ def cache_key(query_string: str, is_operator: bool) -> str:
     public — see the module docstring.
     """
     return f"{'op' if is_operator else 'pub'}|{query_string}"
+
+
+# --- L2: shared across workers -------------------------------------------------
+
+# Bumped when the shape of a cached response changes. An entry written by the
+# old code is then simply not found rather than being deserialised into a model
+# that no longer matches it — which is the difference between a deploy that
+# quietly serves malformed results for two minutes and one that does not.
+SCHEMA_VERSION = "v1"
+
+# Expired rows are swept probabilistically on write rather than by a scheduled
+# job: 1 write in 200 pays for the cleanup, which at any real request rate keeps
+# the table to roughly its live set without anything needing to own a cron.
+_SWEEP_EVERY = 200
+_writes = 0
+_writes_lock = threading.Lock()
+
+
+def shared_get(db, key: str) -> Optional[str]:
+    """The cached JSON body, or None. Never raises."""
+    try:
+        from sqlalchemy import text
+        row = db.execute(text(
+            "SELECT payload FROM search_cache_entries "
+            " WHERE key = :k AND expires_at > now()"
+        ), {"k": f"{SCHEMA_VERSION}|{key}"}).first()
+        return row[0] if row else None
+    except Exception:
+        # Rolled back so the caller's session is still usable for the real
+        # query. Without this a cache miss caused by a broken table would
+        # poison the transaction and turn into a failed search.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        log.debug("shared search cache read failed", exc_info=True)
+        return None
+
+
+def shared_put(db, key: str, payload: str, ttl: int = TTL_SECONDS) -> None:
+    """Store a rendered response body. Never raises."""
+    global _writes
+    try:
+        from sqlalchemy import text
+        db.execute(text("""
+            INSERT INTO search_cache_entries (key, payload, expires_at)
+            VALUES (:k, :p, now() + make_interval(secs => :t))
+            ON CONFLICT (key) DO UPDATE
+               SET payload = EXCLUDED.payload, expires_at = EXCLUDED.expires_at
+        """), {"k": f"{SCHEMA_VERSION}|{key}", "p": payload, "t": ttl})
+
+        with _writes_lock:
+            _writes += 1
+            sweep = _writes % _SWEEP_EVERY == 0
+        if sweep:
+            db.execute(text("DELETE FROM search_cache_entries WHERE expires_at < now()"))
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        log.debug("shared search cache write failed", exc_info=True)

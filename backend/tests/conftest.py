@@ -19,10 +19,39 @@ from sqlalchemy.orm import sessionmaker
 _TRUNCATE = (
     "stories", "chapters", "series", "series_works", "facets",
     "users", "user_sessions", "user_hosted", "takedowns", "source_gone",
+    "search_cache_entries",
 )
 
 _engine = None
 _Session = None
+
+
+def _apply_schema(engine):
+    """Bring the test database up to the production DDL.
+
+    Without this the test schema is whatever someone created by hand once, and it
+    drifts silently every time a table is added to init_db.py. That drift is not
+    loud: the shared search cache was added, its tests ran green against a
+    database with no such table, and they passed only because a missing table is
+    deliberately indistinguishable from a cache miss. Tests that cannot fail are
+    worse than no tests, so the schema comes from the same source the real
+    database does.
+
+    Statement failures are tolerated INDIVIDUALLY, each in its own transaction.
+    Some of init_db.py's statements are maintenance rather than structure —
+    planner statistics targets, backfills — and are meaningless against an empty
+    database; one of them raising must not stop the tables after it from being
+    created. Anything genuinely missing still fails, loudly, in the test that
+    needs it.
+    """
+    import init_db
+
+    for stmt in init_db._split_statements(init_db.SQL):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(stmt))
+        except Exception:
+            pass
 
 
 def _build():
@@ -35,6 +64,7 @@ def _build():
         _engine, _Session = None, None
         return None, None
     _engine = create_engine(url)
+    _apply_schema(_engine)
     _Session = sessionmaker(bind=_engine)
     return _engine, _Session
 
