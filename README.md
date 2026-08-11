@@ -73,7 +73,10 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Sanitised chapter HTML** — chapter bodies come from four scrapers and from user-supplied EPUBs, and the reader injects them as HTML. Everything is filtered through an allowlist on the way out (`backend/html_sanitize.py`): scripts, event handlers, `javascript:`/`data:` URLs and inline styles are dropped, outbound links get `rel="noopener"`. It doubles as a readability fix — scrapers captured page navigation and ad text as if it were prose, and unwrapping layout tags keeps the words while dropping the scaffolding
 - **EPUB export / offline reading** — any hosted story has a `↓ EPUB` button that builds a valid EPUB 2 file on the fly (stdlib only, no dependencies) for reading offline in any e-reader app
 - **In-app offline reading** — tap `⤓ Save offline` on any readable story to download its chapters into the browser's IndexedDB. The reader *and the story page* fall back to that saved copy when the network is unreachable (e.g. away from your Tailscale connection), an **Offline** tab in the library lists everything saved on the device with its size, and a service worker caches the app shell so it boots with no connection. Pre-save on wifi, read anywhere
-- **Offline saves that survive** — browsers evict origin storage under disk pressure, oldest origin first, and iOS clears it after seven days for a site not added to the home screen. So "saved" was, by default, a promise the browser was free to break silently — which is the most-reported failure of comparable reader apps. FicAtlas now requests persistent storage at the moment you save (when browsers are most likely to grant it), checks the quota *before* downloading so a long work fails up front with real numbers instead of part-way through, and the Offline tab states plainly whether your saves are protected or may be cleared
+- **Offline saves that survive** — browsers evict origin storage under disk pressure, oldest origin first. So "saved" is, by default, a promise the browser is free to break silently, which is the most-reported failure of comparable reader apps. FicAtlas requests persistent storage **when an installed app starts**, not only when you save: [WebKit grants it on heuristics that include "whether the website is opened as a Home Screen Web App"](https://webkit.org/blog/14403/updates-to-storage-policy/), so asking at launch is what gets it granted on iOS — and the same policy gives an installed app the same quota as a browser, up to 60% of disk, not the 50MB figure that circulates. The quota is checked *before* downloading so a long work fails up front with real numbers rather than part-way through, every save is **read back** before it reports success, and the Library audits saves on load and says plainly which the browser has emptied — while you still have a connection to fix it
+- **Downloads that survive a tunnel** — a save cut short by a lost connection keeps every chapter it fetched and records the rest, so the work is readable up to that point and finishes itself when the connection returns. It says so too: `◐ Saved, 22 to go` rather than a flat "saved" on a work missing sixty chapters. Long works also wait out the site's own rate limit instead of failing — a 199-chapter work used to abort at chapter 166 with HTTP 429 and discard everything
+- **Your offline shelf follows you** — the *list* of works you chose to keep offline syncs across devices; the chapters deliberately do not, since they are megabytes and the other device can fetch the text itself. Open the Library on your phone and the works you picked on your laptop are listed, one tap from downloading
+- **Follow a work** — the one subscription list AO3, FanFiction.net and FicAlley cannot give you between them. There is no notification queue: an update is a *comparison* against what you had seen, answered at read time, so a work is flagged correctly whichever path updated it and no missed event can leave a follow permanently stale
 - **Similar stories** — every story detail page shows an "If you like this, try…" section, recommending reads by shared fandoms/ships/tags with overlap scoring (ships weighted highest, then fandom, then freeform tags, with a small popularity tiebreaker)
 - **Scroll-position reading progress** — debounced save of chapter + scroll position; opening a chapter you've partly read jumps back to where you left off
 - **iOS Books-style hosted library** — book covers with hashed gradients, hover lift, drop shadow. Each shows an amber progress bar across the bottom and `Ch N/M · X%` when you've started reading. Clicking deep-links to your saved chapter, not chapter 1
@@ -567,6 +570,23 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 - `GET /api/userdata` · `PUT/DELETE /api/userdata/{key}` · `POST /api/userdata/merge` — per-account synced storage
 
 ## Known limitations
+
+- **Offline reading requires HTTPS, and this is easy to miss.** Service workers
+  and the Cache API only exist in a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts):
+  `https`, or `localhost`, and nothing else. Reached over plain http at a LAN or
+  tailnet IP — the usual way to open a self-hosted instance from a phone —
+  `navigator.serviceWorker` does not fail, it is **undefined**, so nothing is
+  ever cached. Measured on this deployment: `http://localhost:3000` reports
+  `isSecureContext true`, `http://192.168.1.250:3000` reports `false`.
+  Everything behaves normally right up to the moment it matters — pages load,
+  stories save (IndexedDB *is* available on insecure origins), and reading works
+  while the app stays open — and then a cold launch with no connection shows
+  nothing at all. Tailscale solves it without a domain or public exposure:
+  `sudo tailscale serve --bg --https=443 http://127.0.0.1:3000` gives a real
+  certificate for `<machine>.<tailnet>.ts.net`. **Re-add the app to the home
+  screen from the https origin afterwards** — an installed PWA is bound to the
+  origin it was installed from, and the old icon keeps pointing at the http one.
+  The Library says so explicitly when opened on an insecure origin.
 
 - **No bulk DATASET for AO3 summaries** — though this is no longer the ceiling it
   once looked like. All 13M AO3 rows arrived without a summary, and no published
