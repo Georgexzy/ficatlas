@@ -65,8 +65,22 @@ export default function ServiceWorkerRegistration() {
       } catch { /* nothing to do; saving still asks again later */ }
     }
 
+    // Finish interrupted downloads the moment the connection returns.
+    //
+    // A save cut short by a tunnel keeps what it fetched and records the rest;
+    // this is what completes it, without the reader having to notice, remember,
+    // or press anything. Also runs once at startup, since the connection may
+    // have returned while the app was closed.
+    const onBackOnline = () => {
+      import("@/lib/offline")
+        .then(m => m.resumeInterruptedDownloads())
+        .catch(() => {})
+    }
+
     const onLoad = () => {
       askToPersist()
+      onBackOnline()
+      window.addEventListener("online", onBackOnline)
       navigator.serviceWorker.register("/sw.js")
         .then(reg => {
           registration = reg
@@ -86,6 +100,7 @@ export default function ServiceWorkerRegistration() {
     return () => {
       window.removeEventListener("load", onLoad)
       document.removeEventListener("visibilitychange", onVisible)
+      window.removeEventListener("online", onBackOnline)
       navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange)
       if (interval) clearInterval(interval)
     }

@@ -18,6 +18,9 @@ export interface OfflineChapter {
 }
 
 export interface OfflineStory {
+  /** Chapters not yet fetched, when a download was cut short. Present means
+   *  resumable; absent means complete. */
+  missingChapters?: number[]
   /** Chapters that had text when saved. Absent on records written before this
    *  existed, which is why the audit falls back to "any text at all". */
   textChapters?: number
@@ -296,6 +299,41 @@ export function removeFromShelf(id: string): void {
   writeShelf(readShelf().filter(e => e.id !== id))
 }
 
+/** Finish any download that a lost connection cut short.
+ *
+ *  Saving a long work over a phone connection is exactly the case where the
+ *  connection goes away, and losing 150 fetched chapters because the train
+ *  entered a tunnel is the wrong trade every time. An interrupted save keeps
+ *  what it got and records the rest; this completes them.
+ *
+ *  Safe to call often — it is a no-op when nothing is partial — so it runs when
+ *  the library opens and again the moment the browser reports coming back
+ *  online, which is when it is most likely to succeed.
+ */
+export async function resumeInterruptedDownloads(
+  onStory?: (title: string, done: number, total: number) => void,
+): Promise<number> {
+  if (typeof navigator !== "undefined" && !navigator.onLine) return 0
+  let saved: OfflineStory[]
+  try {
+    saved = await listOfflineStories()
+  } catch {
+    return 0
+  }
+  const partial = saved.filter(s => (s.missingChapters?.length ?? 0) > 0)
+  let finished = 0
+  for (const story of partial) {
+    try {
+      await downloadStoryForOffline(story.id, (d, t) => onStory?.(story.title, d, t))
+      finished++
+    } catch {
+      // Still unreachable, or interrupted again. It stays partial and will be
+      // picked up next time rather than being treated as a failure.
+    }
+  }
+  return finished
+}
+
 /** Put anything already downloaded onto the shelf.
  *
  *  The shelf is written when a work is saved, which does nothing for works saved
@@ -452,7 +490,19 @@ export async function downloadStoryForOffline(
 
   const total = numbers.length
   const chapters: OfflineChapter[] = []
+  // Anything already downloaded on a previous, interrupted attempt. Resuming
+  // costs one lookup and saves refetching a hundred chapters over a connection
+  // that has just proved unreliable.
+  const existing = await getOfflineStory(storyId).catch(() => null)
+  const have = new Map((existing?.chapters ?? []).map(c => [c.number, c]))
+  const missing: number[] = []
   for (const [i, n] of numbers.entries()) {
+    const already = have.get(n)
+    if (already && already.content && already.content.trim()) {
+      chapters.push(already)
+      onProgress?.(i + 1, total)
+      continue
+    }
     // Wait out our own rate limiter rather than failing the download.
     //
     // Saving a long work means fetching every chapter as fast as the loop can
@@ -466,8 +516,16 @@ export async function downloadStoryForOffline(
     // backoff is capped so a genuinely stuck server still ends the attempt
     // rather than hanging forever.
     let r: Response | null = null
+    let lostConnection = false
     for (let attempt = 0; attempt < 6; attempt++) {
-      r = await fetch(`/api/stories/${storyId}/chapters/${n}`)
+      try {
+        r = await fetch(`/api/stories/${storyId}/chapters/${n}`)
+      } catch {
+        // The connection went away mid-download. Everything fetched so far is
+        // still good and still worth keeping — see the partial save below.
+        lostConnection = true
+        break
+      }
       if (r.status !== 429 && r.status < 500) break
       const retryAfter = Number(r.headers.get("Retry-After"))
       const waitMs = Math.min(
@@ -475,6 +533,14 @@ export async function downloadStoryForOffline(
         30_000)
       onProgress?.(i, total)          // keep the UI honest while we wait
       await new Promise(res => setTimeout(res, waitMs))
+    }
+    if (lostConnection) {
+      // Stop here and record the rest as missing, rather than failing the whole
+      // save. A story downloaded to chapter 150 of 199 is readable to chapter
+      // 150; discarding it because the train went into a tunnel is the wrong
+      // trade every time.
+      missing.push(...numbers.slice(i))
+      break
     }
     if (!r || !r.ok) {
       // Skip a chapter we can't fetch rather than losing the whole download.
@@ -523,6 +589,10 @@ export async function downloadStoryForOffline(
     // real chapter can legitimately hold no text, and treating those as damage
     // rejects perfectly good downloads.
     textChapters: chapters.filter(c => c.content && c.content.trim()).length,
+    // Chapters still to fetch, if the connection went away part-way. Their
+    // presence is what makes this record resumable rather than merely
+    // incomplete.
+    missingChapters: missing.length ? missing : undefined,
   })
 
   // Read it back before claiming success.
@@ -546,6 +616,7 @@ export async function downloadStoryForOffline(
   // against what was just downloaded.
   const ok = !!verify && (verify.chapters?.length ?? 0) === chapters.length
              && storedText >= expectedText
+             && chapters.length > 0
   if (ok) {
     // Only after the readback proves it is there. Putting a work on a shelf that
     // syncs to other devices when the download actually failed would spread the
