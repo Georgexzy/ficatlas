@@ -120,6 +120,28 @@ input, select { font-family: inherit; }
    covering the gap when it is not. Kept to the header's width rather than
    full-bleed: -50vw pushed body's scrollWidth from 390 to 561 on a phone when
    that was tried on the reader. */
+/* The header spans the page, not the text column.
+   .page-prose is 660px and .settings-shell 720px, but the header needs about
+   760px for the logo, theme toggle, four nav links, the account and the index
+   chip. Constrained to the column it had nowhere to go: first it overflowed the
+   header background, then — once it was allowed to wrap — it became a 139px
+   two-row block with the wordmark stranded alone on the first line.
+   Neither is a layout problem with the header; it is a header being measured
+   against the wrong width. Full-bleed puts it on the viewport, which is what the
+   search page already gives it and why it fits there.
+   width:100% + the negative margin rather than 100vw: vw includes the scrollbar
+   gutter, and that difference is exactly the few pixels that turn "full width"
+   into a horizontal scrollbar. */
+.page-prose > .header,
+.hub-page > .header,
+.settings-shell > .header {
+  width: auto;
+  margin-left: calc(50% - 50vw + var(--sbw, 0px) / 2);
+  margin-right: calc(50% - 50vw + var(--sbw, 0px) / 2);
+  padding-left: 24px;
+  padding-right: 24px;
+}
+
 .header::before {
   content: "";
   position: absolute; left: 0; right: 0; bottom: 100%;
