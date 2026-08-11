@@ -63,6 +63,20 @@ const SECURITY_HEADERS = [
   // Nothing here uses a camera, microphone or location, so refuse them outright
   // rather than leaving the decision to a future dependency.
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), interest-cohort=()" },
+  // HSTS is unconditional, unlike upgrade-insecure-requests above, and the
+  // difference is the failure mode rather than the intent. A browser IGNORES
+  // this header when it arrives over plain http, so on the port-3000 origin it
+  // is simply inert — where upgrade-insecure-requests was actively fatal there,
+  // rewriting every script to a port serving no TLS. Over the Tailscale origin,
+  // which terminates real TLS and is never reachable any other way, it does the
+  // job it exists for.
+  //
+  // No includeSubDomains and no preload, both deliberately. includeSubDomains
+  // would bind sibling names on the tailnet that this app knows nothing about,
+  // and preload is a submission to a list baked into browser binaries that is
+  // slow and awkward to reverse. 180 days is long enough to be worth having and
+  // short enough to back out of by lowering it.
+  { key: "Strict-Transport-Security", value: "max-age=15552000" },
 ]
 
 const nextConfig: NextConfig = {
