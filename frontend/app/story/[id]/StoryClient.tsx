@@ -84,6 +84,7 @@ export default function StoryClient() {
     }
   }, [id, following])
 
+  const [offlinePending, setOfflinePending] = useState(0)
   const [savingOffline, setSavingOffline] = useState(false)
   const [offlineProgress, setOfflineProgress] = useState<{ done: number; total: number } | null>(null)
   const [offlineMsg, setOfflineMsg] = useState<string | null>(null)
@@ -214,6 +215,11 @@ export default function StoryClient() {
   // Check whether this story is already saved offline.
   useEffect(() => {
     if (id) isStoryOffline(id).then(setOfflineSaved).catch(() => {})
+    // How much of it is actually here. A download cut short by a lost
+    // connection keeps what it fetched, so "Saved offline" alone would be a
+    // half-truth on a work that is missing sixty chapters.
+    if (id) getOfflineStory(id).then(s => setOfflinePending(s?.missingChapters?.length ?? 0))
+              .catch(() => {})
   }, [id])
 
   const saveOffline = async () => {
@@ -222,7 +228,17 @@ export default function StoryClient() {
     try {
       const n = await downloadStoryForOffline(id, (done, total) => setOfflineProgress({ done, total }))
       setOfflineSaved(true)
-      setOfflineMsg(`✓ Saved ${n} chapter${n === 1 ? "" : "s"} for offline reading.`)
+      // Re-read what actually landed. A download cut short by a lost connection
+      // still resolves — it keeps what it fetched — so reporting a flat "saved"
+      // here would be the one moment the app is most likely to be wrong, and
+      // the reader would find out when they opened chapter 155 on a train.
+      const stored = await getOfflineStory(id).catch(() => null)
+      const pending = stored?.missingChapters?.length ?? 0
+      setOfflinePending(pending)
+      setOfflineMsg(pending
+        ? `Saved ${n} chapter${n === 1 ? "" : "s"}. ${pending} still to download — `
+          + `this will finish by itself when you have a connection.`
+        : `✓ Saved ${n} chapter${n === 1 ? "" : "s"} for offline reading.`)
     } catch (e: any) {
       setOfflineMsg(`Couldn't save offline: ${e.message || e}`)
     } finally {
@@ -482,8 +498,12 @@ export default function StoryClient() {
           {story.is_hosted && story.chapters.length > 0 && (
             offlineSaved ? (
               <button className="btn btn--on" onClick={removeOffline}
-                title="Saved on this device — tap to remove">
-                ✓ Saved offline
+                title={offlinePending
+                  ? `${offlinePending} chapters still to download — this will finish by itself when you have a connection. Tap to remove.`
+                  : "Saved on this device — tap to remove"}>
+                {offlinePending
+                  ? `◐ Saved, ${offlinePending} to go`
+                  : "✓ Saved offline"}
               </button>
             ) : (
               <button className="btn btn--ghost" onClick={saveOffline} disabled={savingOffline}

@@ -1063,6 +1063,12 @@ export default function LibraryPage() {
               {blocker.detail}
             </p>
           )}
+          {offlineStories.some(s => (s.missingChapters?.length ?? 0) > 0) && (
+            <p className="offline-elsewhere__hint" role="status">
+              Some downloads are unfinished — they stopped when the connection
+              did, and will complete on their own next time you are online.
+            </p>
+          )}
           {elsewhere.length > 0 && (
             <div className="offline-elsewhere">
               <p className="offline-elsewhere__head">
