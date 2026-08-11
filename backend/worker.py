@@ -1065,6 +1065,17 @@ async def _ffnet_wayback_cdx_loop() -> None:
                 )).scalar() or 0
                 resume = get_setting(db, KEY) or None
             if pending >= high_water:
+                # Idle time is the right time to re-rank the queue. A work we
+                # have since fetched stops being priority 0, and a WIP that
+                # finished stops being worth re-checking — so the order stays
+                # honest without a loop of its own.
+                try:
+                    from ffnet_wayback import refresh_priorities
+                    with db_session() as db:
+                        n = await asyncio.to_thread(refresh_priorities, db)
+                    log.info(f"ffnet wayback: re-ranked {n:,} queued stories")
+                except Exception as e:
+                    log.warning(f"ffnet priority refresh failed: {type(e).__name__}: {e}")
                 # Long sleep, not a poll: re-checking every couple of minutes is
                 # itself a database query and a wakeup, and the queue takes days
                 # to drain at these intervals.

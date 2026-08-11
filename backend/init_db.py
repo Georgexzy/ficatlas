@@ -638,8 +638,16 @@ CREATE TABLE IF NOT EXISTS ffnet_wayback_queue (
     story_id    BIGINT PRIMARY KEY,
     snapshot_ts VARCHAR(20) NOT NULL,
     done_at     TIMESTAMPTZ,
-    ok          BOOLEAN
+    ok          BOOLEAN,
+    -- 0 we hold nothing for this story, 1 it can still change, 2 it is finished.
+    -- archive.org throttles this harvest to ~28 fetches an hour against ~108,000
+    -- queued, so the order the queue is walked in decides what freshness we
+    -- actually get. See ffnet_wayback.next_batch.
+    priority    SMALLINT NOT NULL DEFAULT 1
 );
+ALTER TABLE ffnet_wayback_queue ADD COLUMN IF NOT EXISTS priority SMALLINT NOT NULL DEFAULT 1;
+CREATE INDEX IF NOT EXISTS ix_ffnet_wayback_priority
+    ON ffnet_wayback_queue (priority, snapshot_ts DESC) WHERE done_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_ffnet_wayback_pending
     ON ffnet_wayback_queue (story_id) WHERE done_at IS NULL;
 
