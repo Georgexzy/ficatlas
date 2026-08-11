@@ -81,16 +81,48 @@ class TestOrderMembers:
         assert [m["id"] for m in got] == ["a", "b"]
         assert got[0]["position_source"] == "declared"
 
-    def test_date_only_breaks_ties_among_the_unplaced(self):
+    def test_without_a_dated_anchor_nothing_is_claimed(self):
+        """The anchored member carries no date, so there is nothing to
+        interpolate against. Guessing anyway is what this refuses to do."""
         members = [
             self._m("late", published=datetime(2020, 1, 1)),
             self._m("early", published=datetime(2010, 1, 1)),
             self._m("anchored", summary="AU of CoS."),
         ]
         got = order_members(members)
-        assert [m["id"] for m in got] == ["anchored", "early", "late"]
+        assert got[0]["id"] == "anchored"
         assert got[0]["position_source"] == "canon"
-        assert got[1]["position_source"] == "date"
+        assert {m["position_source"] for m in got[1:]} == {"unknown"}
+
+    def test_an_earlier_work_slots_in_FRONT_of_the_anchors(self):
+        """Saving Connor opens the Sacrifices Arc and says so nowhere a machine
+        can read — no position, no canon anchor, just the premise. What it has
+        is the earliest publication date of the seven, and the anchored works
+        around it give that date something to mean."""
+        members = [
+            self._m("mouth", summary="AU of CoS.", published=datetime(2005, 10, 9)),
+            self._m("freedom", summary="AU of GoF.", published=datetime(2005, 12, 26)),
+            self._m("connor", published=datetime(2005, 9, 15)),
+        ]
+        got = order_members(members)
+        assert [m["id"] for m in got] == ["connor", "mouth", "freedom"]
+        assert got[0]["position_source"] == "date"
+
+    def test_an_undeclared_work_slots_BETWEEN_two_anchors(self):
+        members = [
+            self._m("mouth", summary="AU of CoS.", published=datetime(2005, 10, 9)),
+            self._m("freedom", summary="AU of GoF.", published=datetime(2005, 12, 26)),
+            self._m("maze", published=datetime(2005, 12, 25)),
+        ]
+        got = order_members(members)
+        assert [m["id"] for m in got] == ["mouth", "maze", "freedom"]
+
+    def test_a_later_work_slots_after_them(self):
+        members = [
+            self._m("mouth", summary="AU of CoS.", published=datetime(2005, 10, 9)),
+            self._m("after", published=datetime(2009, 1, 1)),
+        ]
+        assert [m["id"] for m in order_members(members)] == ["mouth", "after"]
 
     def test_dates_never_outrank_a_real_signal(self):
         """A prequel published years later must not be sorted last."""
