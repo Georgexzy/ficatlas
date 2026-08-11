@@ -467,7 +467,10 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .empty__title {
   font-family: var(--font-serif); font-weight: 600; color: var(--text);
   font-size: clamp(24px, 5.2vw, 32px); line-height: 1.15;
-  margin-bottom: 12px; text-wrap: balance;
+  /* margin-top: 0 because this is an <h1> now and the browser's default top
+     margin would push the landing copy down; everything else was already
+     explicit, so the element change is invisible. */
+  margin-top: 0; margin-bottom: 12px; text-wrap: balance;
 }
 .empty__sub {
   font-size: 14px; line-height: 1.6; color: var(--text-dim);

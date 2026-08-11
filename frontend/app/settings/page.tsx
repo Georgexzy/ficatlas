@@ -337,7 +337,8 @@ export default function SettingsPage() {
           <div className="setting-row__label">
             <span className="setting-row__name">Sort by</span>
           </div>
-          <select className="setting-select" value={prefs.default_sort}
+          <select className="setting-select" aria-label="Default sort order"
+            value={prefs.default_sort}
             onChange={e => setPref("default_sort", e.target.value)}>
             {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
@@ -347,7 +348,8 @@ export default function SettingsPage() {
           <div className="setting-row__label">
             <span className="setting-row__name">Results per page</span>
           </div>
-          <select className="setting-select" value={prefs.results_per_page}
+          <select className="setting-select" aria-label="Results per page"
+            value={prefs.results_per_page}
             onChange={e => setPref("results_per_page", e.target.value)}>
             {["10", "20", "30", "50"].map(n => <option key={n} value={n}>{n}</option>)}
           </select>

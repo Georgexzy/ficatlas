@@ -671,7 +671,12 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
           gesture; what this actually does is find a work you cannot name across
           three archives at once, which is the thing no single archive can do
           for you. */}
-      <p className="empty__title">Find fic across three archives at once</p>
+      {/* An <h1>, not a <p>. It is already the top-level statement of what this
+          page is, and the landing page had no heading at all — so a screen
+          reader navigating by headings found nothing on the site's front door,
+          and search engines had no anchor either. The class carries the styling,
+          so nothing moves. */}
+      <h1 className="empty__title">Find fic across three archives at once</h1>
       {/* Accurate about what the live fetch does. It runs AFTER the response is
           sent — indexed results come back in milliseconds and the fresh works
           land in the index for next time — so "pulled in as you search" was
@@ -1676,7 +1681,8 @@ function SearchPageInner() {
                 {SORT_OPTIONS.find(o => o.value === sort)?.help}
               </HelpTip>
             </label>
-            <select value={sort} onChange={e => setSort(e.target.value)} className="select">
+            <select value={sort} onChange={e => setSort(e.target.value)} className="select"
+              aria-label="Sort results">
               {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>

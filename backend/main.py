@@ -8,7 +8,8 @@ from sqlalchemy.exc import OperationalError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from api import (search, stories, stats, library, settings, auth, userdata,
-                 takedown, password_reset, admin, permissions, hubs)
+                 takedown, password_reset, admin, permissions, hubs,
+                 follows)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -126,6 +127,9 @@ app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(auth.router,     prefix="/api/auth",     tags=["auth"])
 app.include_router(password_reset.router, prefix="/api/auth", tags=["auth"])
 app.include_router(userdata.router, prefix="/api/userdata", tags=["userdata"])
+# Following a work across archives — the one subscription list AO3, FF.net and
+# FicAlley cannot give you between them. See api/follows.py.
+app.include_router(follows.router, prefix="/api/follows", tags=["follows"])
 
 # ── Degrade honestly when the database is saturated ─────────────────────────
 #
