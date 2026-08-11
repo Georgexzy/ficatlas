@@ -258,6 +258,24 @@ export default function LibraryPage() {
   useEffect(() => {
     import("@/lib/offline").then(m => setBlocker(m.offlineBlocker())).catch(() => {})
   }, [])
+
+  // Works this reader chose to keep offline on ANOTHER device.
+  //
+  // The chapters cannot follow them — they are megabytes and belong to the
+  // device that downloaded them — but the choice can, and without it someone who
+  // curates a shelf on their laptop opens their phone to an empty Offline tab
+  // with no idea what they had picked. The shelf syncs; the text is re-fetched
+  // here, once, on request.
+  const [elsewhere, setElsewhere] = useState<{ id: string; title: string; author?: string }[]>([])
+  useEffect(() => {
+    let cancelled = false
+    import("@/lib/offline").then(async m => {
+      const shelf = m.readShelf()
+      const here = new Set((await m.listOfflineStories()).map(s => s.id))
+      if (!cancelled) setElsewhere(shelf.filter(e => !here.has(e.id)))
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [offlineStories])
   const [storage, setStorage] = useState<StorageEstimate | null>(null)
   useEffect(() => {
     persistenceState().then(setPersist).catch(() => {})
@@ -1041,6 +1059,24 @@ export default function LibraryPage() {
               <strong>The app can&apos;t be saved for offline use on this address.</strong>{" "}
               {blocker.detail}
             </p>
+          )}
+          {elsewhere.length > 0 && (
+            <div className="offline-elsewhere">
+              <p className="offline-elsewhere__head">
+                Saved on your other devices — not downloaded here yet
+              </p>
+              <ul className="offline-elsewhere__list">
+                {elsewhere.map(e => (
+                  <li key={e.id}>
+                    <Link href={`/story/${e.id}`}>{e.title}</Link>
+                    {e.author ? <span className="offline-elsewhere__by"> by {e.author}</span> : null}
+                  </li>
+                ))}
+              </ul>
+              <p className="offline-elsewhere__hint">
+                Open one and tap &quot;⤓ Save offline&quot; to keep it on this device too.
+              </p>
+            </div>
           )}
           {offlineStories.length === 0
             ? <p className="library-empty">

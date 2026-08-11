@@ -244,6 +244,49 @@ export async function storageEstimate(): Promise<StorageEstimate | null> {
   }
 }
 
+/** The shelf: which works this reader chose to keep offline, and enough about
+ *  them to show a list. Kept beside the stories rather than derived from them,
+ *  because it has to survive on a device that never downloaded any of it —
+ *  that is the entire point of syncing it.
+ *
+ *  Deliberately tiny: id, title, author. The chapters stay on the device that
+ *  fetched them.
+ */
+export interface ShelfEntry { id: string; title: string; author?: string; savedAt: string }
+
+const SHELF_KEY = "ficatlas:offline-shelf"
+
+export function readShelf(): ShelfEntry[] {
+  if (typeof window === "undefined") return []
+  try {
+    const raw = localStorage.getItem(SHELF_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.filter(e => e && typeof e.id === "string") : []
+  } catch {
+    return []
+  }
+}
+
+function writeShelf(entries: ShelfEntry[]): void {
+  try {
+    localStorage.setItem(SHELF_KEY, JSON.stringify(entries))
+    // The sync layer watches localStorage writes; this is what makes the shelf
+    // travel. See lib/auth.tsx.
+    window.dispatchEvent(new StorageEvent("storage", { key: SHELF_KEY }))
+  } catch { /* private mode: the download still works, it just will not sync */ }
+}
+
+export function addToShelf(story: { id: string; title: string; author?: string }): void {
+  const shelf = readShelf().filter(e => e.id !== story.id)
+  shelf.unshift({ id: story.id, title: story.title, author: story.author,
+                  savedAt: new Date().toISOString() })
+  writeShelf(shelf)
+}
+
+export function removeFromShelf(id: string): void {
+  writeShelf(readShelf().filter(e => e.id !== id))
+}
+
 export async function saveStoryOffline(story: OfflineStory): Promise<void> {
   const db = await openDB()
   return new Promise((resolve, reject) => {
@@ -296,7 +339,11 @@ export async function listOfflineStories(): Promise<OfflineStory[]> {
   }
 }
 
-export async function deleteOfflineStory(id: string): Promise<void> {
+export async function deleteOfflineStory(id: string, keepOnShelf = false): Promise<void> {
+  // Removing a download is not the same as changing your mind about wanting the
+  // work with you. The shelf entry goes too by default — an explicit "remove"
+  // means both — but callers clearing space can keep the choice.
+  if (!keepOnShelf) removeFromShelf(id)
   const db = await openDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite")
@@ -419,6 +466,13 @@ export async function downloadStoryForOffline(
   // Reading the row back costs one transaction and turns a silent failure into
   // an error the reader sees while they still have a connection to fix it.
   const verify = await getOfflineStory(storyId)
+  if (verify && verify.chapters?.length
+      && !verify.chapters.some(c => !c.content || !c.content.trim())) {
+    // Only after the readback proves it is there. Putting a work on a shelf that
+    // syncs to other devices when the download actually failed would spread the
+    // failure rather than the story.
+    addToShelf({ id: storyId, title: meta.title, author: meta.author })
+  }
   if (!verify || !verify.chapters?.length
       || verify.chapters.some(c => !c.content || !c.content.trim())) {
     await deleteOfflineStory(storyId).catch(() => {})

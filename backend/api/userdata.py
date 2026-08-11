@@ -15,7 +15,13 @@ from api.auth import require_user
 
 router = APIRouter()
 
-ALLOWED_KEYS = {"bookmarks", "progress", "recents", "settings", "explicit"}
+# "offline" is the LIST of works a reader chose to keep offline, not the works
+# themselves. The chapters are megabytes and belong to the device that
+# downloaded them; the decision — "I want this with me" — belongs to the person
+# and should follow them to their phone. Without it a reader who curates a
+# shelf on their laptop arrives at their phone with an empty Offline tab and no
+# idea what they had picked.
+ALLOWED_KEYS = {"bookmarks", "progress", "recents", "settings", "explicit", "offline"}
 MAX_BYTES    = 2 * 1024 * 1024   # 2 MB per key
 
 
@@ -23,6 +29,8 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
     """Type-aware merge of a client value and the existing server value.
 
     - bookmarks: array of story objects/ids → union, dedup by id (or by value)
+    - offline:   same shape and same union — the shelf of works chosen for
+                 offline reading, deliberately WITHOUT the chapters
     - recents:   array → union preserving recency, cap at 50
     - progress:  dict keyed by story id → per-story keep the most-recently-updated
     - settings:  dict of unrelated preferences → merged per key, client winning
@@ -34,7 +42,9 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
     if client is None:
         return server
 
-    if key == "bookmarks":
+    if key in ("bookmarks", "offline"):
+        # Union, so a device that has not downloaded a work does not erase it
+        # from the shelf for the device that has.
         return _merge_id_array(client, server)
 
     if key == "recents":
