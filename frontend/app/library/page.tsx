@@ -253,6 +253,11 @@ export default function LibraryPage() {
   // difference between learning that here, online, and learning it on a plane.
   const [broken, setBroken] = useState<{ id: string; title: string; reason: string }[]>([])
   const [protecting, setProtecting] = useState(false)
+  // The one offline failure the app cannot fix in itself — see offlineBlocker.
+  const [blocker, setBlocker] = useState<{ reason: string; detail: string } | null>(null)
+  useEffect(() => {
+    import("@/lib/offline").then(m => setBlocker(m.offlineBlocker())).catch(() => {})
+  }, [])
   const [storage, setStorage] = useState<StorageEstimate | null>(null)
   useEffect(() => {
     persistenceState().then(setPersist).catch(() => {})
@@ -1028,6 +1033,15 @@ export default function LibraryPage() {
 
       {tab === "offline" && (
         <div className="library-list">
+          {/* Above the empty/non-empty split on purpose: this matters MOST to
+              someone with nothing saved yet, who is about to save a story that
+              will not be readable the way they expect. */}
+          {blocker && (
+            <p className="offline-tab__broken" role="status">
+              <strong>The app can&apos;t be saved for offline use on this address.</strong>{" "}
+              {blocker.detail}
+            </p>
+          )}
           {offlineStories.length === 0
             ? <p className="library-empty">
                 No stories saved offline yet. On any readable story&apos;s page, tap

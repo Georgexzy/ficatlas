@@ -193,6 +193,37 @@ export async function auditOfflineStories(): Promise<OfflineAudit> {
   return out
 }
 
+/** Why offline reading cannot work here, or null if it can.
+ *
+ *  There is one failure that no amount of service-worker care can fix, and it is
+ *  invisible from inside the app: service workers and the Cache API require a
+ *  SECURE CONTEXT. https, or localhost — and nothing else. Reached over plain
+ *  http at an IP address, which is how a self-hosted instance is usually opened
+ *  from a phone on the same network or over a tailnet, `navigator.serviceWorker`
+ *  does not merely fail, it does not exist.
+ *
+ *  Everything then behaves normally right up to the moment it matters. Pages
+ *  load, stories save — IndexedDB is available on insecure origins — and reading
+ *  works while the app stays open. Close it, lose the connection, tap the icon,
+ *  and there is no cached shell to start from, so nothing appears at all.
+ *
+ *  Saying so is the only honest thing to do: the reader cannot deduce it, and
+ *  the fix is not in the app.
+ */
+export type OfflineBlocker = { reason: "insecure-context"; detail: string } | null
+
+export function offlineBlocker(): OfflineBlocker {
+  if (typeof window === "undefined") return null
+  if (window.isSecureContext && "serviceWorker" in navigator) return null
+  return {
+    reason: "insecure-context",
+    detail: `This site is being served over http://${window.location.host}. `
+      + `Browsers only allow offline caching on https (or localhost), so the app `
+      + `itself cannot be stored for offline use. Saved stories are still on this `
+      + `device, but opening the app with no connection will show nothing.`,
+  }
+}
+
 /** Byte sizes for people, not for machines. */
 export function fmtBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 MB"
