@@ -34,7 +34,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from series_ordering import canon_position, order_members
+from series_ordering import canon_position, order_members, shares_premise
 
 # An author small enough that a canon anchor is evidence rather than noise. Seven
 # works and one declared series is the Sacrifices shape; two hundred HP AUs and
@@ -264,9 +264,14 @@ def run(db, dry_run: bool = True, only_author: str | None = None,
 
     series = placed = 0
     for i, author in enumerate(authors, 1):
-        works = [{"id": r[0], "title": r[1], "summary": r[2], "site": r[3]}
+        # published_at matters: series_ordering interpolates a work that declares
+        # nothing between the ones that do, and without a date it can only put
+        # it last. That is what left the first book of the Sacrifices Arc at the
+        # bottom of its own series.
+        works = [{"id": r[0], "title": r[1], "summary": r[2], "site": r[3],
+                  "published_at": r[4]}
                  for r in db.execute(_t("""
-                     SELECT id::text, title, coalesce(summary,''), site
+                     SELECT id::text, title, coalesce(summary,''), site, published_at
                        FROM stories
                       WHERE lower(author) = lower(:a) AND delisted_at IS NULL
                       LIMIT 400
@@ -303,6 +308,22 @@ def run(db, dry_run: bool = True, only_author: str | None = None,
                         continue          # ambiguous; leave both out
                     members.append({**candidates[0], "series_name": name,
                                     "position": None, "canon": pos})
+
+                # Last: works that declare nothing at all but share the series'
+                # premise. This is what catches a FIRST book — "Saving Connor"
+                # opens the Sacrifices Arc with no position, no canon anchor and
+                # no "sequel to", because there is nothing yet for it to be the
+                # sequel to. What it shares with its own sequels is
+                # Slytherin!Harry and a twin brother named Connor.
+                # series_ordering.shares_premise requires a distinctive word to
+                # appear in at least two established members, and the date
+                # interpolation then places it.
+                have = {m["id"] for ms in groups.values() for m in ms}
+                for w in works:
+                    if w["id"] in have:
+                        continue
+                    if shares_premise(w, members):
+                        members.append({**w, "series_name": name, "position": None})
                 break     # only the author's first series is extended this way
 
         for name, members in groups.items():

@@ -98,33 +98,136 @@ def order_members(members: list[dict]) -> list[dict]:
     """Assign a reading order, using the best signal each member has.
 
     `members` are dicts with `id`, and optionally `position` (an explicit
-    declaration), `summary` and `published_at`. Returns the same dicts, sorted,
-    each with `position` filled in and `position_source` recording which signal
-    decided it — so the UI can say how confident the order is, and so a wrong
-    order is diagnosable rather than mysterious.
+    declaration), `summary` and `published_at`. Returns them sorted, each with
+    `position` filled in and `position_source` recording which signal decided
+    it — so the UI can say how confident an order is, and a wrong one is
+    diagnosable rather than mysterious.
 
-    Explicit positions are never overwritten. A canon anchor fills a gap. Date
-    breaks the remaining ties and nothing more.
+    Explicit positions are never overwritten; a canon anchor fills a gap; date
+    does the rest.
+
+    Date INTERPOLATES rather than trailing
+    --------------------------------------
+    The first version appended everything unplaced to the end, which put the
+    first book of the Sacrifices Arc last. "Saving Connor" opens the series and
+    says so nowhere a machine can read — no position, no canon anchor, just the
+    premise. What it does have is the earliest publication date of the seven, by
+    three weeks.
+
+    So an undated-by-signal member is slotted against the members that DO have a
+    signal, by comparing publication dates. That is much safer than ordering by
+    date outright: the dated anchors come from the author's own statements, and
+    the date is only used to decide where an unplaced work falls BETWEEN them. A
+    work published before every anchored one goes first; one published between
+    two goes between them.
+
+    It still refuses to guess when it cannot. With no date, or no anchored member
+    to compare against, the member keeps its place at the end and is marked
+    "unknown" rather than being given a confident position it has not earned.
     """
-    scored = []
+    def _ts(m):
+        d = m.get("published_at")
+        return d.timestamp() if hasattr(d, "timestamp") else None
+
+    # Anchored members: the ones a real signal placed.
+    anchored = []
     for m in members:
         explicit = m.get("position")
         if explicit is not None:
-            key, source = (0, float(explicit)), "declared"
+            anchored.append((float(explicit), "declared", m))
+            continue
+        canon = canon_position(m.get("summary"))
+        if canon is not None:
+            anchored.append((float(canon), "canon", m))
+    anchored.sort(key=lambda x: x[0])
+
+    # Renumber the anchors 1..n so an unplaced member can be slotted between
+    # them on a scale with room in it, whatever the raw canon numbers were.
+    anchor_points = [(_ts(m), i + 1.0, m) for i, (_p, _s, m) in enumerate(anchored)]
+    dated_anchors = [(ts, rank) for ts, rank, _m in anchor_points if ts is not None]
+
+    placed_ids = {id(m) for _p, _s, m in anchored}
+    scored = []
+    for rank, (_p, source, m) in zip(range(1, len(anchored) + 1), anchored):
+        scored.append((float(rank), source, m))
+
+    for m in members:
+        if id(m) in placed_ids:
+            continue
+        ts = _ts(m)
+        if ts is None or not dated_anchors:
+            # Nothing to compare, so nothing is claimed: last, and labelled.
+            scored.append((float(len(anchored)) + 1000.0, "unknown", m))
+            continue
+        earlier = [r for t, r in dated_anchors if t <= ts]
+        later = [r for t, r in dated_anchors if t > ts]
+        if not earlier:
+            key = min(later) - 0.5          # before every anchored work
+        elif not later:
+            key = max(earlier) + 0.5        # after every anchored work
         else:
-            canon = canon_position(m.get("summary"))
-            if canon is not None:
-                key, source = (0, float(canon)), "canon"
-            else:
-                # No positional signal at all: after everything that has one,
-                # ordered among themselves by date.
-                ts = m.get("published_at")
-                key = (1, ts.timestamp() if hasattr(ts, "timestamp") else 0.0)
-                source = "date" if ts else "unknown"
-        scored.append((key, source, m))
+            key = (max(earlier) + min(later)) / 2.0
+        scored.append((key, "date", m))
 
     scored.sort(key=lambda x: (x[0], str(x[2].get("id"))))
-    out = []
-    for n, (_key, source, m) in enumerate(scored, 1):
-        out.append({**m, "position": n, "position_source": source})
+    return [{**m, "position": n, "position_source": source}
+            for n, (_k, source, m) in enumerate(scored, 1)]
+
+
+# Words too ordinary to identify anything. Everything else is judged by how
+# rarely the author themselves uses it, which is a better test than any fixed
+# list could be.
+_COMMON = {
+    "the", "and", "for", "with", "that", "this", "from", "have", "has", "was",
+    "were", "will", "would", "when", "what", "who", "she", "her", "his", "him",
+    "they", "them", "their", "but", "not", "all", "out", "into", "back", "after",
+    "before", "story", "chapter", "fic", "please", "review", "reviews", "read",
+    "first", "last", "one", "two", "new", "old", "more", "just", "like", "about",
+    "harry", "potter", "hogwarts", "slash", "fluff", "angst", "canon", "years",
+}
+
+_TOKEN = re.compile(r"[A-Za-z][A-Za-z'!-]{2,}")
+
+
+def premise_tokens(summary: str | None) -> set[str]:
+    """Distinctive words from a summary — names, and fandom notation.
+
+    "Slytherin!Harry" survives as one token on purpose: the bang notation is how
+    fandom marks a characterisation, and it is far more identifying than either
+    half alone.
+    """
+    if not summary:
+        return set()
+    out = set()
+    for raw in _TOKEN.findall(summary):
+        tok = raw.strip("'-").lower()
+        if len(tok) < 4 or tok in _COMMON:
+            continue
+        out.add(tok)
     return out
+
+
+def shares_premise(candidate: dict, members: list[dict], min_members: int = 2) -> bool:
+    """Does this work share a distinctive premise with an established series?
+
+    The last resort for membership, and the one that catches a first book.
+    "Saving Connor" opens the Sacrifices Arc while declaring nothing: no
+    position, no canon anchor, no "sequel to". What it shares with its own
+    sequels is the premise — Slytherin!Harry, and a twin brother called Connor —
+    and those words appear in summary after summary because they are what the
+    series is about.
+
+    Deliberately demanding. A token has to appear in at least two established
+    members, so a word that happens to occur once proves nothing, and the
+    ordinary vocabulary of a summary is excluded outright. On its own this would
+    be far too loose to build a series from; as a way of adding a work to a
+    series that other evidence already established, for one author, it holds.
+    """
+    cand = premise_tokens(candidate.get("summary"))
+    if not cand:
+        return False
+    counts: dict[str, int] = {}
+    for m in members:
+        for tok in premise_tokens(m.get("summary")):
+            counts[tok] = counts.get(tok, 0) + 1
+    return any(counts.get(tok, 0) >= min_members for tok in cand)
