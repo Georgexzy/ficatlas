@@ -4568,3 +4568,6 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .offline-elsewhere__list li { padding: 4px 0; }
 .offline-elsewhere__by { color: var(--text-faint); font-size: 13px; }
 .offline-elsewhere__hint { font-size: 12px; color: var(--text-faint); margin: 8px 0 0; }
+/* A work saved on another device, while this one has no connection: shown so
+   you know it exists, dimmed so you do not tap it expecting to read. */
+.offline-elsewhere__unavailable { color: var(--text-faint); }

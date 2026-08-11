@@ -267,6 +267,20 @@ export default function LibraryPage() {
   // with no idea what they had picked. The shelf syncs; the text is re-fetched
   // here, once, on request.
   const [elsewhere, setElsewhere] = useState<{ id: string; title: string; author?: string }[]>([])
+  // Whether these entries can be acted on at all. Set after mount and kept up to
+  // date, because a connection returning mid-visit should quietly make them
+  // tappable rather than requiring a reload.
+  const [online, setOnline] = useState(true)
+  useEffect(() => {
+    const sync = () => setOnline(navigator.onLine)
+    sync()
+    window.addEventListener("online", sync)
+    window.addEventListener("offline", sync)
+    return () => {
+      window.removeEventListener("online", sync)
+      window.removeEventListener("offline", sync)
+    }
+  }, [])
   useEffect(() => {
     let cancelled = false
     import("@/lib/offline").then(async m => {
@@ -1072,18 +1086,31 @@ export default function LibraryPage() {
           {elsewhere.length > 0 && (
             <div className="offline-elsewhere">
               <p className="offline-elsewhere__head">
-                Saved on your other devices — not downloaded here yet
+                {online
+                  ? "Saved on your other devices — not downloaded here yet"
+                  : "Saved on your other devices — not available offline here"}
               </p>
+              {/* Not links while offline.
+                  These are works this device does NOT have — downloading them
+                  needs a connection by definition. Offering them as taps in the
+                  Offline tab invites exactly the wrong conclusion: you tap a
+                  story you know you saved, get "not saved on this device", and
+                  reasonably decide offline saving is broken. Which section it
+                  was in is not something anyone should have to notice. */}
               <ul className="offline-elsewhere__list">
                 {elsewhere.map(e => (
                   <li key={e.id}>
-                    <Link href={`/story/${e.id}`}>{e.title}</Link>
+                    {online
+                      ? <Link href={`/story/${e.id}`}>{e.title}</Link>
+                      : <span className="offline-elsewhere__unavailable">{e.title}</span>}
                     {e.author ? <span className="offline-elsewhere__by"> by {e.author}</span> : null}
                   </li>
                 ))}
               </ul>
               <p className="offline-elsewhere__hint">
-                Open one and tap &quot;⤓ Save offline&quot; to keep it on this device too.
+                {online
+                  ? "Open one and tap \u201c\u2913 Save offline\u201d to keep it on this device too."
+                  : "These aren\u2019t on this device yet, so they can\u2019t be opened until you have a connection."}
               </p>
             </div>
           )}
