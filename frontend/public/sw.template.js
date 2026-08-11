@@ -160,12 +160,46 @@ self.addEventListener("fetch", (event) => {
     return
   }
 
-  // Navigations → network-first; offline, fall back to cache. For the dynamic
-  // reader route, serve any cached reader shell so the JS can boot and read the
-  // requested chapter from IndexedDB.
+  // Navigations → CACHE FIRST, then revalidate in the background.
+  //
+  // This was network-first with no timeout, and that is why opening the app with
+  // no connection showed nothing. With the radio truly off, fetch() rejects
+  // quickly and the fallback runs — but a phone that is ASSOCIATED AND DEAD is
+  // the common case: wifi with no route, a captive portal, a cell radio holding
+  // a bar it cannot use. There fetch() does not reject, it hangs, for as long as
+  // the platform's timeout allows. The cached shell was sitting right there the
+  // whole time and nothing was allowed to serve it.
+  //
+  // It also explains the shape of the complaint — that offline reading only
+  // worked if the app had been left open. A page already on screen performs no
+  // navigation, so it never hits this path.
+  //
+  // Cache-first is the right default for an app shell rather than a compromise:
+  // the shell is versioned by the service worker, so freshness comes from the
+  // update cycle, not from re-fetching the same HTML on every launch. The
+  // background revalidate keeps the copy current for next time, and a deploy
+  // still lands because sw.js is served no-cache and a new worker replaces the
+  // whole cache.
   if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request)
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE)
+      const cached = (await cache.match(request)) ||
+                     (await cache.match(url.origin + url.pathname))
+      if (cached) {
+        // Refresh in the background; the reader is not made to wait for it.
+        event.waitUntil((async () => {
+          try {
+            const fresh = await fetch(request)
+            if (fresh && fresh.ok) {
+              await cache.put(url.origin + url.pathname, fresh.clone())
+              await cache.put(request, fresh)
+            }
+          } catch { /* offline: the cached copy stands */ }
+        })())
+        return cached
+      }
+      // Nothing cached for this URL — the network is the only option.
+      return fetch(request)
         .then((res) => {
           const copy = res.clone()
           caches.open(CACHE).then((c) => {
@@ -196,7 +230,7 @@ self.addEventListener("fetch", (event) => {
               "Open it once while online, then it'll be available here.</p>" +
               "<p><a style='color:#a5b4fc' href='/library'>Go to your library</a></p></body>",
               { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } })
-        }),
-    )
+        })
+    })())
   }
 })
