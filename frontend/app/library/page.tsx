@@ -270,6 +270,9 @@ export default function LibraryPage() {
   useEffect(() => {
     let cancelled = false
     import("@/lib/offline").then(async m => {
+      // Backfill first: works downloaded before the shelf existed are exactly
+      // the ones a reader expects to find on their other device.
+      await m.reconcileShelf().catch(() => 0)
       const shelf = m.readShelf()
       const here = new Set((await m.listOfflineStories()).map(s => s.id))
       if (!cancelled) setElsewhere(shelf.filter(e => !here.has(e.id)))
