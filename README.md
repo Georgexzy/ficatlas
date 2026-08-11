@@ -19,6 +19,10 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Search-first discovery** — you don't need the Import tab to get fics: when a search returns few or no indexed results and AO3 is selected, the app auto-pulls a deeper live batch (and the no-results screen has a one-click "Search AO3 directly" button). The Import tab remains the full power-user control panel for bulk scrapes
 - **Canonical-tag autocomplete in Import** — the Import tab's fandom fields autocomplete index-first, then fall back to AO3's canonical fandom names (`/api/stats/suggest-canonical`) so you can discover and correctly spell new fandoms to scrape, avoiding malformed-tag errors. That vocabulary is synced into our own facets table by `ao3_canonical_fandoms.py` — 73,732 canonical names in 12 requests against AO3's public `/media/<category>/fandoms` listings, refreshed occasionally. It is deliberately **not** AO3's `/autocomplete/` endpoint, which their robots.txt disallows and which this box would otherwise have called on every keystroke
 - **Per-archive result breakdown** — the results bar reads `187 stories · 124 AO3 + 63 FF.net`, which is the one thing no single archive can tell you: that a search found work in more than one place, and how much of it you would have missed searching only the archive you usually use. Counted over the same bounded candidate set as the total, so it costs nothing measurable, and **withheld when the count is capped** — the candidate set behind a capped total is not exactly that size, so the parts would not sum to the headline
+- **Browse by fandom** — 5,025 fandom pages (`/fandoms`, `/fandom/<slug>`), each listing the 50 most-read works **per archive** rather than one merged list. Ranking across archives could only ever return AO3: kudos exists on 239,588 AO3 rows against 1,470 of FanFiction.net's 6.6M, and an AO3 kudos and an FF.net favourite are different units counted by different populations. Reachable from the header and the phone tab bar, and the only route a search engine has into the index — search URLs are `/?q=…`, which robots.txt blocks as an infinite crawl space
+- **`author:` / `by:` operator** — `author:lightning on the wave` finds that author's works. Pen names with spaces need no quotes; quoting is still accepted
+- **Spelling-tolerant tag matching** — freeform tags are whatever the author typed, and 132,714 of 1,574,508 tag values (8.4%) differ from another only by case and punctuation. "fluff" exists as 44 separate values (`fluff!`, `#fluff`, `F L U F F`, `F.L.U.F.F.`); Hurt/Comfort as 33 (`hurt-comfort`, `hurt & comfort`, `hurt|comfort`). Searching any spelling now reaches the rest. Mechanical only: this merges spellings, never meanings — the semantic half genuinely cannot be automated ([FanFicFare #1340](https://github.com/JimmXinu/FanFicFare/issues/1340): Naruto alone has ~300 tags meaning the same thing)
+- **Standing "never show me" list** — ships, tags, fandoms, characters and authors excluded from *every* search automatically, kept on your device and never sent in a shared search link
 - **Click-to-search tags** — every fandom, ship, character, freeform tag and warning is a link that pre-fills the corresponding filter
 - **"Surprise me"** — random discovery on the landing page (real stories only, no drabbles/art), optionally scoped to your active fandom filter
 - **Cross-site filter correctness** — fandom is matched strictly while secondary facets (character/ship/tag) and missing metadata (word count, status, rating, language) are matched permissively, so dump rows with sparse metadata surface correctly without flooding fandom searches
@@ -193,7 +197,32 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **FicAlley** for offline HP archive with full text
 - **FicHub** for any fresh per-URL fetch
 
+### Series detection
+Neither AO3's series field nor a shared title word reaches most of what readers
+call a series, and FanFiction.net has no series feature at all — its authors
+write the relationship into the summary by hand. 49,014 series are currently
+detected. Four detectors, each reading a different signal, and each refusing
+more than it accepts:
+
+- **Shared titles** (`series_detect.py`) — the original: "Dangerverse Book 1" and its siblings. Useless where titles have nothing in common
+- **Declared position** (`series_from_summary.py`) — "part 7 of Sacrifices", "Book Two of the X". A positional declaration is what NAMES a series and proves the author thinks in sequence; a bare mention ("set in my X universe") is far too loose to group on alone and is only used to extend a series already established
+- **Sequel chains** (`series_from_sequels.py`) — 103,302 works say "Sequel to X" and ~10,000 say "Prequel to X". That is a *directed* statement, so chaining the edges orders the sequence. 73% of declarations resolve against the author's own catalogue. Branches (two sequels to one story) and cycles are dropped rather than resolved by guesswork — a fork is not a reading order
+- **Ordering** (`series_ordering.py`) — an explicit position wins; then a canon anchor ("AU of GoF" means the fourth book, so it sits fourth); then publication date, which only ever decides where an unplaced work falls *between* anchored ones. Date never orders anything alone: authors repost, backdate, and publish prequels years later. Each member records which signal placed it
+
+The worked example is Lightning on the Wave's Sacrifices Arc — seven works whose
+titles share not one word, one stated position, and the rest of the order in
+phrases like "AU of CoS". Book three was missing from the index entirely and was
+recovered through the Wayback route above:
+
+```
+1 Saving Connor                        [date]      5 Freedom And Not Peace     [canon: GoF]
+2 No Mouth But Some Serpent's          [canon:CoS] 6 Wind That Shakes the Seas [canon: OoTP]
+3 Comes Out of Darkness Morn           [canon:PoA] 7 A Song In Time of Revolution [canon: HBP]
+4 Maze of Light                        [date]      8 I Am Also Thy Brother    [declared: part 7]
+```
+
 ### Settings & UX
+- **Your data** — every group the site keeps on your device (recent searches, reading progress, bookmarks, mute list, preferences) with its size, a Clear button per group, and a JSON export, so "it never leaves your device" is something you can check rather than take on trust
 - **Settings page** at `/settings` — tracked fandom, poll-on-load, live AO3 fetch, default sites/sort/per-page, feed filters, reader font and width, explicit visibility, and an advanced **direct-crawl toggle** (off by default). Persisted server-side
 - **Direct crawl toggle** — opt-in scheduled crawling of AO3/FF.net. AO3 works from a normal home/residential connection (its heavy filtered-works and feed pages are just slow, ~5–20s, which the app now waits out with generous granular timeouts and same-host 525 retries). FF.net stays Cloudflare-blocked for direct server requests regardless of IP — use one-click FicHub URL import for it. Controlled at runtime from the DB setting (no restart); `GET /api/library/crawl-status` reports recent crawl outcomes
 - **Index status widget** — per-site counts, total stories, total words, DLP and HPFFA counts
@@ -560,7 +589,8 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
   disallowed outright and are no longer used by anything automated:
   `/works/search?` (the free-text live-fetch path — fandom-scoped searches use
   the permitted `/tags/<tag>/works` instead) and `/autocomplete/`.
-- **FF.net live search and bulk crawling from cloud IPs** — FanFiction.net runs an aggressive interactive Cloudflare challenge that blocks server-side scraping from datacenter IPs entirely. URL-based import works through FicHub (which solves the challenge on its end). For bulk freshness you'd need a residential-proxy browser API.
+- **FanFiction.net cannot be crawled at all, and the Internet Archive is the way round it.** FF.net has blocked automated access since 2021 and does it with Cloudflare. Eight endpoints were tested from this host — story pages, listings, author profiles, the Atom and RSS feeds, and both mobile URLs — and every one returns the same "Just a moment" challenge, so this is not a datacenter-IP problem. FicHub (which solves the challenge on its end) still works per URL but rate-limits hard and has itself reported FF.net as "fragile". The documented community workarounds are a human loading pages in their own browser, or Cloudflare-evasion proxies such as FlareSolverr and `undetected-chromedriver`; the second is not something this project will use.
+  What does work is not asking FF.net. The Archive crawls it independently, their CDX API is public, and `web.archive.org` is not behind the challenge — 20,000+ successful FF.net story captures since January 2026, which was the query limit rather than the ceiling. `ffnet_wayback.py` reads those snapshots for metadata and text, the same route `wayback_harvest.py` already takes for AO3 and on the same footing: the OTW's own scraping statement names backing works up to the Wayback Machine as acceptable use. It is **not** parity with AO3 — coverage is partial, it lags by however long a recrawl takes, and most captures are redirects or non-first chapters rather than usable pages. Measured against the Archive's index, 2,385 of 2,464 sampled FF.net story ids are already here, so the bulk dump is ~96% complete and this closes the remainder.
 - **AO3 latency, not blocking** — from a normal residential connection AO3 is reachable, but its filtered-works and atom-feed endpoints are slow to generate (≈7s typical, spiking to 15–20s under load) and intermittently return Cloudflare 525s when their origin is overloaded. The app handles this with generous granular timeouts, same-host 525 retries with backoff, and a brief self-cooldown only after many consecutive failures (not a single slow response). On a datacenter IP AO3 may block outright (525/timeouts on everything) — a Tailscale exit node or WARP routes around that. The HuggingFace dump, FicHub per-URL import, DLP, and FicAlley remain the fastest bulk paths.
 
 ## Acknowledgements
