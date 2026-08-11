@@ -18,6 +18,9 @@ export interface OfflineChapter {
 }
 
 export interface OfflineStory {
+  /** Chapters that had text when saved. Absent on records written before this
+   *  existed, which is why the audit falls back to "any text at all". */
+  textChapters?: number
   id: string
   title: string
   author: string
@@ -180,12 +183,18 @@ export async function auditOfflineStories(): Promise<OfflineAudit> {
                         reason: "no chapters saved" })
       continue
     }
-    // A chapter row with no text is a half-written save or a partially evicted
-    // one; either way it will read as a blank page offline.
-    const empty = chapters.filter(c => !c.content || !c.content.trim()).length
-    if (empty) {
-      out.broken.push({ id: story.id, title: story.title,
-                        reason: `${empty} of ${chapters.length} chapters are empty` })
+    // Compared against what the save RECORDED, not against perfection. A story
+    // can legitimately contain a chapter with no text; what indicates eviction
+    // is text that has since gone missing.
+    const withText = chapters.filter(c => c.content && c.content.trim()).length
+    const expected = story.textChapters
+    if (expected == null ? withText === 0 : withText < expected) {
+      out.broken.push({
+        id: story.id, title: story.title,
+        reason: expected == null
+          ? "no chapter text is left"
+          : `${expected - withText} of ${expected} chapters have lost their text`,
+      })
       continue
     }
     out.ok.push(story.id)
@@ -444,12 +453,34 @@ export async function downloadStoryForOffline(
   const total = numbers.length
   const chapters: OfflineChapter[] = []
   for (const [i, n] of numbers.entries()) {
-    const r = await fetch(`/api/stories/${storyId}/chapters/${n}`)
-    if (!r.ok) {
+    // Wait out our own rate limiter rather than failing the download.
+    //
+    // Saving a long work means fetching every chapter as fast as the loop can
+    // go, and the read limit is 300 a minute — so a 199-chapter story reliably
+    // hit 429 partway through and threw, discarding everything fetched so far.
+    // Measured: "Chapter 166 failed (HTTP 429)" and nothing saved at all.
+    //
+    // This is a reader downloading a work they are already allowed to read, one
+    // request at a time, so waiting is the correct response to being asked to
+    // slow down — not abandoning. Retry-After is honoured when sent, and the
+    // backoff is capped so a genuinely stuck server still ends the attempt
+    // rather than hanging forever.
+    let r: Response | null = null
+    for (let attempt = 0; attempt < 6; attempt++) {
+      r = await fetch(`/api/stories/${storyId}/chapters/${n}`)
+      if (r.status !== 429 && r.status < 500) break
+      const retryAfter = Number(r.headers.get("Retry-After"))
+      const waitMs = Math.min(
+        (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2 ** attempt) * 1000,
+        30_000)
+      onProgress?.(i, total)          // keep the UI honest while we wait
+      await new Promise(res => setTimeout(res, waitMs))
+    }
+    if (!r || !r.ok) {
       // Skip a chapter we can't fetch rather than losing the whole download.
       // A partially saved story is far more useful than nothing.
-      if (r.status === 404) continue
-      throw new Error(`Chapter ${n} failed (HTTP ${r.status})`)
+      if (r && r.status === 404) continue
+      throw new Error(`Chapter ${n} failed (HTTP ${r ? r.status : "no response"})`)
     }
     const ch = await r.json()
     chapters.push({
@@ -487,6 +518,11 @@ export async function downloadStoryForOffline(
     bytes,
     schema: SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
+    // How many chapters had text when this was written. The distinction that
+    // matters later is "became empty" (evicted) versus "was always empty" — a
+    // real chapter can legitimately hold no text, and treating those as damage
+    // rejects perfectly good downloads.
+    textChapters: chapters.filter(c => c.content && c.content.trim()).length,
   })
 
   // Read it back before claiming success.
@@ -499,16 +535,24 @@ export async function downloadStoryForOffline(
   //
   // Reading the row back costs one transaction and turns a silent failure into
   // an error the reader sees while they still have a connection to fix it.
+  const expectedText = chapters.filter(c => c.content && c.content.trim()).length
   const verify = await getOfflineStory(storyId)
-  if (verify && verify.chapters?.length
-      && !verify.chapters.some(c => !c.content || !c.content.trim())) {
+  const storedText = verify?.chapters?.filter(c => c.content && c.content.trim()).length ?? 0
+  // Readable, not perfect. The first version of this demanded that EVERY stored
+  // chapter have text, which deleted any story containing a legitimately empty
+  // one — an author's note, a placeholder, a chapter whose text this index does
+  // not hold. Those saved fine before and are worth keeping. What the readback
+  // is actually for is catching a write that did not survive, so it compares
+  // against what was just downloaded.
+  const ok = !!verify && (verify.chapters?.length ?? 0) === chapters.length
+             && storedText >= expectedText
+  if (ok) {
     // Only after the readback proves it is there. Putting a work on a shelf that
     // syncs to other devices when the download actually failed would spread the
     // failure rather than the story.
     addToShelf({ id: storyId, title: meta.title, author: meta.author })
   }
-  if (!verify || !verify.chapters?.length
-      || verify.chapters.some(c => !c.content || !c.content.trim())) {
+  if (!ok) {
     await deleteOfflineStory(storyId).catch(() => {})
     throw new Error(
       "Saved, but it could not be read back — this device may be out of space. "
