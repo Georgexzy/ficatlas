@@ -14,7 +14,18 @@ import "./globals.css"
 // both more accurate and more persuasive, because a reader who uses two of them
 // immediately understands what the third buys. And "search" alone leaves out the
 // half that matters: this finds work and sends you to the archive that hosts it.
+// Baked at build time by the bundler, not read at runtime — see the note on
+// NEXT_PUBLIC_SITE_URL in frontend/Dockerfile.
+const SITE = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
+
 export const metadata: Metadata = {
+  // Without metadataBase, Next resolves every relative URL in this block against
+  // localhost and says so in the build log. That makes the canonical link and
+  // the Open Graph URL point at a host no crawler or chat client can reach, so a
+  // shared link renders bare and Google is told the page's real address is one
+  // it cannot fetch.
+  metadataBase: new URL(SITE),
+  alternates: { canonical: "/" },
   // `template` applies to pages that set their own title — a story page supplies
   // "Title — Author" and gets " · FicAtlas" appended, so a browser tab or a
   // shared link says whose site it is without the story page repeating it.
@@ -32,6 +43,26 @@ export const metadata: Metadata = {
     + "FicAlley in one place, then read them on the archive that hosts them. "
     + "No adverts, no tracking, no AI trained on fic.",
   manifest: "/manifest.json",
+  // What a link to the site looks like when someone pastes it into Discord,
+  // Reddit or a group chat, which for a site like this is most of how it
+  // travels. Without these it renders as a bare URL. Deliberately reusing the
+  // same title and description rather than writing a second, drifting copy.
+  openGraph: {
+    type: "website",
+    siteName: "FicAtlas",
+    url: "/",
+    title: "FicAtlas — search AO3, FanFiction.net and FicAlley at once",
+    description:
+      "Search 19+ million fanworks across three archives in one place, then "
+      + "read them on the archive that hosts them.",
+  },
+  twitter: {
+    card: "summary",
+    title: "FicAtlas — search AO3, FanFiction.net and FicAlley at once",
+    description:
+      "Search 19+ million fanworks across three archives in one place, then "
+      + "read them on the archive that hosts them.",
+  },
 }
 
 // Proper mobile scaling — without this, phones render the page at desktop

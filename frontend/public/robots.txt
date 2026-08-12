@@ -141,11 +141,10 @@ Disallow: /
 User-agent: Perplexity-User
 Disallow: /
 
-# Sitemap: deliberately not declared.
+# The domain exists now, so the directive is real.
 #
-# The directive needs an absolute URL and there is no domain yet, so anything
-# written here would be a guess that points nowhere. /sitemap.xml is served and
-# is allowed above; crawlers find it without being told. Add the line below,
-# with the real host, once a domain exists:
-#
-#   Sitemap: https://example.com/sitemap.xml
+# It needs an absolute URL, which is also why the sitemap itself has to be built
+# knowing its own origin — see NEXT_PUBLIC_SITE_URL in frontend/Dockerfile. An
+# image built without it advertises http://localhost:3000 URLs here, and Google
+# parses the sitemap and then discards every entry as off-domain.
+Sitemap: https://ficatlas.com/sitemap.xml
