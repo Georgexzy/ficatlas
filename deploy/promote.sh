@@ -153,7 +153,12 @@ cmd_promote() {
     tag=$(git rev-parse --short HEAD)
     # A dirty tree would produce an image that matches no commit, and the whole
     # point of tagging by SHA is being able to say what is running.
-    if [ -n "$(git status --porcelain)" ]; then
+    #
+    # active.conf is excluded because THIS SCRIPT rewrites it on every deploy, so
+    # counting it would mark every deploy after the first as dirty and the tag
+    # would stop meaning anything. It stays tracked rather than ignored so a
+    # fresh clone has a valid upstream file and nginx can start at all.
+    if [ -n "$(git status --porcelain -- . ':(exclude)deploy/upstreams/active.conf')" ]; then
         tag="${tag}-dirty"
         c_warn "Working tree is dirty — tagging ${tag}"
     fi
@@ -162,7 +167,8 @@ cmd_promote() {
     echo "deploying to  : ${target}"
     echo "image tag     : ${tag}"
     if [ "$dry" = yes ]; then
-        c_warn "\n--dry-run: stopping here."
+        echo
+        c_warn "--dry-run: stopping here."
         return 0
     fi
 
