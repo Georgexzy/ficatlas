@@ -118,11 +118,58 @@ The API rate-limits per `CF-Connecting-IP`, and nginx passes it through
 untouched — losing that header would put every visitor in one bucket and the
 limiter would throttle the whole site as though it were one abusive client.
 
-Search responses already send `Cache-Control: public, max-age=120,
+Search responses send `Cache-Control: public, max-age=120,
 stale-while-revalidate=480` for anonymous visitors and `private, no-store` for
-signed-in ones, so Cloudflare will cache the popular anonymous queries. That is
-the shared cache the search code was written for, and on this box it matters more
-than usual: a cold search reads from a database far larger than the page cache.
+signed-in ones. That is the shared cache the search code was written for, and on
+this box it matters more than usual: a cold search reads from a database far
+larger than the page cache.
+
+Sending the header is necessary and **not sufficient**. Cloudflare does not cache
+a response on a dynamic path just because it says it may — `/api/*` comes back
+`cf-cache-status: DYNAMIC` until a Cache Rule declares the path eligible. Check
+it with the header, not by assumption:
+
+```bash
+curl -sD- -o /dev/null 'https://ficatlas.com/api/search?q=harry' | grep -i cf-cache-status
+```
+
+The rule to create (Caching → Cache Rules), which is free on this plan:
+
+| field | value |
+|---|---|
+| expression | `(starts_with(http.request.uri.path, "/api/search") or starts_with(http.request.uri.path, "/api/stats/suggest") or starts_with(http.request.uri.path, "/api/hubs")) and len(http.request.cookies["sat"]) == 0` |
+| cache eligibility | Eligible for cache |
+| edge TTL | Respect origin |
+| browser TTL | Respect origin |
+
+The cookie clause is deliberate. Cloudflare's default cache key does not vary on
+cookies, so without it a cached anonymous response could be handed to a signed-in
+reader — an operator would silently lose the delisted works their account is
+supposed to show. Respecting the origin TTL is the second guard: the signed-in
+branch sends `private, no-store`, which Cloudflare will not store.
+
+## Why the origin speaks plain HTTP
+
+Visitors are on HTTPS throughout; nothing is served in the clear. Two hops inside
+this host are plain HTTP, and both are unreachable from outside it:
+
+- **cloudflared → nginx**, `http://localhost:8080`. cloudflared runs in nginx's
+  network namespace, so this is loopback — it never reaches a network interface,
+  let alone the LAN. TLS here would encrypt a socket to itself.
+- **web → nginx**, `http://nginx:8081`, on the internal compose network. nginx's
+  8080/8081 are container ports and are never published to the host, so the only
+  way in is through the tunnel.
+
+The encryption lives where the traffic actually travels: Cloudflare terminates
+TLS at the edge, and the edge→origin leg is cloudflared's own outbound QUIC
+connection. This is the same shape the tailnet had, where the app spoke plain
+HTTP on port 3000 and WireGuard carried it — which is exactly why `FORCE_HTTPS`
+must stay off there and on here (see `frontend/next.config.ts`).
+
+`Always Use HTTPS` is on at the zone, so `http://ficatlas.com` 301s to HTTPS
+rather than answering, and the minimum TLS version is 1.2. HSTS comes from the
+app's own header, not the zone setting, so it stays in version control next to
+the rest of the security headers.
 
 ## When something is wrong
 
