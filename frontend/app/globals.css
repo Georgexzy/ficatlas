@@ -4090,6 +4090,9 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
   cursor: pointer;
 }
+/* Sits under the invite field, inside the label, so it reads as guidance for
+   that box rather than a note about the form as a whole. */
+.auth-note { display: block; margin-top: 6px; font-size: 11px; line-height: 1.45; color: var(--text-faint); }
 .auth-hint--forgot { text-align: center; margin-top: 12px; }
 .auth-hint--forgot a { color: var(--accent); text-decoration: none; }
 .auth-hint--forgot a:hover { text-decoration: underline; }
