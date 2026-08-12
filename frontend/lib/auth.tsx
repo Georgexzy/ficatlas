@@ -26,7 +26,7 @@ interface AuthContextType {
   syncing: boolean
   lastSyncAt: number | null
   login: (username: string, password: string) => Promise<void>
-  signup: (username: string, password: string) => Promise<void>
+  signup: (username: string, password: string, invite?: string) => Promise<void>
   logout: () => Promise<void>
   syncNow: () => Promise<void>
   changePassword: (current: string, next: string) => Promise<void>
@@ -281,9 +281,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await doMerge(undefined, true)   // merge this device's local data with the account's server data
   }, [doMerge])
 
-  const signup = useCallback(async (username: string, password: string) => {
+  const signup = useCallback(async (username: string, password: string, invite?: string) => {
     const fd = new FormData()
     fd.append("username", username); fd.append("password", password)
+    // Sent only when the server says it wants one (see /api/auth/signup-policy).
+    // Without this the invite mode was unusable rather than restrictive: the
+    // form posted username and password, the server compared "" against the
+    // code, and every account creation on the public site failed 403 while the
+    // "Create account" tab went on offering it.
+    if (invite) fd.append("invite", invite)
     const r = await fetch("/api/auth/signup", { method: "POST", body: fd, credentials: "include" })
     if (!r.ok) {
       const e = await r.json().catch(() => ({}))
