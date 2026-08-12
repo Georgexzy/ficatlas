@@ -137,7 +137,12 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=128m
-      - /app/.next/cache:size=256m
+      # uid/gid, or the tmpfs mounts root-owned and the container (uid 1000)
+      # cannot create anything in it. Next then logs "Failed to update prerender
+      # cache … EACCES" once per request and silently runs with its fetch cache
+      # disabled — which is what makes sitemap.ts's `revalidate: 86400` a no-op
+      # and sends every sitemap fetch to the API.
+      - /app/.next/cache:size=256m,uid=1000,gid=1000
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
@@ -163,7 +168,12 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=128m
-      - /app/.next/cache:size=256m
+      # uid/gid, or the tmpfs mounts root-owned and the container (uid 1000)
+      # cannot create anything in it. Next then logs "Failed to update prerender
+      # cache … EACCES" once per request and silently runs with its fetch cache
+      # disabled — which is what makes sitemap.ts's `revalidate: 86400` a no-op
+      # and sends every sitemap fetch to the API.
+      - /app/.next/cache:size=256m,uid=1000,gid=1000
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
