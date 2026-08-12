@@ -314,6 +314,40 @@ function StoryCard({ story }: { story: StoryCard }) {
   }, [story.tags, story.relationships, story.characters])
 
   const [bookmarked, setBookmarked] = useState(false)
+  // Follow state, asked for per card only when it could exist.
+  //
+  // One small request per unfinished work on the page rather than a field on
+  // the search response: search is the expensive query and is cached at the
+  // edge for everyone, so a per-viewer field in it would either be wrong for
+  // somebody or make the response uncacheable. This is the cheap side.
+  const [following, setFollowing] = useState(false)
+  const [followBusy, setFollowBusy] = useState(false)
+  useEffect(() => {
+    if (!user || story.status !== "in_progress") return
+    let live = true
+    fetch(`/api/follows/${story.id}`, { credentials: "include" })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (live && d) setFollowing(!!d.following) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [user, story.id, story.status])
+
+  const toggleFollow = async (e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation()
+    if (followBusy) return
+    setFollowBusy(true)
+    const next = !following
+    setFollowing(next)                       // optimistic; the row is a toggle
+    try {
+      const r = await fetch(`/api/follows/${story.id}`,
+        { method: next ? "POST" : "DELETE", credentials: "include" })
+      if (!r.ok) setFollowing(!next)         // put it back if the server refused
+    } catch {
+      setFollowing(!next)
+    } finally {
+      setFollowBusy(false)
+    }
+  }
   const [importing, setImporting] = useState(false)
   const [importedId, setImportedId] = useState<string | null>(null)
   // Characters and freeform tags are folded away by default.
@@ -593,6 +627,24 @@ function StoryCard({ story }: { story: StoryCard }) {
               </button>
             )}
           </>
+        )}
+        {/* Follow belongs here, not only on the story page. Deciding to keep up
+            with a WIP happens while scanning results — "52/? chapters, updated
+            four months ago" is the whole prompt — and making it cost a page
+            load meant the intent had usually passed by the time you could act
+            on it.
+
+            Only for a signed-in reader: following is stored server-side, so the
+            control would otherwise be a button whose only outcome is a 401.
+            Unfinished works only, since there is nothing to be told about a work
+            that is complete. */}
+        {user && story.status === "in_progress" && (
+          <button className={`card-btn ${following ? "card-btn--on" : ""}`}
+                  onClick={toggleFollow} disabled={followBusy}
+                  title={following ? "Stop following" : "Tell me when this updates"}
+                  aria-label={following ? "Stop following" : "Follow for updates"}>
+            {following ? "following" : "+ follow"}
+          </button>
         )}
         <button className={`card-btn ${bookmarked ? "card-btn--on" : ""}`} onClick={toggleBookmark}
                 aria-label={bookmarked ? "Remove bookmark" : "Bookmark"}>
