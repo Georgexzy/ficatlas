@@ -415,6 +415,34 @@ def _should_fetch_live(sort: str, page: int, q: Optional[str]) -> bool:
 
 # ── Main endpoint ─────────────────────────────────────────────────────────────
 
+def _apply_cache_headers(response, viewer) -> None:
+    """Tell a shared cache in front of us what it may do with this response.
+
+    Every exit from search() must call this, including the cache hits. It used to
+    be set once at the bottom, which meant the two early returns for an L1 or
+    shared-tier hit answered with no Cache-Control at all — and those are exactly
+    the popular, repeated queries most worth caching at the edge. Cloudflare saw
+    the first (slow, uncached) answer as cacheable and every subsequent one as
+    DYNAMIC, so the queries that would have benefited most were the only ones the
+    edge refused to keep. The design defeated itself precisely where it should
+    have paid off.
+
+    Only for anonymous readers. A signed-in viewer may be an operator, whose
+    results include delisted works, and even an ordinary account is a viewer
+    whose response must never be handed to somebody else by a shared proxy.
+    `private` on that branch says exactly that: the browser may keep it, no
+    shared cache may.
+    """
+    if response is None:
+        return
+    if viewer is None:
+        response.headers["Cache-Control"] = (
+            f"public, max-age={SEARCH_CACHE_SECONDS}, "
+            f"stale-while-revalidate={SEARCH_CACHE_SECONDS * 4}")
+    else:
+        response.headers["Cache-Control"] = "private, no-store"
+
+
 @router.get("", response_model=SearchResponse)
 def search(          # NOT async — see below
     q:                     Optional[str] = Query(None),
@@ -578,6 +606,7 @@ def search(          # NOT async — see below
         _ck = cache_key(str(request.url.query), is_operator)
         _hit = CACHE.get(_ck)
         if _hit is not None:
+            _apply_cache_headers(response, viewer)
             return _hit
         # L1 missed. Before paying for the query, ask the shared tier: with four
         # workers this is usually a sibling that has already done exactly this
@@ -587,6 +616,7 @@ def search(          # NOT async — see below
             try:
                 _hit = SearchResponse.model_validate_json(_shared)
                 CACHE.put(_ck, _hit)   # promote, so the next one skips both hops
+                _apply_cache_headers(response, viewer)
                 return _hit
             except Exception:
                 # A stale entry from before a response-shape change. Fall through
@@ -1277,19 +1307,7 @@ def search(          # NOT async — see below
     # front — Cloudflare, in the deployment this is heading for — is ONE cache
     # shared by every visitor, which is the same Zipf-shaped win multiplied by
     # the whole audience instead of by one process.
-    #
-    # Only for anonymous readers. A signed-in viewer may be an operator, whose
-    # results include delisted works, and even an ordinary account is a viewer
-    # whose response should never be handed to somebody else by a shared proxy.
-    # `private` on that branch says exactly that: the browser may keep it, no
-    # shared cache may.
-    if response is not None:
-        if viewer is None:
-            response.headers["Cache-Control"] = (
-                f"public, max-age={SEARCH_CACHE_SECONDS}, "
-                f"stale-while-revalidate={SEARCH_CACHE_SECONDS * 4}")
-        else:
-            response.headers["Cache-Control"] = "private, no-store"
+    _apply_cache_headers(response, viewer)
     return _response
 
 
