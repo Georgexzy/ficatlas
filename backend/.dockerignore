@@ -1,0 +1,44 @@
+# What must never end up inside the image.
+#
+# There was no .dockerignore here, and the cost was not subtle: `COPY . .`
+# produced an 8.53GB layer against 271MB of installed dependencies, because
+# data/ holds the downloaded source dumps — a 6.9GB AO3 metadata JSONL and a
+# 1.1GB HuggingFace cache. Every backend image carried a private copy of both.
+#
+# That is paid three times over. The image is ~12GB instead of ~800MB; every
+# build ships an 8GB context to the daemon before it can start; and every
+# retained deploy generation costs another copy on a disk that runs at 83%.
+#
+# data/ is not lost by excluding it. In dev the repo is bind-mounted, so it is
+# there at /app/data regardless. In the public tier the worker mounts a named
+# volume at the same path. Nothing reads these files at import time — they are
+# inputs to importer scripts run by hand — so an image without them is fully
+# functional and can re-download on demand.
+data/
+
+# Python build artefacts. Stale .pyc files compiled against a different
+# interpreter are worse than useless in an image.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets. The image is built from this directory; a stray .env would be baked
+# in and readable by anyone who can pull or run it.
+.env
+.env.*
+!.env.example
+
+# Local noise.
+*.log
+*.dump
+*.sqlite
+.venv/
+venv/
+.DS_Store
+
+# tests/ is deliberately NOT excluded: the documented way to run the suite is
+# `docker exec ficatlas-backend-1 python -m pytest tests/`, which needs them
+# present in the image.

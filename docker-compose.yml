@@ -1,5 +1,16 @@
+# See docker-compose.public.yml for the reasoning: Docker's json-file driver is
+# unbounded by default, and an unbounded log on this disk eventually stops
+# Postgres writing. The dev stack is quieter than the public one but runs the
+# worker, which logs continuously.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
+    logging: *logging
     image: postgres:16-alpine
     # No service had a restart policy, which is why the whole stack sat dead for
     # four weeks after a reboot. Docker itself is enabled at boot, so this alone
@@ -124,6 +135,7 @@ services:
       retries: 10
 
   backend:
+    logging: *logging
     build: ./backend
     # Named so the worker can reuse this exact image instead of compose building
     # a second identical 2.7GB copy under its own service name.
@@ -204,6 +216,7 @@ services:
     cpus: 2.0
 
   frontend:
+    logging: *logging
     build: ./frontend
     restart: unless-stopped
     environment:
@@ -229,6 +242,7 @@ services:
   # independent of the API's.
 
   worker:
+    logging: *logging
     image: ficatlas-backend    # same image as the API; built by the backend service
     restart: unless-stopped
     command: python worker.py

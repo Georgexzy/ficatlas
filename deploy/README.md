@@ -48,11 +48,22 @@ stopped and rolling back means deploying an older SHA.
 
 ## Disk
 
-The backend image is ~12GB and the database volume ~41GB on a disk that runs
-around 80% full. One build left 26GB of build cache behind. `promote.sh` prunes
-build cache and keeps only the last three tags of each image — do not remove
-that step, because a full disk stops Postgres writing and the site then fails
-for a reason with nothing to do with the deploy that caused it.
+The database volume is ~41GB on a disk that runs above 80% full, so deploy
+artefacts have to be kept in check. `promote.sh` prunes build cache and keeps
+the last two tags of each image — do not remove that step, because a full disk
+stops Postgres writing and the site then fails for a reason with nothing to do
+with the deploy that caused it.
+
+The backend image was 11.8GB and is now 533MB. There was no `.dockerignore`, so
+`COPY . .` baked `backend/data/` — a 6.9GB AO3 metadata dump and a 1.1GB
+HuggingFace cache — into every image, an 8.53GB layer against 271MB of actual
+dependencies. It was paid three times: image size, an 8GB build context shipped
+on every build, and a fresh copy per retained deploy generation. Both
+`.dockerignore` files are load-bearing; deleting them silently restores all of
+that.
+
+Container logs are capped at 10MB x 3 per service in both compose files. Docker's
+json-file driver is unbounded by default, and nginx logs every request.
 
 ## The tunnel
 
@@ -76,7 +87,15 @@ Public hostname (Networks → Tunnels → your tunnel → Public Hostname):
 |---|---|
 | subdomain | *(blank)* — and a second entry for `www` |
 | domain | `ficatlas.com` |
-| service | `HTTP` → `nginx:8080` |
+| service | `HTTP` → `localhost:8080` |
+
+`localhost` because cloudflared shares nginx's network namespace
+(`network_mode: service:nginx`), so nginx *is* localhost to it. A service name
+like `nginx:8080` puts Docker's embedded DNS in the path and is the step that
+most often refuses to save. nginx listens on both IPv4 and IPv6 — `localhost`
+resolves to `::1` first, and an IPv4-only listener refuses it while answering
+`127.0.0.1` perfectly, which looks like a broken tunnel rather than a missing
+listener.
 
 It must point at **nginx**, not at a web container. Pointing it at `web-blue`
 pins the public site to one colour and makes every deploy visible again.
