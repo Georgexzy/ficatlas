@@ -1137,6 +1137,25 @@ kbd {
 /* ── Responsive: stack search bar on mobile ───────────────────────────────── */
 /* ── Mobile filters trigger (hidden on desktop) ──────────────────────────── */
 .filters-trigger { display: none; }
+
+/* Desktop landing: stow the filter panel until there are results to filter.
+   Scoped above the mobile breakpoint because below it the panel is already a
+   drawer and is already out of the way — stowing it there would only take away
+   the drawer the phone layout depends on. */
+@media (min-width: 701px) {
+  .sidebar--stowed { display: none; }
+  /* The handle is a flex item in its own right, so hiding the panel alone left
+     a 6px rule floating against the empty left edge. */
+  .sidebar__resizer--stowed { display: none; }
+  .filters-trigger--stowed {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--surface2); border: 1px solid var(--border2);
+    color: var(--text-dim); padding: 8px 14px; border-radius: 8px;
+    font-size: 13px; cursor: pointer; margin: 2px 0 0;
+  }
+  .filters-trigger--stowed:hover { color: var(--text); border-color: var(--accent-dim); }
+}
+
 .sidebar__mobile-head { display: none; }
 .sidebar__mobile-apply { display: none; }
 .sidebar-backdrop { display: none; }
@@ -4169,6 +4188,62 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .empty__promises li::before { content: "✓"; color: var(--green); }
 .empty__promises a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .empty__promises a:hover { color: var(--accent); }
+
+/* Opens the folded character and tag rows on a result card. Deliberately quiet
+   — it is a disclosure, not an action, and it must not compete with "Read on
+   AO3" a few pixels below it. */
+.card__tags-more {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: none; padding: 2px 0; margin-top: 2px;
+  color: var(--text-faint); font-family: var(--font-mono); font-size: 11px;
+  cursor: pointer; text-align: left;
+}
+.card__tags-more::before { content: "+"; }
+.card__tags-more:hover { color: var(--accent); }
+.card__tags-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* ── Landing: somewhere to go without a search in mind ─────────────────────
+   Sits below the promises because it is the second thing offered, not the
+   first: the search bar is still the answer for anyone who knows what they
+   want. It exists for everyone else, who previously got an empty two-thirds
+   of a screen. */
+.empty__browse {
+  margin: 52px auto 0; max-width: 720px;
+  border-top: 1px solid var(--border); padding-top: 28px;
+}
+.empty__browse-title {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 400;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--text-faint); margin: 0 0 16px; text-align: center;
+}
+.empty__hubs {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+}
+.empty__hub {
+  display: inline-flex; align-items: baseline; gap: 8px;
+  background: var(--surface2); border: 1px solid var(--border2);
+  color: var(--text); border-radius: 999px;
+  padding: 7px 14px; font-size: 13px; cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.12s, color 0.12s;
+}
+.empty__hub:hover { border-color: var(--accent-dim); color: var(--accent); }
+.empty__hub:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The count is what makes one of these worth clicking over another, so it is
+   present but never competes with the name. */
+.empty__hub-count {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
+}
+.empty__hub:hover .empty__hub-count { color: inherit; }
+.empty__browse-more { margin: 18px 0 0; text-align: center; font-size: 13px; }
+.empty__browse-more a { color: var(--text-dim); text-decoration: none; }
+.empty__browse-more a:hover { color: var(--accent); text-decoration: underline; }
+
+@media (max-width: 700px) {
+  .empty__browse { margin-top: 36px; padding-top: 22px; }
+  .empty__hub { padding: 8px 13px; }
+}
 
 /* ── Role preview banner ───────────────────────────────────────────────────
    Loud on purpose. The failure this prevents is forgetting you are in preview
