@@ -182,6 +182,7 @@ cmd_promote() {
     # colour it was built against and stops following deploys.
     DEPLOY_TAG=$tag docker build -q --build-arg FORCE_HTTPS=true \
         --build-arg INTERNAL_API_URL=http://nginx:8081 \
+        --build-arg NEXT_PUBLIC_SITE_URL=https://ficatlas.com \
         -t "ficatlas-frontend:${tag}" ./frontend
     DEPLOY_TAG=$tag docker build -q -t "ficatlas-backend:${tag}"  ./backend
     c_ok "built ficatlas-frontend:${tag} and ficatlas-backend:${tag}"

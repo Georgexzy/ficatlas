@@ -42,48 +42,28 @@ docker compose run --rm --no-deps -T \
 - The backend SQLAlchemy session (`db/session.py`) sets a statement timeout (~60s) by default; long scripts call `SET statement_timeout = 0` first.
 - `db/` container is `ficatlas-db-1`; psql via `docker exec ficatlas-db-1 psql -U ficatlas -d ficatlas`.
 
-## Session work (this branch)
+## The public tier (ficatlas.com)
 
-Author opt-out handling + Phase-1 audit fixes, deployed and tested. All uncommitted unless stated.
+A second compose project, `ficatlas-public`, on the same box and **the same
+database** as the dev stack. Full notes in `deploy/README.md`; the shape:
 
-### Author opt-out
-- `backend/external_optout.py` — conservative detector (`has_external_optout`,
-  `match_external_optout`). Tier-1 "do not repost/redistribute/re-publish" verbs +
-  Tier-2 put-on-a-site verbs that name an external surface; never matches grant
-  language like "Licensed to translate and redistribute".
-- `backend/live_fetch/persist.py::persist_live_results` — skips new opt-out rows
-  and deletes existing ones (chapters cascade). Plus two swallowed-failure fixes:
-  a cross-post lookup failure now logs instead of silently looking like "no
-  match", and a cross-post merge failure now rolls back, logs, counts `failed`,
-  and skips the insert instead of falling through and creating a duplicate.
-- `backend/api/library.py::import_url` — public import with an opt-out summary
-  → HTTP 403; private imports unaffected.
-- `backend/optout_sweep.py` — one-shot cleanup, dry-run default, `--apply` deletes.
-  Already run once against live (removed 49 works).
+```
+visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green} :3000
+                                             nginx :8081 ← (Next rewrites /api/*)
+                                                          → api-{blue,green} :8000
+```
 
-### Frontend back-nav (frontend/app/page.tsx)
-- `lastSearchCache` — module-level cache keyed on exact query URL, written only
-  after a fetch resolves, so back/forward to the same search renders instantly.
-- Scroll capture guarded to the `/` path + trailing 150ms debounce, so a
-  navigation in flight can't clobber the saved position with a story href or y=0.
-
-### Phase-1 audit fixes
-- `backend/api/admin.py::run_job` — replaced `asyncio.get_event_loop()` (raised
-  RuntimeError on py3.10+ → every call 500'd) with loop-safe
-  `run_in_background(lambda: asyncio.to_thread(_go))`.
-- `backend/init_db.py` — added `ix_stories_title_trgm` + `ix_stories_summary_trgm`
-  (GIN trigram) so `search_within` (leading-wildcard ILIKE on title/summary) uses
-  an index instead of a seq scan. **Already built valid on live.** If you ever
-  rebuild them on live, prefer `CREATE INDEX CONCURRENTLY` (and retry — the plain
-  CONCURRENTLY validation failed once under continuous write load; a restart's
-  non-concurrent build is the reliable fallback).
-
-### Tests
-- `backend/tests/conftest.py` (DB fixture, `_test`-DB guard)
-- `backend/tests/test_external_optout.py` — 21 unit tests
-- `backend/tests/test_persist_integration.py` — 11 DB tests (insert/dedup/opt-out/cross-post/enrich/merge)
-- `backend/tests/test_import_url_optout.py` — 3 DB tests (403 public, allow private, allow non-opt-out)
-- Full suite: **67 passed** with test DB; **53 passed / 14 skipped** without.
+- `deploy/promote.sh` is the only way to deploy: it builds tagged by commit SHA,
+  starts the idle colour, waits for health, repoints nginx, verifies through it,
+  and keeps the old colour for 120s so `--rollback` is a reload.
+- cloudflared shares nginx's network namespace, so the tunnel's service URL is
+  `http://localhost:8080` — see the HTTPS note in `deploy/README.md` before
+  concluding anything is served in the clear.
+- There is **no worker in the public project**. The dev stack's worker does all
+  indexing, and the public site sees it immediately because the database is
+  shared. Restarting or rebuilding the public tier does not pause indexing.
+- Signup is invite-mode: `SIGNUP_MODE=invite` + a single shared `SIGNUP_CODE` in
+  `.env`. Not per-person invites — see `backend/api/auth.py:290`.
 
 ## Gotchas
 - Never point a DB test at the live index — `conftest.py` refuses unless the DB
@@ -114,3 +94,22 @@ Author opt-out handling + Phase-1 audit fixes, deployed and tested. All uncommit
 - The AO3 stale-WIP refresh reads from `ao3_refresh_queue` rather than ranking on
   every cycle — the ranking query measured 36.3s and ~8.6GB of reads to pick 40
   works, hourly. Change the scoring freely; just keep it behind the queue.
+- **Next config is baked into the image, so anything the config reads is a build
+  arg, not a runtime variable.** `headers()` and `rewrites()` are resolved during
+  `next build` into `.next/routes-manifest.json`, and `NEXT_PUBLIC_*` is
+  substituted textually by the bundler. Three separate outages came from this:
+  `FORCE_HTTPS` (CSP silently missing `upgrade-insecure-requests`),
+  `INTERNAL_API_URL` (the entire public API 500ing, because the baked
+  `http://backend:8000` does not resolve on the public network), and
+  `NEXT_PUBLIC_SITE_URL` (the sitemap advertising `http://localhost:3000` URLs,
+  which Google discards wholesale). All three are `ARG`s in `frontend/Dockerfile`
+  and are passed by `promote.sh`. The tell is always the same: the variable is
+  present in `docker inspect` on a running container while the thing it controls
+  is wrong. Check the manifest, not the environment:
+  `docker exec <web> grep -o 'http://[a-z0-9:.-]*' .next/routes-manifest.json`
+- ~65% of the index has no summary, and it is not a bug in the crawler: 12.9M AO3
+  rows came from the bulk metadata dump, which has no summary field at all
+  (`backend/data/ao3_meta/` — keys are id, title, metadata). Freshly crawled AO3
+  works do get summaries. FF.net is at 0% missing. Anything that reasons about
+  search relevance should know that `fic_doc` is missing summary text for most
+  AO3 works, and that the only way to fill it is re-crawling.

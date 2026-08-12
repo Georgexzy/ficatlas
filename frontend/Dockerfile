@@ -48,5 +48,17 @@ ENV FORCE_HTTPS=$FORCE_HTTPS
 ARG INTERNAL_API_URL=http://backend:8000
 ENV INTERNAL_API_URL=$INTERNAL_API_URL
 
+# NEXT_PUBLIC_SITE_URL is the third of these, and the most build-time of the
+# three: Next's bundler substitutes NEXT_PUBLIC_* textually during the build, so
+# the value is not read from the environment at all — it is compiled in. Setting
+# it in the container is not merely ineffective, there is nothing left to read.
+#
+# It is the absolute origin the site describes itself with: sitemap <loc> entries
+# and metadataBase. Unset, it falls back to http://localhost:3000 and the public
+# sitemap advertises URLs on a host nobody else can reach, which Google discards
+# as off-domain — the sitemap is served, parsed, and then thrown away whole.
+ARG NEXT_PUBLIC_SITE_URL=http://localhost:3000
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
+
 RUN npm run build && node gen-sw-precache.js
 CMD ["npm", "run", "start"]

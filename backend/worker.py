@@ -809,9 +809,14 @@ async def _listing_harvest_loop() -> None:
                 continue
 
             saved = 0
+            # `saved` counts INSERTS only, and backfill exists to enrich rows we
+            # already hold — so a pass that filled 43 missing summaries logged
+            # "0 new" and read as a job doing nothing. The stats dict is the only
+            # thing that can tell backfill working from backfill idle.
+            stats: dict = {}
             if entries:
                 with db_session() as db:
-                    saved = persist_live_results(db, entries)
+                    saved = persist_live_results(db, entries, stats=stats)
 
             with db_session() as db:
                 # Exhausted means we walked off the end; go round again next time
@@ -820,9 +825,15 @@ async def _listing_harvest_loop() -> None:
                            else int(result.get("next_page", start + PAGES_PER_VISIT)),
                            mode)
 
+            # `complete` is the number this pass spent a request on and could do
+            # nothing with. When it dominates, the walk is over ground that is
+            # already covered and the yield per AO3 request is near zero — which
+            # is the thing to watch, since AO3's rate limit is the real budget.
             log.info(f"listing[{mode}] {fandom[:40]!r} ({works:,} works): pages "
                      f"{start}-{result.get('next_page', start) - 1}, "
-                     f"{len(entries)} works, {saved} new")
+                     f"{len(entries)} works, {saved} new, "
+                     f"{stats.get('enriched', 0)} enriched, "
+                     f"{stats.get('already_indexed', 0)} complete")
         except Exception as e:
             log.warning(f"listing harvest failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)

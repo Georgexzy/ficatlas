@@ -137,10 +137,16 @@ The rule to create (Caching → Cache Rules), which is free on this plan:
 
 | field | value |
 |---|---|
-| expression | `(starts_with(http.request.uri.path, "/api/search") or starts_with(http.request.uri.path, "/api/stats/suggest") or starts_with(http.request.uri.path, "/api/hubs")) and len(http.request.cookies["sat"]) == 0` |
+| expression | `(starts_with(http.request.uri.path, "/api/search") or starts_with(http.request.uri.path, "/api/stats/suggest") or starts_with(http.request.uri.path, "/api/hubs")) and not http.cookie contains "sat="` |
 | cache eligibility | Eligible for cache |
 | edge TTL | Respect origin |
 | browser TTL | Respect origin |
+
+Write the cookie test as `not http.cookie contains "sat="`, not as
+`len(http.request.cookies["sat"]) == 0`. The second form is accepted by the API
+and shows as an enabled rule in the dashboard, and it never matches — the rule
+sits there looking correct while every response comes back DYNAMIC. Confirmed by
+swapping only that clause and watching the same request go MISS → HIT.
 
 The cookie clause is deliberate. Cloudflare's default cache key does not vary on
 cookies, so without it a cached anonymous response could be handed to a signed-in
