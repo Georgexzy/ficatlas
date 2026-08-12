@@ -29,5 +29,24 @@ ENV NODE_OPTIONS=--max-old-space-size=2048
 ARG FORCE_HTTPS=false
 ENV FORCE_HTTPS=$FORCE_HTTPS
 
+# INTERNAL_API_URL is build-time for exactly the same reason, and it fails much
+# louder than FORCE_HTTPS did.
+#
+# next.config.ts rewrites /api/:path* to ${INTERNAL_API}, and Next resolves
+# rewrites() during `next build` into .next/routes-manifest.json alongside the
+# headers. The default is `http://backend:8000`, which is the dev stack's API
+# container. On the public network there is no `backend` — the API containers are
+# api-blue/api-green, deliberately named apart from the dev stack — so a public
+# image built without this proxies every /api call to a host that does not
+# resolve and answers 500 with EAI_AGAIN.
+#
+# That is the whole public API: search, suggestions, story pages. The site shell
+# still returns 200, so it looks up while nothing on it works.
+#
+# It points at nginx's internal listener rather than a colour, so the frontend
+# follows the active colour through a deploy instead of pinning to one.
+ARG INTERNAL_API_URL=http://backend:8000
+ENV INTERNAL_API_URL=$INTERNAL_API_URL
+
 RUN npm run build && node gen-sw-precache.js
 CMD ["npm", "run", "start"]

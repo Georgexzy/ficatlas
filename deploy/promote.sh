@@ -176,7 +176,12 @@ cmd_promote() {
     # FORCE_HTTPS is a build arg, not a runtime variable: Next bakes headers()
     # into the route manifest at build time, so the public image must be BUILT
     # knowing it will be served over TLS. See frontend/Dockerfile.
+    # INTERNAL_API_URL is a build arg for the same reason FORCE_HTTPS is: Next
+    # bakes rewrites() into the route manifest at build time. It must name
+    # nginx's internal listener, not a colour, or the frontend pins to whichever
+    # colour it was built against and stops following deploys.
     DEPLOY_TAG=$tag docker build -q --build-arg FORCE_HTTPS=true \
+        --build-arg INTERNAL_API_URL=http://nginx:8081 \
         -t "ficatlas-frontend:${tag}" ./frontend
     DEPLOY_TAG=$tag docker build -q -t "ficatlas-backend:${tag}"  ./backend
     c_ok "built ficatlas-frontend:${tag} and ficatlas-backend:${tag}"
