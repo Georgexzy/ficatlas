@@ -112,6 +112,36 @@ reload_nginx() {
     "${COMPOSE[@]}" exec -T nginx nginx -s reload
 }
 
+# Does the running nginx actually have the nginx.conf sitting in this repo?
+#
+# It very often does not, and nothing about a deploy says so. nginx.conf is
+# bind-mounted as a single FILE, and Docker resolves that to an inode when the
+# container is created. Every editor that writes safely — including sed -i, and
+# every tool used on this repo — replaces the file rather than modifying it in
+# place, which leaves the container holding the old inode and serving the old
+# config for as long as it lives. A reload re-reads that stale copy quite
+# happily and reports success.
+#
+# So a change to nginx.conf survives `promote.sh` completely unapplied, which is
+# how `keepalive_timeout 65 60` sat in the repo while the running nginx still
+# had 65 and went on 500ing the first search after an idle spell.
+#
+# Recreating nginx means recreating cloudflared too: it uses
+# network_mode: service:nginx, so its network namespace dies with nginx.
+check_nginx_conf() {
+    local live_hash repo_hash
+    repo_hash=$(md5sum "$ROOT/deploy/nginx.conf" | cut -d' ' -f1)
+    live_hash=$("${COMPOSE[@]}" exec -T nginx md5sum /etc/nginx/nginx.conf 2>/dev/null | cut -d' ' -f1)
+    [ -z "$live_hash" ] && return 0          # nginx not up yet; nothing to warn about
+    if [ "$repo_hash" != "$live_hash" ]; then
+        c_warn "nginx is running a DIFFERENT nginx.conf than this repo."
+        c_warn "A reload will not fix it — the bind mount is pinned to the old file."
+        c_warn "Apply it with:"
+        c_warn "  docker compose -p ${PROJECT} -f docker-compose.public.yml \\"
+        c_warn "      up -d --force-recreate nginx cloudflared"
+    fi
+}
+
 verify_through_nginx() {
     # Through nginx, exactly as a visitor arrives — not against the container
     # directly. This is what catches a switch that pointed at the wrong place.
@@ -206,6 +236,7 @@ cmd_promote() {
         exit 1
     fi
     c_ok "ficatlas.com is now served by ${target} (${tag})"
+    check_nginx_conf
 
     step "Keeping ${live} for ${GRACE_SECONDS}s so rollback is instant"
     echo "    deploy/promote.sh --rollback   # if anything looks wrong"
