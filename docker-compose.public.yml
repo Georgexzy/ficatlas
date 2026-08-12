@@ -1,0 +1,219 @@
+# The PUBLIC tier — ficatlas.com. A separate compose project from the dev stack.
+#
+#     docker compose -p ficatlas-public -f docker-compose.public.yml \
+#            --profile blue up -d
+#
+# Normally you do not run that by hand; deploy/promote.sh does, and it knows
+# which colour should be starting.
+#
+# Why a separate project rather than the prod overlay
+# ---------------------------------------------------
+# docker-compose.prod.yml reconfigures the DEV services in place, so applying it
+# means the tailnet stack becomes the public one. That is the right shape when
+# there is only a public site, and the wrong shape for what this is: a dev site
+# that changes are tried on, and a public site they are promoted to. Those have
+# to be able to run at once, from different images, with different settings.
+#
+# What is shared, and what is not
+# -------------------------------
+# The DATABASE is shared, and that is a constraint rather than a preference: it
+# is 36GB and the disk has 44GB free, so a second copy does not fit. Dev and
+# public therefore read and write the same 19.9M rows.
+#
+# That is less alarming than it sounds, because what gets promoted here is CODE,
+# not data. There is one corpus and it is the product; dev testing against the
+# real index is a feature. What it does mean is that a schema change is live for
+# the public site the moment dev applies it, so DDL must stay additive — which
+# init_db.py already is, being idempotent CREATE ... IF NOT EXISTS.
+#
+# The WORKER is deliberately absent. All harvesting runs in the dev project, and
+# a second worker would double every crawl, race the same queues and get both
+# copies rate-limited by AO3. One worker, one database, either project.
+#
+# Colours
+# -------
+# web-blue/web-green and api-blue/api-green are the two halves of a blue/green
+# deploy. Exactly one colour of each runs at a time, selected by profile, and
+# nginx decides which one is live. See deploy/nginx.conf.
+
+services:
+
+  # ── the swap point ─────────────────────────────────────────────────────────
+  nginx:
+    image: nginxinc/nginx-unprivileged:alpine
+    restart: unless-stopped
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Not read-only: promote.sh rewrites active.conf on the host and reloads.
+      - ./deploy/upstreams:/etc/nginx/upstreams:ro
+    # Nothing is published to the host. cloudflared reaches this over the compose
+    # network, and a published port would be a second way in that bypasses
+    # Cloudflare entirely — no WAF, no rate limiting, no Access on /admin.
+    expose:
+      - "8080"
+      - "8081"
+    mem_limit: 128m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=64m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── the tunnel ─────────────────────────────────────────────────────────────
+  # Dials OUT to Cloudflare; nothing dials in. The home IP is never in DNS and
+  # the router needs no port forward.
+  #
+  # The tunnel's public hostname (set in the Cloudflare dashboard) must point at
+  #     http://nginx:8080
+  # NOT at a web container directly — pointing it at web-blue would pin the
+  # public site to one colour and make every deploy visible again.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      - nginx
+    mem_limit: 256m
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+
+  # ── web tier ───────────────────────────────────────────────────────────────
+  web-blue:
+    profiles: ["blue"]
+    image: ficatlas-frontend:${DEPLOY_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      # TLS is real here, so the CSP may upgrade insecure subresources. Setting
+      # this without TLS rewrites every script URL to https:// and the app loads
+      # nothing — see next.config.ts.
+      FORCE_HTTPS: "true"
+      # Through nginx, so the API can be swapped without restarting the web tier.
+      INTERNAL_API_URL: "http://nginx:8081"
+      INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
+      NODE_ENV: "production"
+    mem_limit: 768m
+    cpus: 2.0
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m
+      - /app/.next/cache:size=256m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web-green:
+    profiles: ["green"]
+    image: ficatlas-frontend:${DEPLOY_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      FORCE_HTTPS: "true"
+      INTERNAL_API_URL: "http://nginx:8081"
+      INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
+      NODE_ENV: "production"
+    mem_limit: 768m
+    cpus: 2.0
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m
+      - /app/.next/cache:size=256m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── API tier ───────────────────────────────────────────────────────────────
+  # Joins the dev project's network as well, because that is where the database
+  # lives. It gets its own DNS name there (api-blue/api-green), so it cannot be
+  # confused with the dev stack's own `backend`.
+  api-blue:
+    profiles: ["blue"]
+    image: ficatlas-backend:${DEPLOY_TAG:-latest}
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    environment: &api_env
+      DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/ficatlas
+      # HTTPS-only session cookies: the tunnel always terminates TLS.
+      COOKIE_SECURE: "true"
+      # Cloudflare overwrites CF-Connecting-IP on every proxied request and
+      # strips any inbound copy, so it is safe to believe — but ONLY because
+      # nginx is not published to the host. If it ever were, this must go back
+      # to false: the header is trivially forged and would let one client wear a
+      # new identity per request and bypass rate limiting entirely.
+      TRUST_PROXY_HEADER: "true"
+      RATE_LIMIT: "true"
+      # Searching 19.9M works is public — that is what the site is for. Serving
+      # the complete text of the rehosted stories to anonymous visitors is the
+      # part with real exposure, so reading (and EPUB export, the same text in
+      # one file) needs an account.
+      REQUIRE_LOGIN_TO_READ: "true"
+      SIGNUP_MODE: ${SIGNUP_MODE:-invite}
+      SIGNUP_CODE: ${SIGNUP_CODE:-}
+      INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
+      # The scheduler belongs to the dev project's worker. Set explicitly rather
+      # than left to a default, because two schedulers on one database is the
+      # kind of thing that looks fine until both crawl AO3 at once.
+      RUN_SCHEDULER: "false"
+    networks: [default, ficatlas]
+    mem_limit: 2g
+    cpus: 3.0
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=256m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=5).status==200 else 1)"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 30s
+
+  api-green:
+    profiles: ["green"]
+    image: ficatlas-backend:${DEPLOY_TAG:-latest}
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    environment: *api_env
+    networks: [default, ficatlas]
+    mem_limit: 2g
+    cpus: 3.0
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=256m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=5).status==200 else 1)"]
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 30s
+
+networks:
+  # This project's own network: nginx, cloudflared and the colours talk here.
+  default:
+  # The dev project's network, joined only by the API colours so they can reach
+  # the shared database. Declared external so this file never creates or owns
+  # it — bringing the public tier down must not touch the dev stack's network.
+  ficatlas:
+    external: true
+    name: ficatlas_default
