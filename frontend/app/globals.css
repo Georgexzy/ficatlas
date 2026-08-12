@@ -4781,3 +4781,15 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 /* A list of works, not a column of prose: at the 660px reading measure the
    title and the row's actions collide on anything but the shortest titles. */
 .page-prose--wide { max-width: 880px; }
+
+/* Withdrawing a recorded permission. Set apart from the choice list above with
+   a rule rather than a coloured panel: it is a legitimate, reversible option an
+   author is entitled to take, not a warning. */
+.perm-revoke {
+  margin-top: 36px; padding-top: 24px; border-top: 1px solid var(--border);
+}
+.perm-revoke h2 {
+  font-family: var(--font-serif); font-size: 19px; margin: 0 0 10px; color: var(--text);
+}
+.perm-revoke p { margin: 0 0 12px; }
+.perm-revoke__note { font-size: 13px; color: var(--text-faint); }

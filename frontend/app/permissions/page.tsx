@@ -81,6 +81,33 @@ export default function PermissionsPage() {
     }
   }, [lookup])
 
+  // Confirmed in the browser rather than with a second screen: it is one
+  // reversible setting, the page already says what it does, and a whole
+  // confirmation step for an action whose entire point is being easy to take
+  // would undo the reason it needs no proof.
+  const revoke = async () => {
+    if (!window.confirm(
+      `Withdraw the choice recorded under ${data.author}?\n\n`
+      + "Your work goes back to the default: listed with a link out, never "
+      + "stored here. You can set a new choice at any time.")) return
+    setBusy(true); setError(null); setMsg(null)
+    try {
+      const fd = new FormData()
+      fd.append("site", data.site); fd.append("author", data.author)
+      const r = await fetch("/api/permissions/revoke", { method: "POST", body: fd })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.detail || "Could not withdraw that.")
+      setMsg(d.revoked
+        ? "Withdrawn. Nothing is recorded under this name now."
+        : "There was nothing recorded under this name.")
+      // No setPolicy here: with nothing recorded there is no current choice to
+      // reflect, and the radios stay where the reader left them so picking a new
+      // one is a single click rather than starting over.
+      lookup(data.site, data.author)
+    } catch (e: any) { setError(e.message) }
+    finally { setBusy(false) }
+  }
+
   const save = async () => {
     // Restrictions need no proof — see api/permissions.py for why. Only "host"
     // grants something, and only granting can licence writing that is not yours.
@@ -243,6 +270,38 @@ export default function PermissionsPage() {
               Different name
             </button>
           </div>
+
+          {/* Withdrawing consent entirely, which had no way in at all: this page
+              could record a choice and never unmake one, on a site whose whole
+              argument is that the choice is the author's.
+
+              Deliberately needs no proof — the endpoint is built that way. A
+              revocation only ever reduces what FicAtlas may do, so an
+              unverified one cannot take anything that was not the revoker's to
+              take, and requiring proof would mean an author who lost access to
+              an old archive account could never take back consent they gave
+              through it. That is the case where it matters most.
+
+              Only shown once there is something to withdraw. */}
+          {data.policy && (
+            <div className="perm-revoke">
+              <h2>Withdraw this entirely</h2>
+              <p>
+                Removes the choice recorded under <strong>{data.author}</strong>,
+                returning your work to the default: listed with a link out, never
+                stored here. You do not have to prove anything, and you can set a
+                new choice at any time.
+              </p>
+              <p className="perm-revoke__note">
+                This governs what happens from now on. To remove text FicAtlas
+                already holds, use <a href="/takedown">the takedown form</a> —
+                that comes down immediately.
+              </p>
+              <button className="btn btn--danger" onClick={revoke} disabled={busy}>
+                {busy ? "Working…" : "Withdraw my permission"}
+              </button>
+            </div>
+          )}
           {policy === "host" && !data.verified && (
             <p className="perm-shortcut">
               This is the one option that needs proof — you will be asked to put a
