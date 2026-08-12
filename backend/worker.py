@@ -797,9 +797,26 @@ async def _listing_harvest_loop() -> None:
                 )
             fandom, works, start = pending[0]
 
+            # The two queues walk from opposite ends, which is what the cursor
+            # key has always claimed and what the code did not actually do: both
+            # modes sorted revised_at DESC and differed only in where their
+            # cursor happened to sit.
+            #
+            # Descending is right for discover — newest first is exactly the
+            # post-2024 material the dump cannot cover. It is close to the worst
+            # possible order for backfill, because the works missing summaries
+            # are the dump-era ones, which under DESC sit tens of thousands of
+            # pages deep in a fandom and are never reached at eight pages a
+            # visit. That is why backfill passes were reporting 107-131 of 160
+            # works already complete: it was re-walking the recent end that
+            # discover keeps filling in.
+            #
+            # ASC puts the oldest works on page 1, so backfill starts where the
+            # gaps are instead of paging toward them.
             result = await scrape_tag_works(
                 tag=fandom, max_pages=PAGES_PER_VISIT, start_page=start,
                 sort="revised_at",
+                direction="asc" if mode == "backfill" else "desc",
             )
             entries = result.get("entries") or []
 
