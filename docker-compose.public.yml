@@ -91,10 +91,9 @@ services:
     image: ficatlas-frontend:${DEPLOY_TAG:-latest}
     restart: unless-stopped
     environment:
-      # TLS is real here, so the CSP may upgrade insecure subresources. Setting
-      # this without TLS rewrites every script URL to https:// and the app loads
-      # nothing — see next.config.ts.
-      FORCE_HTTPS: "true"
+      # NOTE: FORCE_HTTPS is NOT here. It is a build argument — Next bakes
+      # headers() into the route manifest at build time, so setting it at
+      # runtime does nothing. promote.sh passes it to docker build.
       # Through nginx, so the API can be swapped without restarting the web tier.
       INTERNAL_API_URL: "http://nginx:8081"
       INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
@@ -120,7 +119,7 @@ services:
     image: ficatlas-frontend:${DEPLOY_TAG:-latest}
     restart: unless-stopped
     environment:
-      FORCE_HTTPS: "true"
+      # FORCE_HTTPS is a build arg, not a runtime variable — see web-blue.
       INTERNAL_API_URL: "http://nginx:8081"
       INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
       NODE_ENV: "production"
