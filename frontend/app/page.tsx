@@ -739,7 +739,7 @@ function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q
           search someone runs is then their own, not another click. */}
       {hubs.length > 0 && (
         <div className="empty__browse">
-          <h2 className="empty__browse-title">Or start somewhere busy</h2>
+          <h2 className="empty__browse-title">Biggest fandoms in the index</h2>
           <ul className="empty__hubs">
             {hubs.map(h => (
               <li key={h.slug}>
