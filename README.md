@@ -162,6 +162,15 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   (dry-run by default; `--apply` deletes)
 
 ### Accounts & sync
+- **Who may register** is `SIGNUP_MODE` in `.env`: `open` (anyone), `invite`
+  (one shared code in `SIGNUP_CODE` — not per-person invitations, no expiry, no
+  revocation) or `closed`. The signup form asks `/api/auth/signup-policy` and
+  renders a code box or hides the tab accordingly. Note that **searching needs
+  no account at all**, so this gates bookmarks, follows and sync rather than
+  access to the index. The first account created becomes `owner`
+- **Following a work** — follow any unfinished story from a result card or its
+  own page, and `/follows` lists everything you follow with new-chapter counts,
+  updates first. The unread count sits on the avatar in the header
 - **Optional accounts** — username + password (bcrypt), no email required. 90-day httponly cookie sessions.
   Session tokens are stored as a SHA-256 digest, not verbatim: the table would
   otherwise be a list of working credentials, and a backup or a stray `pg_dump`
@@ -262,13 +271,42 @@ The backend (8000) and Postgres (5432) are bound to `127.0.0.1` in `docker-compo
 
 `/api/library/*` mutations are no longer unauthenticated — every destructive endpoint requires `admin`, and roles are enforced server-side (see **Accounts & sync**). That is a change from an earlier version of this file, which described them as open.
 
-**Putting this on the internet is a different configuration.** `docker-compose.prod.yml` unpublishes every port but a loopback frontend, drops `--reload` and the bind mount, takes the DB password from `.env`, marks session cookies `Secure`, and adds a Cloudflare Tunnel so nothing has to be forwarded and the home IP never appears in DNS:
+**Putting this on the internet is a different configuration**, and it is now its
+own compose project rather than an overlay. `docker-compose.public.yml` runs the
+public tier — [ficatlas.com](https://ficatlas.com) — as `ficatlas-public`,
+alongside the dev stack and **sharing its database**, so indexing done by the dev
+worker is live on the public site immediately.
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green} :3000
+                                             nginx :8081 ← (Next rewrites /api/*)
+                                                          → api-{blue,green} :8000
 ```
 
-See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the full walkthrough, the recommended Cloudflare settings, and the pre-launch checks.
+Deploys are blue/green and go through one script, which is the only supported
+way to ship:
+
+```bash
+deploy/promote.sh              # build, verify, switch
+deploy/promote.sh --status     # what is live now
+deploy/promote.sh --rollback   # back to the other colour
+```
+
+It builds images tagged by commit SHA, starts the idle colour, waits for it to
+answer, repoints nginx and reloads, then verifies *through* nginx before keeping
+the old colour for 120s so a rollback is a reload rather than a rebuild.
+
+See **[deploy/README.md](deploy/README.md)** for the Cloudflare settings, the
+cache rule, and why the origin speaks plain HTTP behind a TLS tunnel.
+**[DEPLOYMENT.md](DEPLOYMENT.md)** covers the older single-host overlay
+(`docker-compose.prod.yml`), which still works for a simpler setup.
+
+Three things about the frontend image are build arguments rather than runtime
+variables, and each one failed silently in production before it was:
+`FORCE_HTTPS`, `INTERNAL_API_URL` and `NEXT_PUBLIC_SITE_URL`. Next resolves
+`headers()` and `rewrites()` during `next build` into the route manifest, and
+substitutes `NEXT_PUBLIC_*` textually, so setting any of them in the container
+does nothing. `promote.sh` passes all three.
 
 Two things about that overlay worth knowing, because both were wrong in an earlier version and both fail silently:
 
