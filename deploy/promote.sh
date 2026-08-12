@@ -214,11 +214,16 @@ cmd_promote() {
     # and a full disk stops Postgres writing — the site would fail for a reason
     # with nothing to do with the deploy that caused it.
     docker builder prune -af >/dev/null 2>&1 || true
-    # Keep the last few tags so --rollback has something to roll back TO, and so
-    # a bad deploy can be pinned back to a known-good SHA by hand.
+    # Keep the last TWO tags: the live one and the one before it. Three was too
+    # generous here — the backend image is ~11.8GB and the disk runs at ~90%, so
+    # each retained generation is real estate the database needs more.
+    #
+    # Note this is not what makes --rollback fast: that uses the still-running
+    # previous CONTAINER during the grace window. The retained tag is for pinning
+    # back to a known-good SHA by hand after that window has closed.
     for repo in ficatlas-frontend ficatlas-backend; do
         docker images --format '{{.Tag}} {{.ID}} {{.CreatedAt}}' "$repo" \
-            | grep -vE '^(latest|<none>) ' | sort -k3 -r | tail -n +4 \
+            | grep -vE '^(latest|<none>) ' | sort -k3 -r | tail -n +3 \
             | while read -r t _ _; do
                   [ -n "$t" ] && docker rmi "${repo}:${t}" >/dev/null 2>&1 || true
               done
