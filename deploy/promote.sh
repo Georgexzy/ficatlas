@@ -173,7 +173,11 @@ cmd_promote() {
     fi
 
     step "Building images (the live site keeps serving throughout)"
-    DEPLOY_TAG=$tag docker build -q -t "ficatlas-frontend:${tag}" ./frontend
+    # FORCE_HTTPS is a build arg, not a runtime variable: Next bakes headers()
+    # into the route manifest at build time, so the public image must be BUILT
+    # knowing it will be served over TLS. See frontend/Dockerfile.
+    DEPLOY_TAG=$tag docker build -q --build-arg FORCE_HTTPS=true \
+        -t "ficatlas-frontend:${tag}" ./frontend
     DEPLOY_TAG=$tag docker build -q -t "ficatlas-backend:${tag}"  ./backend
     c_ok "built ficatlas-frontend:${tag} and ficatlas-backend:${tag}"
 
