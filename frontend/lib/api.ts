@@ -373,6 +373,45 @@ export function getIndexTotals(): Promise<IndexTotals | null> {
 }
 
 
+export interface TopHub { slug: string; name: string; work_count: number }
+
+// The landing page's way in for someone who does not yet have a search in mind.
+//
+// Same shape of cache as the totals above and for the same reason: the landing
+// page and any other caller want the identical list, and this is a route the
+// edge caches (see the Cache Rule in deploy/README.md), so asking twice is
+// wasted work at both ends. Hubs change when the hub table is rebuilt, which is
+// far slower than a browsing session — an hour is comfortably fresh.
+const HUBS_TTL_MS = 60 * 60 * 1000
+
+interface HubsCache { value: TopHub[] | null; at: number; inflight: Promise<TopHub[]> | null }
+
+function hubsCache(): HubsCache {
+  const w = globalThis as any
+  if (!w.__ficatlasHubs) w.__ficatlasHubs = { value: null, at: 0, inflight: null }
+  return w.__ficatlasHubs as HubsCache
+}
+
+export function getTopHubs(limit = 12): Promise<TopHub[]> {
+  const c = hubsCache()
+  if (c.value && Date.now() - c.at < HUBS_TTL_MS) return Promise.resolve(c.value)
+  if (c.inflight) return c.inflight
+
+  c.inflight = fetch(`/api/hubs?limit=${limit}`)
+    .then(r => (r.ok ? r.json() : []))
+    .then((d: TopHub[]) => {
+      // An empty list is a real answer (a fresh install has no hubs yet) but it
+      // is not worth caching over a good one.
+      if (Array.isArray(d) && d.length) { c.value = d; c.at = Date.now() }
+      return c.value ?? []
+    })
+    .catch(() => c.value ?? [])
+    .finally(() => { c.inflight = null })
+
+  return c.inflight
+}
+
+
 // FictionAlley's five sections, with what each one actually meant to readers.
 //
 // The archive was not one library but five, and "a Schnoogle fic" carried real

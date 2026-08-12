@@ -8,7 +8,7 @@ import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
-         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, FICALLEY_SECTIONS, coverageWarning, statusNote } from "@/lib/api"
+         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getTopHubs, type TopHub, FICALLEY_SECTIONS, coverageWarning, statusNote } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
@@ -316,6 +316,15 @@ function StoryCard({ story }: { story: StoryCard }) {
   const [bookmarked, setBookmarked] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importedId, setImportedId] = useState<string | null>(null)
+  // Characters and freeform tags are folded away by default.
+  //
+  // A well-tagged work carries three tag rows, and because the tags are long
+  // they each wrap to two lines — so tags occupied more of a card than title,
+  // author, summary and stats together, and a 1100px screen showed three
+  // results. Ships stay visible because that is the one tag row people scan
+  // results BY; the rest is what you read once a work already interests you,
+  // which is a click, not a scroll past everything else.
+  const [tagsOpen, setTagsOpen] = useState(false)
 
   useEffect(() => {
     try {
@@ -518,7 +527,7 @@ function StoryCard({ story }: { story: StoryCard }) {
           to see who is in a story was to open it — and unlike AO3 they could
           not be clicked to search. They sit above the freeform tags because
           that is the order AO3 lists them in and it is the more useful signal. */}
-      {story.characters.length > 0 && (
+      {story.characters.length > 0 && tagsOpen && (
         <TagList tags={story.characters} kind="characters" limit={3} className="card__chars" />
       )}
       {/* Freeform tags only.
@@ -527,8 +536,18 @@ function StoryCard({ story }: { story: StoryCard }) {
           printed every pairing and every character TWICE — a card for a
           well-tagged work was three-quarters duplicate text. Subtract what is
           already shown above and only the genuine freeform tags remain. */}
-      {freeformTags.length > 0 && (
+      {freeformTags.length > 0 && tagsOpen && (
         <TagList tags={freeformTags} limit={4} className="card__tags" />
+      )}
+      {/* One control for both rows rather than one each: they are folded for the
+          same reason and nobody wants characters without tags. Counts the real
+          totals, so the button says what opening it actually costs. */}
+      {!tagsOpen && (story.characters.length > 0 || freeformTags.length > 0) && (
+        <button className="card__tags-more" onClick={() => setTagsOpen(true)}>
+          {story.characters.length > 0 && `${story.characters.length} character${story.characters.length === 1 ? "" : "s"}`}
+          {story.characters.length > 0 && freeformTags.length > 0 && " · "}
+          {freeformTags.length > 0 && `${freeformTags.length} tag${freeformTags.length === 1 ? "" : "s"}`}
+        </button>
       )}
       {story.warnings.filter(w => w !== "No Archive Warnings Apply").length > 0 && (
         <div className="card__warnings">
@@ -656,13 +675,15 @@ function fmtCount(n: number): string {
 // the search bar, where they are clickable and next to the box they fill in.
 // On the landing page they were three lines of operator soup competing with the
 // one thing to do — type something.
-function EmptyState({ onSurprise }: { onSurprise: () => void }) {
+function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q: string) => void }) {
   const [total, setTotal] = useState<number | null>(null)
+  const [hubs, setHubs] = useState<TopHub[]>([])
 
   useEffect(() => {
     // Shared with the header widget — see getIndexTotals. Both wanting the same
     // number used to mean four requests per page load between them.
     getIndexTotals().then(d => { if (typeof d?.stories === "number") setTotal(d.stories) })
+    getTopHubs(12).then(setHubs)
   }, [])
 
   return (
@@ -705,6 +726,39 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
         Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
       </p>
       <button className="empty__surprise" onClick={onSurprise}>🎲 Surprise me</button>
+
+      {/* Somewhere to go for the reader who has no particular search in mind.
+          The landing page previously offered exactly one action — type — and
+          below the fold was empty, which asks a first-time visitor to already
+          know what they want from twenty million works. These are the fandoms
+          the index actually holds the most of, so every one of them leads
+          somewhere dense rather than to four results and an apology.
+
+          They fill the query box rather than navigating away, because the thing
+          worth learning on this page is that the box takes `fandom:` — the next
+          search someone runs is then their own, not another click. */}
+      {hubs.length > 0 && (
+        <div className="empty__browse">
+          <h2 className="empty__browse-title">Or start somewhere busy</h2>
+          <ul className="empty__hubs">
+            {hubs.map(h => (
+              <li key={h.slug}>
+                <button
+                  className="empty__hub"
+                  onClick={() => onPick(`fandom: ${h.name}`)}
+                  title={`Search ${h.name}`}
+                >
+                  <span className="empty__hub-name">{h.name}</span>
+                  <span className="empty__hub-count">{fmtCount(h.work_count)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="empty__browse-more">
+            <a href="/fandoms">Every fandom in the index →</a>
+          </p>
+        </div>
+      )}
 
       {/* Says the quiet part out loud, because for this audience it is not
           quiet at all. Fanfiction readers tie an archive's trustworthiness to
@@ -976,6 +1030,15 @@ function SearchPageInner() {
   const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Mobile filter drawer (sidebar becomes a slide-out panel on phones)
   const [filtersOpen,  setFiltersOpen]  = useState(false)
+  // Desktop: whether to show the filter panel before there is anything to
+  // filter. Phones already got this right — the panel is a drawer behind one
+  // button — while desktop opened on a first-time visitor with forty controls
+  // down the left edge and an empty two-thirds of the screen to their right.
+  // The panel is an instrument for narrowing results, and on the landing page
+  // there are none; it returns the moment a search does. Sticky once asked for,
+  // because someone who wants to set sites or ratings before their first search
+  // should not have to ask twice.
+  const [filtersPinned, setFiltersPinned] = useState(false)
   // Prevent background scroll while the drawer is open
   useEffect(() => {
     if (typeof document === "undefined") return
@@ -1661,7 +1724,8 @@ function SearchPageInner() {
         {filtersOpen && <div className="sidebar-backdrop" onClick={() => setFiltersOpen(false)} />}
 
         {/* ── Sidebar (slide-out drawer on mobile) ── */}
-        <aside className={`sidebar ${filtersOpen ? "sidebar--open" : ""}`}
+        <aside className={`sidebar ${filtersOpen ? "sidebar--open" : ""}`
+          + (!results && !loading && !filtersPinned ? " sidebar--stowed" : "")}
           style={sidebarWidth ? ({ ["--sidebar-w" as any]: `${sidebarWidth}px` }) : undefined}>
 
           <div className="sidebar__mobile-head">
@@ -2061,7 +2125,8 @@ function SearchPageInner() {
             As a flex item between the panel and the results it is simply
             always there. Desktop only; hidden by CSS on touch. */}
         <div
-          className="sidebar__resizer"
+          className={"sidebar__resizer"
+            + (!results && !loading && !filtersPinned ? " sidebar__resizer--stowed" : "")}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize filter panel"
@@ -2171,8 +2236,14 @@ function SearchPageInner() {
             }} />
           </div>
 
-          {/* Mobile-only filters trigger — opens the slide-out filter drawer */}
-          <button className="filters-trigger" onClick={() => setFiltersOpen(true)}>
+          {/* On phones this opens the slide-out drawer. On desktop it appears
+              only while the panel is stowed on the landing page, so the filters
+              are one click away rather than gone — the same button doing the
+              same job at both sizes, which is why it is not a second control. */}
+          <button
+            className={"filters-trigger"
+              + (!results && !loading && !filtersPinned ? " filters-trigger--stowed" : "")}
+            onClick={() => { setFiltersOpen(true); setFiltersPinned(true) }}>
             <span className="filters-trigger__icon">⚙</span> Filters &amp; sort
             {activeFilterCount > 0 && <span className="filters-trigger__badge">{activeFilterCount}</span>}
           </button>
@@ -2375,7 +2446,15 @@ function SearchPageInner() {
             </>
           )}
 
-          {!results && !loading && <EmptyState onSurprise={surpriseMe} />}
+          {!results && !loading && (
+            <EmptyState
+              onSurprise={surpriseMe}
+              // Same shape as the recent-search picker above, and for the same
+              // reason: setQuery has not flushed when this runs, and doSearch is
+              // captured from this render, so the query has to be handed over
+              // explicitly or the first click searches for nothing.
+              onPick={q => { setQuery(q); doSearch(true, undefined, q) }} />
+          )}
         </main>
       </div>
     </div>
