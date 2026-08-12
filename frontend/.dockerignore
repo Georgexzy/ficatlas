@@ -1,0 +1,23 @@
+# The image runs `npm install` and `npm run build` itself, so anything here that
+# is already a build output or an installed tree is at best wasted context and
+# at worst actively wrong.
+#
+# .next is the dangerous one: copying a local build into the image before
+# building means the build starts from whatever was last produced on this
+# machine, against different env vars. FORCE_HTTPS is baked into
+# routes-manifest.json at build time, so a stale .next is exactly how a public
+# image ends up carrying the dev site's headers.
+.next/
+node_modules/
+out/
+build/
+
+# Secrets — never inside an image.
+.env
+.env.*
+!.env.example
+
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+coverage/

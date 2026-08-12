@@ -36,10 +36,26 @@
 # deploy. Exactly one colour of each runs at a time, selected by profile, and
 # nginx decides which one is live. See deploy/nginx.conf.
 
+# Container logs are capped, and on a public box that is not housekeeping.
+#
+# Docker's default json-file driver grows without limit. nginx here logs every
+# request to stdout, so a public site's access log becomes an unbounded file on
+# a disk that already runs above 80% — and a full disk stops Postgres writing,
+# which takes the site down for a reason that looks nothing like its cause.
+#
+# 10MB x 3 per container: enough history to debug an incident, bounded at 30MB
+# per service instead of however long the site has been up.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
 
   # ── the swap point ─────────────────────────────────────────────────────────
   nginx:
+    logging: *logging
     image: nginxinc/nginx-unprivileged:alpine
     restart: unless-stopped
     volumes:
@@ -67,16 +83,30 @@ services:
   # Dials OUT to Cloudflare; nothing dials in. The home IP is never in DNS and
   # the router needs no port forward.
   #
-  # The tunnel's public hostname (set in the Cloudflare dashboard) must point at
-  #     http://nginx:8080
-  # NOT at a web container directly — pointing it at web-blue would pin the
-  # public site to one colour and make every deploy visible again.
+  # The tunnel's public hostname (set in the Cloudflare dashboard) points at
+  #     http://localhost:8080
+  #
+  # localhost, not a service name, because of network_mode below: cloudflared
+  # shares nginx's network namespace, so nginx IS localhost to it. That is
+  # deliberate. A service name like http://nginx:8080 depends on Docker's
+  # embedded DNS resolving at the moment Cloudflare validates or dials it, and
+  # is the step that most often refuses to save. Sharing the namespace removes
+  # DNS from the path altogether — there is nothing left to resolve.
+  #
+  # It must NOT point at a web container directly: that would pin the public
+  # site to one colour and make every deploy visible again. localhost:8080 is
+  # nginx, which is the swap point.
   cloudflared:
+    logging: *logging
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    # Shares nginx's network namespace. Also means cloudflared cannot reach any
+    # other container by name, which is a bonus rather than a limitation: the
+    # only thing it should ever talk to inside this box is nginx.
+    network_mode: "service:nginx"
     depends_on:
       - nginx
     mem_limit: 256m
@@ -87,6 +117,7 @@ services:
 
   # ── web tier ───────────────────────────────────────────────────────────────
   web-blue:
+    logging: *logging
     profiles: ["blue"]
     image: ficatlas-frontend:${DEPLOY_TAG:-latest}
     restart: unless-stopped
@@ -115,6 +146,7 @@ services:
       start_period: 20s
 
   web-green:
+    logging: *logging
     profiles: ["green"]
     image: ficatlas-frontend:${DEPLOY_TAG:-latest}
     restart: unless-stopped
@@ -144,6 +176,7 @@ services:
   # lives. It gets its own DNS name there (api-blue/api-green), so it cannot be
   # confused with the dev stack's own `backend`.
   api-blue:
+    logging: *logging
     profiles: ["blue"]
     image: ficatlas-backend:${DEPLOY_TAG:-latest}
     restart: unless-stopped
@@ -187,6 +220,7 @@ services:
       start_period: 30s
 
   api-green:
+    logging: *logging
     profiles: ["green"]
     image: ficatlas-backend:${DEPLOY_TAG:-latest}
     restart: unless-stopped
