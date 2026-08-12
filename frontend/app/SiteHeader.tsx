@@ -22,6 +22,23 @@ export type NavKey = "search" | "browse" | "library" | "settings" | "account"
 function UserMenu() {
   const { user, logout, loading, syncing } = useAuth()
   const [open, setOpen] = useState(false)
+  // Followed works that have moved since you last looked.
+  //
+  // In the menu rather than as a fifth header link: six items already overflowed
+  // a 375px screen (see the tab bar note below), and this is a personal count,
+  // which is what the avatar already stands for. /api/follows/count answers 0
+  // for a signed-out reader instead of 401 precisely so this can be asked for
+  // without checking first.
+  const [unread, setUnread] = useState(0)
+  useEffect(() => {
+    if (!user) { setUnread(0); return }
+    let live = true
+    fetch("/api/follows/count", { credentials: "include" })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (live && d) setUnread(d.unread || 0) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [user])
   useEffect(() => {
     if (!open) return
     const close = (e: MouseEvent) => {
@@ -39,6 +56,12 @@ function UserMenu() {
         <span className="user-menu__avatar">
           {user.username.slice(0, 1).toUpperCase()}
           {syncing && <span className="user-menu__sync-dot" title="Syncing…" />}
+          {unread > 0 && (
+            <span className="user-menu__badge"
+              title={`${unread} followed work${unread === 1 ? "" : "s"} updated`}>
+              {unread > 9 ? "9+" : unread}
+            </span>
+          )}
         </span>
         <span className="user-menu__name">{user.username}</span>
       </button>
@@ -49,6 +72,10 @@ function UserMenu() {
               ? "⟳ Syncing your data…"
               : "Bookmarks, reading progress, recent searches and reader settings sync to this account."}
           </p>
+          <Link href="/follows" className="user-menu__link" onClick={() => setOpen(false)}>
+            Following
+            {unread > 0 && <span className="user-menu__link-count">{unread} new</span>}
+          </Link>
           <Link href="/account" className="user-menu__link" onClick={() => setOpen(false)}>Account &amp; sync</Link>
           <OfflineLink href="/library" className="user-menu__link" onClick={() => setOpen(false)}>My library</OfflineLink>
           {/* The admin page had exactly one link into it, buried in Settings

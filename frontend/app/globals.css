@@ -3985,6 +3985,23 @@ body.is-resizing * { cursor: col-resize !important; }
 }
 .page-prose p { margin: 0 0 16px; }
 .page-prose strong { color: var(--text); font-weight: 600; }
+/* Prose links, not every link on the page. The shared header and footer sit
+   inside this wrapper on about, takedown, permissions and follows, so an
+   unscoped rule underlined and gold-coloured the site navigation on exactly
+   those pages and left it alone on search — the same header rendering two
+   different ways depending on which page you were standing on. */
+.page-prose :is(.header, .tabbar, footer, .site-footer) a {
+  text-decoration: none;
+  /* Restores .header__link's own colour, which this wrapper was also
+     overriding — so the nav came out entirely accent-gold here and correctly
+     dim-with-one-highlight on the search page. */
+  color: var(--text-dim);
+}
+.page-prose .header a:hover { color: var(--text); }
+/* The wordmark sets its own two colours (.logo em is the accent italic) and
+   must not be flattened to one by the rule above. */
+.page-prose .header .logo { color: var(--text); }
+.page-prose .header .logo em { color: var(--accent); }
 .page-prose a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .page-prose a.card-btn { text-decoration: none; display: inline-block; margin-top: 4px; }
 /* A link styled as a button must keep the button's colours.
@@ -4692,3 +4709,75 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 /* A work saved on another device, while this one has no connection: shown so
    you know it exists, dimmed so you do not tap it expecting to read. */
 .offline-elsewhere__unavailable { color: var(--text-faint); }
+
+/* ── Following ──────────────────────────────────────────────────────────────
+   The list of works you follow, updates first. The API for this shipped
+   complete and with no caller at all; this is the half that was missing. */
+
+/* The avatar is already accent-coloured, so an accent badge on it would be
+   invisible. Red is also the convention for "this is waiting for you", and the
+   ring separates it from the circle underneath at 16px. */
+.user-menu__badge {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 16px; height: 16px; padding: 0 4px;
+  background: var(--red); color: #fff;
+  border: 2px solid var(--bg); border-radius: 999px;
+  font-size: 9px; font-weight: 700; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono);
+}
+.user-menu__link-count {
+  margin-left: 8px; font-family: var(--font-mono); font-size: 10px;
+  color: var(--accent);
+}
+
+.follows { list-style: none; padding: 0; margin: 18px 0 0; }
+.follows__item {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--border);
+}
+/* A left edge rather than a filled row: the list is read by scanning down it,
+   and a background on every unread item would make the common case — several at
+   once — read as one solid block instead of as several separate works. */
+.follows__item--new {
+  border-left: 2px solid var(--accent);
+  padding-left: 12px; margin-left: -14px;
+}
+.follows__main { min-width: 0; }
+.follows__title {
+  font-family: var(--font-serif); font-size: 17px; color: var(--text);
+  text-decoration: none; display: block;
+}
+.follows__title:hover { color: var(--accent); }
+.follows__meta {
+  margin: 4px 0 0; font-size: 12px; color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+.follows__actions {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.follows__badge {
+  background: var(--accent-bg); color: var(--accent);
+  border: 1px solid var(--accent-dim); border-radius: 999px;
+  padding: 3px 10px; font-size: 11px; font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.follows__badge--soft { background: none; color: var(--text-faint); border-color: var(--border2); }
+.follows__btn {
+  background: var(--surface2); border: 1px solid var(--border2); color: var(--text-dim);
+  border-radius: 6px; padding: 5px 11px; font-size: 12px; cursor: pointer;
+  font-family: inherit; white-space: nowrap;
+}
+.follows__btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent-dim); }
+.follows__btn:disabled { opacity: 0.5; cursor: default; }
+.follows__btn--quiet { background: none; color: var(--text-faint); }
+
+@media (max-width: 560px) {
+  .follows__item { flex-direction: column; gap: 10px; }
+  .follows__actions { justify-content: flex-start; }
+}
+
+/* A list of works, not a column of prose: at the 660px reading measure the
+   title and the row's actions collide on anything but the shortest titles. */
+.page-prose--wide { max-width: 880px; }
