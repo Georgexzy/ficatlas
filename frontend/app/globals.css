@@ -4801,3 +4801,16 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   color: var(--warn); border-left: 2px solid var(--warn);
   padding-left: 8px; margin-top: 8px;
 }
+
+/* "Stay signed in", which is a choice rather than a field — laid out as a row so
+   the box and its consequence read together instead of the explanation floating
+   under an unlabelled tick. */
+.auth-remember {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 4px 0 2px; cursor: pointer; font-size: 13px; color: var(--text-dim);
+}
+.auth-remember input { margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); }
+.auth-remember small {
+  display: block; margin-top: 3px; font-size: 11px; line-height: 1.45;
+  color: var(--text-faint);
+}
