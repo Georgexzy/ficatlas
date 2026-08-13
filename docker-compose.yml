@@ -241,6 +241,44 @@ services:
   # (RUN_SCHEDULER), so the API never double-polls, and its restarts are
   # independent of the API's.
 
+  # FanFiction.net engagement, which nothing else on this box can reach.
+  #
+  # Its own service, and its own image, for one reason: FF.net answers 403 to
+  # every HTTP client — httpx with a Chrome User-Agent included — and 200 to a
+  # real browser engine. So this needs Chromium, and adding Chromium to the
+  # backend image would put ~400MB back into the 533MB it was just reduced to,
+  # for one job. The Playwright image already carries it.
+  #
+  # Shares the database, so what it collects is live on the public site with no
+  # deploy. See ffnet-harvester/harvest.js for the per-session 403 behaviour and
+  # why each page load gets a fresh browser context.
+  ffnet-harvester:
+    logging: *logging
+    image: mcr.microsoft.com/playwright:v1.49.0-jammy
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./ffnet-harvester:/app
+    # npm install on start rather than a Dockerfile: two dependencies, and this
+    # way the image stays the stock upstream one with nothing to rebuild.
+    command: sh -c "npm install --no-audit --no-fund --silent && node harvest.js"
+    environment:
+      DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:-ficatlas}@db:5432/ficatlas
+      # Seconds between page loads. 25 works per page means even this modest
+      # rate clears the 6.5M backlog in weeks; it is set by what is decent
+      # toward a live site, not by what can be got away with.
+      FFNET_DELAY_MS: ${FFNET_DELAY_MS:-6000}
+      FFNET_PAGES_PER_VISIT: ${FFNET_PAGES_PER_VISIT:-10}
+      # Sort by favourites, so the walk starts with the works whose engagement
+      # figures most affect a ranking — and which the 2017-era dump actually
+      # contains. Sorting by "recently updated" walks works we do not hold.
+      FFNET_SORT: ${FFNET_SORT:-4}
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 1g
+    cpus: 1.0
+
   worker:
     logging: *logging
     image: ficatlas-backend    # same image as the API; built by the backend service

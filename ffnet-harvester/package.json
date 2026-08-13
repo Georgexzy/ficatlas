@@ -1,0 +1,15 @@
+{
+  "name": "ficatlas-ffnet-harvester",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Harvests FanFiction.net engagement counts from listing pages. Needs a real browser engine — FF.net answers 403 to every HTTP client.",
+  "main": "harvest.js",
+  "scripts": {
+    "start": "node harvest.js",
+    "once": "node harvest.js --once"
+  },
+  "dependencies": {
+    "pg": "^8.13.1",
+    "playwright": "1.49.0"
+  }
+}
