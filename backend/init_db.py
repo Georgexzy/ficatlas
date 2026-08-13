@@ -374,6 +374,17 @@ CREATE INDEX IF NOT EXISTS ix_stories_repair_queue ON stories (
     AND tags @> ARRAY['ao3_meta_dump']
     AND title ~* ' (and|of|the|with)$';
 
+-- Cross-archive popularity, 0..1. Written by popularity_rank.py, never by the
+-- request path — see that file for why this is a percentile within each site
+-- rather than a scaled raw count.
+--
+-- NULL means "no engagement figure recorded", which is most of the index and is
+-- NOT the same as unpopular. The partial index matches the sort's own
+-- `popularity IS NOT NULL` predicate so an unranked work costs nothing to skip.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS popularity REAL;
+CREATE INDEX IF NOT EXISTS ix_stories_popularity ON stories (popularity DESC)
+    WHERE popularity IS NOT NULL;
+
 -- ── Dropped indexes ─────────────────────────────────────────────────────────
 -- ix_stories_non_explicit: DROPPED. Defined as
 --     btree (updated_at DESC) WHERE (rating)::text <> 'E'
