@@ -1,8 +1,9 @@
 "use client"
 
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
+import { previousOutside, truncateTo } from "@/lib/navStack"
 
 // "Back", where back means something.
 //
@@ -25,13 +26,24 @@ export default function BackLink(
   { fallback?: string; label?: string; fallbackLabel?: string },
 ) {
   const router = useRouter()
+  const pathname = usePathname()
   const [canGoBack, setCanGoBack] = useState(false)
+  // Where back actually leads, from this tab's own record of where it has been.
+  //
+  // history.length alone said only "there is something behind you", never what.
+  // On a story page that something is very often a chapter OF THIS STORY, which
+  // is how closing a chapter and pressing Back put you straight back into it.
+  // See lib/navStack.ts for why the browser cannot be asked.
+  const [target, setTarget] = useState<string | null>(null)
 
   useEffect(() => {
-    // > 1 means this tab has somewhere of its own to return to. A fresh tab
-    // opened straight onto this page has length 1.
-    setCanGoBack(typeof window !== "undefined" && window.history.length > 1)
-  }, [])
+    if (typeof window === "undefined") return
+    const prev = pathname ? previousOutside(pathname) : null
+    setTarget(prev)
+    // Still gated on real history: with a recorded path but a fresh tab (a
+    // restored session, say) router.back() has nothing to go to.
+    setCanGoBack(window.history.length > 1 && prev !== null)
+  }, [pathname])
 
   if (!canGoBack) {
     return (
@@ -45,7 +57,14 @@ export default function BackLink(
 
   return (
     <p className="back-link">
-      <button type="button" onClick={() => router.back()}>
+      {/* push to the recorded destination rather than router.back(), because
+          back is one step and the thing worth skipping is often several — a
+          story visited from its own chapter list can have half a dozen entries
+          inside it. The stack is trimmed to match so a second Back does not
+          walk forward into what was just skipped. */}
+      <button type="button" onClick={() => {
+        if (target) { truncateTo(target); router.push(target) } else { router.back() }
+      }}>
         <span aria-hidden="true">←</span> {label}
       </button>
     </p>

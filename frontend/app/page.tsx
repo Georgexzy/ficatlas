@@ -8,7 +8,7 @@ import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
-         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getTopHubs, type TopHub, FICALLEY_SECTIONS, coverageWarning, statusNote } from "@/lib/api"
+         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getTopHubs, type TopHub, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
@@ -422,7 +422,7 @@ function StoryCard({ story }: { story: StoryCard }) {
     <article className="card">
       <div className="card__top">
         <div className="card__title-row">
-          <Link href={`/story/${story.id}`} className="card__title">{story.title}</Link>
+          <Link href={`/story/${story.id}`} className="card__title">{displayTitle(story.title)}</Link>
           <div className="card__badges">
             <span className={`badge badge--site-${story.site}`}>{SITE_LABELS[story.site] ?? story.site}</span>
             {/* Only ever set in an admin's results — the API drops delisted rows
@@ -1752,6 +1752,8 @@ function SearchPageInner() {
   const totalPages = results ? Math.ceil(results.total / results.per_page) : 0
 
   // Count active filters for the mobile drawer badge
+  const sortNote = useMemo(() => sortCoverageNote(sort, sites), [sort, sites])
+
   const activeFilterCount =
     incFandoms.length + incChars.length + incShips.length + incTags.length +
     excFandoms.length + excChars.length + excShips.length + excTags.length +
@@ -1801,6 +1803,13 @@ function SearchPageInner() {
               aria-label="Sort results">
               {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
+            {/* Inline, not in the tip above. The caveat was already written and
+                already accurate, and it sat behind a click — so the ordering it
+                explains ("why is this all AO3?") read as a bug rather than as
+                the coverage it is. This is the same treatment the facet filters
+                already get from coverageWarning; the sorts had simply never
+                been given it. */}
+            {sortNote && <p className="sidebar__hint sidebar__hint--warn">{sortNote}</p>}
           </div>
 
           <div className="sidebar__group">

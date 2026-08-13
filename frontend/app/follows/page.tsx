@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback } from "react"
 import Link from "next/link"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
-import { formatWordCount, chapterDisplay, SITE_LABELS } from "@/lib/api"
+import { formatWordCount, chapterDisplay, displayTitle, SITE_LABELS } from "@/lib/api"
 
 // The other half of following a work.
 //
@@ -122,7 +122,7 @@ export default function FollowsPage() {
               {works.map(w => (
                 <li key={w.id} className={`follows__item ${w.is_new ? "follows__item--new" : ""}`}>
                   <div className="follows__main">
-                    <Link href={`/story/${w.id}`} className="follows__title">{w.title}</Link>
+                    <Link href={`/story/${w.id}`} className="follows__title">{displayTitle(w.title)}</Link>
                     <p className="follows__meta">
                       {w.author && <>{w.author} · </>}
                       {SITE_LABELS[w.site] ?? w.site}
