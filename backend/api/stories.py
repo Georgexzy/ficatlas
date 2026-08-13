@@ -54,6 +54,28 @@ def may_read_text(db: Session, story: "Story | None", viewer) -> bool:
     ), {"u": str(viewer.id), "s": str(story.id)}).first())
 
 
+def delisted_as_gone(story: "Story | None", viewer) -> bool:
+    """A delisted work is gone as far as the public is concerned.
+
+    Delisting is the strongest action the site takes: the author asked for the
+    entry removed. The story page 404s rather than tombstone so the author's
+    title and pen name are not republished, and the chapter reader and the EPUB
+    exporter have to apply exactly the same gate — otherwise the full text the
+    author withdrew stays a guessed URL away. One helper rather than the check
+    written out at each call site, for the same reason `may_read_text` exists:
+    the three endpoints hand over the same bytes, and drifting apart would mean
+    a 404 on the story page and an open door on the export.
+
+    Admins can still open a delisted work, because the reversal the policy
+    promises needs someone able to look at what was removed.
+    """
+    if story is None or story.delisted_at is None:
+        return False
+    if viewer is not None and viewer.at_least(ROLE_ADMIN):
+        return False
+    return True
+
+
 def valid_story_id(story_id: str) -> str:
     """404 on a story id that is not a UUID, rather than letting Postgres raise.
 
@@ -227,8 +249,7 @@ def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get
     # title, their pen name and the fact that they withdrew it. An admin can
     # still open it, because the reversal the policy promises needs someone able
     # to look at what was removed.
-    if story.delisted_at is not None and not (
-            viewer is not None and viewer.at_least(ROLE_ADMIN)):
+    if delisted_as_gone(story, viewer):
         raise HTTPException(404, "Story not found")
 
     chapter_meta = [
@@ -300,6 +321,11 @@ def get_chapter(number: int, story_id: str = Depends(valid_story_id),
     against it.
     """
     story = db.query(Story).filter(Story.id == story_id).first()
+    # Delisting is the strongest action, so it outranks the text-withdrawal
+    # status: an author who asked for the entry gone gets a 404, not a 451 that
+    # still names their work.
+    if delisted_as_gone(story, viewer):
+        raise HTTPException(404, "Story not found")
     if story is not None and story.text_withdrawn_at is not None:
         raise HTTPException(
             451,
@@ -523,6 +549,11 @@ def export_epub(story_id: str = Depends(valid_story_id), db: Session = Depends(g
     login wall with the door propped open beside it.
     """
     story = db.query(Story).filter(Story.id == story_id).first()
+    # Same delisted gate as the chapter reader: the exporter hands over the
+    # ENTIRE story in one file, so it has to respect the strongest action even
+    # more than the single-chapter view does.
+    if delisted_as_gone(story, viewer):
+        raise HTTPException(404, "Story not found")
     if story is not None and story.text_withdrawn_at is not None:
         raise HTTPException(451, "The author of this story asked for it not to be hosted here.")
     if REQUIRE_LOGIN_TO_READ and viewer is None:
