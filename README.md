@@ -20,6 +20,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Canonical-tag autocomplete in Import** — the Import tab's fandom fields autocomplete index-first, then fall back to AO3's canonical fandom names (`/api/stats/suggest-canonical`) so you can discover and correctly spell new fandoms to scrape, avoiding malformed-tag errors. That vocabulary is synced into our own facets table by `ao3_canonical_fandoms.py` — 73,732 canonical names in 12 requests against AO3's public `/media/<category>/fandoms` listings, refreshed occasionally. It is deliberately **not** AO3's `/autocomplete/` endpoint, which their robots.txt disallows and which this box would otherwise have called on every keystroke
 - **Per-archive result breakdown** — the results bar reads `187 stories · 124 AO3 + 63 FF.net`, which is the one thing no single archive can tell you: that a search found work in more than one place, and how much of it you would have missed searching only the archive you usually use. Counted over the same bounded candidate set as the total, so it costs nothing measurable, and **withheld when the count is capped** — the candidate set behind a capped total is not exactly that size, so the parts would not sum to the headline
 - **Browse by fandom** — 5,025 fandom pages (`/fandoms`, `/fandom/<slug>`), each listing the 50 most-read works **per archive** rather than one merged list. Ranking across archives could only ever return AO3: kudos exists on 239,588 AO3 rows against 1,470 of FanFiction.net's 6.6M, and an AO3 kudos and an FF.net favourite are different units counted by different populations. Reachable from the header and the phone tab bar, and the only route a search engine has into the index — search URLs are `/?q=…`, which robots.txt blocks as an infinite crawl space
+- **Cross-archive popularity** (`popularity_rank.py`, computed offline; **not yet wired to a sort**) — the answer to the line above, which is why the two sit together. The archives do not count on the same scale: average kudos/favs is 190 on AO3 against 1,676 on FanFiction.net, so a raw column sorts mostly by *which site a row came from*. Each metric is converted to a percentile **within its own archive** — "top 1% of AO3" and "top 1% of FF.net" mean the same thing whatever the scales do, and unlike a fixed multiplier it self-corrects as coverage changes. Weighted by what the action costs a reader (bookmarks/follows .35, kudos/favs .30, comments/reviews .20, hits .15), renormalised over the metrics a work actually has, shrunk toward the median by how much of the picture was visible, and blended 75/25 with the same standing per √day alive so an old work does not out-rank a better new one purely by having had longer. A `0` counts as *absent*, not as unpopular — the bulk imports wrote 0 everywhere — so unscored works get NULL and sort out of the way
 - **`author:` / `by:` operator** — `author:lightning on the wave` finds that author's works. Pen names with spaces need no quotes; quoting is still accepted
 - **Spelling-tolerant tag matching** — freeform tags are whatever the author typed, and 132,714 of 1,574,508 tag values (8.4%) differ from another only by case and punctuation. "fluff" exists as 44 separate values (`fluff!`, `#fluff`, `F L U F F`, `F.L.U.F.F.`); Hurt/Comfort as 33 (`hurt-comfort`, `hurt & comfort`, `hurt|comfort`). Searching any spelling now reaches the rest. Mechanical only: this merges spellings, never meanings — the semantic half genuinely cannot be automated ([FanFicFare #1340](https://github.com/JimmXinu/FanFicFare/issues/1340): Naruto alone has ~300 tags meaning the same thing)
 - **Standing "never show me" list** — ships, tags, fandoms, characters and authors excluded from *every* search automatically, kept on your device and never sent in a shared search link
@@ -409,6 +410,20 @@ at all, no update dates, and truncates long titles mid-phrase; the FFN dump
 carries no characters, ships, dates or engagement counts. There is **no bulk
 source that fixes this** — see Known limitations — so it is recovered from the
 sites themselves, in the background, at a deliberately modest rate.
+
+- **`ffnet-harvester/`** — FanFiction.net engagement (Reviews, Favs, Follows),
+  25 works per request from a listing page. It is its own container on the
+  stock Playwright image, and that is not a preference: FF.net answers **403 to
+  every HTTP client** and 200 to a real browser engine. Measured on the same URL
+  in the same minute — httpx with a Chrome User-Agent gets the interstitial,
+  headless Chromium gets 25 stories with the counts inline. So every httpx path
+  (`ffnet_enrich`, `fichub_meta`, the live fetchers) is locked out by
+  construction. The refusal is per *session* rather than per rate — after ~3
+  pages one browser context is refused indefinitely, while the same pages on a
+  fresh context return immediately — so each page load gets its own context.
+  Sorted by favourites, because "recently updated" walks works the 2017-era dump
+  never contained. Measured: 250 works per 10 pages, ~432,000/day at a 6s pace.
+  FF.net publishes no view counter anywhere, so `hits` stays empty for it.
 
 - **`ao3_listing_harvest.py`** — the bulk route. A tag-works listing carries
   full metadata for **twenty works per request** (measured: 19/20 with a
