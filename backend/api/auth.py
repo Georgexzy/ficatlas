@@ -86,7 +86,8 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _create_session(db: Session, user: User, user_agent: str | None = None) -> str:
+def _create_session(db: Session, user: User, user_agent: str | None = None,
+                    remember: bool = True) -> str:
     token = _new_token()
     sess = UserSession(
         token=_token_hash(token), user_id=user.id,
@@ -94,6 +95,7 @@ def _create_session(db: Session, user: User, user_agent: str | None = None) -> s
         expires_at=datetime.utcnow() + timedelta(days=SESSION_DAYS),
         last_used=datetime.utcnow(),
         user_agent=(user_agent or "")[:255],
+        remember=remember,
     )
     db.add(sess)
     # Opportunistic cleanup: drop this user's expired sessions so the table
@@ -115,10 +117,29 @@ def _create_session(db: Session, user: User, user_agent: str | None = None) -> s
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
+def _set_session_cookie(response: Response, token: str,
+                        remember: bool = True) -> None:
+    """Send the session cookie, persistent or not.
+
+    `remember=False` omits Max-Age entirely, which makes it a session cookie: the
+    browser drops it when it closes. That is the only mechanism there is — a
+    cookie is either persistent or it is not, and there is no middle setting.
+
+    The server-side row still lasts SESSION_DAYS either way. It has to: the row
+    is what `/account` lists as an active session and what "sign out everywhere"
+    revokes, and expiring it early would make a closed browser look like a
+    session that never existed. Forgetting happens at the client, which is where
+    the person who ticked the box actually is.
+
+    Defaults to True so every existing caller keeps the behaviour it had.
+    """
     response.set_cookie(
         key=SESSION_COOKIE, value=token,
-        max_age=SESSION_DAYS * 86400,
+        # Deliberately not `max_age=None if not remember` inline: passing
+        # max_age=None is what "session cookie" means to Starlette, and spelling
+        # it out here is the difference between reading as intent and reading as
+        # an oversight.
+        max_age=(SESSION_DAYS * 86400) if remember else None,
         httponly=True, samesite="lax",
         secure=COOKIE_SECURE,
         path="/",
@@ -201,7 +222,9 @@ def get_current_user(
         dirty = True
         # The browser cookie carries its own Max-Age, so extending the DB row alone
         # would not keep the client signed in. Re-issue it with the same token.
-        _set_session_cookie(response, sat)
+        # Honours what this session originally asked for, or the slide would
+        # hand a persistent cookie to someone who ticked the box off.
+        _set_session_cookie(response, sat, bool(getattr(s, "remember", True)))
 
     if dirty:
         db.commit()
@@ -313,6 +336,7 @@ def signup(
     response: Response, request: Request,
     username: str = Form(...), password: str = Form(...),
     invite: str = Form(""),
+    remember: bool = Form(True),
     db: Session = Depends(get_db),
 ):
     if SIGNUP_MODE == "closed":
@@ -335,8 +359,8 @@ def signup(
     user = User(username=username, password_hash=hash_password(password),
                 last_login=datetime.utcnow())
     db.add(user); db.commit(); db.refresh(user)
-    token = _create_session(db, user, request.headers.get("user-agent"))
-    _set_session_cookie(response, token)
+    token = _create_session(db, user, request.headers.get("user-agent"), remember)
+    _set_session_cookie(response, token, remember)
     return {"username": user.username, "id": str(user.id)}
 
 
@@ -344,6 +368,7 @@ def signup(
 def login(
     response: Response, request: Request,
     username: str = Form(...), password: str = Form(...),
+    remember: bool = Form(True),
     db: Session = Depends(get_db),
 ):
     username = username.strip().lower()
@@ -359,8 +384,8 @@ def login(
         raise HTTPException(401, "Invalid username or password")
     _clear_login_fails(username)
     user.last_login = datetime.utcnow()
-    token = _create_session(db, user, request.headers.get("user-agent"))
-    _set_session_cookie(response, token)
+    token = _create_session(db, user, request.headers.get("user-agent"), remember)
+    _set_session_cookie(response, token, remember)
     db.commit()
     return {"username": user.username, "id": str(user.id)}
 

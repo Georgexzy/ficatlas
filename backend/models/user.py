@@ -1,7 +1,7 @@
 """User accounts, sessions, and per-account JSON storage."""
 from datetime import datetime
 import uuid
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index
+from sqlalchemy import Boolean, Column, String, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from models.story import Base
 
@@ -59,6 +59,8 @@ class UserSession(Base):
     expires_at  = Column(DateTime, nullable=False)
     last_used   = Column(DateTime, default=datetime.utcnow)
     user_agent  = Column(String(255))
+    # See init_db.py: the cookie cannot be asked whether it was persistent.
+    remember    = Column(Boolean, nullable=False, server_default="true")
     # Temporary self-downgrade for previewing the site as a lesser role.
     # Never an upgrade — see auth.get_current_user.
     view_as     = Column(String(16))

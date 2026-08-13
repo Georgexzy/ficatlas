@@ -420,6 +420,16 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 );
 CREATE INDEX IF NOT EXISTS ix_user_sessions_user ON user_sessions (user_id);
 
+-- Did this session ask to be remembered across browser restarts?
+--
+-- The cookie cannot answer that later: a request carries a name and a value and
+-- nothing about whether it had a Max-Age. Without somewhere to record it, the
+-- sliding refresh in api/auth.py would re-issue every session as persistent and
+-- quietly undo an unticked box on the first page load after signing in.
+--
+-- Defaults TRUE so sessions predating the column keep the behaviour they had.
+ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS remember BOOLEAN NOT NULL DEFAULT TRUE;
+
 CREATE TABLE IF NOT EXISTS user_data (
     user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     key        VARCHAR(50) NOT NULL,

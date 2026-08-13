@@ -25,8 +25,8 @@ interface AuthContextType {
   loading: boolean
   syncing: boolean
   lastSyncAt: number | null
-  login: (username: string, password: string) => Promise<void>
-  signup: (username: string, password: string, invite?: string) => Promise<void>
+  login: (username: string, password: string, remember?: boolean) => Promise<void>
+  signup: (username: string, password: string, invite?: string, remember?: boolean) => Promise<void>
   logout: () => Promise<void>
   syncNow: () => Promise<void>
   changePassword: (current: string, next: string) => Promise<void>
@@ -268,9 +268,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("beforeunload", onBeforeUnload)
   }, [snapshot])
 
-  const login = useCallback(async (username: string, password: string) => {
+  const login = useCallback(async (username: string, password: string, remember = true) => {
     const fd = new FormData()
     fd.append("username", username); fd.append("password", password)
+    // The server decides what the cookie looks like; this only says which was
+    // asked for. Unticked means a session cookie, gone when the browser closes.
+    fd.append("remember", String(remember))
     const r = await fetch("/api/auth/login", { method: "POST", body: fd, credentials: "include" })
     if (!r.ok) {
       const e = await r.json().catch(() => ({}))
@@ -281,7 +284,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await doMerge(undefined, true)   // merge this device's local data with the account's server data
   }, [doMerge])
 
-  const signup = useCallback(async (username: string, password: string, invite?: string) => {
+  const signup = useCallback(async (username: string, password: string, invite?: string, remember = true) => {
     const fd = new FormData()
     fd.append("username", username); fd.append("password", password)
     // Sent only when the server says it wants one (see /api/auth/signup-policy).
@@ -290,6 +293,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // code, and every account creation on the public site failed 403 while the
     // "Create account" tab went on offering it.
     if (invite) fd.append("invite", invite)
+    fd.append("remember", String(remember))
     const r = await fetch("/api/auth/signup", { method: "POST", body: fd, credentials: "include" })
     if (!r.ok) {
       const e = await r.json().catch(() => ({}))

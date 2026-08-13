@@ -15,6 +15,10 @@ function LoginPageInner() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [invite, setInvite] = useState("")
+  // Default on, which is what the site already did for everyone — the box exists
+  // so a shared or borrowed device can opt OUT, not to make people opt in to
+  // something that already worked.
+  const [remember, setRemember] = useState(true)
   // What the server will accept, asked rather than assumed. The endpoint exists
   // precisely so this page does not have to guess, and it exposes no secret —
   // only whether a code is needed, which the failing 403 announced anyway.
@@ -48,8 +52,8 @@ function LoginPageInner() {
     e.preventDefault()
     setError(null); setBusy(true)
     try {
-      if (mode === "login") await login(username, password)
-      else                  await signup(username, password, invite)
+      if (mode === "login") await login(username, password, remember)
+      else                  await signup(username, password, invite, remember)
       router.replace(next)
     } catch (e: any) {
       setError(e.message || `${mode} failed`)
@@ -101,6 +105,16 @@ function LoginPageInner() {
           </label>
         )}
 
+        <label className="auth-remember">
+          <input type="checkbox" checked={remember}
+            onChange={e => setRemember(e.target.checked)} />
+          <span>
+            Stay signed in on this device
+            <small>Leave this off on a shared or public computer — you will be
+              signed out when the browser closes.</small>
+          </span>
+        </label>
+
         {error && <div className="auth-error">{error}</div>}
 
         <button type="submit" className="auth-submit" disabled={busy}>
@@ -115,7 +129,9 @@ function LoginPageInner() {
 
         <p className="auth-hint">
           {mode === "login"
-            ? "Stays signed in for 90 days on this device."
+            ? (remember
+                ? "Stays signed in for 90 days on this device."
+                : "You will be signed out when this browser closes.")
             : "Your username can be anything 3–30 chars. No email needed."}
           {" "}Your bookmarks, reading progress, recent searches and reader
           settings sync automatically and merge across devices.
