@@ -41,6 +41,37 @@ type SyncKey = typeof SYNC_KEYS[number]
 
 const LS = (k: string) => `ficatlas:${k}`
 
+// The last identity the server confirmed, kept so being OFFLINE is not mistaken
+// for being signed out.
+//
+// /api/auth/me is the only thing that establishes who you are, and with no
+// network that fetch rejects. The bootstrap swallowed the rejection and left
+// `user` null, so every offline page rendered signed out: the header offered
+// "Sign in", the library showed a stranger's empty shelf, and anything gated on
+// an account vanished — while the chapter text itself loaded perfectly from
+// IndexedDB. That is what "offline reading doesn't really work" looks like from
+// the outside, and it is not the reading that is broken.
+//
+// A 401 is different from a failed request and is handled differently below:
+// one is the server saying no, the other is not reaching the server at all.
+const ME_CACHE = LS("me")
+
+function cacheUser(u: User | null): void {
+  try {
+    if (u) localStorage.setItem(ME_CACHE, JSON.stringify(u))
+    else localStorage.removeItem(ME_CACHE)
+  } catch { /* private mode; the app still works, it just forgets */ }
+}
+
+function cachedUser(): User | null {
+  try {
+    const raw = localStorage.getItem(ME_CACHE)
+    if (!raw) return null
+    const u = JSON.parse(raw)
+    return u && typeof u.username === "string" ? (u as User) : null
+  } catch { return null }
+}
+
 // Sync key -> the localStorage key the app actually writes.
 //
 // These drifted apart and two of the four advertised sync keys did nothing:
@@ -231,14 +262,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     hookLocalStorage(scheduleSync)
     fetch("/api/auth/me", { credentials: "include" })
-      .then(r => (r.ok ? r.json() : null))
+      .then(async r => {
+        // 401 is an answer: this session is gone, and the cached identity must
+        // go with it or a signed-out reader keeps seeing their old name.
+        if (r.status === 401) { cacheUser(null); return null }
+        // Any other non-OK status is the server being unwell, not a verdict on
+        // who you are — treated like a failed request, below.
+        if (!r.ok) throw new Error(`me: ${r.status}`)
+        return await r.json()
+      })
       .then(d => {
         const u = d?.user ?? null
         setUser(u)
+        cacheUser(u)
         loggedInRef.current = !!u
         if (u) doMerge(undefined, true)   // initial merge reconciles this device with the server
       })
-      .catch(() => {})
+      .catch(() => {
+        // Could not ask. Fall back to the last confirmed identity rather than
+        // deciding the reader is a stranger. Deliberately no doMerge: there is
+        // no network to merge with, and the focus/online listeners below will
+        // reconcile the moment there is.
+        const u = cachedUser()
+        if (u) {
+          setUser(u)
+          loggedInRef.current = true
+        }
+      })
       .finally(() => setLoading(false))
 
     // Re-sync when the tab regains focus or comes back online (robust catch-up).
@@ -280,7 +330,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(e.detail || "Login failed")
     }
     const d = await r.json()
-    setUser(d); loggedInRef.current = true
+    setUser(d); cacheUser(d); loggedInRef.current = true
     await doMerge(undefined, true)   // merge this device's local data with the account's server data
   }, [doMerge])
 
@@ -300,7 +350,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(e.detail || "Signup failed")
     }
     const d = await r.json()
-    setUser(d); loggedInRef.current = true
+    setUser(d); cacheUser(d); loggedInRef.current = true
     await doMerge(undefined, true)   // push existing local data up to the fresh account
   }, [doMerge])
 
@@ -308,7 +358,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Flush any pending edits before signing out so nothing is lost.
     if (dirtyRef.current.size > 0) { try { await doMerge(undefined, true) } catch {} }
     try { await fetch("/api/auth/logout", { method: "POST", credentials: "include" }) } catch {}
-    setUser(null); loggedInRef.current = false
+    setUser(null); cacheUser(null); loggedInRef.current = false
   }, [doMerge])
 
   const syncNow = useCallback(async () => { await doMerge(undefined, true) }, [doMerge])
@@ -331,7 +381,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const e = await r.json().catch(() => ({}))
       throw new Error(e.detail || "Couldn't delete account")
     }
-    setUser(null); loggedInRef.current = false
+    setUser(null); cacheUser(null); loggedInRef.current = false
   }, [])
 
   return (

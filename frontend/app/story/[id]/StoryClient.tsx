@@ -4,6 +4,7 @@ import { useParams } from "next/navigation"
 import Link from "next/link"
 import BackLink from "../../BackLink"
 import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory, getOfflineStory } from "@/lib/offline"
+import { useAuth } from "@/lib/auth"
 import { describeError, type Failure } from "@/lib/errors"
 import OfflineLink from "@/app/OfflineLink"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
@@ -40,6 +41,7 @@ const STATUS_LABEL: Record<string, string> = {
 export default function StoryClient() {
   const params = useParams()
   const id = params?.id as string
+  const { user } = useAuth()
   const [story, setStory] = useState<StoryDetail | null>(null)
   const [error, setError] = useState<Failure | null>(null)
   // True when what is on screen came from the offline copy rather than the API.
@@ -510,7 +512,19 @@ export default function StoryClient() {
               ↓ EPUB
             </a>
           )}
-          {story.is_hosted && story.chapters.length > 0 && (
+          {/* Saving needs an account, because the chapter API needs one — see
+              api/stories.py, where reading hosted text is deliberately gated
+              while searching is not. Offered to a signed-out reader the button
+              fetched chapter 1, got a 401, and stopped, leaving the label
+              unchanged and nothing on the device: a control that appears to do
+              nothing at all. Saying what it needs is the whole fix. */}
+          {story.is_hosted && story.chapters.length > 0 && !user && (
+            <a className="btn btn--ghost" href={`/login?next=/story/${story.id}`}
+              title="Reading and saving hosted text needs an account; searching does not">
+              ⤓ Sign in to save offline
+            </a>
+          )}
+          {story.is_hosted && story.chapters.length > 0 && user && (
             offlineSaved ? (
               <button className="btn btn--on" onClick={removeOffline}
                 title={offlinePending
