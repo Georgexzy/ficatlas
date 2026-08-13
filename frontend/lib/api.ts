@@ -174,8 +174,12 @@ export const SORT_OPTIONS = [
     help: "Newest changes first. Where a work has no recorded update date — common in the bulk imports — its published date is used instead, so it is not pushed to the bottom." },
   { value: "published_desc", label: "Newest",
     help: "Most recently posted first. Reliable for AO3; a large share of FanFiction.net rows arrived without dates and will sort last." },
+  // Placed above the raw engagement sorts because it is the one that answers
+  // the question people are actually asking when they reach for them.
+  { value: "popularity_desc", label: "Most popular",
+    help: "The only ranking that compares archives fairly. AO3 kudos, FanFiction.net favourites and FictionAlley hits are different actions counted by different communities on wildly different scales — average kudos is 190 on AO3 against 1,676 on FF.net — so ranking on any single raw figure mostly sorts by which site a work came from. This instead scores each work against its OWN archive, then weighs bookmarks and follows highest (keeping a work costs more than liking it), kudos next, comments and hits lowest, and tempers the result for works with only one figure recorded or with a long time to accumulate it. Works with no recorded engagement at all — still most of the index — sort after those that have some, rather than being ranked as unpopular." },
   { value: "kudos_desc", label: "Most kudos",
-    help: "Most-liked first. Worth knowing: kudos counts were not included in the bulk imports, so this ranks the small minority of works whose counts have since been filled in — it is not a view of the whole index." },
+    help: "Most-liked first, on the raw AO3-style count. Worth knowing: kudos were not included in the bulk imports, so this ranks the small minority whose counts have since been filled in — and because FanFiction.net favourites are counted on a much larger scale, a mid-tier FF.net work can outrank a far better-loved AO3 one. 'Most popular' is the version of this question that accounts for both." },
   { value: "hits_desc", label: "Most hits",
     help: "Most-read first. Same caveat as kudos — hit counts come from re-reading a work's page, so most of the index has none and sorts below those that do." },
   { value: "bookmarks_desc", label: "Most bookmarks",

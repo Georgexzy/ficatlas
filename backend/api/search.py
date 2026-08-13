@@ -315,6 +315,13 @@ SORT_MAP: dict[str, tuple[str, bool] | None] = {
     "word_count_asc":  ("word_count", False),
     "comments_desc":   ("comments", True),
     "bookmarks_desc":  ("bookmarks", True),
+    # The only sort that can be asked of the whole index rather than of one
+    # archive at a time. Written offline by popularity_rank.py — a percentile
+    # within each site, so an AO3 kudos and an FF.net favourite stop being
+    # compared as though they were the same unit. NULL for a work with no
+    # recorded engagement, which nullslast() puts after everything scored rather
+    # than ranking it as unpopular.
+    "popularity_desc": ("popularity", True),
 }
 
 
