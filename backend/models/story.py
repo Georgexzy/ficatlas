@@ -1,6 +1,6 @@
 """SQLAlchemy models for FicAtlas"""
 from sqlalchemy import (
-    Column, String, Integer, BigInteger, Boolean, DateTime,
+    Column, String, Integer, BigInteger, Boolean, DateTime, Float,
     Text, ARRAY, ForeignKey, Enum as SAEnum, Index, create_engine
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -62,6 +62,13 @@ class Story(Base):
     bookmarks = Column(Integer, default=0)
     hits = Column(Integer, default=0)
     comments = Column(Integer, default=0)
+    # Cross-archive popularity, 0..1, written offline by popularity_rank.py.
+    #
+    # No default, unlike the counts above, and that difference is the point: 0
+    # in those columns means "the bulk import recorded nothing", which is not
+    # the same as unpopular and is exactly what made engagement sorts misleading.
+    # NULL here means unranked and sorts last rather than bottom.
+    popularity = Column(Float)
     favourites = Column(Integer, default=0)
 
     fandoms = Column(ARRAY(Text), default=list)

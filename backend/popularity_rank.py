@@ -156,7 +156,7 @@ r_bookmarks AS (
       FROM scored WHERE bookmarks IS NOT NULL AND age_days IS NOT NULL
 ),
 pct AS (
-    SELECT s.id,
+    SELECT s.id, s.site,
            pk.v AS p_kudos, pb.v AS p_bookmarks, pc.v AS p_comments, ph.v AS p_hits,
            rk.v AS r_kudos, rb.v AS r_bookmarks,
            s.kudos, s.bookmarks, s.comments, s.hits, s.age_days
@@ -169,7 +169,7 @@ pct AS (
       LEFT JOIN r_bookmarks rb ON rb.id = s.id
 ),
 blended AS (
-    SELECT id,
+    SELECT id, site,
            -- Weight actually observed, so the renormalisation below divides by
            -- what was measurable rather than by the full 1.0.
            (CASE WHEN p_kudos     IS NOT NULL THEN {W_KUDOS}     ELSE 0 END
@@ -189,21 +189,40 @@ blended AS (
           + COALESCE(r_bookmarks * {W_BOOKMARKS}, 0))                        AS s_rate
       FROM pct
 ),
+-- The most weight any work in this archive manages to carry.
+--
+-- Confidence has to be measured against what the ARCHIVE can offer, not against
+-- a perfect 1.0, or the shrink silently becomes a per-site penalty for what a
+-- platform does not publish. FanFiction.net has no view counter at all, so no
+-- FF.net work can ever hold the 0.15 that hits carries: its ceiling was 0.925
+-- and it took 0 of the top 1% while AO3 took 597. FictionAlley, holding little
+-- but hits, was capped at 0.575 and could not reach the top 10% of the index at
+-- any level of acclaim.
+--
+-- Dividing by the site's own best-case restores the thing this whole file is
+-- for: a work that carries everything its archive records is fully trusted,
+-- whichever archive that is. It stays self-correcting too — when the harvester
+-- starts filling a metric a site was missing, the ceiling rises on its own.
+site_cap AS (
+    SELECT site, GREATEST(MAX(w_have), 0.0001) AS w_max FROM blended GROUP BY site
+),
 final AS (
-    SELECT id,
+    SELECT b.id,
            -- Renormalise over observed weight, shrink toward the prior by how
            -- much of the picture was actually visible, then let the rate view
            -- argue for a quarter of the result where it exists.
            (
-             0.75 * ({PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR}) * w_have)
+             0.75 * ({PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR}) * LEAST(w_have / c.w_max, 1.0))
            + 0.25 * CASE WHEN w_rate > 0
                          THEN {PRIOR} + (s_rate / w_rate - {PRIOR}) * w_rate
                          -- No usable date: the absolute view carries the whole
                          -- score rather than being diluted by a neutral 0.5.
-                         ELSE {PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR}) * w_have
+                         ELSE {PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR})
+                                        * LEAST(w_have / c.w_max, 1.0)
                     END
            ) AS popularity
-      FROM blended
+      FROM blended b
+      JOIN site_cap c ON c.site = b.site
 )
 UPDATE stories s
    SET popularity = round(f.popularity::numeric, 6)
