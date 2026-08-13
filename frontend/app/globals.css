@@ -4793,3 +4793,11 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 .perm-revoke p { margin: 0 0 12px; }
 .perm-revoke__note { font-size: 13px; color: var(--text-faint); }
+
+/* A sort or filter caveat that changes how the results should be read. Warm
+   rather than red: the sort is working as designed and the data is thin, which
+   is a thing to know, not an error to fix. */
+.sidebar__hint--warn {
+  color: var(--warn); border-left: 2px solid var(--warn);
+  padding-left: 8px; margin-top: 8px;
+}

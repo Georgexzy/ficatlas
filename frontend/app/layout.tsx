@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next"
 import { AuthProvider } from "@/lib/auth"
 import ServiceWorkerRegistration from "./ServiceWorkerRegistration"
+import NavRecorder from "./NavRecorder"
 import SiteFooter from "./SiteFooter"
 import PreviewBanner from "./PreviewBanner"
 import HealthBanner from "./HealthBanner"
@@ -92,6 +93,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <ServiceWorkerRegistration />
+        <NavRecorder />
         <AuthProvider>
           <HealthBanner />
           <PreviewBanner />

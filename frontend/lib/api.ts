@@ -513,6 +513,69 @@ const SITE_LABEL: Record<string, string> = {
   ao3: "AO3", ffnet: "FanFiction.net", fictionalley: "FictionAlley",
 }
 
+/** Share of each site's works carrying a NON-ZERO value for a sortable field.
+ *
+ *  Measured 2026-08-13. Zero is the important part: these columns are NOT NULL
+ *  everywhere, so a coverage check written against NULL reports 100% for all
+ *  three sites and sees nothing wrong. The bulk imports simply wrote 0, and a
+ *  work with 0 hits is indistinguishable from one nobody has counted.
+ *
+ *  The engagement figures are the ones worth staring at. Sorting 19.9M works by
+ *  kudos orders the 2.6% that have a number and leaves everything else tied at
+ *  zero, so the ranking a reader sees is decided entirely by that fraction —
+ *  and since FanFiction.net has essentially none, "most hits" across all sites
+ *  is in practice "AO3 and FictionAlley first, everything else in arbitrary
+ *  order". That is the behaviour; this is what makes it say so.
+ */
+export const SORT_COVERAGE: Record<string, Record<string, number>> = {
+  hits_desc:       { ao3: 0.027,  ffnet: 0.0000, fictionalley: 0.997 },
+  kudos_desc:      { ao3: 0.026,  ffnet: 0.0002, fictionalley: 0.001 },
+  comments_desc:   { ao3: 0.021,  ffnet: 0.0003, fictionalley: 0.000 },
+  bookmarks_desc:  { ao3: 0.020,  ffnet: 0.0002, fictionalley: 0.001 },
+  // Present nearly everywhere; listed so the check can say "this one is fine"
+  // rather than staying silent for two different reasons.
+  word_count_desc: { ao3: 0.692,  ffnet: 0.9999, fictionalley: 0.9999 },
+}
+
+/** A plain warning for a sort whose data most of the selection does not have.
+ *
+ *  Deliberately names the worst site rather than an average. An average across
+ *  AO3 + FF.net hides the fact that one of them contributes nothing at all, and
+ *  "3% of your selection" reads as merely thin where "FanFiction.net records
+ *  this for almost none of its works" explains the result on screen.
+ */
+export function sortCoverageNote(sort: string, sites: string[]): string | null {
+  const cov = SORT_COVERAGE[sort]
+  if (!cov || sites.length === 0) return null
+
+  let rows = 0, have = 0
+  for (const s of sites) {
+    const n = SITE_SIZE[s]
+    if (!n) return null
+    rows += n
+    have += n * (cov[s] ?? 0)
+  }
+  if (rows === 0) return null
+  const pct = have / rows
+  if (pct >= 0.5) return null                 // word counts and the like
+
+  // The sites contributing essentially nothing, largest first — those are the
+  // ones whose absence from the top of the results needs explaining.
+  const empty = sites.filter(s => (cov[s] ?? 0) < 0.01)
+                     .sort((a, b) => (SITE_SIZE[b] ?? 0) - (SITE_SIZE[a] ?? 0))
+  const shown = pct < 0.01 ? "under 1%" : `about ${Math.round(pct * 100)}%`
+
+  if (empty.length) {
+    const names = empty.map(s => SITE_LABEL[s] ?? s).join(" and ")
+    return `Only ${shown} of the works you have selected record this, and `
+      + `${names} almost never ${empty.length > 1 ? "do" : "does"} — so those `
+      + `works sort below every work that has a figure, whatever they are `
+      + `actually worth. This ranks the minority that has been counted.`
+  }
+  return `Only ${shown} of the works you have selected record this, so this `
+    + `ranks that minority; everything else is tied and sorts below it.`
+}
+
 // `short` is the one-line version for the help bubble's list; `help` is the
 // full sentence, used as the pill's own tooltip.
 export const FICALLEY_SECTIONS = [
@@ -527,3 +590,41 @@ export const FICALLEY_SECTIONS = [
   { value: "Essays & Meta", label: "Essays & Meta", short: "essays and analysis, not fiction",
     help: "Analysis and discussion rather than fiction: essays on the books, character studies, arguments about canon. The smallest section, at 66 pieces." },
 ]
+
+/** A title the AO3 metadata dump cut off mid-phrase, shown as cut off.
+ *
+ *  About 306,000 works arrived with the title truncated at a word boundary:
+ *
+ *      One Foot in Front of the
+ *      Ill Be Your Light In The
+ *      BRING ME THE HEAD OF THE
+ *
+ *  Rendered plainly these do not read as damaged data, they read as a site full
+ *  of badly named stories — which is worse, because the fault looks like the
+ *  author's and there is nothing to tell a reader otherwise.
+ *
+ *  Hiding the works instead was the other option and is the wrong trade: the
+ *  summary, tags, length and link are all intact, so hiding costs a reader
+ *  306,000 findable stories to tidy up a string. An ellipsis says the same thing
+ *  honestly and costs nothing.
+ *
+ *  The test deliberately matches TRUNCATED_SQL in backend/ao3_title_repair.py.
+ *  If the two drift, this marks titles the repair queue will never come for, or
+ *  stays silent on ones it is actively fixing. Titles ending in "to", "in" or
+ *  "her" are NOT included, for the same reason they are not in the queue: "a
+ *  pain that i'm used to" and "that's how the light gets in" are real titles,
+ *  and there are far more of those than truncations.
+ *
+ *  This resolves itself. ao3_title_repair.py refetches these from AO3 and writes
+ *  the full title back, so a repaired work simply stops matching.
+ */
+const TRUNCATED_TAIL = /\s(and|of|the|with)$/i
+
+export function looksTruncated(title: string | null | undefined): boolean {
+  return !!title && TRUNCATED_TAIL.test(title.trim())
+}
+
+export function displayTitle(title: string | null | undefined): string {
+  const t = (title ?? "").trim()
+  return looksTruncated(t) ? `${t}…` : t
+}
