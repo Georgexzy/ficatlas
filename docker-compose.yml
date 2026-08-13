@@ -225,7 +225,11 @@ services:
       # against a single client bucket. Must match the backend's value.
       INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
     ports:
-      - "3000:3000"
+      # Development is reachable from the host and tailnet peers, never from
+      # every LAN interface. An unset TAILSCALE_IP fails closed to an unused
+      # loopback address rather than accidentally publishing on 0.0.0.0.
+      - "127.0.0.1:3000:3000"
+      - "${TAILSCALE_IP:-127.0.0.2}:3000:3000"
     depends_on:
       - backend
     mem_limit: 600m
