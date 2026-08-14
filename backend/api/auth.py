@@ -144,6 +144,13 @@ def _set_session_cookie(response: Response, token: str,
         secure=COOKIE_SECURE,
         path="/",
     )
+    # A response that carries a session cookie must never be held by a shared
+    # cache, or Cloudflare can hand one reader's credential to the next. Every
+    # endpoint that can reach this either sets no cache header at all or already
+    # says private for a signed-in viewer, so this is belt-and-braces rather
+    # than a fix — but it is the kind of thing that has to be true by
+    # construction, not by remembering to check each new endpoint.
+    response.headers["Cache-Control"] = "private, no-store"
 
 
 # How stale last_used may get before we bother writing it back. This field only
@@ -181,28 +188,39 @@ def get_current_user(
         # time it is used, and the rest expire.
         #
         # Delete this once no legacy rows remain — they cannot outlive
-        # SESSION_DAYS from the deploy that introduced hashing.
-        legacy = (
+        # SESSION_DAYS from the deploy that introduced hashing (2026-08-10).
+        #
+        # This was a delete followed by an insert that re-listed the columns to
+        # carry over, and it was wrong twice.
+        #
+        # It dropped `remember`, so converting a session silently turned "forget
+        # me when the browser closes" into a 90-day cookie — the exact promise
+        # the box exists to keep, broken on an unrelated deploy.
+        #
+        # And a page load makes several API calls at once, so several requests
+        # reach this with the same legacy cookie simultaneously. Each deletes the
+        # row it just read and inserts the hashed one; whichever commits second
+        # collides on the primary key, and the request dies with an
+        # IntegrityError. To the reader that is a 500 on /api/auth/me — which the
+        # frontend reads as "the server is unwell" rather than "you are signed
+        # out", so it keeps showing you signed in while every gated call fails.
+        #
+        # An UPDATE of the primary key is one statement the database serialises
+        # for us. The loser of the race matches zero rows (the token it was
+        # looking for is already gone) instead of colliding, and every column
+        # comes along by construction rather than by being remembered here.
+        hashed = _token_hash(sat)
+        db.query(UserSession).filter(UserSession.token == sat).update(
+            {UserSession.token: hashed}, synchronize_session=False)
+        db.commit()
+        row = (
             db.query(UserSession, User)
             .join(User, User.id == UserSession.user_id)
-            .filter(UserSession.token == sat)
+            .filter(UserSession.token == hashed)
             .first()
         )
-        if not legacy:
+        if not row:
             return None
-        s_old, user_old = legacy
-        # token is the primary key, so this is a delete plus an insert.
-        db.delete(s_old)
-        db.flush()
-        s_new = UserSession(
-            token=_token_hash(sat), user_id=s_old.user_id,
-            created_at=s_old.created_at, expires_at=s_old.expires_at,
-            last_used=s_old.last_used, user_agent=s_old.user_agent,
-            view_as=s_old.view_as,
-        )
-        db.add(s_new)
-        db.commit()
-        row = (s_new, user_old)
     s, user = row
     now = datetime.utcnow()
     if s.expires_at < now:
@@ -210,21 +228,38 @@ def get_current_user(
         return None
 
     dirty = False
+    used = False
     # Only write last_used when it has actually gone stale. Refreshing it on every
     # request turned each authenticated GET into an UPDATE + COMMIT, which meant a
     # row write (and WAL) per page view for no user-visible benefit.
     if s.last_used is None or (now - s.last_used) > _LAST_USED_REFRESH:
         s.last_used = now
-        dirty = True
+        dirty = used = True
 
     if (s.expires_at - now) < _SESSION_SLIDE_WHEN_UNDER:
         s.expires_at = now + timedelta(days=SESSION_DAYS)
         dirty = True
-        # The browser cookie carries its own Max-Age, so extending the DB row alone
-        # would not keep the client signed in. Re-issue it with the same token.
-        # Honours what this session originally asked for, or the slide would
-        # hand a persistent cookie to someone who ticked the box off.
-        _set_session_cookie(response, sat, bool(getattr(s, "remember", True)))
+
+    # Roll the browser's copy forward on use, not only when the row is close to
+    # expiring.
+    #
+    # The old rule re-sent the cookie only on the slide, which is correct as far
+    # as it goes — the row and the cookie were issued together and expire
+    # together, so extending one without the other would sign you out. But it
+    # gives the cookie exactly one chance to survive: miss that window and the
+    # 90 days run out on the day they were always going to, however much the
+    # site was used in between. A browser that drops the Set-Cookie once, an
+    # offline spell over the slide, a device that sleeps through it — any of
+    # those and "stay signed in" quietly stops being true, which is what it
+    # looked like from the outside.
+    #
+    # Re-issuing whenever last_used is written makes the session heal instead:
+    # every visit pushes the cookie's expiry out another 90 days, at most one
+    # Set-Cookie per _LAST_USED_REFRESH per session. Only for sessions that
+    # asked to be remembered — an unticked box means a cookie with no Max-Age,
+    # and there is no expiry on it to extend.
+    if used and bool(getattr(s, "remember", True)):
+        _set_session_cookie(response, sat, True)
 
     if dirty:
         db.commit()
@@ -236,10 +271,19 @@ def get_current_user(
     # min() of the two ranks, so this can only ever LOWER what you can do. An
     # attacker with a stolen session gains nothing from it, and a mistake in the
     # UI cannot escalate anybody.
+    #
+    # `_view_as` rather than assigning to user.role, and the difference is the
+    # whole account. `role` is a MAPPED column on a live ORM object: setting it
+    # marks the row dirty, and the next db.commit() anywhere in the same request
+    # flushes it. Previewing as a reader and then doing anything that writes —
+    # a bookmark merge, a follow, the last_used refresh above — would demote the
+    # real account in the database, permanently and silently, with the only
+    # owner seat on the instance being the one at risk. `_view_as` is not a
+    # column, so SQLAlchemy has nothing to write.
     if s.view_as:
         from models.user import ROLE_RANK
         if ROLE_RANK.get(s.view_as, 99) < ROLE_RANK.get(user.role, 0):
-            user.role = s.view_as
+            user._view_as = s.view_as
             user._previewing = True
 
     return user
@@ -426,7 +470,11 @@ def me(user: Optional[User] = Depends(get_current_user)):
         # Rendering an Import tab that 403s on every button is worse than not
         # rendering it: the reader learns the app is broken rather than that
         # the feature is not theirs.
-        "role": user.role,
+        #
+        # The EFFECTIVE role, so a preview shows the site the way the preview
+        # sees it. user.role is the stored one and would contradict the gates
+        # below, which is how the UI ends up offering what the API refuses.
+        "role": user.effective_role(),
         "can_import": user.at_least(ROLE_ADMIN),
         "can_manage": user.at_least(ROLE_OWNER),
         # So the UI can show an unmissable banner. Forgetting you are in preview
