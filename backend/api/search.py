@@ -1064,7 +1064,21 @@ def search(          # NOT async — see below
             merged = merged.union(part)
         candidates = merged.subquery()
     else:
-        candidates = db_query.order_by(None).limit(COUNT_CEILING + 1).subquery()
+        # Plain browse (no text): db_query is a filter over the whole index.
+        # An unordered LIMIT 5001 slice is an arbitrary sample of 19.7M rows, so
+        # ranking "Most popular" within it ranked the wrong rows — the page was
+        # a random sample's top score, not the index's, and the works everyone
+        # actually knows were almost never in that sample. The partial
+        # popularity index makes ordering the slice by score cheap (browse with
+        # no other filter is a straight index walk), so "Most popular" now
+        # ranks the true top of the index. `popularity IS NOT NULL` is both the
+        # index's predicate and what nullslast() does anyway: a work with no
+        # recorded engagement has no score and belongs after every scored one.
+        base = db_query
+        if sort == "popularity_desc":
+            base = (base.filter(Story.popularity.isnot(None))
+                       .order_by(Story.popularity.desc()))
+        candidates = base.limit(COUNT_CEILING + 1).subquery()
     S = aliased(Story, candidates)
     total_over = func.count().over().label("total_matches")
     ordered = db.query(S, total_over)
