@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 import StoryClient from "./StoryClient"
+import { escapeJsonLd } from "@/lib/jsonLd"
 
 // A server wrapper so a story page can describe itself.
 //
@@ -100,11 +101,53 @@ export async function generateMetadata(
       description,
       type: "article",
       siteName: "FicAtlas",
+      images: "/og.png",
     },
-    twitter: { card: "summary", title, description },
+    twitter: { card: "summary_large_image", title, description, images: "/og.png" },
   }
 }
 
-export default function StoryPage() {
-  return <StoryClient />
+export default async function StoryPage(
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params
+  const SITE = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
+  const story = await fetchStory(id)
+
+  // A story page is a CreativeWork: title, author, fandoms, counts, and above
+  // all a summary — most of the index's stories have none, so the ones that do
+  // get the credit for it here. The page's body is a client-render shell, so
+  // this script is the only place the metadata lives in the HTML itself. The
+  // works that are not ours (the majority) are described as CreativeWork too,
+  // with a link to the hosting archive, because that is what the page is.
+  const jsonLd = story ? {
+    "@context": "https://schema.org",
+    "@type": story.is_hosted ? "Book" : "CreativeWork",
+    name: story.title,
+    url: `${SITE}/story/${id}`,
+    ...(story.author ? { author: { "@type": "Person", name: story.author } } : {}),
+    ...(story.summary ? { description: story.summary.replace(/\s+/g, " ").trim().slice(0, 500) } : {}),
+    ...(story.fandoms?.length ? { genre: story.fandoms } : {}),
+    ...(story.word_count ? { wordCount: story.word_count } : {}),
+    // Book's numberOfPages means printed pages, not chapters — so a chapter
+    // count has no honest home in the Book schema. It still belongs in the
+    // description of the node, and wordCount above carries the size signal.
+    isPartOf: { "@type": "WebSite", name: "FicAtlas", url: SITE },
+    publisher: { "@type": "Organization", name: "FicAtlas", url: SITE },
+    inLanguage: "en",
+    // The author's work stays on the archive they chose; this page only points
+    // at it. isAccessibleForFree plus a link keeps the schema honest about what
+    // FicAtlas actually is: a finding tool, not a mirror.
+    isAccessibleForFree: true,
+  } : null
+
+  return (
+    <>
+      {jsonLd && (
+        <script type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: escapeJsonLd(jsonLd) }} />
+      )}
+      <StoryClient />
+    </>
+  )
 }

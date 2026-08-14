@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import Link from "next/link"
 import SiteHeader from "../../SiteHeader"
 import { notFound } from "next/navigation"
+import { escapeJsonLd } from "@/lib/jsonLd"
 
 // A fandom hub: the crawlable way into the index, and a genuinely useful page
 // for someone arriving cold who has not used the search box yet.
@@ -16,6 +17,7 @@ import { notFound } from "next/navigation"
 // See backend/fandom_hubs.py for why hubs are bounded rather than a sitemap of
 // all 19.9M works.
 const INTERNAL_API = process.env.INTERNAL_API_URL || "http://backend:8000"
+const SITE = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
 
 // A day. Hubs are rebuilt offline and change slowly; the withdrawal checks that
 // actually matter run at read time in the API, not off this cache.
@@ -75,8 +77,8 @@ export async function generateMetadata(
   return {
     title,
     description,
-    openGraph: { title, description, type: "website", siteName: "FicAtlas" },
-    twitter: { card: "summary", title, description },
+    openGraph: { title, description, type: "website", siteName: "FicAtlas", images: "/og.png" },
+    twitter: { card: "summary_large_image", title, description, images: "/og.png" },
   }
 }
 
@@ -106,6 +108,49 @@ export default async function FandomHub(
       <nav className="hub__crumbs" aria-label="Breadcrumb">
         <Link href="/fandoms">All fandoms</Link>
       </nav>
+
+      {/* Structured data for the two things this page is: a place in the
+          site's hierarchy (BreadcrumbList) and a listing of works with their
+          attributes (CollectionPage + ItemList). Google reads this without
+          executing the page's JavaScript, which is the point — this is the
+          route by which story entries get discovered at all. */}
+      <script type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html:
+          escapeJsonLd([
+            {
+            "@context": "https://schema.org",
+            "@type": "BreadcrumbList",
+            itemListElement: [
+              { "@type": "ListItem", position: 1, name: "Fandom hub", item: `${SITE}/fandoms` },
+              { "@type": "ListItem", position: 2, name: hub.name, item: `${SITE}/fandom/${hub.slug}` },
+            ],
+          },
+          {
+            "@context": "https://schema.org",
+            "@type": "CollectionPage",
+            name: `${hub.name} fanfiction`,
+            description:
+              `${hub.work_count.toLocaleString()} ${hub.name} fanworks indexed from ` +
+              `Archive of Our Own, FanFiction.net and FicAlley.`,
+            url: `${SITE}/fandom/${hub.slug}`,
+            isPartOf: { "@type": "WebSite", name: "FicAtlas", url: SITE },
+            mainEntity: {
+              "@type": "ItemList",
+              itemListElement: sections.flatMap(section => section.works).map((w, i) => ({
+                "@type": "ListItem",
+                position: i + 1,
+                item: {
+                  "@type": "CreativeWork",
+                  name: w.title,
+                  url: `${SITE}/story/${w.id}`,
+                  ...(w.author ? { author: { "@type": "Person", name: w.author } } : {}),
+                  ...(w.word_count ? { wordCount: w.word_count } : {}),
+                  ...(w.summary ? { description: w.summary.slice(0, 500) } : {}),
+                },
+              })),
+            },
+          },
+        ]) }} />
 
       <h1>{hub.name}</h1>
       <p className="hub__lede">

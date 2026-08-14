@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 import SeriesClient from "./SeriesClient"
+import { escapeJsonLd } from "@/lib/jsonLd"
 
 // Server wrapper, same purpose and shape as the one over the story page: a
 // series link shared anywhere used to preview as the site's generic blurb.
@@ -35,8 +36,8 @@ export async function generateMetadata(
     return {
       title,
       description,
-      openGraph: { title, description, type: "article", siteName: "FicAtlas" },
-      twitter: { card: "summary", title, description },
+      openGraph: { title, description, type: "article", siteName: "FicAtlas", images: "/og.png" },
+      twitter: { card: "summary_large_image", title, description, images: "/og.png" },
     }
   } catch {
     // Never let a preview lookup break the page; the client fetches its own data.
@@ -44,6 +45,57 @@ export async function generateMetadata(
   }
 }
 
-export default function SeriesPage({ params }: { params: Promise<{ id: string }> }) {
-  return <SeriesClient params={params} />
+export default async function SeriesPage(
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params
+  const SITE = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
+
+  let series: {
+    name?: string
+    author?: string
+    work_count?: number
+    total_words?: number
+    works?: { id: string; title?: string }[]
+  } | null = null
+  try {
+    const r = await fetch(`${INTERNAL_API}/api/stories/series/${id}`, {
+      next: { revalidate },
+      headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
+      signal: AbortSignal.timeout(8000),
+    })
+    if (r.ok) series = await r.json()
+  } catch {
+    series = null
+  }
+
+  const jsonLd = series?.name ? {
+    "@context": "https://schema.org",
+    "@type": "CreativeWorkSeries",
+    name: series.name,
+    url: `${SITE}/series/${id}`,
+    ...(series.author ? { author: { "@type": "Person", name: series.author } } : {}),
+    ...(series.work_count ? { numberOfEpisodes: series.work_count } : {}),
+    ...(series.total_words ? { wordCount: series.total_words } : {}),
+    ...(Array.isArray(series.works) && series.works.length ? {
+      hasPart: series.works.map(w => ({
+        "@type": "CreativeWork",
+        name: w.title,
+        url: `${SITE}/story/${w.id}`,
+      })),
+    } : {}),
+    isPartOf: { "@type": "WebSite", name: "FicAtlas", url: SITE },
+    publisher: { "@type": "Organization", name: "FicAtlas", url: SITE },
+    inLanguage: "en",
+  } : null
+
+  return (
+    <>
+      {jsonLd && (
+        <script type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: escapeJsonLd(jsonLd) }} />
+      )}
+      <SeriesClient params={params} />
+    </>
+  )
 }

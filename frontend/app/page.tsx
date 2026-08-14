@@ -727,19 +727,17 @@ function fmtCount(n: number): string {
 // the search bar, where they are clickable and next to the box they fill in.
 // On the landing page they were three lines of operator soup competing with the
 // one thing to do — type something.
-function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q: string) => void }) {
-  const [total, setTotal] = useState<number | null>(null)
-  const [hubs, setHubs] = useState<TopHub[]>([])
+// ── Landing intro ─────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    // Shared with the header widget — see getIndexTotals. Both wanting the same
-    // number used to mean four requests per page load between them.
-    getIndexTotals().then(d => { if (typeof d?.stories === "number") setTotal(d.stories) })
-    getTopHubs(12).then(setHubs)
-  }, [])
-
+// The static top half of the landing state, shared by the interactive
+// EmptyState below and the homepage's Suspense fallback. The fallback is what
+// the server actually emits in the HTML (the search page uses useSearchParams,
+// which makes Next defer the whole search component to the client, so a
+// fallback of nothing left crawlers with a page that contained neither a
+// heading nor a sentence). Both render the same copy so they cannot drift.
+function LandingIntro() {
   return (
-    <div className="empty">
+    <>
       {/* Names the job, not the noun. "Search the fanfiction internet" is a
           gesture; what this actually does is find a work you cannot name across
           three archives at once, which is the thing no single archive can do
@@ -759,9 +757,8 @@ function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q
           19.7M on the same screen — and it only ever grows, so any literal here
           starts going stale the moment the workers add a row. */}
       <p className="empty__sub">
-        {total ? `${fmtCount(total)} works` : "Millions of works"} from AO3,
-        FanFiction.net and FicAlley — one search across all three, instead of
-        three searches that each miss two.
+        <IndexTotal /> from AO3, FanFiction.net and FicAlley — one search across
+        all three, instead of three searches that each miss two.
       </p>
       {/* Says where reading happens, on the screen where someone decides whether
           to trust the site. FicAtlas is a way of finding work, not a place that
@@ -774,44 +771,28 @@ function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q
         Every result links straight to the archive that hosts it, so authors keep
         their readers, their kudos and their comments.
       </p>
-      <p className="empty__nudge">
-        Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
-      </p>
-      <button className="empty__surprise" onClick={onSurprise}>🎲 Surprise me</button>
+    </>
+  )
+}
 
-      {/* Somewhere to go for the reader who has no particular search in mind.
-          The landing page previously offered exactly one action — type — and
-          below the fold was empty, which asks a first-time visitor to already
-          know what they want from twenty million works. These are the fandoms
-          the index actually holds the most of, so every one of them leads
-          somewhere dense rather than to four results and an apology.
+// Reads the live index count. Shared between the header widget and the landing
+// intro; both wanting the same number used to mean four requests per page load
+// between them. "Millions of works" is the server-rendered (and pre-fetch)
+// value: always true, never stale.
+function IndexTotal() {
+  const [total, setTotal] = useState<number | null>(null)
+  useEffect(() => {
+    getIndexTotals().then(d => { if (typeof d?.stories === "number") setTotal(d.stories) })
+  }, [])
+  return total ? fmtCount(total) : <>Millions of works</>
+}
 
-          They fill the query box rather than navigating away, because the thing
-          worth learning on this page is that the box takes `fandom:` — the next
-          search someone runs is then their own, not another click. */}
-      {hubs.length > 0 && (
-        <div className="empty__browse">
-          <h2 className="empty__browse-title">Biggest fandoms in the index</h2>
-          <ul className="empty__hubs">
-            {hubs.map(h => (
-              <li key={h.slug}>
-                <button
-                  className="empty__hub"
-                  onClick={() => onPick(`fandom: ${h.name}`)}
-                  title={`Search ${h.name}`}
-                >
-                  <span className="empty__hub-name">{h.name}</span>
-                  <span className="empty__hub-count">{fmtCount(h.work_count)}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          <p className="empty__browse-more">
-            <a href="/fandoms">Every fandom in the index →</a>
-          </p>
-        </div>
-      )}
-
+// The reopenable promises list, below the fold on the landing state. Kept out
+// of LandingIntro so the server-rendered fallback stays above the fold only;
+// the full EmptyState composes it back in below the hub browse list.
+function LandingPromises() {
+  return (
+    <>
       {/* Says the quiet part out loud, because for this audience it is not
           quiet at all. Fanfiction readers tie an archive's trustworthiness to
           exactly these properties: AO3's standing rests on being noncommercial,
@@ -836,7 +817,65 @@ function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q
         <li>Non-commercial &amp; <a href="https://github.com/Georgexzy/ficatlas"
               target="_blank" rel="noopener noreferrer">open source</a></li>
       </ul>
+    </>
+  )
+}
+
+function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q: string) => void }) {
+  return (
+    <div className="empty">
+      <LandingIntro />
+      <p className="empty__nudge">
+        Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
+      </p>
+      <button className="empty__surprise" onClick={onSurprise}>🎲 Surprise me</button>
+
+      {/* Somewhere to go for the reader who has no particular search in mind.
+          The landing page previously offered exactly one action — type — and
+          below the fold was empty, which asks a first-time visitor to already
+          know what they want from twenty million works. These are the fandoms
+          the index actually holds the most of, so every one of them leads
+          somewhere dense rather than to four results and an apology.
+
+          They fill the query box rather than navigating away, because the thing
+          worth learning on this page is that the box takes `fandom:` — the next
+          search someone runs is then their own, not another click. */}
+      <TopHubs onPick={onPick} />
+      <LandingPromises />
     </div>
+  )
+}
+
+// The browse-able list of the biggest hubs in the index, which gives the
+// landing page somewhere to go beyond the search box.
+function TopHubs({ onPick }: { onPick: (q: string) => void }) {
+  const [hubs, setHubs] = useState<TopHub[]>([])
+  useEffect(() => { getTopHubs(12).then(setHubs) }, [])
+  return (
+    <>
+      {hubs.length > 0 && (
+        <div className="empty__browse">
+          <h2 className="empty__browse-title">Biggest fandoms in the index</h2>
+          <ul className="empty__hubs">
+            {hubs.map(h => (
+              <li key={h.slug}>
+                <button
+                  className="empty__hub"
+                  onClick={() => onPick(`fandom: ${h.name}`)}
+                  title={`Search ${h.name}`}
+                >
+                  <span className="empty__hub-name">{h.name}</span>
+                  <span className="empty__hub-count">{fmtCount(h.work_count)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="empty__browse-more">
+            <a href="/fandoms">Every fandom in the index →</a>
+          </p>
+        </div>
+      )}
+    </>
   )
 }
 
@@ -2570,7 +2609,31 @@ function SearchPageKeyed() {
 
 export default function SearchPage() {
   return (
-    <Suspense fallback={null}>
+    // The search page reads searchParams via useSearchParams, which forces Next
+    // to defer the whole interactive component to the client — so whatever is
+    // in this fallback is the ONLY content a non-JS crawler ever sees from the
+    // landing page. It used to be `null`, which left robots and early-render
+    // crawlers with a page containing just the footer: no heading, no sentence,
+    // nothing to index under any query except the brand name baked into the
+    // metadata.
+    //
+    // The fix renders the same copy the interactive empty state shows, so a
+    // crawler gets the landing's actual message and a human sees no flash — the
+    // fallback is replaced by the full search UI once it resolves.
+    <Suspense
+      fallback={
+        <div className="shell">
+          <SiteHeader current="search" />
+          <div className="layout">
+            <main className="main">
+              <div className="empty">
+                <LandingIntro />
+              </div>
+            </main>
+          </div>
+        </div>
+      }
+    >
       <SearchPageKeyed />
     </Suspense>
   )
