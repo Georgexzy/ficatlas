@@ -3761,6 +3761,56 @@ body.is-resizing * { cursor: col-resize !important; }
 }
 .settings-group__hint--tight { margin-top: -2px; }
 
+/* ── Traffic panel ────────────────────────────────────────────────────────
+   A day is one bar. Deliberately not a line chart: the series is short, often
+   has gaps (a day with no traffic has no row at all), and a line drawn through
+   a gap invents days that were never recorded. */
+.traffic-days {
+  display: flex; align-items: flex-end; gap: 3px;
+  height: 120px; margin: 0 0 20px; padding: 0 0 18px;
+  overflow-x: auto; border-bottom: 1px solid var(--border);
+}
+.traffic-day {
+  flex: 1 0 14px; min-width: 14px; height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  align-items: center; position: relative;
+}
+.traffic-day__bar {
+  width: 100%; border-radius: 3px 3px 0 0;
+  background: color-mix(in srgb, var(--accent) 60%, transparent);
+  /* A day with views but a tiny share of the peak still has to be visible, or
+     the chart reads as "nothing happened" on every day but the best one. */
+  min-height: 2px;
+}
+.traffic-day__label {
+  position: absolute; bottom: -16px; font-size: 9px; color: var(--text-faint);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+/* Past a fortnight the labels collide, so they go and the tooltip carries the
+   date instead. */
+.traffic-days > :nth-child(n+15) .traffic-day__label { display: none; }
+
+.traffic-table {
+  width: 100%; border-collapse: collapse; margin: 0 0 22px;
+  font-size: 12.5px; display: block; overflow-x: auto;
+}
+.traffic-table th {
+  text-align: left; font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text-faint); font-weight: 500;
+  padding: 0 12px 6px 0; border-bottom: 1px solid var(--border);
+}
+.traffic-table td {
+  padding: 6px 12px 6px 0; color: var(--text);
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+/* The query or path, which is the one column allowed to be long. Readers type
+   whole sentences into search, so it wraps rather than stretching the table. */
+.traffic-table__q {
+  width: 99%; white-space: normal; word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px;
+}
+
 @media (max-width: 700px) {
   .admin-facts { grid-template-columns: 1fr; gap: 2px 0; }
   .admin-facts dd { margin-bottom: 10px; }

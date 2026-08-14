@@ -450,6 +450,27 @@ def _apply_cache_headers(response, viewer) -> None:
         response.headers["Cache-Control"] = "private, no-store"
 
 
+def _note_total(request, payload) -> None:
+    """Hand the result count to the traffic recorder.
+
+    The middleware in main.py sees the request and the status code but not the
+    body, and "how many did this search find" is the one number that turns a
+    list of popular queries into a list of gaps in the index. Left on
+    request.state rather than passed anywhere: a new exit from search() that
+    forgets this records the query with an unknown count, which the report shows
+    as "—". Nothing breaks and nothing lies.
+
+    Called BEFORE _apply_cache_headers at each exit, never between it and the
+    return: test_search_cache_headers walks the ast and requires the cache-header
+    call to be the statement immediately preceding every `return`, which is what
+    stops a future exit from quietly losing it.
+    """
+    try:
+        request.state.search_total = int(getattr(payload, "total", None) or 0)
+    except Exception:
+        pass
+
+
 @router.get("", response_model=SearchResponse)
 def search(          # NOT async — see below
     q:                     Optional[str] = Query(None),
@@ -613,6 +634,7 @@ def search(          # NOT async — see below
         _ck = cache_key(str(request.url.query), is_operator)
         _hit = CACHE.get(_ck)
         if _hit is not None:
+            _note_total(request, _hit)
             _apply_cache_headers(response, viewer)
             return _hit
         # L1 missed. Before paying for the query, ask the shared tier: with four
@@ -623,6 +645,7 @@ def search(          # NOT async — see below
             try:
                 _hit = SearchResponse.model_validate_json(_shared)
                 CACHE.put(_ck, _hit)   # promote, so the next one skips both hops
+                _note_total(request, _hit)
                 _apply_cache_headers(response, viewer)
                 return _hit
             except Exception:
@@ -1328,6 +1351,7 @@ def search(          # NOT async — see below
     # front — Cloudflare, in the deployment this is heading for — is ONE cache
     # shared by every visitor, which is the same Zipf-shaped win multiplied by
     # the whole audience instead of by one process.
+    _note_total(request, _response)
     _apply_cache_headers(response, viewer)
     return _response
 

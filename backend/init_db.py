@@ -856,6 +856,51 @@ CREATE TABLE IF NOT EXISTS wayback_queue (
 -- dominate, so index exactly that predicate.
 CREATE INDEX IF NOT EXISTS ix_wayback_pending ON wayback_queue (work_id)
     WHERE done_at IS NULL;
+
+-- ── Anonymous traffic ───────────────────────────────────────────────────────
+--
+-- What the site is used for, recorded without recording who used it. No IP
+-- address and no user agent string are stored anywhere in here: `visitor` is a
+-- keyed hash of both, mixed with the calendar day, so two requests can be told
+-- apart within a day and cannot be joined across one. There is no account id
+-- either — a signed-in reader is counted exactly like everybody else.
+--
+-- See tracking.py for the hashing and the write path.
+CREATE TABLE IF NOT EXISTS visit_events (
+    id       BIGSERIAL PRIMARY KEY,
+    at       TIMESTAMP NOT NULL,
+    visitor  CHAR(16) NOT NULL,
+    kind     VARCHAR(8) NOT NULL,       -- page | search
+    path     VARCHAR(300) NOT NULL,
+    -- Referrer HOST, never the full referring URL: the path someone arrived
+    -- from can name a person (a profile page, a private forum thread) and is
+    -- not needed to answer "where does traffic come from".
+    ref_host VARCHAR(120),
+    q        VARCHAR(200),              -- the search text, for kind='search'
+    -- How many that search found. NULL means no count was recorded, which is
+    -- not the same as a search that found nothing.
+    -- (No semicolon in this comment on purpose: _split_statements cuts the
+    -- statement at one, and a CREATE TABLE truncated mid-column fails with
+    -- "syntax error at end of input" while everything around it succeeds.)
+    results  INTEGER,
+    bot      BOOLEAN NOT NULL DEFAULT FALSE
+);
+-- Every report is "the last N days", so the ordering column is the one to
+-- index. kind is in the second index because the searches report filters on it
+-- before it sorts, over a table where pageviews will outnumber searches.
+CREATE INDEX IF NOT EXISTS ix_visit_events_at ON visit_events (at DESC);
+CREATE INDEX IF NOT EXISTS ix_visit_events_kind_at ON visit_events (kind, at DESC);
+
+-- The key that turns an address into a `visitor` hash.
+--
+-- Its own table rather than app_settings, which GET /api/settings returns to
+-- anyone who asks. A key that can be read is a key that can be used to test a
+-- guess — "was this visitor at 81.2.x.y?" — and the whole point of hashing is
+-- that nobody can answer that, including us.
+CREATE TABLE IF NOT EXISTS tracking_secret (
+    one_row BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (one_row),
+    secret  TEXT NOT NULL
+);
 """
 
 def _split_statements(sql: str) -> list[str]:

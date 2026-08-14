@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import TakedownQueue from "./TakedownQueue"
+import TrafficPanel from "./TrafficPanel"
 import BackLink from "../BackLink"
 import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
@@ -83,10 +84,10 @@ function pct(missing: number, total: number): number {
 }
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<"health" | "takedowns">("health")
+  const [tab, setTab] = useState<"health" | "takedowns" | "traffic">("health")
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("tab") === "takedowns")
-      setTab("takedowns")
+    const t = new URLSearchParams(window.location.search).get("tab")
+    if (t === "takedowns" || t === "traffic") setTab(t)
   }, [])
   const { user, loading: authLoading } = useAuth()
   const isAdmin = !!user?.can_manage
@@ -149,9 +150,12 @@ export default function AdminPage() {
           onClick={() => setTab("health")}>Index health</button>
         <button className={`library-tab ${tab === "takedowns" ? "library-tab--on" : ""}`}
           onClick={() => setTab("takedowns")}>Takedown requests</button>
+        <button className={`library-tab ${tab === "traffic" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("traffic")}>Traffic</button>
       </div>
 
-      {tab === "takedowns" ? <TakedownQueue /> : (
+      {tab === "traffic" ? <TrafficPanel /> :
+       tab === "takedowns" ? <TakedownQueue /> : (
       <>
       <h1 className="settings-title">Index health</h1>
 

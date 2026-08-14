@@ -62,8 +62,12 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
 - There is **no worker in the public project**. The dev stack's worker does all
   indexing, and the public site sees it immediately because the database is
   shared. Restarting or rebuilding the public tier does not pause indexing.
-- Signup is invite-mode: `SIGNUP_MODE=invite` + a single shared `SIGNUP_CODE` in
-  `.env`. Not per-person invites — see `backend/api/auth.py:290`.
+- Signup is **open** (`SIGNUP_MODE=open`), which is a decision rather than a
+  default left unset: a public search engine wants accounts. The invite path
+  still exists — `SIGNUP_MODE=invite` plus a single shared `SIGNUP_CODE` in
+  `.env`, not per-person invites — and the login form asks the server which mode
+  it is in via `/api/auth/signup-policy`, so switching needs no frontend change.
+  See `backend/api/auth.py`.
 
 ## Gotchas
 - Never point a DB test at the live index — `conftest.py` refuses unless the DB
@@ -78,6 +82,31 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   filtering uses facet resolution + array containment `&&`, served by the plain
   GIN indexes). Dropping them took the DB 40GB → 36GB. `ix_stories_fandoms_trgm`
   and `ix_stories_characters_trgm` are still used and must stay.
+- **One hostname, or sessions break.** The session cookie is host-only by design
+  (no `Domain`), so every hostname that serves the app has its own cookie jar.
+  `www.ficatlas.com` used to answer 200 with the whole site, which from the
+  inside is indistinguishable from being signed out — and from "stay signed in
+  didn't work", and from "owner-only pages 403 sometimes", depending on which
+  host you landed on. `deploy/nginx.conf` now 301s `www.*` to the apex from a
+  regex `server_name` block (matched ahead of the `_` default server). Adding a
+  new hostname without a redirect re-creates all three symptoms at once.
+- nginx.conf is bind-mounted, so `promote.sh --reload` cannot pick up a change to
+  it: the container must be recreated (`docker compose -p ficatlas-public up -d
+  nginx`). `check_nginx_conf` in promote.sh compares md5s and warns, which is the
+  only reason this is ever noticed.
+- Anonymous traffic lives in `backend/tracking.py` (buffered writer, daily-rotating
+  keyed visitor hash, 90-day retention) + `backend/api/traffic.py` (public
+  `POST /hit` beacon, owner-only reports) + the Traffic tab on `/admin`.
+  Pageviews come from the browser (`NavRecorder`), searches from a middleware in
+  `main.py`, and the result count is stashed on `request.state.search_total` by
+  `_note_total` next to each of search()'s three exits. No IP, user agent or
+  account id is stored — see the module docstring before adding a column.
+- `init_db.py`'s DDL is split by `_split_statements`, which drops whole-line `--`
+  comments but still splits on a semicolon in a TRAILING inline comment. A
+  `CREATE TABLE` with `-- how many it found; NULL if unknown` on a column line is
+  cut in half and fails with "syntax error at end of input" — while every
+  statement around it succeeds and startup logs nothing above a skipped-statement
+  count. Keep semicolons out of inline DDL comments.
 - Never put a `:param` token inside a `--` comment in a `text()` query.
   SQLAlchemy binds it there too and psycopg2 substitutes into the comment, so any
   value containing a newline escapes into executable SQL. This stalled series

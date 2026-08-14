@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from api import (search, stories, stats, library, settings, auth, userdata,
                  takedown, password_reset, admin, permissions, hubs,
-                 follows)
+                 follows, traffic)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -50,6 +50,13 @@ async def lifespan(app: FastAPI):
     import asyncio
     warm_task = asyncio.create_task(_warm_caches())
 
+    # Anonymous traffic is buffered in memory and written in batches; this is
+    # the thing that writes it. Started here rather than in the worker because
+    # the events are produced in THIS process — a worker task could not see
+    # them. See tracking.py.
+    import tracking
+    track_task = asyncio.create_task(tracking.flush_loop()) if tracking.ENABLED else None
+
     # Recurring background work lives in the worker container, not here: running
     # it on the API's event loop meant feed polls and crawls competed with request
     # handling. Set RUN_SCHEDULER=true to run it in-process instead (single-
@@ -63,6 +70,11 @@ async def lifespan(app: FastAPI):
     yield
 
     warm_task.cancel()
+    if track_task is not None:
+        # Cancelling is what triggers the final flush (see flush_loop), so the
+        # last few seconds of traffic survive a deploy rather than being thrown
+        # away on every promote.
+        track_task.cancel()
     if stop_scheduler is not None:
         stop_scheduler()
 
@@ -71,7 +83,47 @@ app = FastAPI(title="FicAtlas API", version="0.1.0", lifespan=lifespan)
 # ── Rate limiting ────────────────────────────────────────────────────────────
 # Only matters once this is reachable from outside the tailnet; see ratelimit.py
 # for why it is per-IP-and-path-class rather than one global bucket.
-from ratelimit import rate_limit_middleware  # noqa: E402
+from ratelimit import rate_limit_middleware, client_ip, is_internal_render  # noqa: E402
+
+# ── Traffic: searches ────────────────────────────────────────────────────────
+# Pageviews are reported by the app (POST /api/traffic/hit) because only the
+# browser knows what it actually rendered. Searches are taken here instead, off
+# the request itself, for the opposite reason: this is where they are
+# authoritative. A query recorded server-side is the query that really ran,
+# cannot be forged or double-counted by a re-render, and includes searches made
+# by anything that is not our own page.
+#
+# Registered BEFORE the rate limiter, which means it sits INSIDE it — Starlette
+# builds the stack so the last middleware added is the outermost. A throttled
+# flood is therefore not recorded as search traffic, which is right: it is an
+# attack, not an audience.
+@app.middleware("http")
+async def track_search_middleware(request: Request, call_next):
+    response = await call_next(request)
+    try:
+        import tracking
+        if (tracking.ENABLED
+                and request.url.path.rstrip("/") == "/api/search"
+                and response.status_code < 400
+                and not is_internal_render(request)):
+            q = (request.query_params.get("q") or "").strip()
+            if q:
+                ua = request.headers.get("user-agent", "")
+                tracking.record(
+                    "search", "/api/search",
+                    tracking.visitor_hash(client_ip(request), ua),
+                    q=q,
+                    # Set by search() next to each of its exits. Absent rather
+                    # than wrong if a new exit ever forgets it — a missing count
+                    # shows as "—" in the report, which is honest, where a zero
+                    # would read as "this search found nothing".
+                    results=getattr(request.state, "search_total", None),
+                    bot=tracking.is_bot(ua),
+                )
+    except Exception:
+        pass  # analytics may never fail a request
+    return response
+
 
 app.middleware("http")(rate_limit_middleware)
 
@@ -130,6 +182,9 @@ app.include_router(userdata.router, prefix="/api/userdata", tags=["userdata"])
 # Following a work across archives — the one subscription list AO3, FF.net and
 # FicAlley cannot give you between them. See api/follows.py.
 app.include_router(follows.router, prefix="/api/follows", tags=["follows"])
+# The beacon under this prefix is public; every report under it is owner-only.
+# See api/traffic.py for why the reports sit at owner rather than admin.
+app.include_router(traffic.router, prefix="/api/traffic", tags=["traffic"])
 
 # ── Degrade honestly when the database is saturated ─────────────────────────
 #

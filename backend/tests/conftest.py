@@ -19,7 +19,7 @@ from sqlalchemy.orm import sessionmaker
 _TRUNCATE = (
     "stories", "chapters", "series", "series_works", "facets",
     "users", "user_sessions", "user_hosted", "takedowns", "source_gone",
-    "search_cache_entries",
+    "search_cache_entries", "visit_events",
 )
 
 _engine = None
