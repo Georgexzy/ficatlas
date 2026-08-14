@@ -77,7 +77,9 @@ and the absolute term carries the rest.
 """
 import argparse
 import logging
+import time
 
+import sqlalchemy
 from sqlalchemy import text
 
 from db.session import db_session
@@ -99,9 +101,16 @@ PRIOR = 0.5
 # established works in the index.
 EPOCH_FLOOR = "1998-01-01"
 
-SQL = f"""
-WITH scored AS (
-    SELECT id, site, published_at,
+# Why temp tables rather than one big WITH ... UPDATE? The plan. On 19.7M rows
+# the scored population is ~525k rows, but PostgreSQL estimates it at 1.6M and
+# the planner's six-way merge/join cascade on that bad number balloons to
+# ~4.79e29 estimated rows, so it picks a plan that runs forever (an hour in, no
+# row had been updated). Materialising each percentile into a temp table with a
+# PK on id gives the planner exact cardinality and 1:1 join semantics, which is
+# the difference between a minute and never.
+STAGED = f"""
+CREATE TEMP TABLE pr_scored ON COMMIT PRESERVE ROWS AS
+    SELECT id, site,
            NULLIF(kudos, 0)     AS kudos,
            NULLIF(bookmarks, 0) AS bookmarks,
            NULLIF(comments, 0)  AS comments,
@@ -117,119 +126,139 @@ WITH scored AS (
       FROM stories
      WHERE delisted_at IS NULL
        AND (kudos > 0 OR bookmarks > 0 OR comments > 0 OR hits > 0)
-),
--- PARTITION BY site is the whole parity mechanism: every percentile below is a
--- standing among that work's OWN archive, so the three become comparable
--- without ever being compared directly.
---
--- One CTE per metric, each filtered to the rows that HAVE that metric, rather
--- than one window over everything. This is not tidiness. percent_rank() sorts
--- NULLs last, so a single window scored every work missing a figure as if it
--- held the highest one in the archive: the first run put FF.net works with
--- kudos=0 and comments=0 at the very top of the index, above Harry Potter and
--- the Methods of Rationality, with scores over 1.0. A missing metric has to be
--- absent from its percentile population, not sorted within it.
-p_kudos AS (
-    SELECT id, percent_rank() OVER (PARTITION BY site ORDER BY kudos) AS v
-      FROM scored WHERE kudos IS NOT NULL
-),
-p_bookmarks AS (
-    SELECT id, percent_rank() OVER (PARTITION BY site ORDER BY bookmarks) AS v
-      FROM scored WHERE bookmarks IS NOT NULL
-),
-p_comments AS (
-    SELECT id, percent_rank() OVER (PARTITION BY site ORDER BY comments) AS v
-      FROM scored WHERE comments IS NOT NULL
-),
-p_hits AS (
-    SELECT id, percent_rank() OVER (PARTITION BY site ORDER BY hits) AS v
-      FROM scored WHERE hits IS NOT NULL
-),
--- The same standing, per unit of time alive, over the works that have both the
--- metric and a credible date.
-r_kudos AS (
-    SELECT id, percent_rank() OVER (PARTITION BY site ORDER BY kudos / sqrt(age_days)) AS v
-      FROM scored WHERE kudos IS NOT NULL AND age_days IS NOT NULL
-),
-r_bookmarks AS (
-    SELECT id, percent_rank() OVER (PARTITION BY site ORDER BY bookmarks / sqrt(age_days)) AS v
-      FROM scored WHERE bookmarks IS NOT NULL AND age_days IS NOT NULL
-),
-pct AS (
+;
+ANALYZE pr_scored
+"""
+# One temp table per metric, each filtered to the rows that HAVE that metric,
+# rather than one window over everything. This is not tidiness. percent_rank()
+# sorts NULLs last, so a single window scored every work missing a figure as if
+# it held the highest one in the archive: the first run put FF.net works with
+# kudos=0 and comments=0 at the very top of the index, above Harry Potter and
+# the Methods of Rationality, with scores over 1.0. A missing metric has to be
+# absent from its percentile population, not sorted within it.
+#
+# PARTITION BY site is the whole parity mechanism: every percentile below is a
+# standing among that work's OWN archive, so the three become comparable
+# without ever being compared directly.
+PERCENTILE_SQL = """
+CREATE TEMP TABLE pr_{name} ON COMMIT PRESERVE ROWS AS
+    SELECT id, percent_rank() OVER (PARTITION BY site ORDER BY {expr}) AS v
+      FROM pr_scored
+     WHERE {where}
+;
+ALTER TABLE pr_{name} ADD PRIMARY KEY (id);
+ANALYZE pr_{name}
+"""
+
+# The same standing, per unit of time alive, over the works that have both the
+# metric and a credible date.
+PERCENTILE_RATE_SQL = """
+CREATE TEMP TABLE pr_{name} ON COMMIT PRESERVE ROWS AS
+    SELECT id, percent_rank() OVER (PARTITION BY site ORDER BY {expr} / sqrt(age_days)) AS v
+      FROM pr_scored
+     WHERE {where}
+       AND age_days IS NOT NULL
+;
+ALTER TABLE pr_{name} ADD PRIMARY KEY (id);
+ANALYZE pr_{name}
+"""
+
+BLENDED_SQL = f"""
+CREATE TEMP TABLE pr_blended ON COMMIT PRESERVE ROWS AS
     SELECT s.id, s.site,
-           pk.v AS p_kudos, pb.v AS p_bookmarks, pc.v AS p_comments, ph.v AS p_hits,
-           rk.v AS r_kudos, rb.v AS r_bookmarks,
-           s.kudos, s.bookmarks, s.comments, s.hits, s.age_days
-      FROM scored s
-      LEFT JOIN p_kudos     pk ON pk.id = s.id
-      LEFT JOIN p_bookmarks pb ON pb.id = s.id
-      LEFT JOIN p_comments  pc ON pc.id = s.id
-      LEFT JOIN p_hits      ph ON ph.id = s.id
-      LEFT JOIN r_kudos     rk ON rk.id = s.id
-      LEFT JOIN r_bookmarks rb ON rb.id = s.id
-),
-blended AS (
-    SELECT id, site,
            -- Weight actually observed, so the renormalisation below divides by
            -- what was measurable rather than by the full 1.0.
-           (CASE WHEN p_kudos     IS NOT NULL THEN {W_KUDOS}     ELSE 0 END
-          + CASE WHEN p_bookmarks IS NOT NULL THEN {W_BOOKMARKS} ELSE 0 END
-          + CASE WHEN p_comments  IS NOT NULL THEN {W_COMMENTS}  ELSE 0 END
-          + CASE WHEN p_hits      IS NOT NULL THEN {W_HITS}      ELSE 0 END) AS w_have,
-           (COALESCE(p_kudos     * {W_KUDOS},     0)
-          + COALESCE(p_bookmarks * {W_BOOKMARKS}, 0)
-          + COALESCE(p_comments  * {W_COMMENTS},  0)
-          + COALESCE(p_hits      * {W_HITS},      0))                      AS s_abs,
+           (CASE WHEN pk.v IS NOT NULL THEN {W_KUDOS}     ELSE 0 END
+          + CASE WHEN pb.v IS NOT NULL THEN {W_BOOKMARKS} ELSE 0 END
+          + CASE WHEN pc.v IS NOT NULL THEN {W_COMMENTS}  ELSE 0 END
+          + CASE WHEN ph.v IS NOT NULL THEN {W_HITS}      ELSE 0 END) AS w_have,
+           (COALESCE(pk.v * {W_KUDOS},     0)
+          + COALESCE(pb.v * {W_BOOKMARKS}, 0)
+          + COALESCE(pc.v * {W_COMMENTS},  0)
+          + COALESCE(ph.v * {W_HITS},      0)) AS s_abs,
            -- Rate view: only the two intent signals, which are the ones worth
            -- comparing per unit time. Comments scale with chapters and hits with
            -- re-reads, so neither says much about pace.
-           (CASE WHEN r_kudos     IS NOT NULL THEN {W_KUDOS}     ELSE 0 END
-          + CASE WHEN r_bookmarks IS NOT NULL THEN {W_BOOKMARKS} ELSE 0 END) AS w_rate,
-           (COALESCE(r_kudos     * {W_KUDOS},     0)
-          + COALESCE(r_bookmarks * {W_BOOKMARKS}, 0))                        AS s_rate
-      FROM pct
-),
--- The most weight any work in this archive manages to carry.
---
--- Confidence has to be measured against what the ARCHIVE can offer, not against
--- a perfect 1.0, or the shrink silently becomes a per-site penalty for what a
--- platform does not publish. FanFiction.net has no view counter at all, so no
--- FF.net work can ever hold the 0.15 that hits carries: its ceiling was 0.925
--- and it took 0 of the top 1% while AO3 took 597. FictionAlley, holding little
--- but hits, was capped at 0.575 and could not reach the top 10% of the index at
--- any level of acclaim.
---
--- Dividing by the site's own best-case restores the thing this whole file is
--- for: a work that carries everything its archive records is fully trusted,
--- whichever archive that is. It stays self-correcting too — when the harvester
--- starts filling a metric a site was missing, the ceiling rises on its own.
-site_cap AS (
-    SELECT site, GREATEST(MAX(w_have), 0.0001) AS w_max FROM blended GROUP BY site
-),
-final AS (
-    SELECT b.id,
-           -- Renormalise over observed weight, shrink toward the prior by how
-           -- much of the picture was actually visible, then let the rate view
-           -- argue for a quarter of the result where it exists.
-           (
-             0.75 * ({PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR}) * LEAST(w_have / c.w_max, 1.0))
-           + 0.25 * CASE WHEN w_rate > 0
-                         THEN {PRIOR} + (s_rate / w_rate - {PRIOR}) * w_rate
-                         -- No usable date: the absolute view carries the whole
-                         -- score rather than being diluted by a neutral 0.5.
-                         ELSE {PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR})
-                                        * LEAST(w_have / c.w_max, 1.0)
-                    END
-           ) AS popularity
-      FROM blended b
-      JOIN site_cap c ON c.site = b.site
-)
-UPDATE stories s
-   SET popularity = round(f.popularity::numeric, 6)
-  FROM final f
- WHERE s.id = f.id
-   AND (s.popularity IS DISTINCT FROM round(f.popularity::numeric, 6))
+           (CASE WHEN rk.v IS NOT NULL THEN {W_KUDOS}     ELSE 0 END
+          + CASE WHEN rb.v IS NOT NULL THEN {W_BOOKMARKS} ELSE 0 END) AS w_rate,
+           (COALESCE(rk.v * {W_KUDOS},     0)
+          + COALESCE(rb.v * {W_BOOKMARKS}, 0)) AS s_rate
+      FROM pr_scored s
+      LEFT JOIN pr_pk pk ON pk.id = s.id
+      LEFT JOIN pr_pb pb ON pb.id = s.id
+      LEFT JOIN pr_pc pc ON pc.id = s.id
+      LEFT JOIN pr_ph ph ON ph.id = s.id
+      LEFT JOIN pr_rk rk ON rk.id = s.id
+      LEFT JOIN pr_rb rb ON rb.id = s.id
+;
+ALTER TABLE pr_blended ADD PRIMARY KEY (id);
+ANALYZE pr_blended
 """
+
+# The most weight any work in this archive manages to carry.
+#
+# Confidence has to be measured against what the ARCHIVE can offer, not against
+# a perfect 1.0, or the shrink silently becomes a per-site penalty for what a
+# platform does not publish. FanFiction.net has no view counter at all, so no
+# FF.net work can ever hold the 0.15 that hits carries: its ceiling was 0.925
+# and it took 0 of the top 1% while AO3 took 597. FictionAlley, holding little
+# but hits, was capped at 0.575 and could not reach the top 10% of the index at
+# any level of acclaim.
+#
+# Dividing by the site's own best-case restores the thing this whole file is
+# for: a work that carries everything its archive records is fully trusted,
+# whichever archive that is. It stays self-correcting too — when the harvester
+# starts filling a metric a site was missing, the ceiling rises on its own.
+#
+# The rate view has the same parity need and the same fix. w_rate is at most
+# 0.65 (the two intent signals), so without renormalising, a work whose dates
+# ARE recorded — every FF.net and FicAlley row, nearly none of the AO3 bulk
+# import — carries a rate term that multiplies a number it can never fully
+# hold: its ceiling was (0.75*1.0 + 0.25*{PRIOR}+0.325) = 0.956, while a
+# date-less AO3 work skipped the term entirely and scored 1.0. That put 597
+# AO3 works above 0.99 and every archive with good dates beneath them for no
+# reason a reader would agree with. Dividing by the site's own best rate
+# weight restores the same full-trust ceiling for whichever archive records
+# the dates.
+UPDATE_SQL = f"""
+CREATE TEMP TABLE pr_final ON COMMIT PRESERVE ROWS AS
+    SELECT b.id,
+           round((0.75 * ({PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR}) * LEAST(w_have / c.w_max, 1.0))
+                + 0.25 * CASE WHEN w_rate > 0
+                              THEN {PRIOR} + (s_rate / w_rate - {PRIOR})
+                                             * LEAST(w_rate / r.r_max, 1.0)
+                              ELSE {PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR})
+                                             * LEAST(w_have / c.w_max, 1.0)
+                          END)::numeric, 6) AS popularity
+      FROM pr_blended b
+      JOIN (SELECT site, GREATEST(MAX(w_have), 0.0001) AS w_max
+              FROM pr_blended GROUP BY site) c ON c.site = b.site
+      JOIN (SELECT site, GREATEST(MAX(w_rate), 0.0001) AS r_max
+              FROM pr_blended GROUP BY site) r ON r.site = b.site
+;
+ALTER TABLE pr_final ADD PRIMARY KEY (id);
+ANALYZE pr_final;
+"""
+
+UPDATE_WRITE_SQL = """
+UPDATE stories s
+   SET popularity = pf.popularity
+  FROM pr_final pf
+ WHERE s.id = pf.id
+   AND (s.popularity IS DISTINCT FROM pf.popularity)
+"""
+
+
+# Each percentile is keyed by id with a PK, so the planner joins on exact
+# cardinality instead of the 1.6M-estimate cascade that never terminates.
+PERCENTILES = [
+    ("pk", PERCENTILE_SQL.format(name="pk", expr="kudos",     where="kudos IS NOT NULL")),
+    ("pb", PERCENTILE_SQL.format(name="pb", expr="bookmarks", where="bookmarks IS NOT NULL")),
+    ("pc", PERCENTILE_SQL.format(name="pc", expr="comments",  where="comments IS NOT NULL")),
+    ("ph", PERCENTILE_SQL.format(name="ph", expr="hits",      where="hits IS NOT NULL")),
+    ("rk", PERCENTILE_RATE_SQL.format(name="rk", expr="kudos",     where="kudos IS NOT NULL")),
+    ("rb", PERCENTILE_RATE_SQL.format(name="rb", expr="bookmarks", where="bookmarks IS NOT NULL")),
+]
 
 
 def run(dry_run: bool = False) -> int:
@@ -238,6 +267,12 @@ def run(dry_run: bool = False) -> int:
         # 60s default would abort it partway through, leaving the index half
         # ranked on two different runs' worth of percentiles.
         db.execute(text("SET statement_timeout = 0"))
+        # The sort heavy lifting is a few window functions over ~525k scored
+        # rows. With the default 32MB work_mem every sort spills to disk; on a
+        # memory-tight box that turned a two-minute job into an hour of swap
+        # thrash. One-off linear scans, so a generous single-session limit is
+        # right here — it never touches the shared buffers of the API workers.
+        db.execute(text("SET work_mem = '1GB'"))
         if dry_run:
             n = db.execute(text("""
                 SELECT count(*) FROM stories
@@ -246,11 +281,42 @@ def run(dry_run: bool = False) -> int:
             """)).scalar()
             log.info("would score %s works", f"{n:,}")
             return int(n or 0)
-        res = db.execute(text(SQL))
+        db.execute(text(STAGED))
+        for _, sql in PERCENTILES:
+            db.execute(text(sql))
+        db.execute(text(BLENDED_SQL))
+        db.execute(text(UPDATE_SQL))  # builds pr_final
         db.commit()
-        n = res.rowcount or 0
-        log.info("popularity written for %s works", f"{n:,}")
-        return n
+        # Force a merge-friendly plan on the final write: drive the UPDATE with
+        # an order-preserving index scan over stories in id order rather than a
+        # hash join that has to probe every heap page, and a hash of the small
+        # pr_final side. On a cold, swap-starved box the default nested-loop
+        # plan did ~546k random single-row heap reads (20+ min, zero writes)
+        # and a seq-scan hash join streamed the whole 19.7M-row heap in read
+        # order (hours). The id-ordered index-scan join reads the heap
+        # sequentially and writes matched rows in WAL-friendly order.
+        db.execute(text("SET enable_nestloop = off"))
+
+        # The worker is out there updating the same story rows one at a time,
+        # and it locks them in a different order than this bulk pass, so the
+        # UPDATE can and does deadlock with it. pr_final is already committed
+        # (temp tables survive on COMMIT PRESERVE ROWS), so just re-run the
+        # UPDATE in a fresh transaction until it wins. The deadlock checks both
+        # lock orders, so the retry is safe regardless of which side got aborted.
+        for attempt in range(1, 11):
+            try:
+                res = db.execute(text(UPDATE_WRITE_SQL))
+                db.commit()
+                n = res.rowcount or 0
+                log.info("popularity written for %s works (attempt %s)", f"{n:,}", attempt)
+                return n
+            except sqlalchemy.exc.OperationalError as e:
+                if attempt == 10 or "DeadlockDetected" not in str(e):
+                    raise
+                db.rollback()
+                log.warning("deadlock with worker, retrying (%s/10)", attempt)
+                time.sleep(2)
+        return 0
 
 
 if __name__ == "__main__":
