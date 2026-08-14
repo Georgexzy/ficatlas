@@ -5,6 +5,7 @@ import NavRecorder from "./NavRecorder"
 import SiteFooter from "./SiteFooter"
 import PreviewBanner from "./PreviewBanner"
 import HealthBanner from "./HealthBanner"
+import { escapeJsonLd } from "@/lib/jsonLd"
 import "./globals.css"
 
 // What the site says it is, in the two places people meet it before they see it:
@@ -48,6 +49,13 @@ export const metadata: Metadata = {
   // Reddit or a group chat, which for a site like this is most of how it
   // travels. Without these it renders as a bare URL. Deliberately reusing the
   // same title and description rather than writing a second, drifting copy.
+  // One shared 1200x630 card for every page that does not supply its own.
+  // Before this, a link shared anywhere rendered with no image at all; a card
+  // is what makes a link worth clicking in Discord/Tumblr/a group chat, and
+  // Open Graph image is also the one field every crawler reads even when the
+  // page's body is a client-render shell. Committed as a real PNG (generated
+  // once, image reproduced by tools/gen_og.py) rather than a generated route,
+  // so crawlers that never execute JS still see it.
   openGraph: {
     type: "website",
     siteName: "FicAtlas",
@@ -56,13 +64,15 @@ export const metadata: Metadata = {
     description:
       "Search 19+ million fanworks across three archives in one place, then "
       + "read them on the archive that hosts them.",
+    images: "/og.png",
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "FicAtlas — search AO3, FanFiction.net and FicAlley at once",
     description:
       "Search 19+ million fanworks across three archives in one place, then "
       + "read them on the archive that hosts them.",
+    images: "/og.png",
   },
 }
 
@@ -100,6 +110,25 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {children}
           <SiteFooter />
         </AuthProvider>
+        {/* WebSite schema: the entity Google associates with the domain and,
+            via SearchAction, the site-wide searchbox shown as a sitelink. The
+            query URL is the site's real search entry point. */}
+        <script type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: escapeJsonLd({
+            "@context": "https://schema.org",
+            "@type": "WebSite",
+            name: "FicAtlas",
+            url: SITE,
+            description: "Search 19+ million fanworks across Archive of Our Own, FanFiction.net and FicAlley.",
+            potentialAction: {
+              "@type": "SearchAction",
+              target: {
+                "@type": "EntryPoint",
+                urlTemplate: `${SITE}/?q={search_term_string}`,
+              },
+              "query-input": "required name=search_term_string",
+            },
+          }) }} />
       </body>
     </html>
   )
