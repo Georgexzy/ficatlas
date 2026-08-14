@@ -41,9 +41,21 @@ class User(Base):
     # promise mail delivery, so nothing may depend on it being present.
     email         = Column(String(200))
 
+    def effective_role(self) -> str:
+        """The role this REQUEST runs as, which is not always the stored one.
+
+        A session can ask to be seen as a lesser role (see auth.get_current_user).
+        That choice is carried on the instance as `_view_as`, deliberately not as
+        a column: `role` is mapped, so writing the preview there would let any
+        commit in the same request flush the demotion to the database and make it
+        permanent. Everything that asks what you may do goes through here, so the
+        preview applies without anything being written down.
+        """
+        return getattr(self, "_view_as", None) or self.role or ROLE_READER
+
     @property
     def rank(self) -> int:
-        return ROLE_RANK.get(self.role or ROLE_READER, 0)
+        return ROLE_RANK.get(self.effective_role(), 0)
 
     def at_least(self, role: str) -> bool:
         return self.rank >= ROLE_RANK.get(role, 99)
