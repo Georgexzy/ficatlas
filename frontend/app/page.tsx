@@ -1058,7 +1058,13 @@ function SearchPageInner() {
   const [updatedAfter, setUpdatedAfter] = useState(get("updated_after") ?? "")
   const [searchWithin, setSearchWithin] = useState("")
   const [sort,         setSort]         = useState(get("sort") ?? "relevance")
-  const [page,         setPage]         = useState(Number(get("page") ?? 1))
+  // Seeds from the URL so the run-on-mount search can honour an explicit
+  // &page=N. NaN-proofed: a malformed value used to be swept aside by the
+  // mount effect's reset-to-page-1, and now that the mount effect preserves the
+  // page, a garbage value must not leak into the query string as page=NaN.
+  const seededPage = Number(get("page"))
+  const [page,         setPage]         = useState(
+    Number.isFinite(seededPage) && seededPage >= 1 ? Math.floor(seededPage) : 1)
 
   // Results
   const [results,      setResults]      = useState<SearchResponse | null>(null)
@@ -1216,7 +1222,13 @@ function SearchPageInner() {
       setAppliedSig(filterSig)
       return
     }
-    doSearch()
+    // Do NOT reset to page 1. This effect runs on every keyed remount, and the
+    // key is parameterised enough that clicking "Next" remounts with
+    // &page=N in the URL. resetPage=true here threw that away and landed the
+    // reader back on page 1 the moment the remount's fetch resolved. `page`
+    // state is seeded from the URL on mount, so doSearch(false) re-runs the
+    // search for the page the URL actually requests.
+    doSearch(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
