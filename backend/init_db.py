@@ -85,6 +85,14 @@ CREATE INDEX IF NOT EXISTS ix_stories_updated_at ON stories (updated_at);
 CREATE INDEX IF NOT EXISTS ix_stories_rating ON stories (rating);
 CREATE INDEX IF NOT EXISTS ix_stories_status ON stories (status);
 CREATE INDEX IF NOT EXISTS ix_stories_is_hosted ON stories (is_hosted);
+-- The hosted library shelf is ORDER BY indexed_at DESC over a tiny subset of a
+-- 39GB table. A bare `is_hosted` index serves neither the count nor the sort
+-- well: Postgres read ~22k scattered heap pages to page five rows (16s, and past
+-- the 60s statement timeout once the cache was cold). PARTIAL so it holds only
+-- the ~30k hosted rows (a full composite over 19.9M rows was 148MB for the same
+-- effect); the WHERE clause lets the planner use it for both queries.
+CREATE INDEX IF NOT EXISTS ix_stories_hosted_shelf
+    ON stories (indexed_at DESC) WHERE is_hosted;
 CREATE INDEX IF NOT EXISTS ix_stories_fandoms ON stories USING gin (fandoms);
 CREATE INDEX IF NOT EXISTS ix_stories_tags ON stories USING gin (tags);
 CREATE INDEX IF NOT EXISTS ix_stories_relationships ON stories USING gin (relationships);
