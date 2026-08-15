@@ -3,7 +3,7 @@ import hashlib
 import os
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Response, Cookie, Form, Request
@@ -150,9 +150,20 @@ def _set_session_cookie(response: Response, token: str,
                         remember: bool = True) -> None:
     """Send the session cookie, persistent or not.
 
-    `remember=False` omits Max-Age entirely, which makes it a session cookie: the
-    browser drops it when it closes. That is the only mechanism there is — a
-    cookie is either persistent or it is not, and there is no middle setting.
+    `remember=False` omits Max-Age AND Expires entirely, which makes it a session
+    cookie: the browser drops it when it closes. That is the only mechanism there
+    is — a cookie is either persistent or it is not, and there is no middle
+    setting.
+
+    When it IS persistent, both attributes go out, which is belt-and-braces
+    rather than redundancy. Max-Age is the modern one and wins where both are
+    understood (RFC 6265 §5.3), but it is also the newer of the two and the one
+    a minimal or embedded cookie parser is most likely to skip — and a persistent
+    cookie whose only expiry attribute was ignored does not become a long-lived
+    cookie, it becomes a SESSION cookie, discarded the moment the browser closes.
+    That failure is invisible from the server: the Set-Cookie leaves here
+    correct, and the only symptom is someone reporting that "stay signed in"
+    does not last, from one browser and not the others.
 
     The server-side row still lasts SESSION_DAYS either way. It has to: the row
     is what `/account` lists as an active session and what "sign out everywhere"
@@ -167,8 +178,14 @@ def _set_session_cookie(response: Response, token: str,
         # Deliberately not `max_age=None if not remember` inline: passing
         # max_age=None is what "session cookie" means to Starlette, and spelling
         # it out here is the difference between reading as intent and reading as
-        # an oversight.
+        # an oversight. The same goes for expires.
         max_age=(SESSION_DAYS * 86400) if remember else None,
+        # Must be timezone-aware: Starlette formats this with
+        # email.utils.format_datetime(usegmt=True), which raises on a naive
+        # datetime rather than assuming UTC. utcnow() here would be a 500 on
+        # every login.
+        expires=(datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS))
+                if remember else None,
         httponly=True, samesite="lax",
         secure=COOKIE_SECURE,
         path="/",
@@ -180,6 +197,39 @@ def _set_session_cookie(response: Response, token: str,
     # than a fix — but it is the kind of thing that has to be true by
     # construction, not by remembering to check each new endpoint.
     response.headers["Cache-Control"] = "private, no-store"
+
+
+async def reissue_session_cookie_middleware(request: Request, call_next):
+    """Deliver the rolled-forward session cookie whatever the endpoint returned.
+
+    get_current_user sets it on the Response that FastAPI injects into it, which
+    works for the ordinary case and silently does not for one specific shape:
+    when a path operation returns a Response OBJECT rather than a value to
+    serialise, FastAPI uses that object as the reply and never merges the
+    dependency's headers into it (`response = raw_response` in
+    fastapi/routing.py). Set-Cookie and the Cache-Control above both vanish.
+
+    Nothing warns about this and nothing fails — the request succeeds, the
+    reader stays signed in for now, and the only consequence is that the session
+    quietly did not extend itself on that visit. Catching it out here means a
+    new endpoint cannot reintroduce it by choosing to return a Response, which
+    is a normal thing to do and carries no hint that it touches sessions.
+
+    scope["state"] is shared between the Request the dependency saw and this one,
+    which is the same mechanism main.py's search tracking already relies on.
+    """
+    response = await call_next(request)
+    token = getattr(request.state, _PENDING_COOKIE, None)
+    if token and not _carries_session_cookie(response):
+        _set_session_cookie(response, token, True)
+    return response
+
+
+def _carries_session_cookie(response: Response) -> bool:
+    """Did the cookie already make it out? The overwhelmingly common case, and
+    setting it twice would send a duplicate Set-Cookie rather than replace one."""
+    return any(h.startswith(f"{SESSION_COOKIE}=")
+               for h in response.headers.getlist("set-cookie"))
 
 
 # How stale last_used may get before we bother writing it back. This field only
@@ -195,10 +245,19 @@ _LAST_USED_REFRESH = timedelta(minutes=15)
 _SESSION_SLIDE_WHEN_UNDER = timedelta(days=SESSION_DAYS * 2 // 3)
 
 
+# Where the roll-forward below leaves the cookie it wants sent, for
+# reissue_session_cookie_middleware to apply to whatever the endpoint returned.
+# See that function for why the injected Response is not enough on its own.
+_PENDING_COOKIE = "reissue_session_cookie"
+
+
 def get_current_user(
     response: Response,
     sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
     db: Session = Depends(get_db),
+    # Last, and with a default, so the direct positional calls in the tests keep
+    # working. FastAPI injects this by annotation, not by position.
+    request: Request = None,
 ) -> Optional[User]:
     if not sat:
         return None
@@ -306,6 +365,18 @@ def get_current_user(
     # and there is no expiry on it to extend.
     if used and bool(getattr(s, "remember", True)):
         _set_session_cookie(response, sat, True)
+        # And again, later, if that one does not survive. FastAPI merges this
+        # dependency's Response headers into the reply ONLY when the endpoint
+        # returns a value to serialise; an endpoint that returns a Response
+        # object itself replaces it wholesale and every header set here is
+        # dropped on the floor. /api/stories/{id}.epub is one such endpoint
+        # today. Because the row's last_used has just been written, the next
+        # roll-forward is not attempted for another _LAST_USED_REFRESH — so a
+        # reader whose habit is "open the app, download the chapter" could burn
+        # every chance the session had to extend itself and be signed out on the
+        # 90th day regardless of using the site daily.
+        if request is not None:
+            setattr(request.state, _PENDING_COOKIE, sat)
 
     if dirty:
         db.commit()

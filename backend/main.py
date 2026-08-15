@@ -136,6 +136,11 @@ async def track_search_middleware(request: Request, call_next):
 
 app.middleware("http")(rate_limit_middleware)
 
+# Outside the routing, so it sees the finished response — including the ones a
+# path operation built itself, which is precisely the case where the session
+# cookie set inside get_current_user never made it out. See that function.
+app.middleware("http")(auth.reissue_session_cookie_middleware)
+
 # ── CORS ─────────────────────────────────────────────────────────────────────
 # The browser never talks to this port directly: the Next.js frontend declares a
 # rewrite for /api/* (see frontend/next.config.ts), so every request the browser

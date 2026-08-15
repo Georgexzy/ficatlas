@@ -69,12 +69,33 @@ def test_ticked_box_is_a_persistent_cookie():
     assert "HttpOnly" in sc and "Path=/" in sc
 
 
+def test_a_persistent_cookie_says_so_twice():
+    """Max-Age AND Expires, because a client that understands neither one of
+    them does not fall back to a long-lived cookie — it falls back to a SESSION
+    cookie, dropped the moment the browser closes. Max-Age is the newer
+    attribute and the likelier of the two to be skipped, so sending only that is
+    a bet, and the losing side of the bet is silent: the header leaves the
+    server correct and the reader is signed out by morning.
+    """
+    r = Response()
+    _set_session_cookie(r, "abc", True)
+    sc = r.headers.get("set-cookie")
+    assert f"Max-Age={SESSION_DAYS * 86400}" in sc
+    # Formatted, not a raw offset — Starlette renders a datetime through
+    # format_datetime(usegmt=True), and a naive one raises rather than being
+    # assumed to be UTC.
+    assert "expires=" in sc.lower() and "GMT" in sc
+
+
 def test_unticked_box_is_a_session_cookie():
     r = Response()
     _set_session_cookie(r, "abc", False)
     sc = r.headers.get("set-cookie")
-    # The whole mechanism: no Max-Age means the browser drops it on close.
+    # The whole mechanism: NEITHER expiry attribute, so the browser drops it on
+    # close. Expires would keep the cookie exactly as surely as Max-Age would,
+    # so adding it above must not have leaked into this path.
     assert "Max-Age" not in sc
+    assert "expires=" not in sc.lower()
     assert "abc" in sc
 
 
@@ -122,6 +143,82 @@ def test_a_freshly_used_session_does_not_re_issue_on_every_request(db):
     r = Response()
     assert get_current_user(r, tok, db) is not None
     assert r.headers.get("set-cookie") is None
+
+
+def test_the_roll_forward_survives_an_endpoint_that_returns_a_response(db):
+    """The roll-forward is set on the Response FastAPI injects into
+    get_current_user, and FastAPI merges those headers into the reply only when
+    the endpoint returns a value to SERIALISE. Return a Response object instead
+    and it becomes the reply wholesale, with every header the dependency set
+    dropped — no error, no log line, the request just quietly stops extending
+    the session. /api/stories/{id}.epub returns a Response like this.
+
+    It compounds: last_used has already been written by the time the header is
+    discarded, so no other request tries again for another quarter hour. Open
+    the app, download a chapter, close it — and the 90 days run from the login
+    however long the habit continues.
+    """
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from api.auth import (SESSION_COOKIE, get_current_user,
+                          reissue_session_cookie_middleware)
+    from db.session import get_db
+
+    app = FastAPI()
+    app.middleware("http")(reissue_session_cookie_middleware)
+
+    @app.get("/plain")
+    def plain(u=Depends(get_current_user)):
+        return {"ok": u is not None}
+
+    @app.get("/raw")
+    def raw(u=Depends(get_current_user)):
+        # The shape that loses the header. An EPUB, a CSV, a redirect.
+        return Response(content=b"bytes", media_type="application/octet-stream")
+
+    app.dependency_overrides[get_db] = lambda: db
+
+    u = _user(db)
+    client = TestClient(app)
+
+    for path in ("/plain", "/raw"):
+        # Aged past the refresh window each time, so each request is one that
+        # SHOULD roll the cookie forward.
+        tok = _session(db, u, remember=True, last_used_ago=timedelta(hours=1))
+        r = client.get(path, cookies={SESSION_COOKIE: tok})
+        assert r.status_code == 200
+        sc = r.headers.get("set-cookie") or ""
+        assert tok in sc, f"{path} dropped the rolled-forward session cookie"
+        assert f"Max-Age={SESSION_DAYS * 86400}" in sc
+
+
+def test_the_roll_forward_is_not_sent_twice(db):
+    """The middleware is a backstop, not a second writer: on the ordinary path
+    the dependency's header already arrived, and setting it again would send two
+    Set-Cookie headers for the same name rather than replacing one."""
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from api.auth import (SESSION_COOKIE, get_current_user,
+                          reissue_session_cookie_middleware)
+    from db.session import get_db
+
+    app = FastAPI()
+    app.middleware("http")(reissue_session_cookie_middleware)
+
+    @app.get("/plain")
+    def plain(u=Depends(get_current_user)):
+        return {"ok": u is not None}
+
+    app.dependency_overrides[get_db] = lambda: db
+
+    u = _user(db)
+    tok = _session(db, u, remember=True, last_used_ago=timedelta(hours=1))
+    r = TestClient(app).get("/plain", cookies={SESSION_COOKIE: tok})
+    sent = [h for h in r.headers.get_list("set-cookie")
+            if h.startswith(f"{SESSION_COOKIE}=")]
+    assert len(sent) == 1, sent
 
 
 def test_an_expired_session_is_refused_and_removed(db):
