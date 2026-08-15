@@ -245,6 +245,16 @@ async def flush_loop(stop_after_idle: Optional[float] = None) -> None:
     deploy.
     """
     import asyncio
+
+    # Load the hashing key here, off the event loop, before anything needs it.
+    # visitor_hash() reads it from the database on first use, and the search
+    # tracker calls that from an async middleware — so without this the first
+    # tracked search in each worker blocked the whole loop on a query.
+    try:
+        await asyncio.to_thread(_load_secret)
+    except Exception:
+        pass  # it will be loaded on demand instead
+
     last_prune = time.monotonic()
     try:
         while True:

@@ -65,6 +65,12 @@ def _new_token() -> str:
     return secrets.token_urlsafe(48)
 
 
+# What a STORED token looks like: sha256 hex. A cookie value never does —
+# `secrets.token_urlsafe(48)` is 64 characters drawn from 64 symbols, so the
+# chance of one being 64 lowercase hex digits is (1/4)^64.
+_LOOKS_STORED = re.compile(r"[0-9a-f]{64}")
+
+
 def _token_hash(token: str) -> str:
     """What actually goes in the database.
 
@@ -84,6 +90,29 @@ def _token_hash(token: str) -> str:
     Hex digest is 64 chars and the column is String(80), so nothing migrates.
     """
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _token_lookups(sat: str) -> list[str]:
+    """Every stored value this cookie is allowed to match.
+
+    The hash always. The raw value ONLY if it cannot itself be a stored one —
+    which is the whole point, and was missing.
+
+    Sessions from before hashing are stored verbatim, so every lookup here also
+    tries the cookie as-is. That handed back what hashing was introduced to
+    prevent: someone with read access to `user_sessions` could paste a STORED
+    value in as their cookie and be authenticated as that user, because the
+    legacy branch compares the raw cookie against the stored column and a stored
+    hash matches itself. A database backup was a list of working credentials
+    again, in a different shape.
+
+    Refusing hash-shaped cookies closes it without touching the genuine legacy
+    sessions, which are urlsafe-base64 and effectively never all-hex.
+    """
+    lookups = [_token_hash(sat)]
+    if not _LOOKS_STORED.fullmatch(sat or ""):
+        lookups.append(sat)
+    return lookups
 
 
 def _create_session(db: Session, user: User, user_agent: str | None = None,
@@ -209,6 +238,23 @@ def get_current_user(
         # for us. The loser of the race matches zero rows (the token it was
         # looking for is already gone) instead of colliding, and every column
         # comes along by construction rather than by being remembered here.
+        # A hash-shaped cookie is refused outright rather than looked up: see
+        # _token_lookups. This is the branch that made a stored value usable as
+        # a credential.
+        if sat not in _token_lookups(sat):
+            return None
+
+        # Look before writing. Nearly every route resolves the current user, and
+        # a cookie that misses the hashed lookup is USUALLY not a legacy session
+        # at all — it is an expired one (deleted below, while the browser keeps
+        # its 90-day cookie), a bot replaying something stale, or junk. Going
+        # straight to UPDATE ... COMMIT spent a write transaction on every one of
+        # those, so unauthenticated traffic generated WAL on a public site. The
+        # read costs nothing on a primary-key equality.
+        if not db.query(UserSession.token).filter(
+                UserSession.token == sat).first():
+            return None
+
         hashed = _token_hash(sat)
         db.query(UserSession).filter(UserSession.token == sat).update(
             {UserSession.token: hashed}, synchronize_session=False)
@@ -445,7 +491,7 @@ def logout(
         # is still genuinely destroyed. A logout that silently leaves the
         # session alive is the worst possible bug in this function.
         db.query(UserSession).filter(
-            UserSession.token.in_([_token_hash(sat), sat])).delete(
+            UserSession.token.in_(_token_lookups(sat))).delete(
                 synchronize_session=False)
         db.commit()
     response.delete_cookie(SESSION_COOKIE, path="/")
@@ -506,7 +552,7 @@ def change_password(
         # notin_ both forms: matching only the hash would sign the caller out of
         # the very device they are changing their password on, if that session
         # happened not to have been converted yet.
-        q = q.filter(UserSession.token.notin_([_token_hash(sat), sat]))
+        q = q.filter(UserSession.token.notin_(_token_lookups(sat)))
     q.delete(synchronize_session=False)
     db.commit()
     return {"ok": True, "message": "Password changed. Other devices were signed out."}
@@ -531,7 +577,7 @@ def set_view_as(role: str = Form(""), sat: Optional[str] = Cookie(default=None, 
     from models.user import ROLE_RANK, ROLE_READER, ROLE_ADMIN, ROLE_OWNER
 
     sess = db.query(UserSession).filter(
-        UserSession.token.in_([_token_hash(sat), sat])).first() if sat else None
+        UserSession.token.in_(_token_lookups(sat))).first() if sat else None
     if not sess:
         raise HTTPException(401, "Not authenticated")
     user = db.query(User).filter(User.id == sess.user_id).first()
@@ -605,7 +651,11 @@ def list_sessions(
     return {
         "sessions": [
             {
-                "current": s.token == sat,
+                # Hashed, because that is what the column holds. Comparing the
+                # raw cookie has silently marked nothing as current since
+                # tokens started being hashed, so /account listed every device
+                # and told you which one you were on: none of them.
+                "current": s.token == _token_hash(sat) if sat else False,
                 "user_agent": s.user_agent or "Unknown device",
                 "created_at": s.created_at.isoformat() if s.created_at else None,
                 "last_used": s.last_used.isoformat() if s.last_used else None,
@@ -630,7 +680,7 @@ def logout_all(
     signed in; otherwise the cookie is cleared too."""
     q = db.query(UserSession).filter(UserSession.user_id == user.id)
     if keep_current and sat:
-        q = q.filter(UserSession.token.notin_([_token_hash(sat), sat]))
+        q = q.filter(UserSession.token.notin_(_token_lookups(sat)))
     q.delete(synchronize_session=False)
     db.commit()
     if not keep_current:

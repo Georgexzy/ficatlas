@@ -74,7 +74,16 @@ async def lifespan(app: FastAPI):
         # Cancelling is what triggers the final flush (see flush_loop), so the
         # last few seconds of traffic survive a deploy rather than being thrown
         # away on every promote.
+        #
+        # And it has to be AWAITED. cancel() only marks the task; the handler
+        # that does the flushing needs the loop to run it once more, and lifespan
+        # shutdown returns straight into teardown. Without this the buffered
+        # events were dropped on every deploy — exactly what the comment above
+        # claims is prevented.
         track_task.cancel()
+        import contextlib
+        with contextlib.suppress(asyncio.CancelledError):
+            await track_task
     if stop_scheduler is not None:
         stop_scheduler()
 

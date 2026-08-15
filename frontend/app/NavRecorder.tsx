@@ -37,18 +37,31 @@ export default function NavRecorder() {
     if (dnt) return
 
     if (sent.current === pathname) return
+    // Whether this is the first page of the visit, not just a new path. The
+    // referrer belongs to the DOCUMENT, and a client-side navigation does not
+    // load a new one.
+    const firstOfThisLoad = sent.current === null
     sent.current = pathname
 
     const fd = new FormData()
     fd.append("path", pathname)
-    // Only an EXTERNAL referrer is worth sending: internal navigation would be
-    // most of the rows and would say nothing about where readers come from.
+    // Only an EXTERNAL referrer, and only once per page load.
+    //
+    // document.referrer does not change across App Router navigations — they
+    // are pushState, not a document load — so re-reading it on every path
+    // change re-sent the same referrer for every page of the visit. Someone
+    // arriving from reddit and reading twenty stories was counted as twenty
+    // arrivals from reddit, and "where readers came from" overstated by roughly
+    // pages-per-visit: the busier the visit, the bigger the lie.
+    //
     // Decided here because the browser is the only party that can see both
     // document.referrer and its own origin.
-    try {
-      const ref = document.referrer
-      if (ref && new URL(ref).host !== location.host) fd.append("ref", ref)
-    } catch { /* an unparseable referrer is simply not sent */ }
+    if (firstOfThisLoad) {
+      try {
+        const ref = document.referrer
+        if (ref && new URL(ref).host !== location.host) fd.append("ref", ref)
+      } catch { /* an unparseable referrer is simply not sent */ }
+    }
 
     // keepalive so the report survives the navigation that triggered it, and a
     // swallowed rejection because a page must never break over its own

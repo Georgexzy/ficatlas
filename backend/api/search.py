@@ -466,7 +466,14 @@ def _note_total(request, payload) -> None:
     stops a future exit from quietly losing it.
     """
     try:
-        request.state.search_total = int(getattr(payload, "total", None) or 0)
+        total = getattr(payload, "total", None)
+        # `or 0` here would turn "no count available" into "found nothing", which
+        # is the one confusion the NULL exists to prevent — a healthy query would
+        # appear in the empty-results report and send the crawler after something
+        # already indexed.
+        if total is None:
+            return
+        request.state.search_total = int(total)
     except Exception:
         pass
 
