@@ -91,9 +91,25 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   regex `server_name` block (matched ahead of the `_` default server). Adding a
   new hostname without a redirect re-creates all three symptoms at once.
 - nginx.conf is bind-mounted, so `promote.sh --reload` cannot pick up a change to
-  it: the container must be recreated (`docker compose -p ficatlas-public up -d
-  nginx`). `check_nginx_conf` in promote.sh compares md5s and warns, which is the
-  only reason this is ever noticed.
+  it: the container must be recreated (`docker compose -p ficatlas-public
+  -f docker-compose.public.yml up -d --force-recreate nginx cloudflared` —
+  cloudflared shares nginx's netns, so it goes with it). `check_nginx_conf` in
+  promote.sh compares md5s and warns, which is the only reason this is ever
+  noticed. Editing the file replaces the inode, so the running container keeps
+  serving the OLD content until recreated — verify with
+  `docker exec <nginx> md5sum /etc/nginx/nginx.conf` against the host copy.
+- **`server_name _` is not a wildcard.** It matches nothing; the public block only
+  ever served the site because it was the first block on `:8080` and nginx falls
+  back to the first one. Adding any server block above it silently steals that
+  role — which took the apex down for a minute (`301 https:///`, empty capture)
+  the first time the www redirect went in. The public block now says
+  `default_server` explicitly. Add new blocks freely, but never remove that.
+- **A 500 with nothing in the API log is a proxy failure, not an app failure.**
+  Check `docker logs <web-colour>` for `socket hang up`/`ECONNRESET`: the request
+  died between Next and nginx and never reached uvicorn. It used to hit the first
+  request after any quiet spell (an idle night, so the first click of the
+  morning). Fixed by `keepalive_timeout 0` on nginx's internal `:8081` listener —
+  see the comment there before re-enabling pooling on that hop.
 - Anonymous traffic lives in `backend/tracking.py` (buffered writer, daily-rotating
   keyed visitor hash, 90-day retention) + `backend/api/traffic.py` (public
   `POST /hit` beacon, owner-only reports) + the Traffic tab on `/admin`.
