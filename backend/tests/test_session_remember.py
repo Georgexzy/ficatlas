@@ -202,3 +202,32 @@ def test_preview_cannot_raise_a_role(db):
     user = get_current_user(Response(), tok, db)
     assert user.at_least(ROLE_OWNER) is False
     assert user.effective_role() == "reader"
+
+
+def test_a_stored_token_is_not_a_working_cookie(db):
+    """The point of hashing was that reading `user_sessions` gives you nothing.
+
+    It did not: every lookup also tried the cookie as-is, to support sessions
+    from before hashing — and a stored hash matches itself. Anyone with read
+    access to that one table could paste a stored value in as their cookie and
+    be authenticated as its owner, which is the exact property the hashing
+    commit was written to buy.
+    """
+    u = _user(db)
+    tok = _session(db, u)
+    stored = db.execute(text("SELECT token FROM user_sessions")).scalar()
+    assert stored == _token_hash(tok)
+
+    assert get_current_user(Response(), stored, db) is None
+    # ...and the attempt must not have damaged the real session either.
+    assert get_current_user(Response(), tok, db) is not None
+
+
+def test_an_unknown_cookie_costs_no_write(db):
+    """Nearly every route resolves the current user, and most cookies that miss
+    the hashed lookup are expired or junk rather than legacy. Converting first
+    and asking later spent a write transaction on each one."""
+    _user(db)
+    assert get_current_user(Response(), "no-such-token", db) is None
+    # Nothing was inserted, updated or deleted by the lookup.
+    assert db.execute(text("SELECT count(*) FROM user_sessions")).scalar() == 0

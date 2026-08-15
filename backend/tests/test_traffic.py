@@ -10,6 +10,7 @@ read. So they are tested as behaviour, not left as a claim in a comment:
   * every report is owner-only, and that is checked from the route table rather
     than from each handler, so a report added later cannot quietly skip it.
 """
+import hashlib
 import os
 import sys
 import uuid
@@ -75,14 +76,28 @@ def test_different_people_are_different_visitors(db):
             != tracking.visitor_hash("198.51.100.4", "Chrome"))
 
 
-def test_the_address_is_not_recoverable_from_the_hash(db):
-    """Not a proof — a hash of a 32-bit space is guessable given the key. It is
-    the reason the key lives in its own table and not in app_settings, which
-    GET /api/settings hands to anybody."""
-    ip = "198.51.100.4"
-    h = tracking.visitor_hash(ip, "Firefox")
+def test_a_visitor_id_cannot_be_reproduced_without_the_key(db):
+    """The property that makes the table safe to keep.
+
+    A hash of a 32-bit address space is trivially enumerable, so an UNKEYED
+    digest would let anyone holding these rows ask "was this visitor at
+    81.2.x.y?" and get an answer. Keying it means the question cannot be asked
+    without the secret — which is why that secret lives in its own table and not
+    in app_settings, where GET /api/settings hands it to anybody.
+
+    (An earlier version of this test asserted that no octet of the address
+    appeared anywhere in the hash. Single-digit octets appear in a 16-character
+    hex string most of the time, so it was passing on luck and failed the first
+    morning the daily rotation produced a hash containing a "4".)
+    """
+    ip, ua = "198.51.100.4", "Firefox"
+    h = tracking.visitor_hash(ip, ua)
+    assert len(h) == 16 and all(c in "0123456789abcdef" for c in h)
     assert ip not in h
-    assert all(part not in h for part in ip.split("."))
+
+    day = datetime.utcnow().strftime("%Y-%m-%d")
+    unkeyed = hashlib.sha256(f"{day}|{ip}|{ua}".encode()).hexdigest()[:16]
+    assert h != unkeyed, "the visitor id must be keyed, not a plain digest"
 
 
 # ── the beacon ──────────────────────────────────────────────────────────────
@@ -242,3 +257,55 @@ def test_a_stranger_is_told_to_sign_in(db):
 def test_the_owner_gets_in(db):
     owner = _user(db, role=ROLE_OWNER)
     assert require_owner(user=owner, db=db) is owner
+
+
+def test_a_search_with_no_total_records_nothing_rather_than_zero():
+    """Through _note_total itself, which is where the confusion enters.
+
+    The report test above calls tracking.record directly, so it could never have
+    caught `int(getattr(payload, "total", None) or 0)` — which turned "no count
+    available" into "found nothing" and would have put healthy queries in the
+    empty-results list, sending the crawler after something already indexed.
+    """
+    from api.search import _note_total
+
+    class _Req:
+        def __init__(self):
+            self.state = type("S", (), {})()
+
+    absent = _Req()
+    _note_total(absent, object())                       # payload has no .total
+    assert getattr(absent.state, "search_total", None) is None
+
+    none_total = _Req()
+    _note_total(none_total, type("P", (), {"total": None})())
+    assert getattr(none_total.state, "search_total", None) is None
+
+    # A real zero still records as zero — that IS a search that found nothing.
+    genuine = _Req()
+    _note_total(genuine, type("P", (), {"total": 0})())
+    assert genuine.state.search_total == 0
+
+
+def test_a_deploy_does_not_lose_the_last_few_seconds(db):
+    """Cancelling the writer is what flushes it, and cancelling is how shutdown
+    arrives. This ran green while the events were in fact being thrown away on
+    every promote, because main.py cancelled the task without awaiting it — the
+    handler needs the loop to run once more. Pinned here at the flush_loop end;
+    the await is what makes it reachable."""
+    import asyncio
+    import contextlib
+
+    async def scenario():
+        task = asyncio.create_task(tracking.flush_loop())
+        await asyncio.sleep(0.05)               # let it reach its first sleep
+        tracking.record("page", "/last-second",
+                        tracking.visitor_hash("198.51.100.11", "Firefox"))
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert db.execute(text("""
+        SELECT count(*) FROM visit_events WHERE path = '/last-second'
+    """)).scalar() == 1
