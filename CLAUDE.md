@@ -104,6 +104,21 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   role — which took the apex down for a minute (`301 https:///`, empty capture)
   the first time the www redirect went in. The public block now says
   `default_server` explicitly. Add new blocks freely, but never remove that.
+- **A dependency's `Response` headers are dropped by endpoints that return a
+  `Response`.** FastAPI merges the injected `Response` into the reply only when
+  the path operation returns a value to serialise; return a `Response` object and
+  it becomes the reply wholesale (`response = raw_response` in `fastapi/routing.py`).
+  `get_current_user` sets the rolled-forward session cookie and `Cache-Control:
+  private, no-store` there, so both silently vanished on `/api/stories/{id}.epub`.
+  Nothing errors and nothing logs — the session just stops extending itself, and
+  because `last_used` was already written, nothing retries for 15 minutes.
+  `reissue_session_cookie_middleware` now applies it to the finished response;
+  don't go back to relying on the injected `Response` alone.
+- **The session cookie sends `Expires` AND `Max-Age`, deliberately.** A client
+  that ignores one of them does not fall back to a long-lived cookie — it falls
+  back to a session cookie, dropped on browser close, which is indistinguishable
+  from "stay signed in didn't work" and shows up in one browser only. Whatever
+  you change there, the unticked-box path must send NEITHER attribute.
 - **A 500 with nothing in the API log is a proxy failure, not an app failure.**
   Check `docker logs <web-colour>` for `socket hang up`/`ECONNRESET`: the request
   died between Next and nginx and never reached uvicorn. It used to hit the first
