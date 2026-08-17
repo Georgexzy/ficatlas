@@ -785,6 +785,29 @@ CREATE TABLE IF NOT EXISTS fandom_hubs (
 -- The index listing orders by size, which is the only way it is ever read.
 CREATE INDEX IF NOT EXISTS ix_fandom_hubs_count ON fandom_hubs (work_count DESC);
 
+-- The same thing again, one per romantic pairing. See ship_hubs.py for why
+-- ships get their own hubs rather than being a filter on a fandom hub: they are
+-- how readers actually search, and they are the queries a fandom hub cannot
+-- win because AO3 already owns them.
+--
+-- Identical shape to fandom_hubs deliberately -- hub_build.py writes both, and
+-- the serving path in api/hubs.py reads both through one helper. `variants`
+-- here holds every facet spelling that collapses to this pairing, matched with
+-- && against the existing GIN index on stories.relationships.
+--
+-- Built offline by ship_hubs.py; an empty table simply means no ship hubs are
+-- served, which is correct for a fresh install.
+CREATE TABLE IF NOT EXISTS ship_hubs (
+    slug        TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    variants    TEXT[] NOT NULL,
+    work_count  INTEGER NOT NULL DEFAULT 0,
+    top_ids     TEXT[] NOT NULL DEFAULT '{}',
+    top_by_site JSONB NOT NULL DEFAULT '{}'::jsonb,
+    built_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_ship_hubs_count ON ship_hubs (work_count DESC);
+
 CREATE TABLE IF NOT EXISTS author_permissions (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     site          VARCHAR(24) NOT NULL,          -- ao3 | ffnet

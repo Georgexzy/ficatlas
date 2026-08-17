@@ -1,10 +1,13 @@
-"""Fandom hub pages — the crawlable way into the index.
+"""Hub pages — the crawlable way into the index.
 
-Read-only and cheap by construction: fandom_hubs holds precomputed rows, so a
-hub is a primary-key lookup plus a fetch of ~60 stories by id. Nothing here
-ranks or scans, because these are the routes a crawler hits hardest.
+Two kinds, served identically: one per fandom (fandom_hubs) and one per romantic
+pairing (ship_hubs). Read-only and cheap by construction: both tables hold
+precomputed rows, so a hub is a primary-key lookup plus a fetch of ~150 stories
+by id. Nothing here ranks or scans, because these are the routes a crawler hits
+hardest.
 
-See fandom_hubs.py for why hubs exist and how they are built.
+See fandom_hubs.py for why hubs exist at all, and ship_hubs.py for why pairings
+get their own set rather than being a filter on a fandom hub.
 """
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ from sqlalchemy.orm import Session
 from db.session import get_db
 
 router = APIRouter()
+ships_router = APIRouter()
 
 
 class HubSummary(BaseModel):
@@ -54,35 +58,42 @@ class HubDetail(BaseModel):
     sections: list[SiteSection]
 
 
-@router.get("", response_model=list[HubSummary])
-def list_hubs(
-    response: Response,
-    limit: int = Query(2000, ge=1, le=10000),
-    offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
-):
-    """Every hub, largest first. Backs the /fandoms index page and the sitemap.
+# Both hub tables have the same shape, so listing and detail differ only in the
+# table name. It is interpolated, so it is checked against a literal allowlist
+# rather than trusted — these are module constants today and this keeps that
+# safe if a caller ever passes something derived from a request.
+_TABLES = {"fandom": "fandom_hubs", "ship": "ship_hubs"}
+
+CACHE = "public, max-age=3600, stale-while-revalidate=86400"
+
+
+def _list(kind: str, response: Response, limit: int, offset: int, db: Session):
+    """Every hub of one kind, largest first. Backs the index pages and the
+    sitemap.
 
     Fully public and rebuilt offline, so a shared cache can hold it for a long
     time — this is the request a crawler makes before walking every hub."""
-    response.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
-    rows = db.execute(text("""
-        SELECT slug, name, work_count FROM fandom_hubs
+    table = _TABLES[kind]
+    response.headers["Cache-Control"] = CACHE
+    rows = db.execute(text(f"""
+        SELECT slug, name, work_count FROM {table}
          ORDER BY work_count DESC, slug
          LIMIT :lim OFFSET :off
     """), {"lim": limit, "off": offset}).fetchall()
     return [HubSummary(slug=r[0], name=r[1], work_count=r[2]) for r in rows]
 
 
-@router.get("/{slug}", response_model=HubDetail)
-def get_hub(slug: str, response: Response, db: Session = Depends(get_db)):
-    response.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
+def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
+    table = _TABLES[kind]
+    response.headers["Cache-Control"] = CACHE
     hub = db.execute(text(
-        "SELECT slug, name, work_count, top_ids, top_by_site "
-        "  FROM fandom_hubs WHERE slug = :s"
+        f"SELECT slug, name, work_count, top_ids, top_by_site "
+        f"  FROM {table} WHERE slug = :s"
     ), {"s": slug}).fetchone()
     if not hub:
-        raise HTTPException(status_code=404, detail="No such fandom")
+        raise HTTPException(status_code=404,
+                            detail="No such fandom" if kind == "fandom"
+                                   else "No such pairing")
 
     ids = list(hub[3] or [])
     works: list[HubWork] = []
@@ -124,3 +135,33 @@ def get_hub(slug: str, response: Response, db: Session = Depends(get_db)):
 
     return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2],
                      works=works, sections=sections)
+
+
+@router.get("", response_model=list[HubSummary])
+def list_hubs(
+    response: Response,
+    limit: int = Query(2000, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return _list("fandom", response, limit, offset, db)
+
+
+@router.get("/{slug}", response_model=HubDetail)
+def get_hub(slug: str, response: Response, db: Session = Depends(get_db)):
+    return _detail("fandom", slug, response, db)
+
+
+@ships_router.get("", response_model=list[HubSummary])
+def list_ships(
+    response: Response,
+    limit: int = Query(2000, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return _list("ship", response, limit, offset, db)
+
+
+@ships_router.get("/{slug}", response_model=HubDetail)
+def get_ship(slug: str, response: Response, db: Session = Depends(get_db)):
+    return _detail("ship", slug, response, db)

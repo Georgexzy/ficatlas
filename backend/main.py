@@ -181,8 +181,11 @@ app.add_middleware(GZipMiddleware, minimum_size=800)
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(stories.router, prefix="/api/stories", tags=["stories"])
 app.include_router(stats.router,  prefix="/api/stats", tags=["stats"])
-# Crawlable fandom entry points. Read-only; see fandom_hubs.py.
+# Crawlable entry points. Read-only; see fandom_hubs.py and ship_hubs.py.
 app.include_router(hubs.router, prefix="/api/hubs", tags=["hubs"])
+# Separate prefix rather than /api/hubs/ships, which would collide with the
+# `/{slug}` route above the moment a fandom slugged to "ships".
+app.include_router(hubs.ships_router, prefix="/api/ships", tags=["hubs"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(takedown.router, prefix="/api/takedown", tags=["takedown"])

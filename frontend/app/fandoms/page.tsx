@@ -73,7 +73,8 @@ export default async function FandomsIndex() {
       <h1>Browse fandoms</h1>
       <p className="hub__lede">
         {hubs.length.toLocaleString()} fandoms indexed across Archive of Our Own,
-        FanFiction.net and FicAlley. Pick one to see its most popular works, or{" "}
+        FanFiction.net and FicAlley. Pick one to see its most popular works,
+        browse <Link href="/ships">by pairing</Link> instead, or{" "}
         <Link href="/">search the whole index</Link> if you know what you want.
       </p>
 

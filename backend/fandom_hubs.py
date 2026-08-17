@@ -37,7 +37,6 @@ so the hubs collapse the same way search does.
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 import unicodedata
@@ -47,6 +46,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from api.search import fandom_base
+from hub_build import build_groups
 
 log = logging.getLogger(__name__)
 
@@ -62,23 +62,6 @@ log = logging.getLogger(__name__)
 # wrong answer. The build cost is unchanged — the ranking query already scans the
 # same rows and only the row_number cutoff moves.
 WORKS_PER_SITE = 50
-
-# Ranked within a site, never across them.
-#
-# kudos is the popularity column and its coverage is wildly uneven: 239,588 AO3
-# rows have it against 1,470 of FanFiction.net's 6.57M, and FicAlley records
-# hits on 29,864 of its 29,949 rows and kudos on 27. A single ORDER BY kudos
-# across all three therefore returned AO3 and only AO3 — which is exactly what
-# the hubs showed.
-#
-# Sorting them against each other was never meaningful anyway: an AO3 kudos and
-# a FanFiction.net favourite are different units counted by different
-# populations. So each archive is ranked on its own and shown in its own
-# section, and the fallbacks run kudos -> hits -> word_count so that a site with
-# no popularity data at all still produces a sensible list rather than an empty
-# one.
-_RANK = ("kudos DESC NULLS LAST, hits DESC NULLS LAST, "
-         "word_count DESC NULLS LAST")
 
 # Minimum works for a fandom to get a hub. 92,018 fandom tags exist; most are
 # one-off freeform noise. The thresholds measured on this index:
@@ -136,95 +119,19 @@ def build_hubs(db: Session, min_works: int = MIN_WORKS_FOR_HUB,
 
     Offline by design — this is minutes of work, not a request path.
     """
-    db.execute(text("SET statement_timeout = 0"))
-
     rows = db.execute(text(
         "SELECT value, count FROM facets WHERE kind = 'fandom' AND count >= :m"
     ), {"m": min_works}).fetchall()
     hubs = _collapse((r[0], r[1]) for r in rows)
 
-    ordered = sorted(hubs.items(), key=lambda kv: -kv[1]["approx"])
     if limit:
-        ordered = ordered[:limit]
+        hubs = dict(sorted(hubs.items(), key=lambda kv: -kv[1]["approx"])[:limit])
 
-    written = 0
-    for slug, hub in ordered:
-        variants = hub["variants"]
-        try:
-            # One pass, partitioned by site: a window function ranks within each
-            # archive so a single scan produces all three lists. Three separate
-            # queries would triple the cost of a rebuild that already takes
-            # minutes over 17.7M matching rows.
-            ranked = db.execute(text(f"""
-                SELECT site, id FROM (
-                    SELECT site, id,
-                           row_number() OVER (PARTITION BY site
-                                              ORDER BY {_RANK}) AS rn
-                      FROM stories
-                     WHERE fandoms && :variants
-                       AND delisted_at IS NULL
-                       AND source_restricted_at IS NULL
-                ) ranked
-                 WHERE rn <= :n
-                 ORDER BY site, rn
-            """), {"variants": variants, "n": per_hub}).fetchall()
-
-            by_site: dict[str, list[str]] = {}
-            for site, sid in ranked:
-                by_site.setdefault(str(site), []).append(str(sid))
-
-            # top_ids stays populated as a flat interleave of the per-site lists,
-            # so anything reading the old column still gets a sensible, and now
-            # cross-archive, ordering.
-            top = []
-            for i in range(per_hub):
-                for site in sorted(by_site):
-                    if i < len(by_site[site]):
-                        top.append(by_site[site][i])
-
-            exact = db.execute(text("""
-                SELECT count(*) FROM stories
-                 WHERE fandoms && :variants AND delisted_at IS NULL
-            """), {"variants": variants}).scalar_one()
-        except Exception:
-            # One bad fandom must not abandon the rest of a long rebuild.
-            log.exception("hub build failed for %s", slug)
-            db.rollback()
-            continue
-
-        if not top:
-            continue
-
-        db.execute(text("""
-            INSERT INTO fandom_hubs (slug, name, variants, work_count, top_ids,
-                                     top_by_site, built_at)
-            VALUES (:slug, :name, :variants, :wc, :top,
-                    CAST(:by_site AS jsonb), now())
-            ON CONFLICT (slug) DO UPDATE SET
-                name = EXCLUDED.name, variants = EXCLUDED.variants,
-                work_count = EXCLUDED.work_count, top_ids = EXCLUDED.top_ids,
-                top_by_site = EXCLUDED.top_by_site,
-                built_at = EXCLUDED.built_at
-        """), {"slug": slug, "name": hub["name"], "variants": variants,
-               "wc": exact, "top": top, "by_site": json.dumps(by_site)})
-        written += 1
-        if written % 200 == 0:
-            db.commit()
-            log.info("built %d hubs", written)
-
-    db.commit()
-
-    # A fandom that fell below the threshold, or whose works were all delisted,
-    # leaves a hub behind that would 200 with stale contents and keep being
-    # crawled. Drop anything this run did not touch.
-    stale = db.execute(text(
-        "DELETE FROM fandom_hubs WHERE built_at < now() - interval '1 hour'"
-    )).rowcount
-    db.commit()
-    if stale:
-        log.info("removed %d stale hubs", stale)
-
-    return written
+    # A limited run is a trial over the largest fandoms only. Pruning there would
+    # delete every hub it did not rebuild — 5,015 of them for `--limit 10`, from
+    # a flag whose help text calls it a trial run.
+    return build_groups(db, table="fandom_hubs", array_col="fandoms",
+                        groups=hubs, per_hub=per_hub, prune=not limit)
 
 
 if __name__ == "__main__":
