@@ -82,6 +82,67 @@ WORKS_PER_SITE = 50
 # unknown.
 MIN_WORKS_FOR_HUB = 500
 
+# Fandom names for a pairing, keyed by slug.
+#
+# Nobody searches "Draco Malfoy/Harry Potter fanfiction". They search "drarry".
+# The portmanteau is the primary name a ship has inside fandom and the canonical
+# tag is the formal one, and until this existed a ship hub contained the formal
+# name and nothing else — so the page for 49,964 Drarry works could not match
+# the word Drarry, on the page or in a search engine.
+#
+# Curated rather than derived. A portmanteau is not a function of the two names
+# (Harry + Hermione is "Harmony", Sirius + Remus is "Wolfstar"), and a wrong one
+# is worse than none: these are the words readers identify a ship by, so getting
+# one wrong is immediately visible to exactly the audience this is for. Every
+# slug below was checked against the built ship_hubs table rather than guessed —
+# the first pass had Steve/Eddie and Katara/Zuko under the wrong slug, because
+# the slug is alphabetical and the tag is not.
+#
+# Serving-time rather than a column: the list is static, editing it takes effect
+# without a rebuild of 2,553 rows, and it needs no DDL.
+#
+# First entry is the primary; the rest are accepted spellings.
+SHIP_NICKNAMES: dict[str, list[str]] = {
+    "draco-malfoy-harry-potter":        ["Drarry"],
+    "draco-malfoy-hermione-granger":    ["Dramione"],
+    "harry-potter-hermione-granger":    ["Harmony", "Harmione"],
+    "hermione-granger-ron-weasley":     ["Romione"],
+    "ginny-weasley-harry-potter":       ["Hinny"],
+    "remus-lupin-sirius-black":         ["Wolfstar"],
+    "james-potter-lily-evans-potter":   ["Jily"],
+    "castiel-dean-winchester":          ["Destiel"],
+    "dean-winchester-sam-winchester":   ["Wincest"],
+    "john-watson-sherlock-holmes":      ["Johnlock"],
+    "derek-hale-stiles-stilinski":      ["Sterek"],
+    "james-bucky-barnes-steve-rogers":  ["Stucky"],
+    "steve-rogers-tony-stark":          ["Stony"],
+    "harry-styles-louis-tomlinson":     ["Larry Stylinson", "Larry"],
+    "keith-lance-voltron":              ["Klance"],
+    "bakugou-katsuki-midoriya-izuku":   ["Bakudeku", "KatsuDeku"],
+    "eddie-munson-steve-harrington":    ["Steddie"],
+    "aziraphale-crowley-good-omens":    ["Ineffable Husbands"],
+    "dazai-osamu-nakahara-chuuya-bungou-stray-dogs": ["Soukoku"],
+    "alec-lightwood-magnus-bane":       ["Malec"],
+    "kara-danvers-lena-luthor":         ["Supercorp"],
+    "clarke-griffin-lexa":              ["Clexa"],
+    "bilbo-baggins-thorin-oakenshield": ["Bagginshield"],
+    "annabeth-chase-percy-jackson":     ["Percabeth"],
+    "katniss-everdeen-peeta-mellark":   ["Everlark"],
+    "james-t-kirk-spock":               ["Spirk"],
+    "katara-zuko-avatar":               ["Zutara"],
+    "buffy-summers-spike":              ["Spuffy"],
+    "ben-solo-kylo-ren-rey":            ["Reylo"],
+    "kylo-ren-rey":                     ["Reylo"],
+    "simon-snow-tyrannus-basilton-baz-pitch": ["Snowbaz"],
+    "alexander-hamilton-john-laurens":  ["Lams"],
+}
+
+
+def nicknames_for(slug: str) -> list[str]:
+    """Fandom names for a pairing. Empty for the ones that have none."""
+    return SHIP_NICKNAMES.get(slug, [])
+
+
 # A pairing with more halves than this gets no hub. Threesomes are a real
 # category with real readership; beyond that the tags are long, rare, and
 # produce slugs nobody would ever type or link.

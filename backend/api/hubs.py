@@ -28,6 +28,9 @@ class HubSummary(BaseModel):
     slug: str
     name: str
     work_count: int
+    # Ships only. Shown on the index so the A-Z is browsable by the name people
+    # know the pairing by, not only by the canonical tag.
+    nicknames: list[str] = []
 
 
 class HubWork(BaseModel):
@@ -53,6 +56,10 @@ class HubDetail(BaseModel):
     slug: str
     name: str
     work_count: int
+    # Fandom names for a pairing ("Drarry"), primary first. Ships only; empty
+    # for fandoms and for the many pairings that have no portmanteau. See
+    # SHIP_NICKNAMES in ship_hubs.py for why these are curated, not derived.
+    nicknames: list[str] = []
     # Flat, interleaved across archives. Kept for anything reading the old shape.
     works: list[HubWork]
     sections: list[SiteSection]
@@ -80,7 +87,12 @@ def _list(kind: str, response: Response, limit: int, offset: int, db: Session):
          ORDER BY work_count DESC, slug
          LIMIT :lim OFFSET :off
     """), {"lim": limit, "off": offset}).fetchall()
-    return [HubSummary(slug=r[0], name=r[1], work_count=r[2]) for r in rows]
+    nick = {}
+    if kind == "ship":
+        from ship_hubs import nicknames_for
+        nick = {r[0]: nicknames_for(r[0]) for r in rows}
+    return [HubSummary(slug=r[0], name=r[1], work_count=r[2],
+                       nicknames=nick.get(r[0], [])) for r in rows]
 
 
 def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
@@ -133,8 +145,13 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     # Largest archive first, so the biggest list leads the page.
     sections.sort(key=lambda s: -len(s.works))
 
+    nicknames: list[str] = []
+    if kind == "ship":
+        from ship_hubs import nicknames_for
+        nicknames = nicknames_for(hub[0])
+
     return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2],
-                     works=works, sections=sections)
+                     nicknames=nicknames, works=works, sections=sections)
 
 
 @router.get("", response_model=list[HubSummary])

@@ -23,7 +23,7 @@ export const metadata: Metadata = {
     + "and FicAlley. Browse by pairing, then search within it.",
 }
 
-interface HubSummary { slug: string; name: string; work_count: number }
+interface HubSummary { slug: string; name: string; work_count: number; nicknames?: string[] }
 
 async function fetchShips(): Promise<HubSummary[]> {
   try {
@@ -86,7 +86,15 @@ export default async function ShipsIndex() {
             {top.map(h => (
               <li key={h.slug}>
                 <Link href={`/ship/${h.slug}`} className="hub__chip">
-                  <span className="hub__chip-name">{h.name}</span>
+                  <span className="hub__chip-name">
+                    {h.name}
+                    {/* The name readers actually use, on the index too — this
+                        page is how someone scans for their ship, and scanning
+                        for "Drarry" should not require knowing the tag. */}
+                    {h.nicknames?.[0] && (
+                      <span className="hub__chip-aka">{h.nicknames[0]}</span>
+                    )}
+                  </span>
                   <span className="hub__chip-count">{h.work_count.toLocaleString()}</span>
                 </Link>
               </li>
@@ -107,6 +115,9 @@ export default async function ShipsIndex() {
                 {groups.get(l)!.map(h => (
                   <li key={h.slug}>
                     <Link href={`/ship/${h.slug}`}>{h.name}</Link>{" "}
+                    {h.nicknames?.[0] && (
+                      <span className="hub__az-aka">{h.nicknames[0]}</span>
+                    )}
                     <span className="hub__az-count">{h.work_count.toLocaleString()}</span>
                   </li>
                 ))}

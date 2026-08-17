@@ -4956,3 +4956,16 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 .hidden-note__text { font-size: 13px; color: var(--text); line-height: 1.5; }
 .hidden-note__btn { flex-shrink: 0; }
+
+/* The pairing's fandom name — "Drarry" for Draco Malfoy/Harry Potter. Nobody
+   searches the canonical tag, so this is the word a reader arriving from a
+   search engine needs to see to know they are in the right place. See
+   SHIP_NICKNAMES in backend/ship_hubs.py. */
+.hub__aka {
+  font-size: 14px; color: var(--text-dim); margin: -6px 0 14px;
+}
+.hub__aka strong { color: var(--accent); font-weight: 600; }
+.hub__chip-aka {
+  display: block; font-size: 11px; color: var(--accent); margin-top: 1px;
+}
+.hub__az-aka { font-size: 11px; color: var(--accent); margin-right: 6px; }
