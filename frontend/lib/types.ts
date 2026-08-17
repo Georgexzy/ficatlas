@@ -63,6 +63,12 @@ export interface SearchResponse {
    *  site_counts in backend/api/search.py for why it is withheld otherwise. */
   site_counts?: Record<string, number>
   live_count?: number
+  /** How many matches the explicit-rating filter is hiding. Counted by the
+   *  server only when the page came back EMPTY, so it is 0 on any search that
+   *  returned results — it exists to turn "No stories matched" into "your
+   *  content setting hid all of them". Capped at 999, so treat a value of 999
+   *  as "999+" rather than exact. */
+  hidden_explicit?: number
   parsed_tokens?: any[]
 }
 

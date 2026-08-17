@@ -1340,7 +1340,22 @@ function SearchPageInner() {
 
   // Apply saved default sites / sort from settings on a fresh landing (no URL params)
   useEffect(() => {
-    if (rawParams.toString()) return  // user arrived with explicit params; respect them
+    // Arriving with params means the link said what to search for, so the
+    // instance's default sites/sort/page-size must not overwrite it.
+    //
+    // show_explicit is the exception, and it is not a search default — it is a
+    // standing statement about what this reader will be shown at all. Skipping
+    // it here meant every inbound link silently reset it to "hide": a reader
+    // with explicit enabled clicked an author on a hub page and got a filtered
+    // result set they had already opted out of being filtered by. Applied
+    // unless the URL names `explicit` itself, in which case the link wins.
+    if (rawParams.toString()) {
+      if (rawParams.get("explicit") === null) {
+        const mine = readAllPrefs()
+        if (mine.show_explicit !== undefined) setExplicit(mine.show_explicit === "true")
+      }
+      return
+    }
     const API_BASE = ""  // relative — handled by Next.js rewrite to backend
     // This reader's own defaults win over the instance's. The server value is
     // what a first-time visitor gets; anything they have since chosen in
@@ -2481,6 +2496,25 @@ function SearchPageInner() {
                       : null
                   })()}
 
+                  {/* What the content setting is holding back, on the results
+                      bar rather than only on the empty state.
+                      MesserMoon has ten works indexed: one rated NR and nine
+                      rated E. The author link returned a single result and said
+                      nothing, so the honest reading of the page was "the index
+                      has one work by them". A count next to the total is the
+                      only place a reader would look. */}
+                  {!explicit && (results.hidden_explicit ?? 0) > 0 && (
+                    <button className="results-bar__loose"
+                      onClick={() => setExplicit(true)}
+                      title="Explicit-rated works are hidden by your content setting. Click to include them.">
+                      {" · "}
+                      {results.hidden_explicit! > 999
+                        ? "999+ hidden as explicit"
+                        : `${results.hidden_explicit!.toLocaleString()} hidden as explicit`}
+                      {" — show"}
+                    </button>
+                  )}
+
                   {/* Without this it looks like the filters are broken: results
                       appear that have no value for the field being filtered. */}
                   {includeUnknown && (
@@ -2527,6 +2561,40 @@ function SearchPageInner() {
                       <p className="no-results__sub">
                         Try removing a filter, broadening the word count, or checking a different site.
                       </p>
+                    )}
+                    {/* Offered alongside the reasons above rather than instead
+                        of them, because it is rarely the likeliest cause and is
+                        occasionally the only one.
+
+                        The browse pages rank by kudos with no rating filter, so
+                        an explicit work can sit at the top of /ship/<slug> —
+                        and clicking its author then landed here, which reads as
+                        "we do not have them" rather than "you asked not to see
+                        this". Reported against Kill Your Darlings by MesserMoon:
+                        32,908 kudos, top of remus-lupin-sirius-black, rated E,
+                        and the author link returned nothing at all.
+
+                        Worded as a fact about the filter, not a claim about the
+                        cause — we cannot know whether an excluded work exists
+                        without running the search again without the filter. */}
+                    {!explicit && (results.hidden_explicit ?? 0) > 0 && (
+                      <>
+                        <p className="no-results__sub no-results__sub--muted">
+                          <strong>
+                            {results.hidden_explicit! > 999
+                              ? "999+ works match"
+                              : `${results.hidden_explicit!.toLocaleString()} work${results.hidden_explicit === 1 ? "" : "s"} match${results.hidden_explicit === 1 ? "es" : ""}`}
+                          </strong>{" "}
+                          but {results.hidden_explicit === 1 ? "is" : "are"} hidden
+                          because {results.hidden_explicit === 1 ? "it is" : "they are"}{" "}
+                          rated explicit.
+                        </p>
+                        <button className="btn btn--primary no-results__fetch"
+                          onClick={() => setExplicit(true)}>
+                          Show {results.hidden_explicit! > 999 ? "them"
+                            : results.hidden_explicit === 1 ? "it" : `all ${results.hidden_explicit!.toLocaleString()}`}
+                        </button>
+                      </>
                     )}
                     {sites.includes("ao3") && user?.can_manage && (
                       <button className="btn btn--primary no-results__fetch"
