@@ -4940,3 +4940,19 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .user-menu__link--current {
   color: var(--text-faint); background: transparent; cursor: default;
 }
+
+/* ── "N more works are hidden as explicit" ────────────────────────────────────
+   A full-width row under the results bar rather than a link inside it. It says
+   the page is not showing you everything, which cannot be quieter than the
+   counts it contradicts — the inline version was reported as invisible.
+   Amber, not red: this is a caution about completeness, not an error. */
+.hidden-note {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 10px;
+  margin: 0 0 14px; padding: 10px 14px;
+  border: 1px solid var(--warn); border-left-width: 3px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+.hidden-note__text { font-size: 13px; color: var(--text); line-height: 1.5; }
+.hidden-note__btn { flex-shrink: 0; }
