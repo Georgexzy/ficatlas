@@ -9,6 +9,8 @@ interface Totals   {
   /** Rows added by the background workers. As fresh as the 5-minute stats cache. */
   indexed_last_hour?: number
   indexed_last_day?: number
+  updated_last_month?: number
+  checked_last_week?: number
 }
 
 import { SITE_LABELS, getIndexTotals } from "@/lib/api"
@@ -97,6 +99,29 @@ export default function IndexStatus() {
                 )}
                 {totals.indexed_last_day != null && totals.indexed_last_day > 0 && (
                   <div><dt>Added past 24h</dt><dd>+{fmt(totals.indexed_last_day)}</dd></div>
+                )}
+                {/* Freshness, which is a different claim from "added".
+                    "Added past 24h" is what WE pulled in; this is how much of
+                    the index is a living work an author is still writing.
+                    Prefixed "at least" because updated_at is NULL for 64% of
+                    rows, so the true figure is higher and this one is a floor —
+                    quoting it bare would understate the index and read as a
+                    precise measurement it is not. */}
+                {totals.updated_last_month != null && totals.updated_last_month > 0 && (
+                  <div>
+                    <dt>Updated past 30d</dt>
+                    <dd title="A floor: 64% of the index has no recorded update date">
+                      at least {fmt(totals.updated_last_month)}
+                    </dd>
+                  </div>
+                )}
+                {totals.checked_last_week != null && totals.checked_last_week > 0 && (
+                  <div>
+                    <dt>Re-checked past 7d</dt>
+                    <dd title="Works we re-read from their source archive in the last week">
+                      {fmt(totals.checked_last_week)}
+                    </dd>
+                  </div>
                 )}
                 {totals.dlp != null && totals.dlp > 0 && (
                   <div><dt>Dark Lord Potter picks</dt><dd>{totals.dlp.toLocaleString()}</dd></div>

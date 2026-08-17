@@ -70,6 +70,16 @@ export default async function FandomsIndex() {
   return (
     <div className="hub-page hub">
       <SiteHeader current="browse" />
+      {/* The two browse axes, as one control. The phone tab bar cannot grow a
+          fifth item (six overflow a 375px screen — see SiteHeader), so this is
+          how /ships is reachable on a phone at all, and on desktop it is a
+          clearer statement than two separate header links that there are
+          exactly two ways to browse. */}
+      <nav className="browse-switch" aria-label="Browse by">
+        <span className="browse-switch__item browse-switch__item--current"
+          aria-current="page">Fandoms</span>
+        <Link href="/ships" className="browse-switch__item">Pairings</Link>
+      </nav>
       <h1>Browse fandoms</h1>
       <p className="hub__lede">
         {hubs.length.toLocaleString()} fandoms indexed across Archive of Our Own,

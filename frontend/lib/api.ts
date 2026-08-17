@@ -326,6 +326,15 @@ export interface IndexTotals {
   hpffa?: number
   indexed_last_hour?: number
   indexed_last_day?: number
+  /** Works whose AUTHOR changed them recently — "still being written".
+   *  updated_at is NULL for 64% of the index (the bulk dumps carry no date),
+   *  so these are floors, not shares of the whole. Render them as "at least". */
+  updated_last_month?: number
+  updated_last_quarter?: number
+  updated_last_year?: number
+  /** Works WE re-read from the source in the last week. A claim about our
+   *  freshness, not the work's — a different question from the three above. */
+  checked_last_week?: number
   /** Live per-site share of works listing a ship / a character. */
   coverage?: Record<string, FieldCoverage>
 }

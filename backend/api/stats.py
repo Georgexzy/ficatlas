@@ -101,7 +101,13 @@ _totals_cached_at: float = 0.0
 # Persisting the numbers turns that into: serve last known figures instantly,
 # recompute behind the response. They are counts of a 19.7M-row index shown in a
 # status widget — being a few minutes stale is invisible, and being absent is not.
-_TOTALS_SETTING = "cached_totals_v1"
+#
+# Versioned: a payload written by older code is missing whatever keys the shape
+# has since gained, and it is served INSTANTLY on the next restart — so a
+# stale-shaped entry would be the first thing every visitor got. Bump on any
+# change to the dict built in _recompute_totals.
+# v2: added updated_last_{month,quarter,year} and checked_last_week.
+_TOTALS_SETTING = "cached_totals_v2"
 
 
 def _persist_totals(payload: dict) -> None:
@@ -142,6 +148,10 @@ def _recompute_totals() -> None:
             "hpffa": row["hpffa"],
             "indexed_last_hour": row["indexed_last_hour"],
             "indexed_last_day": row["indexed_last_day"],
+            "updated_last_month": row["updated_last_month"],
+            "updated_last_quarter": row["updated_last_quarter"],
+            "updated_last_year": row["updated_last_year"],
+            "checked_last_week": row["checked_last_week"],
             "coverage": coverage,
         }
         _totals_cached_at = time.monotonic()
@@ -216,7 +226,24 @@ _TOTALS_SQL = text("""
            -- over 19.6M rows. Here it costs nothing, at the price of being as
            -- fresh as the 5-minute cache — fine for "in the last hour".
            count(*) FILTER (WHERE indexed_at > now() - interval '1 hour')  AS indexed_last_hour,
-           count(*) FILTER (WHERE indexed_at > now() - interval '24 hours') AS indexed_last_day
+           count(*) FILTER (WHERE indexed_at > now() - interval '24 hours') AS indexed_last_day,
+           -- How much of the index is a LIVING work rather than an archived one.
+           --
+           -- Two different questions, and they are easy to confuse:
+           --   * updated_at is when the AUTHOR last changed the work. This is
+           --     the one a reader means by "still updating".
+           --   * checked_last_week is when WE last re-read it from the source,
+           --     which is a claim about our freshness, not the work's.
+           -- Both ride along in this scan for the same reason the indexed_at
+           -- counts do: the pass is already being paid for.
+           --
+           -- updated_at is NULL for 64% of the index (the bulk dumps carry no
+           -- date), so these are floors, not shares of the whole. Anything that
+           -- renders them has to say "at least".
+           count(*) FILTER (WHERE updated_at > now() - interval '30 days')  AS updated_last_month,
+           count(*) FILTER (WHERE updated_at > now() - interval '90 days')  AS updated_last_quarter,
+           count(*) FILTER (WHERE updated_at > now() - interval '365 days') AS updated_last_year,
+           count(*) FILTER (WHERE crawled_at > now() - interval '7 days')   AS checked_last_week
     FROM stories
 """)
 

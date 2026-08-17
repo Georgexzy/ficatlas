@@ -205,8 +205,20 @@ function TabIcon({ name }: { name: string }) {
             {/* Next to Search because it is the other way of starting: search
                 needs you to know what you want, browse answers "what is in
                 here?". It was only reachable from the footer, which is where
-                links go to be found by nobody. */}
-            {link("browse", "/fandoms", "Browse")}
+                links go to be found by nobody.
+
+                Two destinations, one slot. There are now two browse axes —
+                fandoms and pairings — and a fifth header item was not an
+                option: six items at 16px gaps overflow a 375px screen, which is
+                why the tab bar below exists at all. So Browse stays one link to
+                /fandoms and carries a second, smaller link to /ships beside it,
+                which is also the honest hierarchy — fandom is the broader entry
+                point and pairing is the narrower one. */}
+            <span className="header__browse">
+              {link("browse", "/fandoms", "Browse")}
+              <Link href="/ships" className="header__sublink"
+                title="Browse by pairing">Pairings</Link>
+            </span>
             {link("library", "/library", "Library", true)}
             {link("settings", "/settings", "Settings")}
           </span>
