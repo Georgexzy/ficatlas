@@ -1120,22 +1120,30 @@ function SearchPageInner() {
   // Monotonic token so a slow, stale search response can never overwrite a
   // newer one (rapid paging / filter changes used to race and win out of order).
   const searchSeqRef = useRef(0)
-  // Set by a control that has to take effect NOW rather than arm the Apply bar.
+  // The same search with the explicit filter off, as a URL.
   //
-  // Changing a filter normally does not re-search: it marks the filters dirty
-  // and an Apply bar appears, which is right for the sidebar, where you set
-  // several things and run them together. It is wrong for a one-click "show me
-  // the results you just told me are hidden" — that button states an outcome,
-  // so it has to produce it. Without this, clicking it flipped the toggle,
-  // raised the Apply bar somewhere else on the page, and left the same results
-  // on screen, which reads as the button doing nothing.
+  // A LINK, not a state change, and that distinction is the whole fix. This
+  // component is keyed on the query string (see SearchPageInner's caller), so a
+  // URL change starts the page over and every filter is re-derived from the
+  // address — "a link IS a new search". Setting `explicit` in state instead
+  // fought that: it armed the Apply bar, then doSearch pushed a URL, which
+  // remounted the component and threw the state away mid-flight. Two earlier
+  // attempts at this button did exactly that and did nothing visible.
   //
-  // A ref plus an effect rather than calling doSearch() inline, because
-  // doSearch closes over buildParams from the render that set the state — where
-  // `explicit` is still false. Same stale-closure trap the queryOverride and
-  // explicitPage arguments exist for; here the effect just waits for the new
-  // render, which is simpler than threading another override through.
-  const applyNowRef = useRef(false)
+  // Built from rawParams rather than from the filter state, so it carries
+  // precisely the search that produced these results and changes one thing.
+  const showExplicitHref = useMemo(() => {
+    const qs = new URLSearchParams(rawParams.toString())
+    qs.set("explicit", "true")
+    // The UI states "hide explicit" twice — see the ratings note in
+    // api/search.py — so the rating list has to come off too, or the new URL
+    // still excludes E and the button once again appears to do nothing.
+    const r = qs.get("ratings")
+    if (r && !r.split(",").map(x => x.trim().toUpperCase()).includes("E")) {
+      qs.delete("ratings")
+    }
+    return `${pathname}?${qs.toString()}`
+  }, [rawParams, pathname])
   // The in-flight search, so a superseded one can be cancelled outright rather
   // than merely ignored — the query keeps running on the server otherwise.
   const searchAbortRef = useRef<AbortController | null>(null)
@@ -1700,16 +1708,6 @@ function SearchPageInner() {
       if (seq === searchSeqRef.current) setLoading(false)
     }
   }, [buildParams, page, pathname, router, query, sites, refreshing, filterSig])
-
-  // Runs the search for a control that set applyNowRef — see the ref's note.
-  // Keyed on filterSig so it fires on the render AFTER the state change, by
-  // which point doSearch closes over the new filters.
-  useEffect(() => {
-    if (!applyNowRef.current) return
-    applyNowRef.current = false
-    doSearch()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterSig])
 
   // Editing the bar edits the filters.
   //
@@ -2573,10 +2571,10 @@ function SearchPageInner() {
                     but {results.hidden_explicit === 1 ? "is" : "are"} hidden, because{" "}
                     {results.hidden_explicit === 1 ? "it is" : "they are"} rated explicit.
                   </span>
-                  <button className="btn btn--primary hidden-note__btn"
-                    onClick={() => { applyNowRef.current = true; setExplicit(true) }}>
+                  <Link href={showExplicitHref} prefetch={false}
+                    className="btn btn--primary hidden-note__btn">
                     Show {results.hidden_explicit === 1 ? "it" : "them"}
-                  </button>
+                  </Link>
                 </div>
               )}
 
@@ -2633,14 +2631,15 @@ function SearchPageInner() {
                           because {results.hidden_explicit === 1 ? "it is" : "they are"}{" "}
                           rated explicit.
                         </p>
-                        {/* applyNowRef, or this flips the toggle and leaves the
-                            same empty page on screen behind an Apply bar — a
-                            button that names an outcome has to produce it. */}
-                        <button className="btn btn--primary no-results__fetch"
-                          onClick={() => { applyNowRef.current = true; setExplicit(true) }}>
+                        {/* A link, not a toggle — see showExplicitHref. This
+                            page is keyed on the query string, so changing the
+                            filter in state is undone by the remount that
+                            follows it. */}
+                        <Link href={showExplicitHref} prefetch={false}
+                          className="btn btn--primary no-results__fetch">
                           Show {results.hidden_explicit! > 999 ? "them"
                             : results.hidden_explicit === 1 ? "it" : `all ${results.hidden_explicit!.toLocaleString()}`}
-                        </button>
+                        </Link>
                       </>
                     )}
                     {sites.includes("ao3") && user?.can_manage && (
