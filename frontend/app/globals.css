@@ -4969,3 +4969,14 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   display: block; font-size: 11px; color: var(--accent); margin-top: 1px;
 }
 .hub__az-aka { font-size: 11px; color: var(--accent); margin-right: 6px; }
+
+/* "Copy short link" on the story page. Sits in the same footer strip as the hub
+   links and is deliberately quieter than them — it is a utility, not a
+   destination. See story/[id]/ShortLinkButton.tsx. */
+.short-link {
+  background: none; border: 1px solid var(--border); border-radius: 999px;
+  color: var(--text-faint); font: inherit; font-size: 12px;
+  padding: 3px 10px; cursor: pointer; white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.short-link:hover { color: var(--accent); border-color: var(--accent); }

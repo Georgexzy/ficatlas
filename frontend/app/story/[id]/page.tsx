@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import StoryClient from "./StoryClient"
+import ShortLinkButton from "./ShortLinkButton"
 import { escapeJsonLd } from "@/lib/jsonLd"
 
 // A server wrapper so a story page can describe itself.
@@ -169,18 +170,24 @@ export default async function StoryPage(
           invisible to a crawler that does not run JS, and second-pass for one
           that does. It reads as a footer to the page, which is also where a
           reader wants "more like this" once they have decided about this work. */}
-      {!!story?.hubs?.length && (
-        <nav className="story-hubs" aria-label="Browse related">
-          <span className="story-hubs__label">More like this</span>
-          {story.hubs.map(h => (
-            <Link key={`${h.kind}-${h.slug}`}
-              href={h.kind === "fandom" ? `/fandom/${h.slug}` : `/ship/${h.slug}`}
-              className={`story-hubs__link story-hubs__link--${h.kind}`}>
-              {h.name}
-            </Link>
-          ))}
-        </nav>
-      )}
+      {/* The strip renders for EVERY story, not only those with hubs: the
+          short link is per-work and has nothing to do with whether this one
+          happens to belong to a fandom or pairing big enough to have a hub. */}
+      <nav className="story-hubs" aria-label="Browse related">
+        <ShortLinkButton id={id} />
+        {!!story?.hubs?.length && (
+          <>
+            <span className="story-hubs__label">More like this</span>
+            {story.hubs.map(h => (
+              <Link key={`${h.kind}-${h.slug}`}
+                href={h.kind === "fandom" ? `/fandom/${h.slug}` : `/ship/${h.slug}`}
+                className={`story-hubs__link story-hubs__link--${h.kind}`}>
+                {h.name}
+              </Link>
+            ))}
+          </>
+        )}
+      </nav>
     </>
   )
 }
