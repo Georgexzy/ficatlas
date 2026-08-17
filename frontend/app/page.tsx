@@ -36,6 +36,40 @@ function csv(s?: string): string[] {
 function joinCsv(arr: string[]): string | undefined {
   return arr.length ? arr.join(",") : undefined
 }
+
+// Parameters the page would assume anyway if they were absent, so writing them
+// into the address bar says nothing and costs a lot.
+//
+// doSearch serialises every parameter it sends, which made the URL for a search
+// meaning `?author=MesserMoon` (19 characters) look like this:
+//
+//   /?sites=ao3%2Cffnet%2Cfictionalley&match_mode=all&sort=relevance&page=1
+//    &per_page=20&include_unknown=false&author=MesserMoon&ratings=G%2CT%2CM%2CNR
+//    &explicit=false
+//
+// 161 characters, 88% of it defaults, and that is what you get when you copy the
+// address to send someone a search. Every value here is exactly what the state
+// initialisers fall back to when the parameter is missing, so dropping them
+// changes nothing about what the link does — a shared link still reproduces the
+// sender's search.
+//
+// Two that are deliberately in the list and worth understanding:
+//   * per_page — omitted only at 20, the hard-coded fallback. A reader who has
+//     chosen 50 keeps it in the URL, because the settings effect does not run
+//     when parameters are present and 50 would silently become 20.
+//   * ratings — "G,T,M,NR" is the explicit toggle restated (see the note in
+//     api/search.py), regenerated from `explicit` on the other side.
+const URL_DEFAULTS: Record<string, string> = {
+  sites: "ao3,ffnet,fictionalley",
+  match_mode: "all",
+  sort: "relevance",
+  page: "1",
+  per_page: "20",
+  include_unknown: "false",
+  explicit: "false",
+  crossovers: "include",
+  ratings: "G,T,M,NR",
+}
 function detectFicUrl(s: string): { site: string; url: string } | null {
   const t = s.trim()
   if (/^https?:\/\/(www\.)?archiveofourown\.org\/works\/\d+/.test(t)) return { site: "ao3", url: t }
@@ -1260,6 +1294,14 @@ function SearchPageInner() {
       // the page and ran no search at all.
       "sections",
       "in_series",
+      // A browse has no classic filter in it at all, and until URL_DEFAULTS
+      // existed it still carried `sites=ao3,ffnet,fictionalley` — which is what
+      // made this check pass and the search run. Now that the defaults are
+      // dropped from the address, a URL like `/?sort=popularity_desc` is the
+      // whole of a legitimate search, and without these it would remount to a
+      // blank page.
+      "sort", "explicit", "page", "per_page", "crossovers",
+      "include_unknown", "match_mode",
     ]
     if (!SEARCH_PARAMS.some(k => rawParams.get(k))) return
 
@@ -1632,7 +1674,12 @@ function SearchPageInner() {
 
     const qs = new URLSearchParams()
     for (const [k, v] of Object.entries(p)) {
-      if (v !== undefined && v !== null && v !== "") qs.set(k, String(v))
+      if (v === undefined || v === null || v === "") continue
+      // A value the page defaults to anyway carries no information — see
+      // URL_DEFAULTS. Dropped from the ADDRESS only; `p` still goes to the API
+      // in full, so nothing about the request changes.
+      if (URL_DEFAULTS[k] === String(v)) continue
+      qs.set(k, String(v))
     }
     // Remember where to come back to. Recorded here rather than in an effect
     // watching the URL, because this is the one place a search is deliberately
