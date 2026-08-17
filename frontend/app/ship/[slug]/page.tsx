@@ -95,6 +95,7 @@ export async function generateMetadata(
   return {
     title,
     description,
+    alternates: { canonical: `/ship/${hub.slug}` },
     openGraph: { title, description, type: "website", siteName: "FicAtlas", images: "/og.png" },
     twitter: { card: "summary_large_image", title, description, images: "/og.png" },
   }

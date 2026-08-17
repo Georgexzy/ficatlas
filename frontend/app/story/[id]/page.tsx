@@ -99,6 +99,9 @@ export async function generateMetadata(
   return {
     title,
     description,
+    // Its own URL. Without this the root layout's canonical applied and every
+    // story page claimed to be a duplicate of the home page.
+    alternates: { canonical: `/story/${id}` },
     robots: hidden ? { index: false, follow: true } : undefined,
     openGraph: {
       title,

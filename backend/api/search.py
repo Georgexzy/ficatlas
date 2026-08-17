@@ -880,11 +880,30 @@ def search(          # NOT async — see below
     def _or_unknown(cond, *unknown_conds):
         return or_(cond, *unknown_conds) if include_unknown else cond
 
+    # Tracked like _explicit_pred, and for the same reason — see hidden_explicit.
+    #
+    # The search UI sends ratings=G,T,M,NR on EVERY search with the explicit
+    # toggle off, as a second expression of the same intent. That is harmless for
+    # results (no row has a NULL rating, so it selects exactly the non-explicit
+    # ones) and was fatal for the count: dropping only the explicit predicate
+    # left `rating IN (G,T,M,NR) AND rating = E`, which is 0 by construction. So
+    # the notice never appeared in the real UI, while appearing correctly for a
+    # hand-made request that omitted the parameter.
+    _ratings_pred = None
+    _ratings_is_all_but_explicit = False
     if ratings:
         r_vals = [r.strip().upper() for r in ratings.split(",")]
         valid  = [RatingEnum(r) for r in r_vals if r in RatingEnum._value2member_map_]
         if valid:
-            filters.append(_or_unknown(Story.rating.in_(valid), Story.rating.is_(None)))
+            _ratings_pred = _or_unknown(Story.rating.in_(valid), Story.rating.is_(None))
+            filters.append(_ratings_pred)
+            # Only the synthetic "everything except explicit" set is treated as
+            # the toggle restated. A reader who deliberately ticked Teen alone
+            # has asked for Teen, and turning the explicit toggle on would not
+            # reveal anything — so their filter stays, and the count is 0, which
+            # is the truth.
+            _ratings_is_all_but_explicit = (
+                set(valid) == set(RatingEnum) - {RatingEnum.explicit})
 
     if exclude_ratings:
         r_vals = [r.strip().upper() for r in exclude_ratings.split(",")]
@@ -1265,7 +1284,12 @@ def search(          # NOT async — see below
     hidden_explicit = 0
     if _explicit_pred is not None and page == 1 and total <= per_page:
         try:
-            others = [f for f in filters if f is not _explicit_pred]
+            # Both expressions of "hide explicit" have to come out, or the count
+            # contradicts itself. See the note on _ratings_pred above.
+            dropped = {id(_explicit_pred)}
+            if _ratings_is_all_but_explicit and _ratings_pred is not None:
+                dropped.add(id(_ratings_pred))
+            others = [f for f in filters if id(f) not in dropped]
             capped = (db.query(Story.id)
                         .filter(*others, Story.rating == RatingEnum.explicit)
                         .limit(HIDDEN_EXPLICIT_CEILING + 1).subquery())
