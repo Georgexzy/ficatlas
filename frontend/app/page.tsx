@@ -1102,7 +1102,17 @@ function SearchPageInner() {
   // How multiple values inside one filter combine. "all" finds crossovers and
   // tag combinations; "any" is what you want when one thing is split across
   // several spellings, which is common for fandoms.
-  const [matchMode, setMatchMode] = useState<"all" | "any">(
+  // No control for this any more — it was a sidebar toggle called "Picking
+  // several" and readers did not understand it, which is fair: its stated
+  // purpose for "Any of them" was reuniting a fandom split across spellings
+  // ("Harry Potter" vs "Harry Potter - J. K. Rowling"), and facet resolution
+  // has done that automatically since terms started being expanded against the
+  // vocabulary and matched with &&. What remained was a control whose only live
+  // effect was to BREAK crossover searches if you picked the wrong one.
+  //
+  // The state stays, defaulting to "all", so `match_mode=any` in a link someone
+  // already shared still means what it meant.
+  const [matchMode] = useState<"all" | "any">(
     get("match_mode") === "any" ? "any" : "all")
 
   // Include filters
@@ -1961,37 +1971,6 @@ function SearchPageInner() {
             <Pills options={SITE_OPTIONS} selected={sites}
               onToggle={id => tog(sites, setSites, id)}
               highlighted={fromSearch("sites")} />
-          </div>
-
-          <div className="sidebar__group">
-            <label className="sidebar__label">
-              Picking several
-              <HelpTip label="How picking more than one filter works">
-                When you pick two or more fandoms, ships or tags:
-                <strong> All of them</strong> needs a story to carry every one —
-                that is how you find crossovers.
-                <strong> Any of them</strong> needs just one, which reunites a
-                fandom split across spellings, like the three separate
-                &ldquo;Harry Potter&rdquo; tags.
-              </HelpTip>
-            </label>
-            <div className="match-mode">
-              <button className={`match-mode__btn ${matchMode === "all" ? "match-mode__btn--on" : ""}`}
-                onClick={() => setMatchMode("all")}
-                title="A story must have EVERY value you pick — use this to find crossovers.">
-                All of them
-              </button>
-              <button className={`match-mode__btn ${matchMode === "any" ? "match-mode__btn--on" : ""}`}
-                onClick={() => setMatchMode("any")}
-                title="A story needs just ONE of the values — use this when a fandom is split across several spellings.">
-                Any of them
-              </button>
-            </div>
-            <p className="match-mode__hint">
-              {matchMode === "all"
-                ? "Story must have all of them — this is how you find crossovers."
-                : "Story needs any one of them — useful when a fandom has several tag spellings."}
-            </p>
           </div>
 
           <div className="sidebar__group">
