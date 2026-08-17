@@ -77,6 +77,7 @@ export async function generateMetadata(
   return {
     title,
     description,
+    alternates: { canonical: `/fandom/${hub.slug}` },
     openGraph: { title, description, type: "website", siteName: "FicAtlas", images: "/og.png" },
     twitter: { card: "summary_large_image", title, description, images: "/og.png" },
   }

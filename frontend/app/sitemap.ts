@@ -43,7 +43,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   // Both hub kinds, fetched independently: one of them being unavailable should
   // cost its own entries and not the other's.
-  const listing = async (path: string): Promise<{ slug: string }[]> => {
+  const listing = async (path: string): Promise<{ slug: string; content_at?: string }[]> => {
     try {
       const r = await fetch(`${INTERNAL_API}${path}?limit=10000`, {
         next: { revalidate: CACHE_S },
@@ -62,17 +62,24 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     listing("/api/ships"),
   ])
 
+  // lastModified is the hub's content_at — when its contents actually changed,
+  // not when it was last rebuilt. Google states plainly that it uses lastmod
+  // only when it is consistently accurate, so stamping every page with the
+  // nightly rebuild time would get the whole field discarded and would be a
+  // lie about 7,584 pages besides. See the column note in backend/init_db.py.
+  //
+  // Omitted rather than faked when the API does not supply one: no lastmod is a
+  // normal sitemap, a wrong one is a reason to stop trusting the file.
+  const entry = (path: string, h: { slug: string; content_at?: string }) => ({
+    url: `${SITE}${path}/${h.slug}`,
+    ...(h.content_at ? { lastModified: new Date(h.content_at) } : {}),
+    changeFrequency: "weekly" as const,
+    priority: 0.7,
+  })
+
   return [
     ...staticPages,
-    ...fandoms.map(h => ({
-      url: `${SITE}/fandom/${h.slug}`,
-      changeFrequency: "weekly" as const,
-      priority: 0.7,
-    })),
-    ...ships.map(h => ({
-      url: `${SITE}/ship/${h.slug}`,
-      changeFrequency: "weekly" as const,
-      priority: 0.7,
-    })),
+    ...fandoms.map(h => entry("/fandom", h)),
+    ...ships.map(h => entry("/ship", h)),
   ]
 }

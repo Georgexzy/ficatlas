@@ -29,6 +29,7 @@ const CACHE_S = 86400
 
 export const metadata: Metadata = {
   title: "Browse fandoms",
+  alternates: { canonical: "/fandoms" },
   description:
     "Every fandom indexed on FicAtlas, from Archive of Our Own, FanFiction.net "
     + "and FicAlley. Browse by fandom, then search within it.",

@@ -27,7 +27,21 @@ export const metadata: Metadata = {
   // shared link renders bare and Google is told the page's real address is one
   // it cannot fetch.
   metadataBase: new URL(SITE),
-  alternates: { canonical: "/" },
+  // NO `alternates: { canonical: "/" }` here. It was here, and metadata in a
+  // layout is INHERITED by every page under it that does not override it — so
+  // every hub, every pairing and all ~20M story pages served
+  //
+  //     <link rel="canonical" href="https://ficatlas.com">
+  //
+  // which tells Google each of them is a duplicate of the home page and should
+  // not be indexed in its own right. The entire point of the hubs is to be
+  // indexed in their own right, so this quietly cancelled the whole exercise —
+  // and it would have looked like "Google just hasn't ranked us yet".
+  //
+  // Absent is the safe default: with no canonical, Google self-canonicalises to
+  // the URL it fetched, which is correct for every page here including the home
+  // page. A WRONG canonical is destructive; a missing one is not. Set it
+  // per-page (see the hub, story and index routes), never here.
   // `template` applies to pages that set their own title — a story page supplies
   // "Title — Author" and gets " · FicAtlas" appended, so a browser tab or a
   // shared link says whose site it is without the story page repeating it.

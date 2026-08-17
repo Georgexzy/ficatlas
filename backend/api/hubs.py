@@ -31,6 +31,9 @@ class HubSummary(BaseModel):
     # Ships only. Shown on the index so the A-Z is browsable by the name people
     # know the pairing by, not only by the canonical tag.
     nicknames: list[str] = []
+    # When the hub's CONTENTS last changed (not when it was last rebuilt) — the
+    # sitemap's <lastmod>. See the column note in init_db.py.
+    content_at: Optional[str] = None
 
 
 class HubWork(BaseModel):
@@ -83,7 +86,7 @@ def _list(kind: str, response: Response, limit: int, offset: int, db: Session):
     table = _TABLES[kind]
     response.headers["Cache-Control"] = CACHE
     rows = db.execute(text(f"""
-        SELECT slug, name, work_count FROM {table}
+        SELECT slug, name, work_count, content_at FROM {table}
          ORDER BY work_count DESC, slug
          LIMIT :lim OFFSET :off
     """), {"lim": limit, "off": offset}).fetchall()
@@ -92,7 +95,9 @@ def _list(kind: str, response: Response, limit: int, offset: int, db: Session):
         from ship_hubs import nicknames_for
         nick = {r[0]: nicknames_for(r[0]) for r in rows}
     return [HubSummary(slug=r[0], name=r[1], work_count=r[2],
-                       nicknames=nick.get(r[0], [])) for r in rows]
+                       nicknames=nick.get(r[0], []),
+                       content_at=r[3].isoformat() if r[3] else None)
+            for r in rows]
 
 
 def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:

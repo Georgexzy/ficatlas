@@ -124,14 +124,29 @@ def build_groups(
 
         db.execute(text(f"""
             INSERT INTO {table} (slug, name, variants, work_count, top_ids,
-                                 top_by_site, built_at)
+                                 top_by_site, built_at, content_at)
             VALUES (:slug, :name, :variants, :wc, :top,
-                    CAST(:by_site AS jsonb), now())
+                    CAST(:by_site AS jsonb), now(), now())
             ON CONFLICT (slug) DO UPDATE SET
                 name = EXCLUDED.name, variants = EXCLUDED.variants,
                 work_count = EXCLUDED.work_count, top_ids = EXCLUDED.top_ids,
                 top_by_site = EXCLUDED.top_by_site,
-                built_at = EXCLUDED.built_at
+                built_at = EXCLUDED.built_at,
+                -- content_at moves only when the page would actually LOOK
+                -- different. It is the sitemap's <lastmod>, and Google is
+                -- explicit that an inaccurate one gets ignored — bumping it on
+                -- every nightly rebuild would claim all 7,584 hubs changed
+                -- daily, which is both untrue and self-defeating.
+                --
+                -- `IS DISTINCT FROM` rather than `<>` so a NULL on either side
+                -- compares as a change rather than as unknown.
+                content_at = CASE
+                    WHEN {table}.top_ids     IS DISTINCT FROM EXCLUDED.top_ids
+                      OR {table}.work_count  IS DISTINCT FROM EXCLUDED.work_count
+                      OR {table}.name        IS DISTINCT FROM EXCLUDED.name
+                    THEN now()
+                    ELSE {table}.content_at
+                END
         """), {"slug": slug, "name": group["name"], "variants": variants,
                "wc": exact, "top": top, "by_site": json.dumps(by_site)})
         written += 1

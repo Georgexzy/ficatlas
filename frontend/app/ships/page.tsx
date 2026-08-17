@@ -18,6 +18,7 @@ const CACHE_S = 86400
 
 export const metadata: Metadata = {
   title: "Browse pairings",
+  alternates: { canonical: "/ships" },
   description:
     "Every ship indexed on FicAtlas, across Archive of Our Own, FanFiction.net "
     + "and FicAlley. Browse by pairing, then search within it.",

@@ -808,6 +808,19 @@ CREATE TABLE IF NOT EXISTS ship_hubs (
 );
 CREATE INDEX IF NOT EXISTS ix_ship_hubs_count ON ship_hubs (work_count DESC);
 
+-- When a hub's CONTENTS last changed, as opposed to when it was last rebuilt.
+--
+-- These are the sitemap's <lastmod>. built_at moves on every nightly rebuild
+-- whether or not anything about the page differs, and a lastmod that claims
+-- 7,584 pages changed every night is one Google learns to ignore -- their
+-- guidance is explicit that it has to be accurate to be used. hub_build.py only
+-- advances this when top_ids or work_count actually differ.
+--
+-- Defaults to now() so existing rows get a truthful-enough starting value
+-- rather than NULL, and settles onto real change times after one rebuild.
+ALTER TABLE fandom_hubs ADD COLUMN IF NOT EXISTS content_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE ship_hubs   ADD COLUMN IF NOT EXISTS content_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
 CREATE TABLE IF NOT EXISTS author_permissions (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     site          VARCHAR(24) NOT NULL,          -- ao3 | ffnet
