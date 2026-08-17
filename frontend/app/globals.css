@@ -655,12 +655,20 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
    pages all use the ~660px prose column — they are what gives. A two-line link
    in a one-line bar drags the header taller and reads as a rendering fault. Two
    short words should never be a wrap point. */
+/* One block, not two. There was a second `.header__link` rule ~800 lines below
+   under "Header link consistency", and because it came later it won: the hover
+   colour here was var(--text) and never rendered, the accent one did, and the
+   transition ran at 0.15s rather than the 0.12s written here. The two halves
+   that were NOT in conflict — the padding and the white-space below — survived
+   from this block, so the pair looked like it worked while half of it was
+   dead. Merged here; keep it that way. */
 .header__link {
-  color: var(--text-dim); padding: 5px 11px;
-  border-radius: var(--radius); transition: color 0.12s;
+  font-size: 13px; color: var(--text-dim); text-decoration: none;
+  padding: 5px 11px; border-radius: var(--radius);
+  transition: color 0.15s;
   white-space: nowrap;
 }
-.header__link:hover { color: var(--text); }
+.header__link:hover { color: var(--accent); }
 
 /* ── Card actions ─────────────────────────────────────────────────────────── */
 .card__actions {
@@ -1469,13 +1477,6 @@ kbd {
 .library-item__remove:hover {
   border-color: var(--red); color: var(--red); background: var(--red-bg);
 }
-
-/* ── Header link consistency ──────────────────────────────────────────────── */
-.header__link {
-  font-size: 13px; color: var(--text-dim); text-decoration: none;
-  transition: color 0.15s;
-}
-.header__link:hover { color: var(--accent); }
 
 /* ════════════════════════════════════════════════════════════════════════════
    Reader width / font (driven by settings, applied via data attributes)
@@ -3810,6 +3811,15 @@ body.is-resizing * { cursor: col-resize !important; }
   width: 99%; white-space: normal; word-break: break-word;
   font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px;
 }
+.traffic-table__q a { color: inherit; text-decoration: none; }
+.traffic-table__q a:hover { text-decoration: underline; }
+/* The raw path under a resolved title. Present because the title is a lookup
+   and the path is the fact — but demoted, since the whole point of resolving it
+   is that the uuid is not what you are reading the report for. */
+.traffic-table__path {
+  display: block; color: var(--text-faint); font-size: 10.5px;
+  margin-top: 1px; word-break: break-all;
+}
 
 @media (max-width: 700px) {
   .admin-facts { grid-template-columns: 1fr; gap: 2px 0; }
@@ -4864,3 +4874,25 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   display: block; margin-top: 3px; font-size: 11px; line-height: 1.45;
   color: var(--text-faint);
 }
+
+/* ── Story page hub links ─────────────────────────────────────────────────────
+   Server-rendered, unlike the rest of the story page, because these are the only
+   links on it a crawler is allowed to follow — the client body links its fandoms
+   and ships to `/?fandoms=…`, which robots.txt blocks. See story/[id]/page.tsx.
+   Styled as a quiet footer strip: it is a wayfinding aid after the work, not a
+   competing call to action above it. */
+.story-hubs {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  max-width: 860px; margin: 8px auto 40px; padding: 14px 20px 0;
+  border-top: 1px solid var(--border);
+}
+.story-hubs__label {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-faint); margin-right: 2px;
+}
+.story-hubs__link {
+  font-size: 12.5px; color: var(--text-dim); text-decoration: none;
+  padding: 3px 10px; border: 1px solid var(--border);
+  border-radius: 999px; transition: color 0.15s, border-color 0.15s;
+}
+.story-hubs__link:hover { color: var(--accent); border-color: var(--accent); }
