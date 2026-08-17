@@ -24,6 +24,13 @@ SEARCH_TIMEOUT_MS = int(os.getenv("SEARCH_STATEMENT_TIMEOUT_MS", "20000"))
 # disk a search touches.
 SEARCH_COUNT_CEILING = int(os.getenv("SEARCH_COUNT_CEILING", "5000"))
 
+# Cap on the "N explicit works are hidden" count. Far lower than the search
+# ceiling because the number is a hint, not a result set: "999+" and "4,300" tell
+# a reader the same thing, and the count only runs on searches that returned
+# nothing, where the filters are by definition unselective enough to have matched
+# zero rows and a large scan is the very thing to avoid.
+HIDDEN_EXPLICIT_CEILING = int(os.getenv("HIDDEN_EXPLICIT_CEILING", "999"))
+
 # Matches the in-process TTL, so the two layers cannot disagree about how stale
 # a result may be.
 SEARCH_CACHE_SECONDS = int(os.getenv("SEARCH_CACHE_SECONDS", "120"))
@@ -299,6 +306,10 @@ class SearchResponse(BaseModel):
     # than of every match — the UI says so rather than implying precision.
     site_counts: Dict[str, int] = {}
     live_count: int = 0            # how many results came from live fetch
+    # Matches the explicit filter is hiding, counted only when the page came back
+    # empty — see the note where it is computed. Capped, so the UI says "999+"
+    # rather than quoting a number this never measured.
+    hidden_explicit: int = 0
     parsed_tokens: List[ParsedToken] = []  # for UI filter highlighting
 
 
@@ -663,11 +674,16 @@ def search(          # NOT async — see below
     if site_enums:
         filters.append(Story.site.in_(site_enums))
 
+    # Kept as a named object, not just appended, so the count of what it hid can
+    # be rebuilt later from the same filter list minus this one predicate. See
+    # `hidden_explicit` below.
+    _explicit_pred = None
     if not explicit:
         # Hide only stories KNOWN to be explicit. `rating != 'E'` is NULL (not TRUE)
         # for NULL-rating rows in SQL, which silently dropped the entire NULL-rating
         # bulk import (HF FFN dump etc.) from every default search. Permit NULL.
-        filters.append(or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
+        _explicit_pred = or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None))
+        filters.append(_explicit_pred)
 
     if q:
         # Free text goes through Postgres full-text search against the GIN index
@@ -1212,6 +1228,53 @@ def search(          # NOT async — see below
         total = COUNT_CEILING
     indexed = [r[0] for r in rows]
 
+    # How many matches the explicit filter is hiding.
+    #
+    # "No stories matched" is the wrong sentence when the truth is "your content
+    # setting hid all of them". The browse hubs rank by kudos with no rating
+    # filter, so an explicit work can sit at the top of a ship page — clicking
+    # its author then produced an empty search that read as "we do not have
+    # them". Reported against Kill Your Darlings by MesserMoon (32,908 kudos,
+    # top of remus-lupin-sirius-black, rated E).
+    #
+    # Page 1 only, whenever the filter is on — NOT only when the page came back
+    # empty. The first version gated on `total == 0` and missed the case that
+    # was actually reported: MesserMoon has ten works indexed, one of them
+    # rated NR and nine rated E, so the author link returned a single result
+    # rather than none. There was nothing to notice, which is worse than an
+    # empty page — the reader concludes the index has one work by that author.
+    #
+    # Only when the reader is looking at their WHOLE result set — `total` fits
+    # on this page. That is both the cheap case and the only one where the
+    # number changes anything: someone seeing 1 of MesserMoon's 10 works
+    # concludes the index holds one, while someone looking at 5,000 Naruto
+    # results does not need to be told 999+ more exist.
+    #
+    # It is also what keeps this off the hot path. Measured on a broad filtered
+    # search, the count added 0.30s -> 1.11s, because it scans until it has
+    # found HIDDEN_EXPLICIT_CEILING explicit rows. On a search narrow enough to
+    # return a single page it is unmeasurable (0.01s), since the same filters
+    # that returned one row return few explicit ones.
+    #
+    # Rebuilt from the same `filters` minus the one predicate, so every other
+    # filter the reader set still applies and the number is about the rating and
+    # nothing else. In the text-query path the real candidate set is a UNION
+    # with a fuzzy-title arm this does not reproduce, so it can undercount a
+    # misspelled title — it cannot overcount, which is the direction that would
+    # promise results that are not there.
+    hidden_explicit = 0
+    if _explicit_pred is not None and page == 1 and total <= per_page:
+        try:
+            others = [f for f in filters if f is not _explicit_pred]
+            capped = (db.query(Story.id)
+                        .filter(*others, Story.rating == RatingEnum.explicit)
+                        .limit(HIDDEN_EXPLICIT_CEILING + 1).subquery())
+            hidden_explicit = db.query(func.count()).select_from(capped).scalar() or 0
+        except Exception:
+            # A count for a hint must never be the reason a search fails.
+            log.debug("hidden-explicit count failed", exc_info=True)
+            hidden_explicit = 0
+
     # Per-archive split of the matches.
     #
     # Cheap by construction rather than by luck: `candidates` is already bounded
@@ -1337,6 +1400,7 @@ def search(          # NOT async — see below
         results=merged,
         sites_searched=[s.value for s in site_enums],
         live_count=len(live_cards),
+        hidden_explicit=hidden_explicit,
         parsed_tokens=[ParsedToken(**t) for t in parsed_tokens],
     )
     if _ck is not None:
