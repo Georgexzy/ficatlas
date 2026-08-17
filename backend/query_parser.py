@@ -17,7 +17,9 @@ Operators (case-insensitive, any order):
   lang:English                 language:fr
   -tag:fluff                   -fandom:twilight   (exclude prefix)
   crossover:only               crossover:no
-  site:ao3                     site:ffnet
+  site:ao3                     site:ffnet   site:fictionalley
+                               (also fanfiction.net, ff.net, archiveofourown.org,
+                                ffn, ficalley — see SITE_ALIASES)
   series:true                  series:false   (in a series / standalone)
 
 Shorthand without operator key:
@@ -59,13 +61,38 @@ _SHORTHAND_RE = re.compile(
 )
 
 
-def _take_value(available: str) -> tuple[str, int]:
+# Operators whose value is always exactly one word, so free text after them is
+# free text rather than part of the value.
+#
+# A bare value otherwise runs to the next operator key, which is right for the
+# things that are genuinely multi-word — `fandom: Harry Potter`, `tag: slow
+# burn`, an author's pen name — and wrong for every operator whose values come
+# from a fixed list. The result was that a filter and the query could not be
+# combined without quoting:
+#
+#     rating:M harry potter        -> no rating AND no search text. Everything.
+#     site:ao3 harry potter        -> no site filter, no text.
+#     status:complete harry potter -> status "complete harry potter", no text.
+#     updated:2024 harry potter    -> no date, no text.
+#
+# All four silently returned the whole index or nothing, with no indication that
+# the operator had eaten the query. `rating:M harry potter` is an ordinary thing
+# to type.
+#
+# `language` is deliberately NOT here: real values include "Bahasa Indonesia",
+# so it keeps the multi-word rule and quoting remains the way to bound it.
+_SINGLE_TOKEN = {"sites", "ratings", "status", "word_count", "updated_after",
+                 "crossovers", "in_series"}
+
+
+def _take_value(available: str, canonical: str | None = None) -> tuple[str, int]:
     """Read one operator value from the text following `key:`.
 
     Returns (value, characters_consumed). A quoted value ends at the closing
     quote; a bare one runs to the end of `available` (already bounded by the next
     operator key), minus any trailing shorthand words, which belong to the query
-    rather than to this value.
+    rather than to this value — or to exactly one word for the operators in
+    _SINGLE_TOKEN.
     """
     if available.startswith('"'):
         end = available.find('"', 1)
@@ -74,6 +101,14 @@ def _take_value(available: str) -> tuple[str, int]:
         return available[1:end].strip(), end + 1
 
     words = available.split()
+
+    if canonical in _SINGLE_TOKEN:
+        if not words:
+            return "", 0
+        first = words[0]
+        idx = available.index(first)
+        return first, idx + len(first)
+
     keep = len(words)
     # Never strip below one word: `status:complete` and `rating:mature` have a
     # shorthand word as their ENTIRE value, and stripping it discarded the
@@ -118,6 +153,43 @@ RATING_ALIASES = {
     "g": "G", "general": "G", "all": "G",
     "nr": "NR", "none": "NR", "unrated": "NR",
 }
+
+# Archive names → the three values actually stored in stories.site.
+#
+# The column holds `ao3`, `ffnet` and `fictionalley`, and the parser previously
+# just lowercased whatever was typed and passed it through. So `site:ao3` worked
+# and every other way of naming the same archive silently matched nothing:
+# `site:AO3` was fine by luck, `site:FF.net`, `site:fanfiction.net` and
+# `site:archiveofourown.org` all produced a filter no row could satisfy. That
+# fails in the worst direction — zero results reads as "the index has none of
+# this", not as "that filter was not understood".
+#
+# Includes the domain forms because they are what someone copies out of a URL
+# bar, and `a03` because the digit-zero misreading of AO3 is genuinely common.
+SITE_ALIASES = {
+    "ao3": "ao3", "a03": "ao3", "archive": "ao3",
+    "archiveofourown": "ao3", "archiveofourown.org": "ao3",
+    "archive of our own": "ao3", "otw": "ao3",
+
+    "ffnet": "ffnet", "ffn": "ffnet", "ff": "ffnet",
+    "ff.net": "ffnet", "fanfiction": "ffnet", "fanfiction.net": "ffnet",
+    "fanfictionnet": "ffnet", "www.fanfiction.net": "ffnet",
+
+    "fictionalley": "fictionalley", "ficalley": "fictionalley",
+    "fiction alley": "fictionalley", "fa": "fictionalley",
+    "fictionalley.org": "fictionalley",
+}
+
+
+def canonical_site(value: str) -> Optional[str]:
+    """The stored site code for however an archive was named, or None.
+
+    None rather than a passthrough: an unrecognised archive name is a typo or a
+    site this index does not carry, and in both cases dropping the filter and
+    searching everything is friendlier than returning nothing at all.
+    """
+    return SITE_ALIASES.get(" ".join(value.lower().split()))
+
 
 # Field aliases → canonical name
 FIELD_ALIASES = {
@@ -253,7 +325,7 @@ def parse_query(raw: str) -> ParsedQuery:
 
     for i, (kstart, kend, exclude_flag, canonical) in enumerate(key_hits):
         next_start = key_hits[i + 1][0] if i + 1 < len(key_hits) else len(raw)
-        value, used = _take_value(raw[kend:next_start])
+        value, used = _take_value(raw[kend:next_start], canonical)
         # Reject values that are only punctuation ("fandom:::" produced "::").
         if not value or not re.search(r"\w", value):
             continue
@@ -311,7 +383,21 @@ def parse_query(raw: str) -> ParsedQuery:
             pq.language = value
 
         elif canonical == "sites":
-            pq.sites.append(value.lower())
+            site = canonical_site(value)
+            if site:
+                pq.sites.append(site)
+                # The token drives the chip the search bar renders, so it shows
+                # the resolved archive rather than echoing what was typed —
+                # which is how someone who typed `site:ff.net` learns it landed
+                # on ffnet.
+                token["value"] = site
+            else:
+                # Unrecognised archive: no filter and no chip. The span is
+                # already consumed, so the words do not leak into the free-text
+                # query either — `site:goodreads harry potter` searches every
+                # archive for "harry potter" rather than searching none of them
+                # for a site that does not exist here.
+                continue
 
         elif canonical == "crossovers":
             v = value.lower()

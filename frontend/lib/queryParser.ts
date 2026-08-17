@@ -67,6 +67,42 @@ const FIELD_ALIASES: Record<string, string> = {
   series: "in_series", in_series: "in_series",
 }
 
+// Archive names → the three values stored in stories.site. Must stay in step
+// with SITE_ALIASES in backend/query_parser.py: this parser decides what the
+// bar shows and what goes into the URL, that one decides what a shared URL
+// means when the API re-parses it, and a name only one of them knows is a
+// filter that works in one direction.
+//
+// Without this the value was merely lowercased, so `site:ao3` worked and
+// `site:FF.net`, `site:fanfiction.net` and `site:archiveofourown.org` all
+// produced a filter no row could satisfy — which reads as "the index has none
+// of this" rather than "that was not understood".
+const SITE_ALIASES: Record<string, string> = {
+  "ao3": "ao3", "a03": "ao3", "archive": "ao3",
+  "archiveofourown": "ao3", "archiveofourown.org": "ao3",
+  "archive of our own": "ao3", "otw": "ao3",
+
+  "ffnet": "ffnet", "ffn": "ffnet", "ff": "ffnet",
+  "ff.net": "ffnet", "fanfiction": "ffnet", "fanfiction.net": "ffnet",
+  "fanfictionnet": "ffnet", "www.fanfiction.net": "ffnet",
+
+  "fictionalley": "fictionalley", "ficalley": "fictionalley",
+  "fiction alley": "fictionalley", "fa": "fictionalley",
+  "fictionalley.org": "fictionalley",
+}
+
+// Operators whose value is always one word. `language` is deliberately absent —
+// "Bahasa Indonesia" is a real value, so it keeps the multi-word rule and
+// quoting is how you bound it. Mirrors _SINGLE_TOKEN in query_parser.py.
+const SINGLE_TOKEN = new Set([
+  "sites", "ratings", "status", "word_count", "updated_after",
+  "crossovers", "in_series",
+])
+
+export function canonicalSite(value: string): string | null {
+  return SITE_ALIASES[value.toLowerCase().split(/\s+/).join(" ").trim()] ?? null
+}
+
 const RATING_ALIASES: Record<string, string> = {
   e: "E", explicit: "E", x: "E",
   m: "M", mature: "M",
@@ -74,6 +110,12 @@ const RATING_ALIASES: Record<string, string> = {
   g: "G", general: "G", all: "G",
   nr: "NR", none: "NR", unrated: "NR",
 }
+
+// Words that end a bare multi-word operator value, because they are shorthand
+// belonging to the query itself. Mirrors _SHORTHAND_RE in query_parser.py.
+// Not sticky and not global, so .test() has no lastIndex to carry between calls.
+const SHORTHAND_RE =
+  /^(?:complete|completed|wip|incomplete|ongoing|explicit|mature|teen|general|gen|[<>]=?[\d.]+[km]?\+?|[\d.]+[km]\+|[\d.]+[km]-[\d.]+[km])$/i
 
 const STATUS_WORDS: Record<string, string> = {
   complete: "complete", completed: "complete",
@@ -166,9 +208,41 @@ export function parseQuery(raw: string): ParsedQuery {
       const endQ = available.indexOf('"', 1)
       if (endQ === -1) { value = available.slice(1).trim(); spanEnd = kend + available.length }
       else { value = available.slice(1, endQ).trim(); spanEnd = kend + endQ + 1 }
+    } else if (SINGLE_TOKEN.has(canonical)) {
+      // Exactly one word, so free text after the operator stays free text.
+      // Without this `rating:M harry potter` took "M harry potter" as the
+      // rating: no rating matched and no search text was left, so the bar
+      // silently searched the whole index. Must match _SINGLE_TOKEN in
+      // backend/query_parser.py, or a URL means one thing in the bar and
+      // another when the API re-parses it.
+      const first = available.trim().split(/\s+/)[0] ?? ""
+      value = first
+      spanEnd = first ? kend + available.indexOf(first) + first.length : kend
     } else {
-      value = available.trim()
-      spanEnd = nextKeyStart
+      // A bare multi-word value, minus any trailing shorthand words — those
+      // belong to the query, not to this value.
+      //
+      // The backend parser has always done this and this one never did, so the
+      // README's headline syntax was broken in the actual search bar:
+      // `fandom:Harry Potter complete >100k` set the fandom to the whole string
+      // "Harry Potter complete >100k", which matches no facet, and set neither
+      // the status nor the word count. The same string sent straight to the API
+      // worked, so the bar and a hand-written URL disagreed.
+      const words = available.trim().split(/\s+/).filter(Boolean)
+      let keep = words.length
+      // Never below one word: `status:complete` has a shorthand word as its
+      // entire value, and stripping it would discard the operator.
+      while (keep > 1 && SHORTHAND_RE.test(words[keep - 1])) keep--
+      value = words.slice(0, keep).join(" ")
+      // Consume up to the end of the last kept word, so trailing shorthand stays
+      // in the free text where the shorthand pass below can find it.
+      let idx = 0, consumed = 0
+      for (const w of words.slice(0, keep)) {
+        idx = available.indexOf(w, idx)
+        consumed = idx + w.length
+        idx = consumed
+      }
+      spanEnd = kend + consumed
     }
 
     if (!value) continue
@@ -195,7 +269,15 @@ export function parseQuery(raw: string): ParsedQuery {
     else if (canonical === "updated_after") { const d = parseDate(value); if (d) pq.updatedAfter = d }
     else if (canonical === "language")  { pq.language = value }
     else if (canonical === "author")    { pq.author = value }
-    else if (canonical === "sites")     { pq.sites.push(value.toLowerCase()) }
+    // An unrecognised archive drops the filter rather than keeping one nothing
+    // can match. The span is already consumed, so the words do not leak into
+    // the free-text query either.
+    else if (canonical === "sites")     {
+      const s = canonicalSite(value)
+      if (!s) continue
+      pq.sites.push(s)
+      tok.value = s
+    }
     else if (canonical === "crossovers") {
       const v = value.toLowerCase()
       pq.crossovers = ["only","yes","true"].includes(v) ? "only" : ["no","false","exclude"].includes(v) ? "exclude" : "include"

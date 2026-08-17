@@ -35,7 +35,12 @@ const GROUPS: { group: string; rows: Row[] }[] = [
   { group: "Rating, language, site", rows: [
     { syntax: "rating:M", desc: "G / T / M / E / NR", insert: "rating:M" },
     { syntax: "lang:French", desc: "Any language name", insert: "lang:" },
-    { syntax: "site:ao3", desc: "ao3 / ffnet / fictionalley", insert: "site:ao3" },
+    // The archive names are aliased (see SITE_ALIASES in lib/queryParser.ts), so
+    // this says so rather than listing only the three stored codes — someone who
+    // types the domain they copied out of a URL bar should not have to guess
+    // that "ffnet" is the magic word.
+    { syntax: "site:ao3", desc: "ao3 / ffnet / fictionalley — also accepts fanfiction.net, ff.net, archiveofourown.org",
+      insert: "site:ao3" },
     // Only meaningful alongside site:fictionalley, and listed anyway: the
     // sidebar hides the filter until FictionAlley is selected, so this panel is
     // where someone finds out the subsites exist at all.
