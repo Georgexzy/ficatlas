@@ -108,10 +108,39 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   `POPULARITY_INTERVAL_HOURS`). Do not remove it and go back to running the
   script by hand.
 - **Do not re-add `ix_stories_tags_trgm` / `ix_stories_relationships_trgm`.** They
-  were 4.4GB with zero scans and zero code references (tag and relationship
-  filtering uses facet resolution + array containment `&&`, served by the plain
-  GIN indexes). Dropping them took the DB 40GB → 36GB. `ix_stories_fandoms_trgm`
+  were 4.4GB with zero scans (tag and relationship filtering uses facet
+  resolution + array containment `&&`, served by the plain GIN indexes).
+  Dropping them took the DB 40GB → 36GB. `ix_stories_fandoms_trgm`
   and `ix_stories_characters_trgm` are still used and must stay.
+  - **"zero code references" was wrong**, and it cost 83 seconds a query.
+    `arr_inc_aliased` fell back to `fic_arr(col) ILIKE '%…%'` whenever the alias
+    table had nothing — which is any pairing where either half is outside the
+    ~40 Harry Potter characters, i.e. most of the index. With the index gone
+    that fallback was a sequential scan of 20M rows: `relationships=Theodore
+    Nott/Luna Lovegood` took 83.5s and 500'd through the proxy, on the exact
+    link every ship hub emits. It now resolves against the facets table first,
+    like `arr_inc` always did. The trigram branch still exists as a last resort
+    — if you see a filtered search take a minute, that is where it went.
+- **Ship filters must try both pairing orders.** The vocabulary lookup is a
+  substring match, so it only finds the order the reader typed, and the archives
+  are not consistent: "Theodore Nott/Luna Lovegood" resolved to 3 works while
+  "Luna Lovegood/Theodore Nott" — the same ship — carried 564. `_both_orders`
+  in `api/search.py` handles it for two-part pairings; the ship hubs solve the
+  same problem separately with an alphabetical slug.
+- **`popularity_desc` must not filter, only order.** `popularity IS NOT NULL`
+  was applied as a WHERE on every search, and only 2.7% of works have a score,
+  so "Most popular" silently deleted ~97% of matches — 7 results under Relevance,
+  0 under Most popular. It is kept ONLY for an unfiltered browse, where it is a
+  top-N walk of the partial index instead of a sort of 20M rows; any narrowed
+  search (`_narrowed`) uses `nullslast()` instead.
+- **Truncated titles are hidden from search, not repaired at read time.** The AO3
+  dump ships titles cut mid-phrase ("Riding on Brooms With") and 688k rows are
+  affected. `_BROKEN_TITLE_TAIL` excludes them by default;
+  `include_broken_titles=true` brings them back so nothing is unreachable.
+  `ao3_title_repair.py` is the real fix and the worker runs it, but at one AO3
+  request per work it will not catch up. Only closed-class words are matched —
+  "Sobrevivientes Tercera" is also truncated and deliberately NOT caught, because
+  a rule that catches it would hide real titles.
 - **One hostname, or sessions break.** The session cookie is host-only by design
   (no `Domain`), so every hostname that serves the app has its own cookie jar.
   `www.ficatlas.com` used to answer 200 with the whole site, which from the

@@ -31,6 +31,25 @@ SEARCH_COUNT_CEILING = int(os.getenv("SEARCH_COUNT_CEILING", "5000"))
 # zero rows and a large scan is the very thing to avoid.
 HIDDEN_EXPLICIT_CEILING = int(os.getenv("HIDDEN_EXPLICIT_CEILING", "999"))
 
+# A title ending on one of these was cut off, not written that way.
+#
+# The English half is the set ao3_title_repair.py already trusts to identify a
+# truncated dump title ("no real title ends there"), widened to the rest of the
+# closed-class words that behave the same way. The Iberian and Slavic articles
+# are here because the dump truncated non-English titles too — "Leyendo Harry
+# Potter la" and "Lembre-se de nos como" are the same defect, and an
+# English-only rule leaves those on the page.
+#
+# Only closed-class words, never content words: "Sobrevivientes Tercera" is
+# also truncated and is NOT matched here, because a rule that catches it would
+# catch real titles as well. Under-matching is the right direction — the cost
+# is a broken title still showing, where over-matching hides a real work.
+_BROKEN_TITLE_TAIL = (
+    r" (and|of|the|with|or|to|in|for|from|by|at|on|a|an|but|as|into|about"
+    r"|la|el|los|las|un|una|de|del|y|e|o|que|con|por|para|como|na|nos|dos|das"
+    r"|no|i|w|z|na)$"
+)
+
 # Matches the in-process TTL, so the two layers cannot disagree about how stale
 # a result may be.
 SEARCH_CACHE_SECONDS = int(os.getenv("SEARCH_CACHE_SECONDS", "120"))
@@ -204,6 +223,23 @@ def _query_is_category(db, term: str) -> int:
         ), {"v": term}).scalar() or 0)
     except Exception:
         return 0
+
+
+_SHIP_SPLIT = re.compile(r"\s*/\s*")
+
+
+def _both_orders(term: str) -> list[str]:
+    """A pairing written both ways round, or just the term if it isn't one.
+
+    The vocabulary lookup below is a substring match, so it only finds the order
+    the reader happened to type — and the archives are not consistent about it.
+    Two halves only: reversing a three-way pairing has six orderings and no
+    single obvious one, and those tags are rare enough not to be worth it.
+    """
+    parts = [p for p in _SHIP_SPLIT.split(term.strip()) if p]
+    if len(parts) != 2:
+        return [term]
+    return [term, f"{parts[1]}/{parts[0]}"]
 
 
 def _facet_variants(db, col_name: str, term: str) -> list[str]:
@@ -551,6 +587,12 @@ def search(          # NOT async — see below
                     "merely-included.",
     ),
     search_within:         Optional[str] = Query(None),
+    include_broken_titles: bool          = Query(
+        False,
+        description="Also return works whose stored title is truncated or "
+                    "missing ('Riding on Brooms With', 'unknown'). Hidden by "
+                    "default — see _BROKEN_TITLE_TAIL.",
+    ),
     sort:                  str           = Query("relevance"),
     page:                  int           = Query(1, ge=1),
     per_page:              int           = Query(20, ge=1, le=100),
@@ -623,6 +665,34 @@ def search(          # NOT async — see below
     is_operator = viewer is not None and viewer.at_least(ROLE_ADMIN)
     if not is_operator:
         filters.append(Story.delisted_at.is_(None))
+
+    # Works whose title we hold in a visibly broken state.
+    #
+    # The bulk AO3 dump ships titles cut mid-phrase — "Riding on Brooms With",
+    # "Leyendo Harry Potter la" — and some sources gave us no title at all
+    # ("unknown"). 688,000 rows, 3.4% of the index, and they are the entries that
+    # make a results list look broken: a reader cannot tell a truncated title
+    # from a bad index.
+    #
+    # ao3_title_repair.py fixes these properly by re-fetching the work, and the
+    # worker runs it — but it is one AO3 request per work against ~400k
+    # candidates, so it is a slow grind rather than a backfill that finishes.
+    # Hiding them is the interim answer, not the repair.
+    #
+    # A dangling function word cannot end a real title, which is the same
+    # confidence ao3_title_repair.py relies on to identify these at all. The
+    # non-English articles are here because the truncation is not English-only.
+    # Reversible per request rather than a policy: `include_broken_titles=true`
+    # brings them back, so nothing is unreachable — an exact-title search that
+    # wants them can still ask.
+    if not include_broken_titles:
+        filters.append(and_(
+            Story.title.isnot(None),
+            func.btrim(Story.title) != "",
+            ~func.lower(func.btrim(Story.title)).in_(
+                ["unknown", "untitled", "no title", "n/a"]),
+            ~Story.title.op("~*")(_BROKEN_TITLE_TAIL),
+        ))
 
     # Fail fast rather than holding a connection for a minute.
     #
@@ -818,9 +888,41 @@ def search(          # NOT async — see below
         clauses = []
         for v in vals:
             variants = expand(v)
+            if not variants:
+                # The alias table covers ~40 Harry Potter characters and returns
+                # [] for a pairing where EITHER half is unknown — which is most
+                # of the index. That dropped straight to the substring branch
+                # below, and the trigram index backing it
+                # (ix_stories_relationships_trgm) was deleted as unused, so the
+                # "fallback" became a sequential scan of 20M rows.
+                #
+                # Measured on "Theodore Nott/Luna Lovegood", 7 works:
+                # 83.5s at the backend and a 500 through the proxy, for a filter
+                # every ship hub's "Search all" link and every ship tag emits.
+                #
+                # Resolving against the site's own vocabulary first is what
+                # arr_inc already does for fandoms and tags, and it turns this
+                # into the GIN array lookup it was always supposed to be.
+                #
+                # BOTH ORDERS, because the archives disagree about which half of
+                # a pairing goes first and the vocabulary lookup is a substring
+                # match, so it only ever finds the order that was typed.
+                # "Theodore Nott/Luna Lovegood" resolved to 3 works while
+                # "Luna Lovegood/Theodore Nott" — the same ship — carried 564,
+                # and nothing on the page suggested the other 564 existed. This
+                # is the order-independence the ship hubs already have; search
+                # simply never got it.
+                variants = []
+                for term in _both_orders(v):
+                    for x in _facet_variants(db, col.key, term):
+                        if x not in variants:
+                            variants.append(x)
             if variants:
                 match = col.op("&&")(cast(variants, PG_ARRAY(Text)))
             else:
+                # Last resort, and genuinely slow now that the trigram indexes on
+                # these columns are gone. Only reached for a term the vocabulary
+                # has never seen, which by definition matches nothing much.
                 match = _arr_text(col).ilike(f"%{v.lower()}%")
             clauses.append(or_(match, empty) if permissive_empty else match)
         return combine(*clauses)
@@ -973,6 +1075,30 @@ def search(          # NOT async — see below
 
     if filters:
         db_query = db_query.filter(and_(*filters))
+
+    # Has the reader narrowed this search at all, as opposed to browsing the
+    # whole index? Only used to decide whether "Most popular" may take its fast
+    # path — see the popularity_desc branch below.
+    #
+    # Deliberately a list of the parameters rather than `len(filters)`: the
+    # filter list always carries the delisted/restricted gates and usually the
+    # rating one, so its length says nothing about whether the READER asked for
+    # anything. Site selection is excluded for the same reason — the UI sends all
+    # three by default, so it is not a narrowing choice.
+    _narrowed = any([
+        q, fandoms, characters, relationships, tags, warnings, categories,
+        author, status, language, sections, dlp_min_rating,
+        word_count_min, word_count_max,
+        updated_after, updated_before, published_after,
+        exclude_fandoms, exclude_characters, exclude_relationships,
+        exclude_tags, exclude_ratings, exclude_warnings, exclude_categories,
+        exclude_authors,
+        in_series is not None,
+        crossovers not in (None, "include"),
+        # The synthetic "everything but explicit" set is the content toggle
+        # restated, not a choice about ratings — see _ratings_is_all_but_explicit.
+        bool(ratings) and not _ratings_is_all_but_explicit,
+    ])
 
     # Counting all matching rows on a multi-million table is the slowest part of
     # search. We only need an exact count up to a ceiling; beyond that "5000+" is
@@ -1141,8 +1267,27 @@ def search(          # NOT async — see below
         # recorded engagement has no score and belongs after every scored one.
         base = db_query
         if sort == "popularity_desc":
-            base = (base.filter(Story.popularity.isnot(None))
-                       .order_by(Story.popularity.desc()))
+            # `popularity IS NOT NULL` is a FILTER, and it was applied to every
+            # search — so "Most popular" silently deleted every match without a
+            # score. Only 550,384 of 20,075,332 works have one (2.7%), because a
+            # score is a percentile among works with recorded engagement and the
+            # bulk dumps carry none. So a narrow search lost nearly everything:
+            # 7 works for a rare pairing under Relevance, 0 under Most popular,
+            # with nothing to say they had been dropped rather than not exist.
+            #
+            # nullslast() ORDERS unscored works last. It does not remove them,
+            # which is what the old comment here assumed.
+            #
+            # The filter still earns its place on an unfiltered browse, and only
+            # there: that is a top-N walk of the partial popularity index over
+            # 20M rows, and without the predicate it becomes a sort of the whole
+            # table. Once the reader has narrowed the search the candidate set is
+            # small, nullslast is cheap, and correctness is what matters.
+            if _narrowed:
+                base = base.order_by(Story.popularity.desc().nullslast())
+            else:
+                base = (base.filter(Story.popularity.isnot(None))
+                           .order_by(Story.popularity.desc()))
         candidates = base.limit(COUNT_CEILING + 1).subquery()
     S = aliased(Story, candidates)
     total_over = func.count().over().label("total_matches")
