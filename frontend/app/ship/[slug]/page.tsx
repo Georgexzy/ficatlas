@@ -40,6 +40,8 @@ interface Hub {
   slug: string
   name: string
   work_count: number
+  /** Fandom names for the pairing ("Drarry"), primary first. Often empty. */
+  nicknames?: string[]
   works: Work[]
   sections?: SiteSection[]
 }
@@ -78,11 +80,18 @@ export async function generateMetadata(
   const { slug } = await params
   const hub = await fetchShip(slug)
   if (!hub) return {}
+  // The nickname leads the title, because it is what people type. Nobody
+  // searches "Draco Malfoy/Harry Potter fanfiction"; they search "drarry". The
+  // canonical tag stays in the title after it, so the page still matches the
+  // formal name and still reads as a real page rather than a keyword.
+  const nick = hub.nicknames?.[0]
   const description =
-    `Browse ${hub.work_count.toLocaleString()} ${hub.name} fanfics indexed from `
-    + `Archive of Our Own, FanFiction.net and FicAlley. Search every archive at `
-    + `once, then read on the site that hosts them.`
-  const title = `${hub.name} fanfiction`
+    `Browse ${hub.work_count.toLocaleString()} ${nick ? `${nick} (${hub.name})` : hub.name} `
+    + `fanfics indexed from Archive of Our Own, FanFiction.net and FicAlley. `
+    + `Search every archive at once, then read on the site that hosts them.`
+  const title = nick
+    ? `${nick} — ${hub.name} fanfiction`
+    : `${hub.name} fanfiction`
   return {
     title,
     description,
@@ -136,6 +145,9 @@ export default async function ShipHub(
             "@context": "https://schema.org",
             "@type": "CollectionPage",
             name: `${hub.name} fanfiction`,
+            // Every spelling the ship is known by, so a search engine can
+            // connect the page to the word readers actually use for it.
+            ...(hub.nicknames?.length ? { alternateName: hub.nicknames } : {}),
             description:
               `${hub.work_count.toLocaleString()} ${hub.name} fanworks indexed from ` +
               `Archive of Our Own, FanFiction.net and FicAlley.`,
@@ -160,6 +172,17 @@ export default async function ShipHub(
         ]) }} />
 
       <h1>{hub.name}</h1>
+      {/* On the page as well as in the metadata: a reader who arrived searching
+          "drarry" needs to see that word to know they are in the right place,
+          and a crawler needs it in the body rather than only in a meta tag. */}
+      {!!hub.nicknames?.length && (
+        <p className="hub__aka">
+          Also known as{" "}
+          {hub.nicknames.map((n, i) => (
+            <span key={n}><strong>{n}</strong>{i < hub.nicknames!.length - 1 ? " · " : ""}</span>
+          ))}
+        </p>
+      )}
       <p className="hub__lede">
         {hub.work_count.toLocaleString()} works tagged with this pairing across
         Archive of Our Own, FanFiction.net and FicAlley. {" "}
