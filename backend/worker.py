@@ -1125,6 +1125,7 @@ async def _hubs_loop() -> None:
     """
     from db.session import db_session
     from fandom_hubs import build_hubs
+    from ship_hubs import build_ship_hubs
 
     interval = _num("HUBS_INTERVAL_HOURS", 24) * 3600
     # A short delay at startup so a restart does not immediately spend minutes of
@@ -1139,6 +1140,59 @@ async def _hubs_loop() -> None:
             log.info(f"fandom hubs rebuilt: {n:,} hubs")
         except Exception as e:
             log.warning(f"hub rebuild failed: {type(e).__name__}: {e}")
+
+        # Ship hubs share the cycle rather than getting a loop of their own:
+        # they are built from the same facets table by the same machinery, and
+        # running them back to back keeps the two sets consistent with each
+        # other instead of drifting half a day apart. Failures are independent —
+        # a bad fandom rebuild must not skip the pairings.
+        try:
+            def _go_ships():
+                with db_session() as db:
+                    return build_ship_hubs(db)
+            n = await asyncio.to_thread(_go_ships)
+            log.info(f"ship hubs rebuilt: {n:,} hubs")
+        except Exception as e:
+            log.warning(f"ship hub rebuild failed: {type(e).__name__}: {e}")
+
+        await asyncio.sleep(interval)
+
+
+async def _popularity_loop() -> None:
+    """Recompute the cross-archive popularity score.
+
+    `popularity_desc` is the only sort that can honestly be applied to the whole
+    index — every other one compares an AO3 kudos against a FanFiction.net
+    favourite as though they were the same unit. It is therefore the sort the
+    site is most differentiated by, and it was computed by running
+    popularity_rank.py by hand.
+
+    Which meant it was frozen. The score is a percentile among the works that
+    HAVE an engagement figure, so every work the crawler gives kudos or
+    bookmarks to needs the percentiles recomputed to be placed at all — and
+    until then it holds NULL and sorts behind everything scored. Measured before
+    this loop existed: 1,077,875 works carried an engagement signal and 550,384
+    had a score, so 527,491 of them — half the eligible population — were
+    invisible to the site's flagship sort and would have stayed that way.
+
+    This is the same failure `_hubs_loop` was written for, on a different table.
+
+    Weekly rather than daily: it rewrites ~500k rows and wants 1GB of work_mem,
+    and a percentile over half a million works does not move meaningfully in a
+    day. The startup delay is long for the same reason — a worker restart should
+    not spend minutes of database time before the API has settled.
+    """
+    from db.session import db_session  # noqa: F401  (run() opens its own)
+    import popularity_rank
+
+    interval = _num("POPULARITY_INTERVAL_HOURS", 168) * 3600
+    await asyncio.sleep(_num("POPULARITY_START_DELAY_SEC", 900))
+    while True:
+        try:
+            n = await asyncio.to_thread(popularity_rank.run)
+            log.info(f"popularity recomputed: {n:,} works rescored")
+        except Exception as e:
+            log.warning(f"popularity rebuild failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
 
 
@@ -1323,6 +1377,10 @@ async def main() -> None:
     if _flag("REBUILD_HUBS", "true"):
         tasks.append(asyncio.create_task(_hubs_loop()))
         log.info("fandom hub rebuild enabled (browse pages stay current)")
+
+    if _flag("REBUILD_POPULARITY", "true"):
+        tasks.append(asyncio.create_task(_popularity_loop()))
+        log.info("popularity rebuild enabled (cross-archive sort stays current)")
 
     if _flag("FFNET_WAYBACK", "true"):
         tasks.append(asyncio.create_task(_ffnet_wayback_cdx_loop()))

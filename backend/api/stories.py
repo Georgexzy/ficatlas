@@ -149,6 +149,11 @@ class StoryDetail(BaseModel):
     cross_post_urls: List[str] = []
     sources: List[str] = []
     last_checked: Optional[str] = None   # when we last re-verified this record
+    # Fandom and ship hubs this work belongs to, as {kind, slug, name}. Populated
+    # so the story page can render real links back into the browsable part of the
+    # site instead of only `/?fandoms=…` search URLs, which robots.txt blocks.
+    # See _hub_links.
+    hubs: List[dict] = []
     chapters: List[ChapterMeta]
 
 
@@ -237,6 +242,50 @@ def story_series(story_id: str = Depends(valid_story_id),
     return {"series": out}
 
 
+def _hub_links(db: Session, story) -> list[dict]:
+    """The fandom and ship hubs this work belongs to, as {kind, slug, name}.
+
+    Story pages were a dead end in the crawl graph. Hubs link down to ~750k
+    story pages, and every link back out of a story page pointed at
+    `/?fandoms=…` or `/?relationships=…` — search URLs, which robots.txt blocks
+    deliberately because the filter combination space is infinite. So a crawler
+    arrived at a story page and found nothing it was allowed to follow: the
+    pages absorbed the whole crawl and returned none of it.
+
+    Resolved against the hub tables rather than by slugifying the names here,
+    because a name only has a hub if it cleared the size threshold. Linking to a
+    slug that was never built would trade a dead end for a 404, which is worse.
+
+    Cheap by construction: two primary-key-ish lookups against tables of 5,025
+    and 2,553 rows, on a response that is already one row plus its chapters.
+    """
+    from api.search import fandom_base
+    from fandom_hubs import slugify
+    from ship_hubs import ship_key
+
+    want_f = {slugify(fandom_base(f)) for f in (story.fandoms or []) if f}
+    want_s = {k for k in (ship_key(r) for r in (story.relationships or []) if r) if k}
+
+    out: list[dict] = []
+    try:
+        if want_f:
+            rows = db.execute(sql_text(
+                "SELECT slug, name FROM fandom_hubs WHERE slug = ANY(:k) "
+                " ORDER BY work_count DESC LIMIT 6"
+            ), {"k": list(want_f)}).fetchall()
+            out += [{"kind": "fandom", "slug": r[0], "name": r[1]} for r in rows]
+        if want_s:
+            rows = db.execute(sql_text(
+                "SELECT slug, name FROM ship_hubs WHERE slug = ANY(:k) "
+                " ORDER BY work_count DESC LIMIT 6"
+            ), {"k": list(want_s)}).fetchall()
+            out += [{"kind": "ship", "slug": r[0], "name": r[1]} for r in rows]
+    except Exception:
+        # Hubs are a navigation nicety. A story page must render without them.
+        return []
+    return out
+
+
 @router.get("/{story_id}", response_model=StoryDetail)
 def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get_db),
                     viewer=Depends(get_current_user)):
@@ -296,6 +345,7 @@ def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get
         is_hosted=story.is_hosted or False,
         wayback_url=story.wayback_url,
         cross_post_urls=story.cross_post_urls or [],
+        hubs=_hub_links(db, story),
         chapters=chapter_meta,
     )
 

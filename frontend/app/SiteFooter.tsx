@@ -16,6 +16,12 @@ export default function SiteFooter() {
           what you are looking for, and this is the answer to "what's in here?" */}
       <Link href="/fandoms">Browse fandoms</Link>
       <span className="site-footer__sep">·</span>
+      {/* Same job as the link above, for the other axis. /ships is reachable
+          from /fandoms and vice versa, but a crawler that only ever sees a story
+          page needs a root here too — and neither hub index should depend on the
+          other being crawled first. */}
+      <Link href="/ships">Browse pairings</Link>
+      <span className="site-footer__sep">·</span>
       <Link href="/about">About</Link>
       <span className="site-footer__sep">·</span>
       <Link href="/about#ai">AI policy</Link>

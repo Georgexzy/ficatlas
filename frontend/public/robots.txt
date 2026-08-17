@@ -49,6 +49,17 @@ Allow: /story/
 # to crawl the whole index off a home connection. See backend/fandom_hubs.py.
 Allow: /fandoms
 Allow: /fandom/
+
+# Ship hubs — the same thing again, one per romantic pairing.
+#
+# Bounded the same way (a few thousand pages, each capped at 50 works per
+# archive) and added for a different reason: the fandom hubs compete for
+# "[fandom] fanfiction", which AO3 already owns, while pairings are the queries
+# readers actually type and are where a cross-archive index has something to say
+# that no single archive's tag page can. See backend/ship_hubs.py.
+Allow: /ships
+Allow: /ship/
+
 Allow: /sitemap.xml
 
 # Politeness. Google ignores this; most other crawlers honour it, and those are

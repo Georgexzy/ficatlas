@@ -35,29 +35,44 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticPages: MetadataRoute.Sitemap = [
     { url: `${SITE}/`, changeFrequency: "daily", priority: 1 },
     { url: `${SITE}/fandoms`, changeFrequency: "weekly", priority: 0.8 },
+    { url: `${SITE}/ships`, changeFrequency: "weekly", priority: 0.8 },
     { url: `${SITE}/about`, changeFrequency: "monthly", priority: 0.5 },
     { url: `${SITE}/permissions`, changeFrequency: "monthly", priority: 0.5 },
     { url: `${SITE}/takedown`, changeFrequency: "monthly", priority: 0.3 },
   ]
 
-  try {
-    const r = await fetch(`${INTERNAL_API}/api/hubs?limit=10000`, {
-      next: { revalidate: CACHE_S },
-      headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
-      signal: AbortSignal.timeout(15000),
-    })
-    if (!r.ok) return staticPages
-    const hubs: { slug: string }[] = await r.json()
-    return [
-      ...staticPages,
-      ...hubs.map(h => ({
-        url: `${SITE}/fandom/${h.slug}`,
-        changeFrequency: "weekly" as const,
-        priority: 0.7,
-      })),
-    ]
-  } catch {
-    // A sitemap that 500s is worse than one that lists only the static pages.
-    return staticPages
+  // Both hub kinds, fetched independently: one of them being unavailable should
+  // cost its own entries and not the other's.
+  const listing = async (path: string): Promise<{ slug: string }[]> => {
+    try {
+      const r = await fetch(`${INTERNAL_API}${path}?limit=10000`, {
+        next: { revalidate: CACHE_S },
+        headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
+        signal: AbortSignal.timeout(15000),
+      })
+      return r.ok ? await r.json() : []
+    } catch {
+      // A sitemap that 500s is worse than one that lists fewer pages.
+      return []
+    }
   }
+
+  const [fandoms, ships] = await Promise.all([
+    listing("/api/hubs"),
+    listing("/api/ships"),
+  ])
+
+  return [
+    ...staticPages,
+    ...fandoms.map(h => ({
+      url: `${SITE}/fandom/${h.slug}`,
+      changeFrequency: "weekly" as const,
+      priority: 0.7,
+    })),
+    ...ships.map(h => ({
+      url: `${SITE}/ship/${h.slug}`,
+      changeFrequency: "weekly" as const,
+      priority: 0.7,
+    })),
+  ]
 }
