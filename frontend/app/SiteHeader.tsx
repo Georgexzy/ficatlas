@@ -2,6 +2,7 @@
 import Link from "next/link"
 import ThemeToggle from "./ThemeToggle"
 import { useEffect, useState } from "react"
+import { usePathname } from "next/navigation"
 import OfflineLink from "./OfflineLink"
 import IndexStatus from "./IndexStatus"
 import { useAuth } from "@/lib/auth"
@@ -91,6 +92,61 @@ function UserMenu() {
             </Link>
           )}
           <button onClick={async () => { await logout(); setOpen(false) }}>Sign out</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Browse, as a menu over its two axes.
+//
+// Modelled on UserMenu above rather than invented: same open-on-click, same
+// close-on-outside-click, same dropdown styling — two menus in one header that
+// behaved differently would be worse than either choice on its own.
+//
+// It stays a button even on /fandoms and /ships, where `link()` would suppress
+// itself. Suppressing the only control that reaches the OTHER axis is exactly
+// backwards: standing on Fandoms is when you most want Pairings. The current
+// page is marked inside the menu instead.
+function BrowseMenu({ current }: { current: boolean }) {
+  const [open, setOpen] = useState(false)
+  const pathname = usePathname()
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent) => {
+      const t = e.target as HTMLElement
+      if (!t.closest(".browse-menu")) setOpen(false)
+    }
+    document.addEventListener("click", close)
+    return () => document.removeEventListener("click", close)
+  }, [open])
+  // Any navigation closes it, including one started from inside the menu.
+  useEffect(() => { setOpen(false) }, [pathname])
+
+  const item = (href: string, label: string) => {
+    const here = pathname === href
+    return here
+      ? <span className="user-menu__link user-menu__link--current" aria-current="page">{label}</span>
+      : <Link href={href} className="user-menu__link" onClick={() => setOpen(false)}>{label}</Link>
+  }
+
+  return (
+    <div className="browse-menu">
+      <button
+        className={`header__link header__link--menu ${current ? "header__link--current" : ""}`}
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        aria-haspopup="menu">
+        Browse
+        <span className="header__caret" aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <div className="user-menu__dropdown browse-menu__dropdown" role="menu">
+          <p className="user-menu__hint">
+            Two ways in: by franchise, or by the pairing people actually search for.
+          </p>
+          {item("/fandoms", "Fandoms")}
+          {item("/ships", "Pairings")}
         </div>
       )}
     </div>
@@ -207,18 +263,14 @@ function TabIcon({ name }: { name: string }) {
                 here?". It was only reachable from the footer, which is where
                 links go to be found by nobody.
 
-                Two destinations, one slot. There are now two browse axes —
-                fandoms and pairings — and a fifth header item was not an
-                option: six items at 16px gaps overflow a 375px screen, which is
-                why the tab bar below exists at all. So Browse stays one link to
-                /fandoms and carries a second, smaller link to /ships beside it,
-                which is also the honest hierarchy — fandom is the broader entry
-                point and pairing is the narrower one. */}
-            <span className="header__browse">
-              {link("browse", "/fandoms", "Browse")}
-              <Link href="/ships" className="header__sublink"
-                title="Browse by pairing">Pairings</Link>
-            </span>
+                A menu, not two links. There are two browse axes — fandoms and
+                pairings — and a fifth top-level item was never available: six
+                items at 16px gaps overflow a 375px screen, which is why the tab
+                bar below exists at all. The first attempt hung a smaller
+                "Pairings" link off the side of "Browse", which fit but read as
+                two unrelated items crowding one slot. One item that opens is
+                the honest shape: Browse is a category with two things in it. */}
+            <BrowseMenu current={current === "browse"} />
             {link("library", "/library", "Library", true)}
             {link("settings", "/settings", "Settings")}
           </span>

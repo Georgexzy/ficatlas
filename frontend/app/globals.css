@@ -4925,11 +4925,18 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 .browse-switch__item--current:hover { color: var(--text); }
 
-/* The header's Browse slot carries a second, smaller destination rather than a
-   fifth top-level item. See SiteHeader.tsx. */
-.header__browse { display: inline-flex; align-items: baseline; gap: 2px; }
-.header__sublink {
-  font-size: 11px; color: var(--text-faint); text-decoration: none;
-  padding: 5px 6px 5px 0; white-space: nowrap; transition: color 0.15s;
+/* Browse is a menu over its two axes, not two links crowding one slot. Reuses
+   the .user-menu__dropdown styling so the header's two menus behave and look
+   alike. See SiteHeader.tsx. */
+.browse-menu { position: relative; display: inline-flex; }
+.header__link--menu {
+  background: none; border: 0; cursor: pointer; font: inherit;
+  display: inline-flex; align-items: center; gap: 4px;
 }
-.header__sublink:hover { color: var(--accent); }
+.header__caret { font-size: 9px; opacity: 0.7; }
+/* Left-aligned: this menu sits at the left of the nav, where the user menu sits
+   at the right, so anchoring it right would push it off toward the middle. */
+.browse-menu__dropdown { right: auto; left: 0; min-width: 190px; }
+.user-menu__link--current {
+  color: var(--text-faint); background: transparent; cursor: default;
+}
