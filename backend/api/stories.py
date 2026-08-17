@@ -159,6 +159,52 @@ class StoryDetail(BaseModel):
 
 # ── Series ──────────────────────────────────────────────────────────────────
 
+def _series_name(stored: str | None, works: list) -> str:
+    """A usable heading for a series, including the ones that never got a name.
+
+    181 series carry no name at all. Every one is `source='inferred'` — the
+    detector found works that belong together without finding what the set is
+    called — and they hold real works (13, 3, 2 ...), so the page is worth
+    having. It just rendered with a blank heading.
+
+    The fallback is the longest shared opening of the works' titles, which is the
+    pattern the detector matched on in the first place.
+
+    ONE word is enough, and the first version of this required two — which
+    excluded the shape the data actually has. These sets are things like
+    "Day 27", "Day 34", "Day 42": the shared part is a single word because the
+    second token is the number that varies. Requiring two words named 0 of 12
+    sampled series and every one of them fell through to "Untitled".
+
+    A shared word that is only an article or conjunction is discarded instead —
+    "The" is not the name of anything — and then the author carries it, since
+    an inferred series is by construction one writer's run of works.
+    """
+    name = (stored or "").strip()
+    if name:
+        return name
+
+    STOP = {"the", "a", "an", "of", "and", "or", "to", "in", "for", "part", "no"}
+    titles = [(w[1] or "").split() for w in works if (w[1] or "").strip()]
+    if len(titles) >= 2:
+        shared: list[str] = []
+        for i in range(min(len(t) for t in titles)):
+            word = titles[0][i]
+            if all(t[i].lower() == word.lower() for t in titles):
+                shared.append(word)
+            else:
+                break
+        # Trim trailing joining words so "Harry Potter and" becomes
+        # "Harry Potter" rather than reading as another truncated title.
+        while shared and shared[-1].lower() in STOP:
+            shared.pop()
+        if shared and not all(w.lower() in STOP for w in shared):
+            return " ".join(shared).rstrip(" -:,")
+
+    author = next((w[2] for w in works if (w[2] or "").strip()), None)
+    return f"Series by {author}" if author else "Untitled series"
+
+
 @router.get("/series/{series_id}")
 def get_series(series_id: str, db: Session = Depends(get_db)):
     """One series and its works in reading order — the page a reader lands on."""
@@ -178,10 +224,22 @@ def get_series(series_id: str, db: Session = Depends(get_db)):
         -- no place in a numbered run it was never part of.
         ORDER BY (sw.role = 'side'), sw.position NULLS LAST, st.title
     """), {"i": r[0]}).fetchall()
+    # A series whose works have all been delisted is not a page. Three exist,
+    # each a one-work "series" whose single work was withdrawn — they rendered as
+    # a heading, a count and an empty list, which reads as a broken page rather
+    # than as nothing to show.
+    if not works:
+        raise HTTPException(404, "No such series")
+
     return {
-        "id": str(r[0]), "name": r[1], "author": r[2],
+        "id": str(r[0]), "name": _series_name(r[1], works), "author": r[2],
         "site": (r[3].value if hasattr(r[3], "value") else r[3]),
-        "source": r[4], "confidence": round(float(r[5]), 2), "work_count": r[6],
+        "source": r[4], "confidence": round(float(r[5]), 2),
+        # Counted from the works actually being returned, not from the stored
+        # column. That column is denormalised and had drifted on 478 series —
+        # 475 of them understating, so a page said "3 works" above a list of 5.
+        # There is nothing to keep in sync if it is derived.
+        "work_count": len(works),
         "main_count": sum(1 for w in works if (w[12] or "main") != "side"),
         "total_words": sum(w[4] or 0 for w in works),
         "works": [{
