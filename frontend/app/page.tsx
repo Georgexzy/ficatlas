@@ -1120,6 +1120,22 @@ function SearchPageInner() {
   // Monotonic token so a slow, stale search response can never overwrite a
   // newer one (rapid paging / filter changes used to race and win out of order).
   const searchSeqRef = useRef(0)
+  // Set by a control that has to take effect NOW rather than arm the Apply bar.
+  //
+  // Changing a filter normally does not re-search: it marks the filters dirty
+  // and an Apply bar appears, which is right for the sidebar, where you set
+  // several things and run them together. It is wrong for a one-click "show me
+  // the results you just told me are hidden" — that button states an outcome,
+  // so it has to produce it. Without this, clicking it flipped the toggle,
+  // raised the Apply bar somewhere else on the page, and left the same results
+  // on screen, which reads as the button doing nothing.
+  //
+  // A ref plus an effect rather than calling doSearch() inline, because
+  // doSearch closes over buildParams from the render that set the state — where
+  // `explicit` is still false. Same stale-closure trap the queryOverride and
+  // explicitPage arguments exist for; here the effect just waits for the new
+  // render, which is simpler than threading another override through.
+  const applyNowRef = useRef(false)
   // The in-flight search, so a superseded one can be cancelled outright rather
   // than merely ignored — the query keeps running on the server otherwise.
   const searchAbortRef = useRef<AbortController | null>(null)
@@ -1684,6 +1700,16 @@ function SearchPageInner() {
       if (seq === searchSeqRef.current) setLoading(false)
     }
   }, [buildParams, page, pathname, router, query, sites, refreshing, filterSig])
+
+  // Runs the search for a control that set applyNowRef — see the ref's note.
+  // Keyed on filterSig so it fires on the render AFTER the state change, by
+  // which point doSearch closes over the new filters.
+  useEffect(() => {
+    if (!applyNowRef.current) return
+    applyNowRef.current = false
+    doSearch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterSig])
 
   // Editing the bar edits the filters.
   //
@@ -2503,17 +2529,6 @@ function SearchPageInner() {
                       nothing, so the honest reading of the page was "the index
                       has one work by them". A count next to the total is the
                       only place a reader would look. */}
-                  {!explicit && (results.hidden_explicit ?? 0) > 0 && (
-                    <button className="results-bar__loose"
-                      onClick={() => setExplicit(true)}
-                      title="Explicit-rated works are hidden by your content setting. Click to include them.">
-                      {" · "}
-                      {results.hidden_explicit! > 999
-                        ? "999+ hidden as explicit"
-                        : `${results.hidden_explicit!.toLocaleString()} hidden as explicit`}
-                      {" — show"}
-                    </button>
-                  )}
 
                   {/* Without this it looks like the filters are broken: results
                       appear that have no value for the field being filtered. */}
@@ -2535,6 +2550,35 @@ function SearchPageInner() {
                 </span>
               </div>
               {refreshMsg && <div className="alert alert--success" style={{marginBottom:10}}>{refreshMsg}</div>}
+
+              {/* On its own line under the results bar, not tucked inside it.
+                  The first version was a small inline link among the counts and
+                  was reported as invisible — which it effectively was: it is a
+                  statement that the page is not showing you everything, and
+                  that cannot be quieter than the numbers it contradicts.
+
+                  The trap it exists for: browse hubs rank by kudos with no
+                  rating filter, so an explicit work sits at the top of a ship
+                  page, and clicking its author returned 1 of MesserMoon's 10
+                  works with nothing to say the other 9 existed. */}
+              {!explicit && (results.hidden_explicit ?? 0) > 0 && (
+                <div className="hidden-note">
+                  <span className="hidden-note__text">
+                    <strong>
+                      {results.hidden_explicit! > 999
+                        ? "999+ more works"
+                        : `${results.hidden_explicit!.toLocaleString()} more work${results.hidden_explicit === 1 ? "" : "s"}`}
+                    </strong>{" "}
+                    {results.hidden_explicit === 1 ? "matches" : "match"} this search
+                    but {results.hidden_explicit === 1 ? "is" : "are"} hidden, because{" "}
+                    {results.hidden_explicit === 1 ? "it is" : "they are"} rated explicit.
+                  </span>
+                  <button className="btn btn--primary hidden-note__btn"
+                    onClick={() => { applyNowRef.current = true; setExplicit(true) }}>
+                    Show {results.hidden_explicit === 1 ? "it" : "them"}
+                  </button>
+                </div>
+              )}
 
               <div className="story-list">
                 {results.results.length === 0 ? (
@@ -2589,8 +2633,11 @@ function SearchPageInner() {
                           because {results.hidden_explicit === 1 ? "it is" : "they are"}{" "}
                           rated explicit.
                         </p>
+                        {/* applyNowRef, or this flips the toggle and leaves the
+                            same empty page on screen behind an Apply bar — a
+                            button that names an outcome has to produce it. */}
                         <button className="btn btn--primary no-results__fetch"
-                          onClick={() => setExplicit(true)}>
+                          onClick={() => { applyNowRef.current = true; setExplicit(true) }}>
                           Show {results.hidden_explicit! > 999 ? "them"
                             : results.hidden_explicit === 1 ? "it" : `all ${results.hidden_explicit!.toLocaleString()}`}
                         </button>
