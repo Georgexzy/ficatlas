@@ -58,7 +58,14 @@ export default async function ShipsIndex() {
 
   return (
     <div className="hub-page hub">
-      <SiteHeader />
+      {/* current="browse" so the header marks this as the browse section too —
+          /ships is the other half of it, not a page outside it. */}
+      <SiteHeader current="browse" />
+      <nav className="browse-switch" aria-label="Browse by">
+        <Link href="/fandoms" className="browse-switch__item">Fandoms</Link>
+        <span className="browse-switch__item browse-switch__item--current"
+          aria-current="page">Pairings</span>
+      </nav>
       <h1>Browse pairings</h1>
       <p className="hub__lede">
         {ships.length.toLocaleString()} pairings indexed across Archive of Our

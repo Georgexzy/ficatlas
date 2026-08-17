@@ -4896,3 +4896,40 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   border-radius: 999px; transition: color 0.15s, border-color 0.15s;
 }
 .story-hubs__link:hover { color: var(--accent); border-color: var(--accent); }
+
+/* The secondary reason on the no-results screen — offered alongside the likelier
+   ones rather than competing with them. See page.tsx. */
+.no-results__sub--muted {
+  font-size: 13px; color: var(--text-faint); margin-top: 18px; margin-bottom: 10px;
+}
+
+/* ── Browse axis switcher ─────────────────────────────────────────────────────
+   Fandoms | Pairings, on both browse index pages. The phone tab bar cannot grow
+   a fifth item (six overflow a 375px screen), so this is how /ships is reachable
+   on a phone — and on desktop it states plainly that there are exactly two ways
+   to browse, which two separate header links do not. */
+.browse-switch {
+  display: inline-flex; gap: 2px; margin-bottom: 18px;
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 2px;
+}
+.browse-switch__item {
+  font-size: 13px; padding: 5px 14px; border-radius: calc(var(--radius) - 2px);
+  color: var(--text-dim); text-decoration: none; transition: color 0.15s, background 0.15s;
+}
+.browse-switch__item:hover { color: var(--accent); }
+.browse-switch__item--current {
+  /* --surface2, not --surface-2. The misspelling resolved to the fallback and
+     looked fine, which is how --danger and --font-display went unnoticed for
+     months (see IMPROVEMENTS.md §7). Defined in all five theme blocks. */
+  background: var(--surface2); color: var(--text); cursor: default;
+}
+.browse-switch__item--current:hover { color: var(--text); }
+
+/* The header's Browse slot carries a second, smaller destination rather than a
+   fifth top-level item. See SiteHeader.tsx. */
+.header__browse { display: inline-flex; align-items: baseline; gap: 2px; }
+.header__sublink {
+  font-size: 11px; color: var(--text-faint); text-decoration: none;
+  padding: 5px 6px 5px 0; white-space: nowrap; transition: color 0.15s;
+}
+.header__sublink:hover { color: var(--accent); }
