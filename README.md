@@ -19,8 +19,10 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Search-first discovery** — you don't need the Import tab to get fics: when a search returns few or no indexed results and AO3 is selected, the app auto-pulls a deeper live batch (and the no-results screen has a one-click "Search AO3 directly" button). The Import tab remains the full power-user control panel for bulk scrapes
 - **Canonical-tag autocomplete in Import** — the Import tab's fandom fields autocomplete index-first, then fall back to AO3's canonical fandom names (`/api/stats/suggest-canonical`) so you can discover and correctly spell new fandoms to scrape, avoiding malformed-tag errors. That vocabulary is synced into our own facets table by `ao3_canonical_fandoms.py` — 73,732 canonical names in 12 requests against AO3's public `/media/<category>/fandoms` listings, refreshed occasionally. It is deliberately **not** AO3's `/autocomplete/` endpoint, which their robots.txt disallows and which this box would otherwise have called on every keystroke
 - **Per-archive result breakdown** — the results bar reads `187 stories · 124 AO3 + 63 FF.net`, which is the one thing no single archive can tell you: that a search found work in more than one place, and how much of it you would have missed searching only the archive you usually use. Counted over the same bounded candidate set as the total, so it costs nothing measurable, and **withheld when the count is capped** — the candidate set behind a capped total is not exactly that size, so the parts would not sum to the headline
-- **Browse by fandom** — 5,025 fandom pages (`/fandoms`, `/fandom/<slug>`), each listing the 50 most-read works **per archive** rather than one merged list. Ranking across archives could only ever return AO3: kudos exists on 239,588 AO3 rows against 1,470 of FanFiction.net's 6.6M, and an AO3 kudos and an FF.net favourite are different units counted by different populations. Reachable from the header and the phone tab bar, and the only route a search engine has into the index — search URLs are `/?q=…`, which robots.txt blocks as an infinite crawl space
-- **Cross-archive popularity** (`popularity_rank.py`, computed offline; **not yet wired to a sort**) — the answer to the line above, which is why the two sit together. The archives do not count on the same scale: average kudos/favs is 190 on AO3 against 1,676 on FanFiction.net, so a raw column sorts mostly by *which site a row came from*. Each metric is converted to a percentile **within its own archive** — "top 1% of AO3" and "top 1% of FF.net" mean the same thing whatever the scales do, and unlike a fixed multiplier it self-corrects as coverage changes. Weighted by what the action costs a reader (bookmarks/follows .35, kudos/favs .30, comments/reviews .20, hits .15), renormalised over the metrics a work actually has, shrunk toward the median by how much of the picture was visible, and blended 75/25 with the same standing per √day alive so an old work does not out-rank a better new one purely by having had longer. A `0` counts as *absent*, not as unpopular — the bulk imports wrote 0 everywhere — so unscored works get NULL and sort out of the way
+- **Browse by fandom** — 5,025 fandom pages (`/fandoms`, `/fandom/<slug>`), each listing the 50 most-read works **per archive** rather than one merged list. Ranking across archives could only ever return AO3: kudos exists on 239,588 AO3 rows against 1,470 of FanFiction.net's 6.6M, and an AO3 kudos and an FF.net favourite are different units counted by different populations. Reachable from the header and the phone tab bar, and one of the two routes a search engine has into the index — search URLs are `/?q=…`, which robots.txt blocks as an infinite crawl space
+- **Browse by pairing** — 2,553 ship pages (`/ships`, `/ship/<slug>`), the other route in, and the one where a cross-archive index has something to say that no single archive can. AO3's tag pages cover AO3; `/ship/draco-malfoy-harry-potter` puts 50 AO3, 50 FanFiction.net and 50 FicAlley works for the same pairing on one page, out of 49,962 indexed. Both orders of a pairing collapse onto one page — "Draco Malfoy/Harry Potter" (47,460 works), "Harry Potter/Draco Malfoy" (1,541) and "Harry Potter/ Draco Malfoy" (46) are one ship, not three thin duplicates. The slug is alphabetical so the URL is stable, while the heading and its search link use the spelling the archives actually use. Romantic pairings only: AO3's `/` and `&` mean different things to the people reading, and they slugify identically, so building both would merge a ship with a friendship
+- **Story pages link back to both** — a work's fandom and ship hubs are rendered server-side on `/story/<id>`. Before that every link out of a story page pointed at `/?fandoms=…`, which robots.txt blocks, so the hubs fed ~750k story pages and got nothing back: the crawl went in and did not come out
+- **Cross-archive popularity** — the "Most popular" sort, and the answer to the two lines above, which is why they sit together. Computed offline by `popularity_rank.py` and recomputed weekly by the worker (`REBUILD_POPULARITY`), because the score is a percentile among the works that *have* an engagement figure — so every work the crawler gives kudos to needs the percentiles rebuilt to be placed at all. The archives do not count on the same scale: average kudos/favs is 190 on AO3 against 1,676 on FanFiction.net, so a raw column sorts mostly by *which site a row came from*. Each metric is converted to a percentile **within its own archive** — "top 1% of AO3" and "top 1% of FF.net" mean the same thing whatever the scales do, and unlike a fixed multiplier it self-corrects as coverage changes. Weighted by what the action costs a reader (bookmarks/follows .35, kudos/favs .30, comments/reviews .20, hits .15), renormalised over the metrics a work actually has, shrunk toward the median by how much of the picture was visible, and blended 75/25 with the same standing per √day alive so an old work does not out-rank a better new one purely by having had longer. A `0` counts as *absent*, not as unpopular — the bulk imports wrote 0 everywhere — so unscored works get NULL and sort out of the way
 - **`author:` / `by:` operator** — `author:lightning on the wave` finds that author's works. Pen names with spaces need no quotes; quoting is still accepted
 - **Spelling-tolerant tag matching** — freeform tags are whatever the author typed, and 132,714 of 1,574,508 tag values (8.4%) differ from another only by case and punctuation. "fluff" exists as 44 separate values (`fluff!`, `#fluff`, `F L U F F`, `F.L.U.F.F.`); Hurt/Comfort as 33 (`hurt-comfort`, `hurt & comfort`, `hurt|comfort`). Searching any spelling now reaches the rest. Mechanical only: this merges spellings, never meanings — the semantic half genuinely cannot be automated ([FanFicFare #1340](https://github.com/JimmXinu/FanFicFare/issues/1340): Naruto alone has ~300 tags meaning the same thing)
 - **Standing "never show me" list** — ships, tags, fandoms, characters and authors excluded from *every* search automatically, kept on your device and never sent in a shared search link
@@ -508,13 +510,28 @@ republish nothing. See the opt-out note under **Reading & library**.
 | `wc:>100k` `words:200k+` | Word count operator |
 | `updated:1y` `since:2024` | Date filters |
 | `lang:French` | Language |
-| `site:ao3` | Restrict to one site |
+| `site:ao3` | Restrict to one site — also `ffnet`, `fictionalley` |
+| `site:fanfiction.net` | The archive names are aliased: `ff.net`, `ffn`, `archiveofourown.org`, `ficalley` and the domain you pasted all resolve |
 | `-tag:fluff` | Exclude (prefix any operator with `-`) |
 | `complete` `wip` `mature` | Standalone status/rating words |
 | `https://archiveofourown.org/works/12345` | Paste a URL to import the story |
 
 Free text runs through Postgres `websearch_to_tsquery`, so `"exact phrase"`, `or`,
 and `-word` work in the non-operator part of a query too.
+
+**Operators with a fixed set of values take exactly one word**, so a filter and a
+query combine without quoting: `rating:M harry potter` filters by rating *and*
+searches for "harry potter". That applies to `site:`, `rating:`, `status:`,
+`updated:`, `words:`, `crossover:` and `series:`. Operators whose values are
+genuinely multi-word — `fandom:`, `ship:`, `char:`, `tag:`, `author:`, `lang:` —
+run to the next operator, stopping before trailing shorthand, so
+`fandom: Harry Potter complete >100k` still yields all three. Quote a value to
+bound it explicitly.
+
+An archive name that is not recognised drops the filter rather than applying one
+nothing can match: `site:goodreads harry potter` searches every archive for
+"harry potter" instead of returning zero results that read as "the index has
+none of this".
 
 ### How filters treat missing metadata
 
@@ -579,15 +596,22 @@ substring matching, so other fandoms behave as before.
                │ /api
 ┌──────────────▼──────────────────────┐      ┌────────────────────────────┐
 │  FastAPI backend (port 8000)        │      │  worker (same image)       │
-│  search · stories · library · stats │      │  scheduler · AO3 harvest   │
-│                                     │      │  FFN enrich · dedup        │
+│  search · stories · hubs · library  │      │  scheduler · AO3 harvest   │
+│  stats                              │      │  FFN enrich · dedup        │
+│                                     │      │  hubs · popularity         │
 └──────────────┬──────────────────────┘      └─────────────┬──────────────┘
                │                                           │
 ┌──────────────▼───────────────────────────────────────────▼──────────────┐
 │  PostgreSQL 16                                                          │
 │  stories · chapters · crawl_jobs · facets · users                       │
+│  fandom_hubs · ship_hubs                                                │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+Both hub tables have the same shape and are written by one builder
+(`hub_build.build_groups`); `fandom_hubs.py` and `ship_hubs.py` differ only in
+how they collapse facet rows into groups — an author suffix for fandoms, pairing
+order for ships.
 
 The worker runs the scheduler (`RUN_SCHEDULER`) so the API never double-polls,
 and owns every long backfill. Anything started with `docker compose exec backend`
@@ -616,6 +640,8 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
 - `GET  /api/library/ao3-status` / `POST /api/library/admin/clear-ao3-cooldown` — AO3 block cooldown state/reset
 - `GET  /api/library/hosted` · `DELETE /api/library/hosted/{id}` — manage hosted stories
 - `GET/POST /api/settings` — read or update runtime settings
+- `GET  /api/hubs` · `GET /api/hubs/{slug}` — fandom hubs, backing `/fandoms` and `/fandom/<slug>`
+- `GET  /api/ships` · `GET /api/ships/{slug}` — ship hubs, backing `/ships` and `/ship/<slug>`
 - `GET  /api/stats/sites` · `GET /api/stats/totals` — index counts and totals
 - `GET  /api/stats/suggest?kind=&q=` — tag autocomplete · `POST /api/stats/refresh-facets` — rebuild autocomplete index
 - `POST /api/auth/signup` · `/login` · `/logout` · `GET /api/auth/me` — authentication

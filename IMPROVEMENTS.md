@@ -594,3 +594,123 @@ Note: Reddit was requested as a source but blocks Anthropic's crawler
 (`400: domain not accessible`), so the community signal above comes from app
 store reviews, Tumblr, Goodreads and project issue trackers instead. If you want
 Reddit specifically, pasting threads in works — the search tool cannot reach them.
+
+---
+
+## 8. Audit — 2026-08-17, after the public launch
+
+The 2026-08-09 pass above predates `ficatlas.com` (first `deploy/` commit
+2026-08-12), so the public tier had never been audited. This covers that, plus a
+fresh pass over search, the hub builders and the query parsers.
+
+Traffic at the time of writing: four days of data, ~96 non-bot hits, 15 visitors
+on the best day, and **`ref_host` is `(direct)` on every single row** — nothing
+on the internet links here. `site:ficatlas.com` returns zero indexed pages. That
+reframes what is worth fixing: the constraint is not capacity, it is that the
+crawlable surface was one axis wide and the pages it fed led nowhere.
+
+### 8.1 Live now, and not when it was written up
+
+**The rate limiter and the login lockout are at 2x their configured values on
+the public site.** §2 called this P1 and deferred it, correctly, because the dev
+stack ran one worker: *"It becomes one the moment the prod overlay is used."*
+That moment arrived and nobody re-checked. `docker-compose.public.yml` runs
+`uvicorn --workers 2` with `RATE_LIMIT: "true"`, and two worker processes have
+been up since Aug 15 (`docker top ficatlas-public-api-blue-1`).
+
+So on the internet-facing tier, with signup open:
+
+* `RATE_AUTH=10` admits 20 login attempts a minute, because the counter is a
+  module-level `defaultdict` in `ratelimit.py` and each worker has its own;
+* the lockout in `api/auth.py` (`_login_fails`) admits twice the failures before
+  locking;
+* `api/search.py`'s live-fetch dedup can schedule the same AO3 fetch twice.
+
+Plan C in §6 still applies unchanged, and its own conclusion — one worker with
+more CPU is the cheaper correct answer — is now a decision to make rather than
+one to defer. **Not changed here**: dropping the public API to `--workers 1` is a
+capacity decision on a live site and belongs to whoever owns that call.
+
+### 8.2 Fixed in this pass
+
+**`popularity` was never scheduled.** `popularity_rank.py` had no loop anywhere;
+it was run by hand. Since the score is a percentile among works that HAVE an
+engagement figure, every work the crawler gives kudos or bookmarks to needs the
+percentiles recomputed to be placed at all — and until then holds NULL and sorts
+behind everything scored. Measured: **1,078,121 works carried a signal and
+550,384 had a score**, so 527,737 — half the eligible population — were invisible
+to the one sort that is honest across archives. This is precisely the failure
+`_hubs_loop` was written for, on a different table. Now `_popularity_loop`,
+weekly.
+
+**The hub stale sweep could delete the hubs it had just built.** It was
+`DELETE ... WHERE built_at < now() - interval '1 hour'`, which silently assumes
+the rebuild finishes inside an hour. It takes ~4 minutes today, so the margin is
+large — but groups are written largest-first, so if it were ever wrong the rows
+aged past the cutoff would be the biggest fandoms, deleted by their own rebuild.
+Now compared against the run's own start time, which cannot go wrong however
+long the run takes.
+
+**`--limit N` deleted every hub it did not rebuild.** The flag's help text calls
+it a trial run; `python fandom_hubs.py --limit 10` wrote 10 hubs and pruned the
+other 5,015. Pruning is now skipped for any partial run.
+
+**`rating:M harry potter` searched the whole index.** A bare operator value ran
+to the next operator key, which is right for `fandom: Harry Potter` and wrong for
+every operator with a fixed vocabulary. `rating:M harry potter` took
+"M harry potter" as the rating — nothing matched it, AND no search text was left.
+Same shape for `site:`, `status:`, `updated:` and `words:`. All four silently
+returned everything or nothing with no sign the operator had eaten the query.
+Fixed with `_SINGLE_TOKEN`; `language` is excluded because "Bahasa Indonesia" is
+a real value.
+
+**The two query parsers had drifted.** `frontend/lib/queryParser.ts` never
+stripped trailing shorthand, so `fandom:Harry Potter complete >100k` — the
+README's headline syntax — set the fandom to the whole string and matched
+nothing when typed into the bar, while the identical string sent to the API
+worked. Found by writing the frontend's first parser test, which is now a mirror
+of the backend's cases and exists to catch exactly this.
+
+**`site:` accepted one spelling of three archives.** `site:ao3` worked;
+`site:FF.net`, `site:fanfiction.net` and `site:archiveofourown.org` built a
+filter no row could satisfy. Aliased in both parsers, and an unrecognised archive
+now drops the filter instead of guaranteeing zero results.
+
+**`.header__link` was defined twice**, ~800 lines apart, so the hover colour
+written in the first block never rendered and its transition ran at the other
+block's duration — while the padding and `white-space` from the same block did
+apply. `tests/check-css.py` was failing on it. Merged.
+
+### 8.3 Built in this pass
+
+**Ship hubs — 2,553 new crawlable pages.** The fandom hubs compete for
+"[fandom] fanfiction", which AO3 owns and nothing here will outrank. Pairings are
+how readers search, the demand is concentrated (87,992 works for Castiel/Dean
+Winchester), and it is where the cross-archive claim is provable rather than
+asserted: AO3's tag pages cover AO3, while `/ship/draco-malfoy-harry-potter`
+puts 50 AO3, 50 FanFiction.net and 50 FicAlley works for the same pairing on one
+page. Same table shape and the same builder as the fandom hubs.
+
+**Story pages stopped being crawl dead ends.** Every link out of a story page
+pointed at `/?fandoms=…` or `/?relationships=…` — search URLs, blocked in
+robots.txt. So a crawler followed hubs down into ~750k story pages and found
+nothing it could follow back: the story pages absorbed the crawl and returned
+none of it. `_hub_links` resolves a work's fandoms and ships against the hub
+tables (not by slugifying, so it never links to a hub that was never built) and
+`story/[id]/page.tsx` renders them server-side, outside the client shell.
+
+**The traffic report reads in English.** Top pages was a list of
+`/story/4b15fe7e-…/chapter/58`. Ids are resolved to titles at report time rather
+than stored — `tracking.py` asks that you think before adding a column, and a
+title recorded at view time would freeze rather than follow a retitle.
+
+### 8.4 Not fixed, deliberately
+
+* **`ffnet-harvester/node_modules` is committed** — 586 files, 13MB, fully
+  reproducible from its `package-lock.json`. `.gitignore` now covers it, but
+  clearing what is already tracked is a 586-file deletion and should be a
+  deliberate commit: `git rm -r --cached ffnet-harvester/node_modules`.
+* **`fictionalley_importer.py:56` hardcodes `password="ficatlas"`** for the
+  temp import database. Low severity — a one-off importer against a scratch DB,
+  not a live credential — but it is a password in a tracked file.
+* **Plan F (sanitise once)** from §6 remains outstanding.

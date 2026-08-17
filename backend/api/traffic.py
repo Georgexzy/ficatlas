@@ -21,6 +21,7 @@ the browser rather than off the request log.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -122,19 +123,101 @@ def summary(days: int = Query(30, ge=1, le=365),
     }
 
 
+# ── making the paths readable ───────────────────────────────────────────────
+#
+# Half the routes on this site are addressed by opaque id, so the top-pages
+# report reads as
+#
+#     /story/4b15fe7e-51aa-46c6-b8ec-f0738c8e7b3c/chapter/58    4 views
+#
+# which says nothing about what anyone read. The titles are resolved HERE, at
+# report time, rather than being stored alongside the pageview:
+#
+#   * tracking.py's table is deliberately minimal and its docstring asks that
+#     you think before adding a column. This needs no column.
+#   * a title recorded at view time freezes; resolving on read always shows the
+#     work's current title, and follows a retitle rather than preserving a
+#     stale copy of it.
+#   * it costs a handful of primary-key lookups against a list already capped
+#     at `limit` rows, on an owner-only page nobody loads in a loop.
+#
+# An id that no longer resolves — a withdrawn work, a rebuilt hub — keeps its
+# raw path. Showing the path is honest about not knowing; inventing a label
+# would not be.
+_UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_STORY = re.compile(rf"^/story/({_UUID})(?:/chapter/(\d+))?/?$", re.I)
+_SERIES = re.compile(rf"^/series/({_UUID})/?$", re.I)
+_HUB = re.compile(r"^/(fandom|ship)/([a-z0-9-]+)/?$", re.I)
+
+
+def _lookup(db, sql: str, keys: set) -> dict[str, str]:
+    if not keys:
+        return {}
+    try:
+        return {str(r[0]): r[1] for r in
+                db.execute(text(sql), {"k": list(keys)}).fetchall()}
+    except Exception:
+        # A report that renders raw paths is much better than one that 500s.
+        log.debug("traffic: label lookup failed", exc_info=True)
+        return {}
+
+
+def _labels(db, paths: list[str]) -> dict[str, str]:
+    """path -> human-readable label, for the paths that have one."""
+    stories, series, fandoms, ships = set(), set(), set(), set()
+    for p in paths:
+        if m := _STORY.match(p):
+            stories.add(m.group(1).lower())
+        elif m := _SERIES.match(p):
+            series.add(m.group(1).lower())
+        elif m := _HUB.match(p):
+            (fandoms if m.group(1).lower() == "fandom" else ships).add(
+                m.group(2).lower())
+
+    titles = _lookup(db, "SELECT id, title FROM stories WHERE id = ANY(CAST(:k AS uuid[]))", stories)
+    snames = _lookup(db, "SELECT id, name FROM series WHERE id = ANY(CAST(:k AS uuid[]))", series)
+    fnames = _lookup(db, "SELECT slug, name FROM fandom_hubs WHERE slug = ANY(:k)", fandoms)
+    shnames = _lookup(db, "SELECT slug, name FROM ship_hubs WHERE slug = ANY(:k)", ships)
+
+    out: dict[str, str] = {}
+    for p in paths:
+        if m := _STORY.match(p):
+            title = titles.get(m.group(1).lower())
+            if title:
+                # The chapter number stays on the label. Chapters are separate
+                # rows in this report and collapsing them would hide the one
+                # thing the chapter path actually tells you — how far into a
+                # long work people are getting.
+                out[p] = f"{title} — ch {m.group(2)}" if m.group(2) else title
+        elif m := _SERIES.match(p):
+            if name := snames.get(m.group(1).lower()):
+                out[p] = f"{name} (series)"
+        elif m := _HUB.match(p):
+            kind = m.group(1).lower()
+            src = fnames if kind == "fandom" else shnames
+            if name := src.get(m.group(2).lower()):
+                out[p] = f"{name} ({'fandom' if kind == 'fandom' else 'pairing'})"
+    return out
+
+
 @router.get("/pages")
 def pages(days: int = Query(30, ge=1, le=365),
           limit: int = Query(30, ge=1, le=200),
           db: Session = Depends(get_db),
           _owner=Depends(require_owner)):
-    """Most-viewed paths."""
+    """Most-viewed paths, with ids resolved to titles where they have one."""
     rows = db.execute(text("""
         SELECT path, count(*) AS views, count(DISTINCT visitor) AS visitors
         FROM visit_events
         WHERE at >= :cut AND kind = 'page' AND NOT bot
         GROUP BY path ORDER BY views DESC LIMIT :lim
     """), {"cut": _window(days), "lim": limit}).fetchall()
-    return {"pages": [{"path": r[0], "views": r[1], "visitors": r[2]} for r in rows]}
+
+    # `label` is added alongside `path`, never in place of it: the path is what
+    # identifies the row and what a link has to point at.
+    labels = _labels(db, [r[0] for r in rows])
+    return {"pages": [{"path": r[0], "label": labels.get(r[0]),
+                       "views": r[1], "visitors": r[2]} for r in rows]}
 
 
 @router.get("/searches")

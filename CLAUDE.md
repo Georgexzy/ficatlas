@@ -77,6 +77,36 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   lowercases internally. Keep them aligned with `api/search.py` predicates.
 - README figures are checked by `python3 tests/check-readme.py` — run it after
   editing README numbers.
+- **There are two hub tables, built by one module.** `fandom_hubs` (5,025 rows,
+  one per fandom) and `ship_hubs` (2,553 rows, one per romantic pairing) have an
+  identical shape and are both written by `hub_build.build_groups`; `api/hubs.py`
+  serves both through one pair of helpers, mounted at `/api/hubs` and
+  `/api/ships`. They exist because search URLs are blocked in robots.txt, so a
+  crawler needs bounded real pages to walk. Ships are the half that can rank —
+  nothing outranks AO3 for "[fandom] fanfiction".
+  - Ship slugs are ALPHABETICAL (`john-watson-sherlock-holmes`) so "A/B" and
+    "B/A" collapse and the URL never changes; the DISPLAYED name is the
+    most-used spelling ("Sherlock Holmes/John Watson"), because that is what the
+    page's search link passes to facet resolution. Do not make them agree by
+    changing the slug — popularity moves between rebuilds and would rename
+    indexed URLs.
+  - Romantic (`/`) only. Platonic (`&`) slugifies identically, so building both
+    would merge a ship and a friendship onto one URL.
+  - `--limit N` on either builder SKIPS the stale sweep. It used to prune
+    regardless, so a `--limit 10` trial run deleted the other 5,015 hubs.
+- **Story pages must keep a server-rendered link back to their hubs.** The client
+  body links fandoms and ships to `/?fandoms=…`, which robots.txt blocks, so
+  before `_hub_links` in `api/stories.py` every story page was a crawl dead end:
+  hubs fed ~750k story pages and got nothing back. The `hubs` field on
+  `StoryDetail` and the `.story-hubs` nav in `story/[id]/page.tsx` are that link,
+  and it has to stay OUTSIDE `StoryClient` to be in the server HTML.
+- **`popularity` is recomputed by the worker, not by hand.** `popularity_rank.py`
+  had no loop, so the one sort that is honest across archives was frozen at
+  whatever the last manual run produced — 550,384 works scored against 1,078,121
+  carrying an engagement signal, so half the eligible index sorted behind
+  everything. `_popularity_loop` runs it weekly (`REBUILD_POPULARITY`,
+  `POPULARITY_INTERVAL_HOURS`). Do not remove it and go back to running the
+  script by hand.
 - **Do not re-add `ix_stories_tags_trgm` / `ix_stories_relationships_trgm`.** They
   were 4.4GB with zero scans and zero code references (tag and relationship
   filtering uses facet resolution + array containment `&&`, served by the plain
@@ -138,6 +168,22 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   cut in half and fails with "syntax error at end of input" — while every
   statement around it succeeds and startup logs nothing above a skipped-statement
   count. Keep semicolons out of inline DDL comments.
+- **Operator values in the search bar are single-token for the enumerated ones.**
+  `_SINGLE_TOKEN` in `query_parser.py` and its twin in `frontend/lib/queryParser.ts`.
+  A bare value otherwise runs to the next operator key, which is right for
+  `fandom: Harry Potter` and was silently wrong for every fixed-vocabulary
+  operator: `rating:M harry potter` took "M harry potter" as the rating, so no
+  rating matched AND no search text was left — the bar searched the whole index.
+  Same for `site:`, `status:`, `updated:`, `words:`. `language` is deliberately
+  NOT in the set ("Bahasa Indonesia" is a real value).
+- **The two query parsers must agree.** `backend/query_parser.py` and
+  `frontend/lib/queryParser.ts` both parse the same string — the bar to render
+  chips and build the URL, the API when it re-parses on the way in. They had
+  drifted: the frontend never stripped trailing shorthand, so
+  `fandom:Harry Potter complete >100k` (the README's headline syntax) set the
+  fandom to the whole string and matched nothing when typed, while the same
+  string sent to the API worked. `frontend/lib/queryParser.test.ts` asserts the
+  same cases as `backend/tests/test_query_parser.py`; keep them mirrored.
 - Never put a `:param` token inside a `--` comment in a `text()` query.
   SQLAlchemy binds it there too and psycopg2 substitutes into the comment, so any
   value containing a newline escapes into executable SQL. This stalled series

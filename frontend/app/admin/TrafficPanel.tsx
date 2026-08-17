@@ -18,7 +18,10 @@ interface Summary {
   retention_days: number
   enabled: boolean
 }
-interface PageRow { path: string; views: number; visitors: number }
+// `label` is the story, series or hub name the path resolves to, and is absent
+// for paths that are already readable (/library) or whose id no longer resolves.
+// The path always comes too — it is what the row links to.
+interface PageRow { path: string; label?: string | null; views: number; visitors: number }
 interface SearchRow { query: string; runs: number; visitors: number; results: number | null }
 interface EmptyRow { query: string; runs: number }
 interface RefRow { host: string; hits: number; visitors: number }
@@ -148,11 +151,20 @@ export default function TrafficPanel() {
       <h2 className="admin-site__name">Most-viewed pages</h2>
       {pages?.length ? (
         <table className="traffic-table">
-          <thead><tr><th>Path</th><th>Views</th><th>Visitors</th></tr></thead>
+          <thead><tr><th>Page</th><th>Views</th><th>Visitors</th></tr></thead>
           <tbody>
             {pages.map(p => (
               <tr key={p.path}>
-                <td className="traffic-table__q">{p.path}</td>
+                {/* Title first, path underneath. A row reading
+                    /story/4b15fe7e-…/chapter/58 told you nothing about what was
+                    read; the path still has to be here, because it is what
+                    identifies the row and where the link goes. */}
+                <td className="traffic-table__q">
+                  <a href={p.path} target="_blank" rel="noopener noreferrer">
+                    {p.label || p.path}
+                  </a>
+                  {p.label && <span className="traffic-table__path">{p.path}</span>}
+                </td>
                 <td>{p.views}</td><td>{p.visitors}</td>
               </tr>
             ))}

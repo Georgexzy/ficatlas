@@ -1,5 +1,11 @@
 frontend/.next/
 frontend/node_modules/
+# ffnet-harvester's was never listed here, so 586 files and 13MB of Playwright
+# are committed to the repo — reproducible from its package-lock.json by `npm
+# ci`, so they are pure weight on every clone. This rule stops it growing;
+# clearing what is already tracked needs a deliberate commit:
+#     git rm -r --cached ffnet-harvester/node_modules
+ffnet-harvester/node_modules/
 
 # Runtime data — never commit
 backend/data/
