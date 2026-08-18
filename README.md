@@ -1,7 +1,7 @@
 # FicAtlas
 
 A unified search engine for fanfiction. **20.0M works** indexed across AO3 (13.5M),
-FanFiction.net (6.6M) and FicAlley (30k), plus smaller curated sets and any
+FanFiction.net (6.6M) and FictionAlley (30k), plus smaller curated sets and any
 user-supplied EPUB. About 30,000 of those can be read in the app; the rest link
 out to the archive that hosts them.
 
@@ -11,7 +11,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 
 ### Search & discovery
 - **Unified search** in one query across AO3 (13.5M works), FanFiction.net (6.6M) and
-  FicAlley (30k), plus small curated sets — Dark Lord Potter's recommended list (746 works)
+  FictionAlley (30k), plus small curated sets — Dark Lord Potter's recommended list (746 works)
   and a handful from the HP FanFiction Archive (37). Those last two are labels on stories,
   not archives of their own scale, and are listed here so the numbers are not misleading
 - **Operator syntax** in any order: `fandom: Harry Potter ship:Draco/Hermione >100k complete updated:2y -tag:fluff`
@@ -20,7 +20,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Canonical-tag autocomplete in Import** — the Import tab's fandom fields autocomplete index-first, then fall back to AO3's canonical fandom names (`/api/stats/suggest-canonical`) so you can discover and correctly spell new fandoms to scrape, avoiding malformed-tag errors. That vocabulary is synced into our own facets table by `ao3_canonical_fandoms.py` — 73,732 canonical names in 12 requests against AO3's public `/media/<category>/fandoms` listings, refreshed occasionally. It is deliberately **not** AO3's `/autocomplete/` endpoint, which their robots.txt disallows and which this box would otherwise have called on every keystroke
 - **Per-archive result breakdown** — the results bar reads `187 stories · 124 AO3 + 63 FF.net`, which is the one thing no single archive can tell you: that a search found work in more than one place, and how much of it you would have missed searching only the archive you usually use. Counted over the same bounded candidate set as the total, so it costs nothing measurable, and **withheld when the count is capped** — the candidate set behind a capped total is not exactly that size, so the parts would not sum to the headline
 - **Browse by fandom** — 5,025 fandom pages (`/fandoms`, `/fandom/<slug>`), each listing the 50 most-read works **per archive** rather than one merged list. Ranking across archives could only ever return AO3: kudos exists on 670,508 AO3 rows against 355,648 of FanFiction.net's 6.6M, on scales nine times apart, and an AO3 kudos and an FF.net favourite are different units counted by different populations. Reachable from the header and the phone tab bar, and one of the two routes a search engine has into the index — search URLs are `/?q=…`, which robots.txt blocks as an infinite crawl space
-- **Browse by pairing** — 2,553 ship pages (`/ships`, `/ship/<slug>`), the other route in, and the one where a cross-archive index has something to say that no single archive can. AO3's tag pages cover AO3; `/ship/draco-malfoy-harry-potter` puts 50 AO3, 50 FanFiction.net and 50 FicAlley works for the same pairing on one page, out of 49,962 indexed. Both orders of a pairing collapse onto one page — "Draco Malfoy/Harry Potter" (47,460 works), "Harry Potter/Draco Malfoy" (1,541) and "Harry Potter/ Draco Malfoy" (46) are one ship, not three thin duplicates. The slug is alphabetical so the URL is stable, while the heading and its search link use the spelling the archives actually use. Romantic pairings only: AO3's `/` and `&` mean different things to the people reading, and they slugify identically, so building both would merge a ship with a friendship
+- **Browse by pairing** — 2,553 ship pages (`/ships`, `/ship/<slug>`), the other route in, and the one where a cross-archive index has something to say that no single archive can. AO3's tag pages cover AO3; `/ship/draco-malfoy-harry-potter` puts 50 AO3, 50 FanFiction.net and 50 FictionAlley works for the same pairing on one page, out of 49,962 indexed. Both orders of a pairing collapse onto one page — "Draco Malfoy/Harry Potter" (47,460 works), "Harry Potter/Draco Malfoy" (1,541) and "Harry Potter/ Draco Malfoy" (46) are one ship, not three thin duplicates. The slug is alphabetical so the URL is stable, while the heading and its search link use the spelling the archives actually use. Romantic pairings only: AO3's `/` and `&` mean different things to the people reading, and they slugify identically, so building both would merge a ship with a friendship
 - **Story pages link back to both** — a work's fandom and ship hubs are rendered server-side on `/story/<id>`. Before that every link out of a story page pointed at `/?fandoms=…`, which robots.txt blocks, so the hubs fed ~750k story pages and got nothing back: the crawl went in and did not come out
 - **Cross-archive popularity** — the "Most popular" sort, and the answer to the two lines above, which is why they sit together. Computed offline by `popularity_rank.py` and recomputed weekly by the worker (`REBUILD_POPULARITY`), because the score is a percentile among the works that *have* an engagement figure — so every work the crawler gives kudos to needs the percentiles rebuilt to be placed at all. The archives do not count on the same scale: average kudos/favs is 190 on AO3 against 1,676 on FanFiction.net, so a raw column sorts mostly by *which site a row came from*. Each metric is converted to a percentile **within its own archive** — "top 1% of AO3" and "top 1% of FF.net" mean the same thing whatever the scales do, and unlike a fixed multiplier it self-corrects as coverage changes. Weighted by what the action costs a reader (bookmarks/follows .35, kudos/favs .30, comments/reviews .20, hits .15), renormalised over the metrics a work actually has, shrunk toward the median by how much of the picture was visible, and blended 75/25 with the same standing per √day alive so an old work does not out-rank a better new one purely by having had longer. A `0` counts as *absent*, not as unpopular — the bulk imports wrote 0 everywhere — so unscored works get NULL and sort out of the way
 - **Index freshness, stated rather than implied** — the status widget separates two things that are easy to confuse: what *we* added ("Added past 24h"), and how much of the index is a **living work its author is still writing** ("Updated past 30d", at least 125,497 works). A third figure, "Re-checked past 7d", is a claim about our own freshness — works re-read from their source archive. Shown as a floor, not a percentage: `updated_at` is NULL for 64% of the index because the bulk dumps carry no date, so the true number is higher and anything quoting it says "at least"
@@ -81,7 +81,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **Offline saves that survive** — browsers evict origin storage under disk pressure, oldest origin first. So "saved" is, by default, a promise the browser is free to break silently, which is the most-reported failure of comparable reader apps. FicAtlas requests persistent storage **when an installed app starts**, not only when you save: [WebKit grants it on heuristics that include "whether the website is opened as a Home Screen Web App"](https://webkit.org/blog/14403/updates-to-storage-policy/), so asking at launch is what gets it granted on iOS — and the same policy gives an installed app the same quota as a browser, up to 60% of disk, not the 50MB figure that circulates. The quota is checked *before* downloading so a long work fails up front with real numbers rather than part-way through, every save is **read back** before it reports success, and the Library audits saves on load and says plainly which the browser has emptied — while you still have a connection to fix it
 - **Downloads that survive a tunnel** — a save cut short by a lost connection keeps every chapter it fetched and records the rest, so the work is readable up to that point and finishes itself when the connection returns. It says so too: `◐ Saved, 22 to go` rather than a flat "saved" on a work missing sixty chapters. Long works also wait out the site's own rate limit instead of failing — a 199-chapter work used to abort at chapter 166 with HTTP 429 and discard everything
 - **Your offline shelf follows you** — the *list* of works you chose to keep offline syncs across devices; the chapters deliberately do not, since they are megabytes and the other device can fetch the text itself. Open the Library on your phone and the works you picked on your laptop are listed, one tap from downloading
-- **Follow a work** — the one subscription list AO3, FanFiction.net and FicAlley cannot give you between them. There is no notification queue: an update is a *comparison* against what you had seen, answered at read time, so a work is flagged correctly whichever path updated it and no missed event can leave a follow permanently stale
+- **Follow a work** — the one subscription list AO3, FanFiction.net and FictionAlley cannot give you between them. There is no notification queue: an update is a *comparison* against what you had seen, answered at read time, so a work is flagged correctly whichever path updated it and no missed event can leave a follow permanently stale
 - **Similar stories** — every story detail page shows an "If you like this, try…" section, recommending reads by shared fandoms/ships/tags with overlap scoring (ships weighted highest, then fandom, then freeform tags, with a small popularity tiebreaker)
 - **Scroll-position reading progress** — debounced save of chapter + scroll position; opening a chapter you've partly read jumps back to where you left off
 - **iOS Books-style hosted library** — book covers with hashed gradients, hover lift, drop shadow. Each shows an amber progress bar across the bottom and `Ch N/M · X%` when you've started reading. Clicking deep-links to your saved chapter, not chapter 1
@@ -211,7 +211,7 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 
 - **Update tracking** — the index is not a snapshot of import day. Tag pages sorted by `revised_at` are AO3's own update ordering, so tracked fandoms surface changes on their own; any re-encounter applies updates forward-only; and a stale-refresh loop re-reads works most likely to have changed. That last one is weighted rather than naive: `exp(-days_since_update/365) × ln(1+kudos+hits) × ln(2+days_since_checked)`, so a fic updated last week is checked far sooner than one dormant three years, however popular. A measured pass found 22 of 26 re-read works had gained chapters
 - **Live AO3** filling the gap from 2021 onward
-- **FicAlley** for offline HP archive with full text
+- **FictionAlley** for offline HP archive with full text
 - **FicHub** for any fresh per-URL fetch
 
 ### Series detection
@@ -252,7 +252,7 @@ recovered through the Wayback route above:
 - **Backend** — FastAPI · SQLAlchemy · PostgreSQL 16 · APScheduler · httpx · BeautifulSoup4 · pyarrow · huggingface-hub
 - **Frontend** — Next.js 15 (App Router, `/api/*` rewrite proxy to backend) · TypeScript · Tailwind base + custom editorial CSS
 - **External services** — FicHub (cross-archive download API), Wayback Machine CDX, HuggingFace Hub
-- **Data sources** — HuggingFace `mrzjy/fanfiction_meta` (6.6M FFN rows) · AO3 Atom feeds · AO3 tag-works deep-scrape · DLP library list · Wayback Machine FFN URL discovery · FicHub per-URL · FicAlley dump · uploaded EPUBs
+- **Data sources** — HuggingFace `mrzjy/fanfiction_meta` (6.6M FFN rows) · AO3 Atom feeds · AO3 tag-works deep-scrape · DLP library list · Wayback Machine FFN URL discovery · FicHub per-URL · FictionAlley dump · uploaded EPUBs
 
 ## Deployment & accessing from another device
 
@@ -355,10 +355,10 @@ Search is served by Postgres indexes that `init_db.py` creates:
 
 ## Importing data
 
-### FicAlley (≈30k Harry Potter stories with full text)
+### FictionAlley (≈30k Harry Potter stories with full text)
 
 ```bash
-# Copy the FicAlley pg_dump folder into the db container:
+# Copy the FictionAlley pg_dump folder into the db container:
 docker cp /path/to/faarchive ficatlas-db-1:/tmp/dump
 
 # Restore into a temp database:
@@ -557,7 +557,7 @@ other silently does not:
 |---|---:|---:|---:|
 | AO3 | 7,568,883 | 5,638,120 | 74,386 |
 | FanFiction.net | 1,293,899 | **0** | 5,278,073 |
-| FicAlley | 21,453 | **0** | 8,496 |
+| FictionAlley | 21,453 | **0** | 8,496 |
 
 "Complete" genuinely works across all three archives. "In Progress" is AO3-only —
 not because the other archives have no unfinished works (FanFiction.net is full of
@@ -692,14 +692,14 @@ Bulk indexing is one-time per source via the importers. Day-to-day, the live-fet
   the permitted `/tags/<tag>/works` instead) and `/autocomplete/`.
 - **FanFiction.net cannot be crawled at all, and the Internet Archive is the way round it.** FF.net has blocked automated access since 2021 and does it with Cloudflare. Eight endpoints were tested from this host — story pages, listings, author profiles, the Atom and RSS feeds, and both mobile URLs — and every one returns the same "Just a moment" challenge, so this is not a datacenter-IP problem. FicHub (which solves the challenge on its end) still works per URL but rate-limits hard and has itself reported FF.net as "fragile". The documented community workarounds are a human loading pages in their own browser, or Cloudflare-evasion proxies such as FlareSolverr and `undetected-chromedriver`; the second is not something this project will use.
   What does work is not asking FF.net. The Archive crawls it independently, their CDX API is public, and `web.archive.org` is not behind the challenge — 20,000+ successful FF.net story captures since January 2026, which was the query limit rather than the ceiling. `ffnet_wayback.py` reads those snapshots for metadata and text, the same route `wayback_harvest.py` already takes for AO3 and on the same footing: the OTW's own scraping statement names backing works up to the Wayback Machine as acceptable use. It is **not** parity with AO3 — coverage is partial, it lags by however long a recrawl takes, and most captures are redirects or non-first chapters rather than usable pages. Measured against the Archive's index, 2,385 of 2,464 sampled FF.net story ids are already here, so the bulk dump is ~96% complete and this closes the remainder.
-- **AO3 latency, not blocking** — from a normal residential connection AO3 is reachable, but its filtered-works and atom-feed endpoints are slow to generate (≈7s typical, spiking to 15–20s under load) and intermittently return Cloudflare 525s when their origin is overloaded. The app handles this with generous granular timeouts, same-host 525 retries with backoff, and a brief self-cooldown only after many consecutive failures (not a single slow response). On a datacenter IP AO3 may block outright (525/timeouts on everything) — a Tailscale exit node or WARP routes around that. The HuggingFace dump, FicHub per-URL import, DLP, and FicAlley remain the fastest bulk paths.
+- **AO3 latency, not blocking** — from a normal residential connection AO3 is reachable, but its filtered-works and atom-feed endpoints are slow to generate (≈7s typical, spiking to 15–20s under load) and intermittently return Cloudflare 525s when their origin is overloaded. The app handles this with generous granular timeouts, same-host 525 retries with backoff, and a brief self-cooldown only after many consecutive failures (not a single slow response). On a datacenter IP AO3 may block outright (525/timeouts on everything) — a Tailscale exit node or WARP routes around that. The HuggingFace dump, FicHub per-URL import, DLP, and FictionAlley remain the fastest bulk paths.
 
 ## Acknowledgements
 
 - **AO3** — for publishing the official data dump
 - **FicHub** — for the cross-archive download API that bypasses Cloudflare cleanly
 - **Internet Archive** — for preserving FanFiction.net
-- The unofficial **FicAlley archive maintainers** — for keeping the dead site alive in pg_dump form
+- The unofficial **FictionAlley archive maintainers** — for keeping the dead site alive in pg_dump form
 - **Webis / Zenodo** — for publishing fanfiction research corpora openly, even where they were not the right fit here
 
 ## Status

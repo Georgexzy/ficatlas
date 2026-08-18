@@ -11,7 +11,7 @@ import { escapeJsonLd } from "@/lib/jsonLd"
 // nothing here will outrank. Pairings are how readers actually search, the
 // demand is concentrated (83,582 works for Castiel/Dean Winchester alone), and
 // it is where the cross-archive claim is provable rather than asserted: AO3's
-// own tag pages cover AO3, while this page puts the FanFiction.net and FicAlley
+// own tag pages cover AO3, while this page puts the FanFiction.net and FictionAlley
 // works for the same pairing beside them.
 //
 // Server-rendered for the same reason the fandom hubs are — every /story/ link
@@ -49,7 +49,7 @@ interface Hub {
 const SITE_LABELS: Record<string, string> = {
   ao3: "AO3",
   ffnet: "FanFiction.net",
-  fictionalley: "FicAlley",
+  fictionalley: "FictionAlley",
 }
 
 async function fetchShip(slug: string): Promise<Hub | null> {
@@ -87,7 +87,7 @@ export async function generateMetadata(
   const nick = hub.nicknames?.[0]
   const description =
     `Browse ${hub.work_count.toLocaleString()} ${nick ? `${nick} (${hub.name})` : hub.name} `
-    + `fanfics indexed from Archive of Our Own, FanFiction.net and FicAlley. `
+    + `fanfics indexed from Archive of Our Own, FanFiction.net and FictionAlley. `
     + `Search every archive at once, then read on the site that hosts them.`
   const title = nick
     ? `${nick} — ${hub.name} fanfiction`
@@ -151,7 +151,7 @@ export default async function ShipHub(
             ...(hub.nicknames?.length ? { alternateName: hub.nicknames } : {}),
             description:
               `${hub.work_count.toLocaleString()} ${hub.name} fanworks indexed from ` +
-              `Archive of Our Own, FanFiction.net and FicAlley.`,
+              `Archive of Our Own, FanFiction.net and FictionAlley.`,
             url: `${SITE}/ship/${hub.slug}`,
             isPartOf: { "@type": "WebSite", name: "FicAtlas", url: SITE },
             mainEntity: {
@@ -186,7 +186,7 @@ export default async function ShipHub(
       )}
       <p className="hub__lede">
         {hub.work_count.toLocaleString()} works tagged with this pairing across
-        Archive of Our Own, FanFiction.net and FicAlley. {" "}
+        Archive of Our Own, FanFiction.net and FictionAlley. {" "}
         <Link href={searchHref(hub.name)}>
           Search all {hub.work_count.toLocaleString()} with filters →
         </Link>

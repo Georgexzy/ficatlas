@@ -124,7 +124,7 @@ export default function TakedownPage() {
         <p><strong>We will not ask you to prove it.</strong> Fandom runs on pen
         names, and asking someone to document their identity to reclaim their own
         writing gets it backwards. Most of the stories hosted here came from
-        FicAlley, an archive that closed — there is no account left to prove
+        FictionAlley, an archive that closed — there is no account left to prove
         anything with even if we wanted it.</p>
         <p><strong>Nothing is deleted.</strong> A request hides the text
         immediately and permanently as far as readers are concerned, but it stays

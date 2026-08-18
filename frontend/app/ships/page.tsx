@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/ships" },
   description:
     "Every ship indexed on FicAtlas, across Archive of Our Own, FanFiction.net "
-    + "and FicAlley. Browse by pairing, then search within it.",
+    + "and FictionAlley. Browse by pairing, then search within it.",
 }
 
 interface HubSummary { slug: string; name: string; work_count: number; nicknames?: string[] }
@@ -70,7 +70,7 @@ export default async function ShipsIndex() {
       <h1>Browse pairings</h1>
       <p className="hub__lede">
         {ships.length.toLocaleString()} pairings indexed across Archive of Our
-        Own, FanFiction.net and FicAlley — every archive at once, which no single
+        Own, FanFiction.net and FictionAlley — every archive at once, which no single
         archive&rsquo;s tag page can do. Pick one to see its most popular works,
         browse <Link href="/fandoms">by fandom</Link> instead, or{" "}
         <Link href="/">search the whole index</Link> if you know what you want.

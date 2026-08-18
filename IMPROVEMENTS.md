@@ -688,7 +688,7 @@ apply. `tests/check-css.py` was failing on it. Merged.
 how readers search, the demand is concentrated (87,992 works for Castiel/Dean
 Winchester), and it is where the cross-archive claim is provable rather than
 asserted: AO3's tag pages cover AO3, while `/ship/draco-malfoy-harry-potter`
-puts 50 AO3, 50 FanFiction.net and 50 FicAlley works for the same pairing on one
+puts 50 AO3, 50 FanFiction.net and 50 FictionAlley works for the same pairing on one
 page. Same table shape and the same builder as the fandom hubs.
 
 **Story pages stopped being crawl dead ends.** Every link out of a story page

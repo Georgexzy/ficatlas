@@ -32,7 +32,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/fandoms" },
   description:
     "Every fandom indexed on FicAtlas, from Archive of Our Own, FanFiction.net "
-    + "and FicAlley. Browse by fandom, then search within it.",
+    + "and FictionAlley. Browse by fandom, then search within it.",
 }
 
 interface HubSummary { slug: string; name: string; work_count: number }
@@ -84,7 +84,7 @@ export default async function FandomsIndex() {
       <h1>Browse fandoms</h1>
       <p className="hub__lede">
         {hubs.length.toLocaleString()} fandoms indexed across Archive of Our Own,
-        FanFiction.net and FicAlley. Pick one to see its most popular works,
+        FanFiction.net and FictionAlley. Pick one to see its most popular works,
         browse <Link href="/ships">by pairing</Link> instead, or{" "}
         <Link href="/">search the whole index</Link> if you know what you want.
       </p>

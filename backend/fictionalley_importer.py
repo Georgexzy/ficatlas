@@ -1,5 +1,5 @@
 r"""
-FicAlley Archive Importer — full text (stories + chapters)
+FictionAlley Archive Importer — full text (stories + chapters)
 ==========================================================
 Imports stories AND their chapter content. Marks stories as is_hosted=True
 so the reader page knows to load the text from us, not link out.
@@ -45,7 +45,7 @@ def parse_rating(v):
 
 
 def wayback_url_for(story_id: str, author_id: str) -> str:
-    """Best-effort Wayback Machine URL for a FicAlley story."""
+    """Best-effort Wayback Machine URL for a FictionAlley story."""
     return f"https://web.archive.org/web/2018*/fictionalley.org/authors/{author_id}/{story_id}"
 
 
@@ -62,9 +62,9 @@ def import_all(limit, include_hidden, include_corrupt, with_chapters):
     authors = {r["author_id"]: r["pen_name"] for r in cur.fetchall()}
     log.info(f"  {len(authors):,} authors")
 
-    # Existing FicAlley URLs (skip dupes)
+    # Existing FictionAlley URLs (skip dupes)
     existing = {}
-    log.info("Loading existing FicAlley stories...")
+    log.info("Loading existing FictionAlley stories...")
     with db_session() as db:
         rows = (db.query(Story.id, Story.url)
                 .filter(Story.site == SiteEnum.fictionalley).all())

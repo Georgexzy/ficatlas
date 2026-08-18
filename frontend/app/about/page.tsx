@@ -26,7 +26,7 @@ export default function About() {
       <p>
         FicAtlas is a search engine for fanfiction. It indexes work from{" "}
         <strong>Archive of Our Own</strong>, <strong>FanFiction.net</strong> and{" "}
-        <strong>FicAlley</strong> so you can search all three at once, rather than
+        <strong>FictionAlley</strong> so you can search all three at once, rather than
         searching each one and missing the other two.
       </p>
       <p>
@@ -44,7 +44,7 @@ export default function About() {
       </p>
       <p>
         A small number of stories can be read here directly. These come from{" "}
-        <strong>FicAlley</strong>, an archive that shut down, and were preserved
+        <strong>FictionAlley</strong>, an archive that shut down, and were preserved
         so they would not disappear. If you wrote one of them, the section below
         is for you.
       </p>

@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 # Ranked within a site, never across them.
 #
 # kudos is the popularity column and its coverage is wildly uneven: 239,588 AO3
-# rows have it against 1,470 of FanFiction.net's 6.57M, and FicAlley records
+# rows have it against 1,470 of FanFiction.net's 6.57M, and FictionAlley records
 # hits on 29,864 of its 29,949 rows and kudos on 27. A single ORDER BY kudos
 # across all three therefore returned AO3 and only AO3.
 #

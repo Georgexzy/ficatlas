@@ -144,7 +144,7 @@ export function chapterDisplay(count: number, total?: number | null): string {
 export const SITE_LABELS: Record<string, string> = {
   ao3: "AO3",
   ffnet: "FF.net",
-  fictionalley: "FicAlley",
+  fictionalley: "FictionAlley",
   hpffa: "HPFFA",
   hexfiles: "HexFiles",
   squidgeworld: "SquidgeWorld",

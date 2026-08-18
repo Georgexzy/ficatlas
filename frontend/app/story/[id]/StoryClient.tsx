@@ -29,7 +29,7 @@ import { SITE_LABELS } from "@/lib/api"
 // This used to be `status === "complete" ? "Complete" : "In Progress"`, which
 // states "In Progress" for anything that is not explicitly finished. Most of
 // the index is neither: the bulk dumps carry no completion data, so 5.3M FF.net
-// and 8.5k FicAlley works are stored as `unknown` precisely so we stop claiming
+// and 8.5k FictionAlley works are stored as `unknown` precisely so we stop claiming
 // they are unfinished. A binary label put that claim straight back on the page.
 const STATUS_LABEL: Record<string, string> = {
   complete: "Complete",
@@ -55,7 +55,7 @@ export default function StoryClient() {
   // Following this work.
   //
   // The one thing a cross-archive index can offer that no single archive can:
-  // AO3, FanFiction.net and FicAlley each have their own subscriptions, so a
+  // AO3, FanFiction.net and FictionAlley each have their own subscriptions, so a
   // reader following a WIP on each keeps three lists in three places. This is
   // one list.
   //
@@ -557,8 +557,8 @@ export default function StoryClient() {
             </button>
           )}
           {/* One Wayback link, not two.
-              This rendered both a derived link (for hosted FicAlley works) and
-              a stored `wayback_url` when there was one — so a FicAlley story
+              This rendered both a derived link (for hosted FictionAlley works) and
+              a stored `wayback_url` when there was one — so a FictionAlley story
               with a captured snapshot showed "View on Wayback ↗" next to
               "Wayback ↗", two buttons, same archive, different wording.
 

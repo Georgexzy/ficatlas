@@ -42,7 +42,7 @@ QUERIES = {
 CLAIMS = [
     ("AO3 works",        "ao3",          r"AO3 \(([\d.]+)M works\)",        1e6,  0.05),
     ("FanFiction.net",   "ffnet",        r"FanFiction\.net \(([\d.]+)M\)",  1e6,  0.05),
-    ("FicAlley",         "fictionalley", r"FicAlley \((\d+)k\)",            1e3,  0.15),
+    ("FictionAlley",         "fictionalley", r"FictionAlley \((\d+)k\)",            1e3,  0.15),
     ("DLP curated list", "dlp",          r"recommended list \((\d+) works\)", 1,   0.25),
     ("HPFFA",            "hpffa",        r"HP FanFiction Archive \((\d+)\)", 1,    0.25),
     ("canonical fandoms","fandoms_ao3",  r"([\d,]+) canonical names",       1,    0.05),

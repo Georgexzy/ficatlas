@@ -4,7 +4,7 @@ Why this exists here rather than on the archives
 ------------------------------------------------
 Every archive offers subscriptions and none of them can offer the thing a reader
 of this index actually wants: one list. Someone following a WIP on AO3, a
-long-running story on FanFiction.net and a finished series on FicAlley currently
+long-running story on FanFiction.net and a finished series on FictionAlley currently
 keeps three sets of subscriptions in three places, two of which email them. This
 is the one feature a cross-archive index can do that no single archive can.
 

@@ -33,7 +33,7 @@ interface Series {
 }
 
 const SITE_LABELS: Record<string, string> = {
-  ao3: "AO3", ffnet: "FF.net", fictionalley: "FicAlley",
+  ao3: "AO3", ffnet: "FF.net", fictionalley: "FictionAlley",
 }
 
 export default function SeriesClient({ params }: { params: Promise<{ id: string }> }) {

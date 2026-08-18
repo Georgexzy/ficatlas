@@ -44,7 +44,7 @@ BATCH = int(os.getenv("WITHDRAW_BATCH", "40"))
 
 # Archives that no longer exist. Their URLs cannot answer, so checking them is
 # not evidence of anything and re-checking them daily is pure waste — 29,949 of
-# the 29,978 hosted works here are FicAlley, whose domain stopped resolving
+# the 29,978 hosted works here are FictionAlley, whose domain stopped resolving
 # after it closed.
 #
 # This is also why "unreachable" must never mean "deleted": had it, the very
@@ -52,7 +52,7 @@ BATCH = int(os.getenv("WITHDRAW_BATCH", "40"))
 #
 # For these works the source-deletion signal is unavailable by definition, and
 # the takedown form (api/takedown.py) is the only route. Worth knowing that
-# FicAlley's catalogue moved to AO3 via Open Doors in 2018, so those authors do
+# FictionAlley's catalogue moved to AO3 via Open Doors in 2018, so those authors do
 # have their works somewhere they control — just not at the URL we hold.
 DEAD_ARCHIVES = {"fictionalley"}
 

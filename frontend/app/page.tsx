@@ -80,7 +80,7 @@ function detectFicUrl(s: string): { site: string; url: string } | null {
 const SITE_OPTIONS = [
   { id: "ao3",          label: "AO3" },
   { id: "ffnet",        label: "FF.net" },
-  { id: "fictionalley", label: "FicAlley" },
+  { id: "fictionalley", label: "FictionAlley" },
 ]
 const RATING_OPTIONS = [
   { id: "G",  label: "General" },
@@ -791,7 +791,7 @@ function LandingIntro() {
           19.7M on the same screen — and it only ever grows, so any literal here
           starts going stale the moment the workers add a row. */}
       <p className="empty__sub">
-        <IndexTotal /> from AO3, FanFiction.net and FicAlley — one search across
+        <IndexTotal /> from AO3, FanFiction.net and FictionAlley — one search across
         all three, instead of three searches that each miss two.
       </p>
       {/* Says where reading happens, on the screen where someone decides whether

@@ -6,7 +6,7 @@ import Link from "next/link"
 export default function SiteFooter() {
   return (
     <footer className="site-footer">
-      <span>FicAtlas — search AO3, FanFiction.net and FicAlley together</span>
+      <span>FicAtlas — search AO3, FanFiction.net and FictionAlley together</span>
       <span className="site-footer__sep">·</span>
       {/* The footer is on every page from the root layout, which makes this the
           one link that puts /fandoms — and through it every story page — inside

@@ -31,7 +31,7 @@ Why chapter author-notes are not the source
 They carry the same signal — 1,628 chapters here announce a sequel, often naming
 it — but we hold chapter text for only ~30k hosted works, against summaries for
 all 19.9M. The notes are a 60x smaller pool covering the wrong subset: hosted
-FicAlley works rather than the FanFiction.net catalogue where series ordering is
+FictionAlley works rather than the FanFiction.net catalogue where series ordering is
 missing in the first place.
 """
 from __future__ import annotations

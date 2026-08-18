@@ -639,7 +639,7 @@ def search(          # NOT async — see below
 
     # ── Site list ─────────────────────────────────────────────────────────────
     # Defaults to every site we index, not just the two big ones. The old
-    # default predated FicAlley being a first-class site and silently dropped
+    # default predated FictionAlley being a first-class site and silently dropped
     # it: `?sections=Schnoogle` with no `sites` returned 0, because the only
     # archive that HAS sections was not among the defaults. The frontend always
     # sends an explicit list, so nothing in the UI changes.
