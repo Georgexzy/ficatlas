@@ -80,6 +80,15 @@ const SECURITY_HEADERS = [
 ]
 
 const nextConfig: NextConfig = {
+  // Keep the incremental cache in memory. The container is read_only, and Next's
+  // default handler writes rendered ISR/force-static HTML into .next/server/app
+  // on the image layer — see cache-handler.js for why the tmpfs and named-volume
+  // fixes are both wrong. Without this, every /s/<code> render logged EROFS and
+  // the page was re-rendered on every request.
+  cacheHandler: require.resolve("./cache-handler.js"),
+  // The custom handler IS the memory cache now, so Next's separate in-process
+  // LRU would just hold a second copy of everything.
+  cacheMaxMemorySize: 0,
   // Type errors fail the build.
   //
   // This was `ignoreBuildErrors: true`, and the cost of that was not theoretical:

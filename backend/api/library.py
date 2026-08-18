@@ -840,7 +840,73 @@ async def poll_feed(
 
 # ── On-load auto poll (debounced) ────────────────────────────────────────────
 
+# The debounce has to be SHARED, not per-process. This was an in-memory dict, and
+# the public API runs `uvicorn --workers 2` (docker-compose.public.yml), so each
+# worker kept its own idea of "last polled" and AO3 saw up to one poll per worker
+# per window — the same per-process trap that put the search cache in Postgres
+# and moved ao3_budget's limiter into crawl_budget.
+#
+# Reuses crawl_budget rather than adding a table: this genuinely is a "when may I
+# next hit AO3" question, which is what that table answers. The claim is a
+# conditional upsert, so exactly one caller can win a window. A row comes back
+# only if this request either created the key or found a window that had expired;
+# any other caller's UPDATE matches no row and returns nothing, which IS the
+# debounce. Atomic in one statement, so two workers arriving together cannot both
+# win the way a read-then-write would let them.
+_AUTOPOLL_HOST = "ao3-autopoll"
+_AUTOPOLL_WINDOW_S = 600
+
+_AUTOPOLL_CLAIM_SQL = """
+    INSERT INTO crawl_budget (host, next_at, interval_s)
+    VALUES (:host, now() + make_interval(secs => :window), :window)
+    ON CONFLICT (host) DO UPDATE
+        SET next_at = now() + make_interval(secs => EXCLUDED.interval_s)
+        WHERE crawl_budget.next_at <= now()
+    RETURNING next_at
+"""
+
+# Only used if the claim query itself fails (no DB, table missing). Falling back
+# to a per-process gate is worse than the shared one but far better than polling
+# unthrottled, which is the behaviour that matters to AO3.
 _last_autopoll = {"at": None}
+
+# Keeps a strong reference to in-flight background polls. asyncio only holds a
+# WEAK reference to a task, so a task nobody keeps can be garbage collected
+# mid-await and simply stop, with no error anywhere.
+_autopoll_tasks: set = set()
+
+
+async def _run_autopoll(fandom: str, min_words, max_words, complete_only) -> None:
+    """The actual AO3 round trip, off the request path. Owns its own session:
+    the request's has been returned to the pool long before this finishes."""
+    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed, filter_entries
+    from live_fetch.persist import persist_live_results
+    from db.session import db_session
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(
+            headers={"User-Agent": "FicAtlasBot/1.0 (+fanfic discovery)"},
+            timeout=20, follow_redirects=True
+        ) as client:
+            tag_id = await resolve_tag_id(client, fandom.split(",")[0].strip())
+        if not tag_id:
+            log.warning("autopoll: no canonical AO3 feed for %r", fandom)
+            return
+
+        entries = await fetch_feed(tag_id, limit=25)
+        raw_count = len(entries)
+        entries = filter_entries(entries, min_words=min_words,
+                                 max_words=max_words, complete_only=complete_only)
+        with db_session() as bg:
+            inserted = persist_live_results(bg, entries)
+        log.info("autopoll: %s -> %d found, %d after filter, %d newly indexed",
+                 fandom, raw_count, len(entries), inserted)
+    except Exception:
+        # A background poll must never take the process down, and there is no
+        # caller left to hand an error to.
+        log.warning("autopoll: feed poll failed", exc_info=True)
+
 
 @router.post("/autopoll")
 async def autopoll(db: Session = Depends(get_db),
@@ -848,22 +914,61 @@ async def autopoll(db: Session = Depends(get_db),
 ):
     """
     Called by the frontend on page load. Polls the tracked fandom's AO3 feed,
-    but debounced server-side to at most once every 10 minutes so refreshing
-    the page repeatedly doesn't hammer AO3.
+    debounced to at most once every 10 minutes so refreshing the page repeatedly
+    doesn't hammer AO3.
+
+    Returns as soon as the poll is SCHEDULED — it does not wait for AO3.
+
+    It used to await the whole round trip, and that is why this endpoint was the
+    only source of 500s on the public site (17 in 72h, and nothing else). The
+    work behind it is not bounded by anything a browser will wait for: fetching
+    a feed retries 3 times at a 40s read timeout, across more than one base
+    host, with ao3_budget sleeps in between that can stretch to a 15-minute
+    cooldown when AO3 is throttling. nginx cuts the proxied request at
+    proxy_read_timeout 60s, Next sees the socket close and reports
+    `socket hang up / ECONNRESET`, and the visitor gets a 500 — for a
+    fire-and-forget beacon whose response the page discards anyway.
+
+    The tell that it was a timeout rather than the documented keepalive race:
+    only this endpoint ever did outbound network I/O inside a request.
     """
     from datetime import datetime, timezone, timedelta
     from api.settings import get_setting
-    from live_fetch.ao3_feeds import resolve_tag_id, fetch_feed, filter_entries
-    from live_fetch.persist import persist_live_results
-    import httpx
 
     now = datetime.now(timezone.utc)
-    last = _last_autopoll["at"]
-    if last and (now - last) < timedelta(minutes=10):
-        return {"ok": True, "skipped": "debounced", "next_in_seconds": int(600 - (now - last).total_seconds())}
+    try:
+        claimed = db.execute(sql_text(_AUTOPOLL_CLAIM_SQL),
+                             {"host": _AUTOPOLL_HOST,
+                              "window": _AUTOPOLL_WINDOW_S}).first()
+        db.commit()
+        if claimed is None:
+            nxt = db.execute(
+                sql_text("SELECT next_at FROM crawl_budget WHERE host = :host"),
+                {"host": _AUTOPOLL_HOST}).scalar()
+            remaining = int((nxt - now).total_seconds()) if nxt else _AUTOPOLL_WINDOW_S
+            return {"ok": True, "skipped": "debounced",
+                    "next_in_seconds": max(0, remaining)}
+    except Exception:
+        db.rollback()
+        last = _last_autopoll["at"]
+        if last and (now - last) < timedelta(seconds=_AUTOPOLL_WINDOW_S):
+            return {"ok": True, "skipped": "debounced",
+                    "next_in_seconds": int(_AUTOPOLL_WINDOW_S - (now - last).total_seconds())}
 
     fandom = get_setting(db, "tracked_fandom")
     if not fandom:
+        # Release the window we just claimed. Nothing was polled, so holding it
+        # would make an admin who sets the tracked fandom wait out a 10-minute
+        # debounce for a poll that never ran. The old in-memory gate was only
+        # stamped after this check, and that ordering was correct.
+        try:
+            db.execute(sql_text(
+                "UPDATE crawl_budget SET next_at = now() WHERE host = :host"),
+                {"host": _AUTOPOLL_HOST})
+            db.commit()
+        except Exception:
+            db.rollback()
+        _last_autopoll["at"] = None
         return {"ok": False, "error": "No tracked fandom set"}
 
     # Read filter settings (all optional)
@@ -877,23 +982,13 @@ async def autopoll(db: Session = Depends(get_db),
 
     _last_autopoll["at"] = now
 
-    try:
-        async with httpx.AsyncClient(
-            headers={"User-Agent": "FicAtlasBot/1.0 (+fanfic discovery)"},
-            timeout=20, follow_redirects=True
-        ) as client:
-            tag_id = await resolve_tag_id(client, fandom.split(",")[0].strip())
-        if not tag_id:
-            return {"ok": False, "error": f"No canonical feed for '{fandom}'"}
+    task = asyncio.create_task(
+        _run_autopoll(fandom, min_words, max_words, complete_only))
+    _autopoll_tasks.add(task)
+    task.add_done_callback(_autopoll_tasks.discard)
 
-        entries = await fetch_feed(tag_id, limit=25)
-        raw_count = len(entries)
-        entries = filter_entries(entries, min_words=min_words, max_words=max_words, complete_only=complete_only)
-        inserted = persist_live_results(db, entries)
-        return {"ok": True, "fandom": fandom, "found": raw_count,
-                "after_filter": len(entries), "newly_indexed": inserted}
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:200]}
+    return {"ok": True, "started": True, "fandom": fandom,
+            "next_in_seconds": _AUTOPOLL_WINDOW_S}
 
 
 # ── Delete hosted stories ────────────────────────────────────────────────────

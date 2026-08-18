@@ -72,6 +72,14 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
 ## Gotchas
 - Never point a DB test at the live index — `conftest.py` refuses unless the DB
   name ends in `_test`.
+- **`backup.sh essential` selects text by `is_hosted OR a row in user_hosted`,
+  and both halves are load-bearing.** A privately imported work is
+  `is_hosted = false` PLUS a `user_hosted` row (`privatise_live_archive_hosting.py`),
+  so the original `WHERE is_hosted` silently dropped 28 stories / 678 chapters of
+  exactly the text the script exists to protect. `user_hosted` itself is dumped
+  too — it is the ACCESS CONTROL for a private import, so text restored without
+  it is in the database and reachable by nobody. Anything that changes what
+  "hosted" means has to change this predicate in the same commit.
 - `ix_stories_title_trgm`/`summary_trgm` are on the **plain** columns, not
   `lower()`/`fic_doc`: the predicate is `ILIKE '%x%'` and GIN `gin_trgm_ops`
   lowercases internally. Keep them aligned with `api/search.py` predicates.
@@ -184,6 +192,17 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   request after any quiet spell (an idle night, so the first click of the
   morning). Fixed by `keepalive_timeout 0` on nginx's internal `:8081` listener —
   see the comment there before re-enabling pooling on that hop.
+  - **`ECONNRESET` has a second, unrelated cause: the handler simply took longer
+    than nginx's `proxy_read_timeout 60s`.** Same log line, same 500, nothing in
+    the API log — but the fix is in the endpoint, not the proxy. This is what
+    made `POST /api/library/autopoll` the ONLY source of 500s on the public site
+    (17 in 72h) long after the keepalive fix: it awaited an AO3 round trip
+    inside the request, and that work is bounded by nothing a browser will wait
+    for — 3 retries at a 40s read timeout, more than one base host, plus
+    `ao3_budget` sleeps that reach a 15-minute cooldown under throttling. It now
+    claims its window and returns in ~20ms, doing the poll in a background task.
+    Distinguish the two by whether the endpoint does outbound network I/O: if it
+    does, suspect the timeout before touching nginx.
 - Anonymous traffic lives in `backend/tracking.py` (buffered writer, daily-rotating
   keyed visitor hash, 90-day retention) + `backend/api/traffic.py` (public
   `POST /hit` beacon, owner-only reports) + the Traffic tab on `/admin`.
