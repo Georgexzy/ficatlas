@@ -7,14 +7,18 @@
 #
 #   fictionalley   29,749 stories   1.86 GB of chapter text
 #
-# FicAlley is a dead site. That text exists only because someone preserved a
+# FictionAlley is a dead site. That text exists only because someone preserved a
 # pg_dump of it. If this volume is lost, it is gone for good. The same goes for
 # anything you imported by URL or uploaded as EPUB, and for user accounts.
 #
 # So there are two modes:
 #
-#   essential (default)  users, sessions, user_data, and every hosted story with
-#                        its chapters. A few GB. This is the irreplaceable part.
+#   essential (default)  accounts and sessions; every story whose text we hold —
+#                        publicly hosted AND privately imported — with its
+#                        chapters; the user_hosted rows that make a private
+#                        import reachable by its owner; follows; author
+#                        permissions and takedown records; site settings.
+#                        A few GB. This is the irreplaceable part.
 #   full                 the entire database including all bulk metadata. Large
 #                        and slow, but a single-file restore.
 #
@@ -37,6 +41,14 @@ USER=ficatlas
 command -v docker >/dev/null || { echo "docker not found"; exit 1; }
 cd "$(dirname "$0")"
 
+# The DB password, not the username. This used to pass PGPASSWORD="$USER",
+# which only ever worked because pg_hba.conf trusts connections over the local
+# socket — and `docker compose exec` lands on that socket. The moment pg_hba is
+# tightened, or the dump is taken over TCP, that silently becomes a login
+# failure at 4am. Read the real value the way everything else does.
+[ -f .env ] && set -a && . ./.env && set +a
+PGPW="${POSTGRES_PASSWORD:-ficatlas}"
+
 mkdir -p "$DEST"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="$DEST/ficatlas-$MODE-$STAMP.dump"
@@ -54,7 +66,7 @@ echo "  destination: $OUT"
 case "$MODE" in
   full)
     # -Fc = custom format: compressed, and restorable selectively with pg_restore.
-    compose exec -T -e PGPASSWORD="$USER" "$SERVICE" \
+    compose exec -T -e PGPASSWORD="$PGPW" "$SERVICE" \
       pg_dump -U "$USER" -d "$DB" -Fc --no-owner --no-acl > "$OUT"
     ;;
 
@@ -65,19 +77,44 @@ case "$MODE" in
     # dumped. Staging the account tables here too rather than passing -t for them:
     # combining -n with -t makes pg_dump's object selection restrictive in a way
     # that silently produced an 8KB dump containing essentially nothing.
-    compose exec -T -e PGPASSWORD="$USER" "$SERVICE" bash -c "
+    #
+    # "Text we hold" is NOT `is_hosted` alone, and getting that wrong cost this
+    # backup 28 stories / 678 chapters for two weeks without a word. A privately
+    # imported work is `is_hosted = false` PLUS a row in user_hosted — see
+    # privatise_live_archive_hosting.py, which introduced that split three days
+    # after this script was written and silently narrowed what it covers. The
+    # header above promises to protect "anything you imported by URL or uploaded
+    # as EPUB"; that promise is this predicate. Keep the user_hosted arm.
+    compose exec -T -e PGPASSWORD="$PGPW" "$SERVICE" bash -c "
       set -e
       psql -U $USER -d $DB -v ON_ERROR_STOP=1 -q >&2 <<'SQL'
         DROP SCHEMA IF EXISTS backup_subset CASCADE;
         CREATE SCHEMA backup_subset;
-        CREATE TABLE backup_subset.stories  AS SELECT * FROM public.stories WHERE is_hosted;
+        CREATE TABLE backup_subset.stories AS
+          SELECT * FROM public.stories s
+          WHERE s.is_hosted
+             OR s.id IN (SELECT story_id FROM public.user_hosted);
+        -- Join the STAGED stories, not public.stories, so this can never drift
+        -- from the predicate above.
         CREATE TABLE backup_subset.chapters AS
           SELECT c.* FROM public.chapters c
-          JOIN public.stories s ON s.id = c.story_id
-          WHERE s.is_hosted;
+          JOIN backup_subset.stories s ON s.id = c.story_id;
         CREATE TABLE backup_subset.users         AS SELECT * FROM public.users;
         CREATE TABLE backup_subset.user_sessions AS SELECT * FROM public.user_sessions;
         CREATE TABLE backup_subset.user_data     AS SELECT * FROM public.user_data;
+        -- user_hosted is not bookkeeping, it is the ACCESS CONTROL for a private
+        -- import: see the case in api/stories.py for a viewer who privately
+        -- imported the work. Restore the text without it and the story is in
+        -- the database but reachable by nobody.
+        -- Keep double quotes out of this block: it is all inside a bash -c
+        -- argument, and one stray quote ends the argument and the backup.
+        CREATE TABLE backup_subset.user_hosted   AS SELECT * FROM public.user_hosted;
+        -- Reader-created and consent/legal state. None of it is derivable from
+        -- a re-import of the public dumps, which is the test for belonging here.
+        CREATE TABLE backup_subset.follows            AS SELECT * FROM public.follows;
+        CREATE TABLE backup_subset.author_permissions AS SELECT * FROM public.author_permissions;
+        CREATE TABLE backup_subset.takedowns          AS SELECT * FROM public.takedowns;
+        CREATE TABLE backup_subset.app_settings       AS SELECT * FROM public.app_settings;
 SQL
       pg_dump -U $USER -d $DB -Fc --no-owner --no-acl -n backup_subset
       psql -U $USER -d $DB -q -c 'DROP SCHEMA IF EXISTS backup_subset CASCADE;' >&2
@@ -110,7 +147,8 @@ cat > "$DEST/RESTORE.md" <<'DOC'
 
     docker compose up -d db
 
-## essential dump (accounts + hosted stories and their chapters)
+## essential dump (accounts, hosted AND privately imported stories, chapters,
+## private-library ownership, follows, consent records and site settings)
 
 Everything lands in a staging schema `backup_subset`, so nothing in `public` is
 touched until you choose to merge. Safe to run against a live database.
@@ -124,16 +162,45 @@ Inspect first if you like:
       -c 'SELECT count(*) FROM backup_subset.stories;'
 
 Then merge back into the live tables. ON CONFLICT DO NOTHING means re-running is
-harmless and existing rows win:
+harmless and existing rows win.
+
+This merges column-by-column rather than with `INSERT ... SELECT *`. `SELECT *`
+depends on the live table having exactly the columns, in exactly the order, that
+it had on the day of the dump — and init_db.py adds columns as the app grows. So
+the obvious form works perfectly right up until the one day you need it, then
+fails with "INSERT has more target columns than expressions" (or, if a column was
+dropped and types still line up, quietly writes data into the wrong column). This
+form uses the columns the two schemas have IN COMMON, so an older dump restores
+into a newer schema, leaving new columns at their defaults:
 
     docker compose exec -T db psql -U ficatlas -d ficatlas <<'SQL'
-      INSERT INTO public.stories       SELECT * FROM backup_subset.stories       ON CONFLICT (id) DO NOTHING;
-      INSERT INTO public.chapters      SELECT * FROM backup_subset.chapters      ON CONFLICT (id) DO NOTHING;
-      INSERT INTO public.users         SELECT * FROM backup_subset.users         ON CONFLICT (id) DO NOTHING;
-      INSERT INTO public.user_sessions SELECT * FROM backup_subset.user_sessions ON CONFLICT (token) DO NOTHING;
-      INSERT INTO public.user_data     SELECT * FROM backup_subset.user_data     ON CONFLICT (user_id, key) DO NOTHING;
+      DO $$
+      DECLARE t text; cols text;
+      BEGIN
+        FOREACH t IN ARRAY ARRAY[
+          'users','stories','chapters','user_sessions','user_data',
+          'user_hosted','follows','author_permissions','takedowns','app_settings'
+        ] LOOP
+          SELECT string_agg(quote_ident(c.column_name), ', ')
+            INTO cols
+            FROM information_schema.columns c
+           WHERE c.table_schema = 'backup_subset' AND c.table_name = t
+             AND EXISTS (SELECT 1 FROM information_schema.columns p
+                          WHERE p.table_schema = 'public'
+                            AND p.table_name   = t
+                            AND p.column_name  = c.column_name);
+          CONTINUE WHEN cols IS NULL;   -- table not in this dump
+          EXECUTE format(
+            'INSERT INTO public.%I (%s) SELECT %s FROM backup_subset.%I ON CONFLICT DO NOTHING',
+            t, cols, cols, t);
+          RAISE NOTICE 'merged %', t;
+        END LOOP;
+      END $$;
       DROP SCHEMA backup_subset CASCADE;
     SQL
+
+Order matters and is deliberate: `users` before `stories`/`user_hosted`, because
+the foreign keys point that way.
 
 ## full dump
 

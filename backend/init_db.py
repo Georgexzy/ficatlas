@@ -344,8 +344,13 @@ CREATE INDEX IF NOT EXISTS ix_stories_author_lower ON stories (lower(author));
 -- filters are independent and "Harry Potter", "Fluff" and the word "harry" are
 -- anything but. Extended statistics cannot express that for ILIKE-on-expression
 -- predicates. Better per-index estimates are still worth having.
+-- ix_stories_tags_trgm is deliberately NOT in this list. It was dropped (4.4GB,
+-- zero scans -- tag filtering goes through facet resolution and array
+-- containment), and the ALTER stayed behind throwing UndefinedTable on every
+-- single startup. Harmless in itself, but it padded the skipped-statement count
+-- that is the ONLY signal a real DDL statement failed to apply, so a genuine
+-- failure looked like business as usual. Do not re-add it without the index.
 ALTER INDEX ix_stories_fandoms_trgm ALTER COLUMN 1 SET STATISTICS 2000;
-ALTER INDEX ix_stories_tags_trgm    ALTER COLUMN 1 SET STATISTICS 2000;
 ALTER INDEX ix_stories_doc_fts      ALTER COLUMN 1 SET STATISTICS 2000;
 
 -- Date filtering and the "recently updated" sort both use
@@ -659,6 +664,26 @@ CREATE INDEX IF NOT EXISTS ix_stories_text_withdrawn ON stories (id)
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS source_restricted_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS ix_stories_source_restricted ON stories (id)
     WHERE source_restricted_at IS NOT NULL;
+
+-- Two tables that used to be created lazily by the first code path that needed
+-- them: app_settings by api/settings.py's _ensure_table, crawl_budget by
+-- ao3_budget.py. That is the hand-built drift conftest.py was introduced to end
+-- -- both were absent from every test database, so nothing that touched site
+-- settings or the crawl budget was ever covered, and a fresh install only got
+-- them if the right request happened to run first.
+--
+-- Declared here so the schema has ONE source of truth. The lazy creators are
+-- IF NOT EXISTS too, so they stay correct and simply become no-ops.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS crawl_budget (
+    host       TEXT PRIMARY KEY,
+    next_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    interval_s DOUBLE PRECISION NOT NULL DEFAULT 5.0
+);
 
 CREATE TABLE IF NOT EXISTS takedowns (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),

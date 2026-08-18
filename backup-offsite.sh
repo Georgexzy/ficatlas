@@ -94,6 +94,11 @@ if cp "$NEWEST" "$DEST_DIR/.$BASE.part" 2>/dev/null &&
    [ "$(stat -c%s "$DEST_DIR/.$BASE.part")" = "$(stat -c%s "$NEWEST")" ] &&
    mv "$DEST_DIR/.$BASE.part" "$DEST_DIR/$BASE" 2>/dev/null; then
   log "offsite copy complete: $BASE"
+  # Record the success LOCALLY. The share is unmounted most of the time, so
+  # "when did an offsite copy last succeed?" is otherwise unanswerable without
+  # the laptop present — and that question is the whole point of the watchdog
+  # check. A stamp on the local disk can always be read.
+  touch "$SRC_DIR/.offsite-stamp" 2>/dev/null || true
 else
   log "ERROR: copy failed or was truncated (laptop slept mid-transfer?)"
   rm -f "$DEST_DIR/.$BASE.part" 2>/dev/null

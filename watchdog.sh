@@ -108,6 +108,35 @@ if [ "$free_mb" -lt "${WATCHDOG_MIN_FREE_MB:-5000}" ]; then
   problems+=("only ${free_mb}MB free on disk")
 fi
 
+# ── backups, because a backup that quietly stopped is only discovered when it
+#    is needed ────────────────────────────────────────────────────────────────
+# Both halves are age checks on things that should move on their own. Neither
+# can be answered by "did the script exit 0" — the nightly dump and the offsite
+# copy both run from cron into a log nobody reads, and backup-offsite.sh exits 0
+# on purpose when the target laptop is off, which is the common case. So the
+# only honest signal is staleness.
+newest_dump=$(ls -1t backups/ficatlas-essential-*.dump 2>/dev/null | head -1)
+if [ -z "$newest_dump" ]; then
+  problems+=("no local backup exists at all")
+else
+  dump_age_h=$(( ( $(date +%s) - $(stat -c %Y "$newest_dump") ) / 3600 ))
+  # The dump runs nightly, so 48h means at least one run was missed outright.
+  if [ "$dump_age_h" -gt "${WATCHDOG_BACKUP_MAX_AGE_H:-48}" ]; then
+    problems+=("newest local backup is ${dump_age_h}h old")
+  fi
+fi
+
+# The offsite target is a laptop that is legitimately off for days at a time, so
+# this threshold is deliberately loose. It is not asking "did it copy last
+# night" — it is asking whether the only copy that survives losing this machine
+# has drifted far enough to be worth knowing about.
+if [ -f backups/.offsite-stamp ]; then
+  offsite_age_d=$(( ( $(date +%s) - $(stat -c %Y backups/.offsite-stamp) ) / 86400 ))
+  if [ "$offsite_age_d" -gt "${WATCHDOG_OFFSITE_MAX_AGE_D:-7}" ]; then
+    problems+=("last offsite backup copy was ${offsite_age_d} days ago")
+  fi
+fi
+
 # ── report ──────────────────────────────────────────────────────────────────
 if [ ${#fixed[@]} -gt 0 ]; then log "actions: ${fixed[*]}"; fi
 

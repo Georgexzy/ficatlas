@@ -148,7 +148,15 @@ def test_a_crawler_is_flagged_and_left_out_of_the_reports(db):
 
     assert db.execute(text("SELECT count(*) FROM visit_events WHERE bot")).scalar() == 1
     pages = traffic.pages(days=7, limit=10, db=db, _owner=None)["pages"]
-    assert pages == [{"path": "/story/abc", "views": 1, "visitors": 1}]
+    # Assert the fields this test is about, not the whole row. Both visits hit
+    # the same path, so "views == 1" IS the bot exclusion -- an equality check
+    # against the entire dict also fails the day a purely additive field like
+    # `label` is introduced, which is what happened and which says nothing about
+    # whether crawlers are filtered.
+    assert len(pages) == 1
+    assert pages[0]["path"] == "/story/abc"
+    assert pages[0]["views"] == 1
+    assert pages[0]["visitors"] == 1
 
 
 def test_a_beacon_never_raises_at_the_caller(db, monkeypatch):
