@@ -227,7 +227,14 @@ export default function AdminPage() {
                           <span className={`admin-bar__fill ${p >= 90 ? "is-bad" : p >= 50 ? "is-mid" : "is-ok"}`}
                                 style={{ width: `${p}%` }} />
                         </span>
-                        <span className="admin-bar__pct">{p}%</span>
+                        {/* "missing" stays on the number, not only in the
+                            tooltip and the paragraph above. Read on its own,
+                            "Summary 0%" for FF.net says none of its works have
+                            a summary — when it means the opposite, that none
+                            are MISSING one (6,571,851 of 6,571,982 have one).
+                            The one number a bar shows has to carry its own
+                            sense. */}
+                        <span className="admin-bar__pct">{p}% missing</span>
                       </div>
                     )
                   })}

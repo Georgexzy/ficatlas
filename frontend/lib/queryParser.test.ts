@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { parseQuery, canonicalSite } from "./queryParser"
+import { parseQuery, canonicalSite, quoteValue } from "./queryParser"
 
 // This parser has a twin: backend/query_parser.py. The search bar parses a query
 // here to render its chips and build the URL, and the API re-parses the same
@@ -113,5 +113,48 @@ describe("multi-word operators still take multi-word values", () => {
     expect(pq.fandoms).toEqual(["Naruto"])
     expect(pq.status).toBe("complete")
     expect(pq.wordCountMin).toBe(100000)
+  })
+})
+
+// ── Quoting: only when the value would not round-trip bare ──────────────────
+// The serialiser used to quote anything containing a space, which filled the bar
+// with `fandom:"Harry Potter"` for the commonest search there is. These pin the
+// three cases where a quote is actually load-bearing, and the round trip itself.
+describe("quoteValue", () => {
+  it("leaves an ordinary multi-word value bare", () => {
+    expect(quoteValue("Harry Potter")).toBe("Harry Potter")
+    expect(quoteValue("Hermione Granger")).toBe("Hermione Granger")
+    expect(quoteValue("Bahasa Indonesia")).toBe("Bahasa Indonesia")
+  })
+
+  it("quotes a value whose last word is shorthand the parser would strip", () => {
+    expect(quoteValue("Nothing Is Complete")).toBe('"Nothing Is Complete"')
+    expect(quoteValue("Project Wip")).toBe('"Project Wip"')
+  })
+
+  it("quotes a value containing something that reads as an operator key", () => {
+    // `tag:` IS an operator alias, so leaving this bare would end the fandom
+    // value early and start a tag filter.
+    expect(quoteValue("re: zero tag: x")).toBe('"re: zero tag: x"')
+    // `Trek:` is not an alias, so this needs no quotes and should not get any.
+    expect(quoteValue("Star Trek: Voyager")).toBe("Star Trek: Voyager")
+  })
+
+  it("quotes a value containing a quote", () => {
+    expect(quoteValue('The "Real" Thing')).toBe('"The "Real" Thing"')
+  })
+
+  it("round-trips a bare multi-word fandom with another operator after it", () => {
+    const s = `fandom:${quoteValue("Harry Potter")} char:${quoteValue("Hermione Granger")}`
+    expect(s).toBe("fandom:Harry Potter char:Hermione Granger")
+    const pq = parseQuery(s)
+    expect(pq.fandoms).toEqual(["Harry Potter"])
+    expect(pq.characters).toEqual(["Hermione Granger"])
+  })
+
+  it("round-trips a value that needed the quotes", () => {
+    const pq = parseQuery(`fandom:${quoteValue("Nothing Is Complete")}`)
+    expect(pq.fandoms).toEqual(["Nothing Is Complete"])
+    expect(pq.status).toBeNull()
   })
 })

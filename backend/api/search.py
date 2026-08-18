@@ -24,6 +24,25 @@ SEARCH_TIMEOUT_MS = int(os.getenv("SEARCH_STATEMENT_TIMEOUT_MS", "20000"))
 # disk a search touches.
 SEARCH_COUNT_CEILING = int(os.getenv("SEARCH_COUNT_CEILING", "5000"))
 
+# A lower ceiling, used ONLY by the ordered-browse fast path and only for its
+# COUNT. Counting is where the time goes once the rows are an index walk, and the
+# cost is wildly non-linear because the scan has to read far enough to find that
+# many matching rows. Measured on `fandoms=Harry Potter`, same query, id-only
+# subquery, this box:
+#
+#     LIMIT 5001   17,977 ms
+#     LIMIT 2000    1,711 ms
+#     LIMIT 1000      946 ms
+#     LIMIT  500      271 ms
+#
+# 2,000 is the knee. It is deliberately NOT the global ceiling: SEARCH_COUNT_
+# CEILING also sizes the candidate set a TEXT search ranks over, and shrinking
+# that would quietly make relevance worse to make a browse faster. A browse has
+# no ranking to damage — it is already in index order — so the only thing this
+# costs is that a filtered browse says "2,000+" where it used to say "5,000+",
+# and both mean "more than you will page through".
+SEARCH_BROWSE_COUNT_CEILING = int(os.getenv("SEARCH_BROWSE_COUNT_CEILING", "2000"))
+
 # Cap on the "N explicit works are hidden" count. Far lower than the search
 # ceiling because the number is a hint, not a result set: "999+" and "4,300" tell
 # a reader the same thing, and the count only runs on searches that returned
@@ -370,6 +389,92 @@ SORT_MAP: dict[str, tuple[str, bool] | None] = {
     # than ranking it as unpopular.
     "popularity_desc": ("popularity", True),
 }
+
+
+# The predicate that matches each partial sort index, so an unfiltered browse can
+# use it as a top-N walk instead of sorting 20M rows. Keyed by sort, applied ONLY
+# when the search is not narrowed — see the long note at the call site. A sort
+# with no entry here is backed by a full index (kudos, word_count) or by the
+# coalesce expression index (the date sorts), and needs no predicate.
+# How to order an UNFILTERED browse so the ordering matches an actual index.
+#
+# (predicate, order-expression). The predicate removes the NULLs; the expression
+# is then a plain .desc(), which is what the index stores.
+#
+# Both halves are load-bearing, and the second one is the subtle one: a DESC
+# btree is NULLS FIRST by default, so ordering by `col DESC NULLS LAST` — which
+# is what _sort_expr produces, correctly, for the general case — cannot use it
+# to order at all and Postgres sorts the whole table instead. That is not a
+# small difference at 20M rows: "Most hits" measured 32.7s that way against
+# 0.06s once the ordering matched, and "Most kudos" and "Longest" hit the 60s
+# statement timeout outright and returned 503.
+#
+# A sort that is NOT in this map keeps the old cap-then-order behaviour. That is
+# deliberate: pre-ordering without an index that supports it is how those 503s
+# happened, so the rule is "only where it is known to be an index walk", never
+# "by default and hope".
+_BROWSE_ORDER = {
+    "published_desc":  (lambda e: e.published_at.isnot(None), lambda e: e.published_at.desc()),
+    "kudos_desc":      (lambda e: e.kudos.isnot(None),        lambda e: e.kudos.desc()),
+    "hits_desc":       (lambda e: e.hits > 0,                 lambda e: e.hits.desc()),
+    "comments_desc":   (lambda e: e.comments > 0,             lambda e: e.comments.desc()),
+    "bookmarks_desc":  (lambda e: e.bookmarks > 0,            lambda e: e.bookmarks.desc()),
+    "word_count_desc": (lambda e: e.word_count.isnot(None),   lambda e: e.word_count.desc()),
+    # updated_desc is absent on purpose: ix_stories_last_activity is itself
+    # `COALESCE(updated_at, published_at) DESC NULLS LAST`, so _sort_expr already
+    # matches it exactly and needs no predicate. Handled below.
+}
+
+# The lowest value a timestamptz can hold. Used as a range bound that selects
+# exactly what `IS NOT NULL` selects, while giving the planner a start position
+# in the btree — see the fast path in search() for the 6,649ms -> 0.17ms this is
+# worth. `-infinity` is a real timestamptz value, so this is not a sentinel date
+# that could one day collide with real data.
+_TS_MIN = "-infinity"
+
+# Sorts the fast path can serve, as (range-bound predicate, ORDER BY expression).
+#
+# Both entries are index-shaped and neither is interchangeable with _sort_expr:
+#
+#   * the BOUND must select exactly the non-NULL rows and nothing else, or the
+#     fast path would silently drop matches. Every bound here is equivalent to
+#     `IS NOT NULL` for its column — kudos and word_count are never negative
+#     (checked, 0 rows each), and no timestamp is below -infinity.
+#   * the ORDER BY must match the index's own ordering EXACTLY, including where
+#     it puts NULLs, or Postgres cannot walk it and sorts instead:
+#       ix_stories_last_activity   COALESCE(...) DESC NULLS LAST  -> .nullslast()
+#       ix_stories_published_desc  published_at DESC (partial)    -> plain .desc()
+#       ix_stories_kudos_desc      kudos DESC                     -> plain .desc()
+#       ix_stories_word_count      word_count (ASC, walked back)  -> plain .desc()
+#     Getting this wrong is not subtle in cost: published_desc ordered with
+#     NULLS LAST against its plain-DESC partial index measured 21.2s, and 1.6s
+#     with the ordering matched.
+#
+# hits/comments/bookmarks are deliberately absent. Their indexes are partial on
+# `col > 0`, so the bound that would make them usable is `> 0` — and that DOES
+# drop matches: a filtered search for "most hits" must still list works with no
+# recorded hits, after the ones that have them, rather than pretending they do
+# not exist. See the popularity_desc note above for the same trap.
+_FAST_SORTS = {
+    "updated_desc":   (lambda e: func.coalesce(e.updated_at, e.published_at) >= _TS_MIN,
+                       lambda e: func.coalesce(e.updated_at, e.published_at).desc().nullslast()),
+    "published_desc": (lambda e: e.published_at >= _TS_MIN,
+                       lambda e: e.published_at.desc()),
+    # kudos_desc and word_count_desc were tried here and REMOVED, which is worth
+    # recording because the index exists and it looks like it should work.
+    #
+    # The walk only pays off when the filtered rows are DENSE near the top of the
+    # index. That holds for dates — the newest works in a big fandom are within a
+    # few thousand rows of the newest works overall — and does not hold for
+    # engagement: the highest-kudos works on the site are mostly not in any one
+    # fandom or tag, so the scan reads a very long way before it fills a page.
+    # Measured: `tags=Fluff&sort=kudos_desc` went from 4.6s to 47.3s. Same shape,
+    # opposite result, entirely because of where the matches sit.
+}
+
+# Sorts whose own index already matches _sort_expr, so they pre-order with no
+# predicate and no special casing.
+_BROWSE_ORDER_DIRECT = {"updated_desc"}
 
 
 def _sort_expr(entity, sort: str):
@@ -1288,6 +1393,44 @@ def search(          # NOT async — see below
             else:
                 base = (base.filter(Story.popularity.isnot(None))
                            .order_by(Story.popularity.desc()))
+        else:
+            # EVERY other column sort has exactly the same problem, and only
+            # popularity_desc had ever been fixed. Ordering after an unordered
+            # LIMIT sorts an arbitrary 5,001 of the matches, so the answer is not
+            # the top of the index, it is the top of a sample. Measured, on
+            # `fandoms=Harry Potter&sort=updated_desc`: the page called the
+            # newest work Feb 2026 when the real answer was 15 Aug 2026 — six
+            # months of the freshest works in the largest fandom on the site
+            # simply unreachable, with nothing to say so.
+            #
+            # So order BEFORE the cap, the same way. What makes that affordable
+            # is one partial index per sort, mirroring ix_stories_popularity:
+            # only 3.9% of works have hits, 4.7% comments, 4.7% bookmarks, so
+            # those indexes are tens of MB rather than hundreds. The predicate
+            # goes on for an UNFILTERED browse only, for the reason spelled out
+            # above for popularity: as a filter it would delete matches, and
+            # "Most hits" over a narrowed search must still return works with
+            # no recorded hits rather than nothing at all.
+            if _narrowed:
+                # Narrowed searches deliberately keep the OLD cap-then-order
+                # behaviour, and that is a known inaccuracy, not an oversight.
+                #
+                # Ordering before the cap is just as correct here, but there is
+                # no index that answers "newest works tagged Fluff": Postgres
+                # has to bitmap every match and top-N sort it. Measured on this
+                # database, ordered before the cap: Naruto 7.9s, Harry Potter
+                # 18.9s, tags=Fluff 33.9s — and bounding it with a date window
+                # moved the cost into the count rather than removing it. A page
+                # that takes twenty seconds is a worse answer than an imprecise
+                # one, so this waits for a precomputed per-fandom recent list
+                # (the shape fandom_hubs already uses) rather than being paid
+                # for on every filtered search. See CLAUDE.md.
+                pass
+            elif sort in _BROWSE_ORDER:
+                pred, order_by = _BROWSE_ORDER[sort]
+                base = base.filter(pred(Story)).order_by(order_by(Story))
+            elif sort in _BROWSE_ORDER_DIRECT:
+                base = base.order_by(_sort_expr(Story, sort))
         candidates = base.limit(COUNT_CEILING + 1).subquery()
     S = aliased(Story, candidates)
     total_over = func.count().over().label("total_matches")
@@ -1374,10 +1517,71 @@ def search(          # NOT async — see below
         ordered = ordered.order_by(S.word_count.desc().nullslast())
 
     offset  = (page - 1) * per_page
-    rows    = ordered.offset(offset).limit(per_page).all()
+
+    # ── Fast path: walk the sort's index instead of sorting the candidate set ──
+    #
+    # A filtered browse ordered by date used to cost 7.9s (Naruto), 18.9s (Harry
+    # Potter) and 33.9s (tags=Fluff), because the only way to order the capped
+    # candidate set is to collect every match and top-N sort it. The page does
+    # not need every match. It needs `offset + per_page` rows — twenty of them —
+    # and ix_stories_last_activity is already in exactly that order.
+    #
+    # Two things have to be true before Postgres will walk it and stop early:
+    #
+    #   1. the ORDER BY must match the index exactly. It is
+    #      `COALESCE(updated_at, published_at) DESC NULLS LAST`, which is what
+    #      _sort_expr produces. Dropping NULLS LAST costs 6.6s.
+    #   2. there must be a RANGE BOUND on the sort expression. This is the
+    #      unobvious half: `>= '-infinity'` selects exactly the rows that
+    #      `IS NOT NULL` selects — no timestamp is below -infinity — but only the
+    #      range form gives the scan a start position in the btree. Measured on
+    #      Harry Potter, same rows, same order:
+    #
+    #          IS NOT NULL      6,649 ms
+    #          >= '-infinity'       0.17 ms
+    #
+    # The bound is why this is a fast path and not a rewrite: it changes the
+    # PLAN, not the result set.
+    #
+    # It applies only to a small limit. The same walk at LIMIT 5001 costs 3.5s
+    # (Harry Potter) and 42.9s (Naruto), because the ceiling is far enough down
+    # the index to lose the early exit — so the count keeps its own cheap query
+    # over the unordered capped set (~0.17s) rather than riding along on the
+    # rows via count(*) OVER ().
+    _ceiling = COUNT_CEILING
+    _fast_rows = None
+    if (not q) and _narrowed and sort in _FAST_SORTS and offset + per_page <= COUNT_CEILING:
+        try:
+            _bound, _order = _FAST_SORTS[sort]
+            _fast_rows = (db_query
+                          .filter(_bound(Story))
+                          .order_by(_order(Story))
+                          .offset(offset).limit(per_page).all())
+        except Exception:
+            log.warning("ordered fast path failed; falling back", exc_info=True)
+            _fast_rows = None
+
+    if _fast_rows is not None:
+        rows = [(r, None) for r in _fast_rows]
+        # Count over an ID-ONLY capped subquery. `candidates` selects all 45
+        # columns because the rows are read from it on the normal path; counting
+        # them makes the executor materialise 5,001 rows of ~1.3KB to throw the
+        # contents away. Selecting a single column instead measured 4.5-40s down
+        # to a steady ~4s on this box — the spread matters as much as the median,
+        # because the wide form is the one that goes off a cliff under write
+        # load, which is exactly when someone is searching.
+        total = db.query(func.count()).select_from(
+            db_query.with_entities(Story.id)
+                    .limit(SEARCH_BROWSE_COUNT_CEILING + 1).subquery()
+        ).scalar() or 0
+        _ceiling = SEARCH_BROWSE_COUNT_CEILING
+    else:
+        rows = ordered.offset(offset).limit(per_page).all()
     # count(*) OVER () repeats the same total on every row; it is only absent
     # when the page is empty, which also means there was nothing to count.
-    if rows:
+    if _fast_rows is not None:
+        pass
+    elif rows:
         total = int(rows[0][1])
     elif page > 1:
         # An empty page past the first tells us nothing about the total — the
@@ -1387,9 +1591,9 @@ def search(          # NOT async — see below
         total = db.query(func.count()).select_from(candidates).scalar() or 0
     else:
         total = 0
-    count_is_capped = total > COUNT_CEILING
+    count_is_capped = total > _ceiling
     if count_is_capped:
-        total = COUNT_CEILING
+        total = _ceiling
     indexed = [r[0] for r in rows]
 
     # How many matches the explicit filter is hiding.

@@ -203,6 +203,30 @@ services:
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
       UVICORN_RELOAD: ${UVICORN_RELOAD:-false}
       DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:-ficatlas}@db:5432/ficatlas
+      # ── The whole-box connection budget ──────────────────────────────────
+      # ONE Postgres with max_connections=100 (3 reserved for the superuser) now
+      # serves THREE pools, not the one this budget was originally written for:
+      # this API, the background worker, and — since the public tier — a second
+      # API on the same database. The default 32+16 here plus the same again on
+      # ficatlas.com plus the worker's 18 comes to 114, and going over does not
+      # degrade, it fails outright with "FATAL: sorry, too many clients already".
+      #
+      # So the box is budgeted explicitly:
+      #
+      #   dev API (this)     4 workers x (4+2)  = 24   <- development convenience
+      #   public API         2 workers x (12+6) = 36   <- serves ficatlas.com
+      #   worker                                = 18
+      #                                          ----
+      #                                            78, leaving ~19 for psql,
+      #                                            maintenance scripts and the
+      #                                            superuser reserve.
+      #
+      # The public tier gets the larger share because it is the one with readers
+      # on it. Raising max_connections instead is not free: work_mem is 32MB per
+      # sort node on a 14GB desktop, so idle-but-allowed connections are a real
+      # memory commitment.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-16}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-8}
     depends_on:
       db:
         condition: service_healthy

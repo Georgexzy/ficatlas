@@ -190,9 +190,33 @@ services:
     profiles: ["blue"]
     image: ficatlas-backend:${DEPLOY_TAG:-latest}
     restart: unless-stopped
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    # Same entry point as the dev stack, for the same reason: WEB_CONCURRENCY is
+    # ONE knob that uvicorn, db/session.py and ratelimit.py all read, and they
+    # have to agree. This used to be `uvicorn --workers 2` inline, which set the
+    # worker count WITHOUT setting the variable — so each worker read the default
+    # WEB_CONCURRENCY=1 and believed it was alone. Two consequences, both silent:
+    #
+    #   * the connection budget is divided by the worker count, so each worker
+    #     took the WHOLE 32+16 pool instead of half. Two workers = 96 connections
+    #     against max_connections=100, before the dev stack's 48 and the
+    #     background worker's 18 — and the failure mode is not gradual, it is
+    #     "FATAL: sorry, too many clients already" on every request. During a
+    #     promote both colours are up, which doubles it again.
+    #   * ratelimit.py divides its limits by the same number, so every limit was
+    #     enforced at twice its configured value.
+    #
+    # Do not put --workers back on this line. Change WEB_CONCURRENCY instead.
+    command: ["sh", "/app/start.sh"]
     environment: &api_env
       DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/ficatlas
+      # Read by uvicorn (worker count), db/session.py (pool budget / workers) and
+      # ratelimit.py (limit / workers). See the command: note above.
+      WEB_CONCURRENCY: ${PUBLIC_WEB_CONCURRENCY:-2}
+      # Share of the whole-box connection budget — see the long note in
+      # docker-compose.yml. 2 workers x (12+6) = 36. This tier gets the larger
+      # share of the two APIs because it is the one with readers on it.
+      DB_POOL_SIZE: ${PUBLIC_DB_POOL_SIZE:-24}
+      DB_MAX_OVERFLOW: ${PUBLIC_DB_MAX_OVERFLOW:-12}
       # HTTPS-only session cookies: the tunnel always terminates TLS.
       COOKIE_SECURE: "true"
       # Cloudflare overwrites CF-Connecting-IP on every proxied request and
@@ -234,7 +258,23 @@ services:
     profiles: ["green"]
     image: ficatlas-backend:${DEPLOY_TAG:-latest}
     restart: unless-stopped
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    # Same entry point as the dev stack, for the same reason: WEB_CONCURRENCY is
+    # ONE knob that uvicorn, db/session.py and ratelimit.py all read, and they
+    # have to agree. This used to be `uvicorn --workers 2` inline, which set the
+    # worker count WITHOUT setting the variable — so each worker read the default
+    # WEB_CONCURRENCY=1 and believed it was alone. Two consequences, both silent:
+    #
+    #   * the connection budget is divided by the worker count, so each worker
+    #     took the WHOLE 32+16 pool instead of half. Two workers = 96 connections
+    #     against max_connections=100, before the dev stack's 48 and the
+    #     background worker's 18 — and the failure mode is not gradual, it is
+    #     "FATAL: sorry, too many clients already" on every request. During a
+    #     promote both colours are up, which doubles it again.
+    #   * ratelimit.py divides its limits by the same number, so every limit was
+    #     enforced at twice its configured value.
+    #
+    # Do not put --workers back on this line. Change WEB_CONCURRENCY instead.
+    command: ["sh", "/app/start.sh"]
     environment: *api_env
     networks: [default, ficatlas]
     mem_limit: 2g

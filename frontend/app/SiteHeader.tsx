@@ -88,7 +88,7 @@ function UserMenu() {
               reader the site is broken rather than that it is not theirs. */}
           {user?.can_manage && (
             <Link href="/admin" className="user-menu__link" onClick={() => setOpen(false)}>
-              Index health &amp; requests
+              Admin
             </Link>
           )}
           <button onClick={async () => { await logout(); setOpen(false) }}>Sign out</button>
