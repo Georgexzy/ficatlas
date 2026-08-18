@@ -212,7 +212,7 @@ ANALYZE pr_blended
 #
 # The rate view has the same parity need and the same fix. w_rate is at most
 # 0.65 (the two intent signals), so without renormalising, a work whose dates
-# ARE recorded — every FF.net and FicAlley row, nearly none of the AO3 bulk
+# ARE recorded — every FF.net and FictionAlley row, nearly none of the AO3 bulk
 # import — carries a rate term that multiplies a number it can never fully
 # hold: its ceiling was (0.75*1.0 + 0.25*{PRIOR}+0.325) = 0.956, while a
 # date-less AO3 work skipped the term entirely and scored 1.0. That put 597

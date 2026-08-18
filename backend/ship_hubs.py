@@ -13,7 +13,7 @@ Malfoy/Harry Potter" 47,460. There are 575,979 distinct relationship facets, of
 which 3,256 carry 500 works or more.
 
 It is also where the cross-archive claim is provable rather than asserted. AO3's
-own tag pages cover AO3; a ship hub here lists the FanFiction.net and FicAlley
+own tag pages cover AO3; a ship hub here lists the FanFiction.net and FictionAlley
 works for the same pairing next to them, which no single archive can do.
 
 Collapsing pairing order

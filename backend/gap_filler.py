@@ -9,7 +9,7 @@ empty in others, so no single one closes the gaps:
                                      titles truncated mid-phrase
     HF FFN dump          6.6M rows   NO dates, NO characters/ships,
                                      NO engagement counts
-    FicAlley dump         30k rows   near complete
+    FictionAlley dump         30k rows   near complete
     AO3 tag LISTINGS       live      20 works per request — the bulk route
     AO3 work pages         live      1 work per request; only for defects a
                                      listing cannot show, e.g. a title the dump

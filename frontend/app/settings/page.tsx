@@ -70,7 +70,7 @@ const MUTE_FIELDS: { key: keyof MuteList; name: string; hint: string; placeholde
 const SITE_OPTIONS = [
   { id: "ao3", label: "AO3" },
   { id: "ffnet", label: "FF.net" },
-  { id: "fictionalley", label: "FicAlley" },
+  { id: "fictionalley", label: "FictionAlley" },
 ]
 const SORT_OPTIONS = [
   { value: "relevance", label: "Relevance" },

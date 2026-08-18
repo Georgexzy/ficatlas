@@ -1608,11 +1608,11 @@ export default function LibraryPage() {
             </p>
 
             <details className="bulk-importer">
-              <summary><strong>FicAlley HTML dump</strong> — full text, ~30k Harry Potter stories</summary>
-              <p>Imports stories from a local extract of the FicAlley archive (chapters and metadata).</p>
+              <summary><strong>FictionAlley HTML dump</strong> — full text, ~30k Harry Potter stories</summary>
+              <p>Imports stories from a local extract of the FictionAlley archive (chapters and metadata).</p>
               <pre className="bulk-importer__cmd">{`sudo docker compose exec backend python fictionalley_importer.py --path /path/to/fictionalley`}</pre>
               <p className="bulk-importer__note">
-                Source: archived FicAlley HTML directories. If you have a local copy, mount it into
+                Source: archived FictionAlley HTML directories. If you have a local copy, mount it into
                 the backend container and pass <code>--path</code>.
               </p>
             </details>

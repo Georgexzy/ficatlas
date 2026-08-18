@@ -2,7 +2,7 @@
 Sanitise scraped chapter HTML before it reaches a reader's browser.
 ==================================================================
 
-Chapter bodies are scraped from AO3, FF.net, FicAlley and DarkLordPotter, or
+Chapter bodies are scraped from AO3, FF.net, FictionAlley and DarkLordPotter, or
 uploaded directly as EPUB, and the reader injects them with
 `dangerouslySetInnerHTML`. Nothing sanitised them anywhere in between, so any
 markup in a fic ran in the reader's page — and the app has logged-in accounts,
@@ -13,7 +13,7 @@ Two jobs, both of which turned out to matter:
 
   * SECURITY — drop scripts, event handlers and javascript: URLs.
   * READABILITY — scrapers captured page furniture along with the story. A real
-    stored FicAlley chapter contains a table of site navigation, an "Add to
+    stored FictionAlley chapter contains a table of site navigation, an "Add to
     Address Book" link and the text "This is spam", all rendered as if it were
     prose. Unwrapping layout tags removes the scaffolding and keeps the words.
 

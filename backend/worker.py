@@ -455,7 +455,7 @@ async def _refresh_stale_loop() -> None:
 # The Open Doors archives were only ever reachable through the Library page's
 # one-click buttons, which cap at 20 pages and always restart from page 1. The
 # index held 21 HPFFA works, 0 HexFiles and 0 SquidgeWorld, so "search every
-# archive at once" was true only for AO3, FFN and FicAlley.
+# archive at once" was true only for AO3, FFN and FictionAlley.
 #
 # Those 21 rows were also 100% empty of metadata, because the works-listing
 # parser silently dropped every field inside a collection listing — fixed

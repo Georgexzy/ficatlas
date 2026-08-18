@@ -11,7 +11,7 @@ import { escapeJsonLd } from "@/lib/jsonLd"
 // tags rather than the site-wide defaults from layout.tsx.
 //
 // Before this, every one of ~19.9M story pages served the identical
-// "FicAtlas — search AO3, FanFiction.net and FicAlley at once" and no author
+// "FicAtlas — search AO3, FanFiction.net and FictionAlley at once" and no author
 // name at all. Two consequences, and the second was the one nobody had noticed:
 //
 //   * search engines had nothing to index, so `Allow: /story/` in robots.txt

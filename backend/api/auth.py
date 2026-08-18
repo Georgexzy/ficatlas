@@ -444,7 +444,7 @@ def require_admin(
     Every one of those was completely unauthenticated at one point, including
     DELETE /api/library/hosted/{id} — which deletes hosted full text.
 
-    (An earlier version of this comment called the ~30k FicAlley works
+    (An earlier version of this comment called the ~30k FictionAlley works
     "irreplaceable, from a dead archive". That is wrong and worth correcting
     here because it was being used to justify decisions: FictionAlley moved its
     archive to AO3 through the OTW's Open Doors programme in 2018, and the

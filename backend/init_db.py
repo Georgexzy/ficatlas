@@ -722,7 +722,7 @@ CREATE INDEX IF NOT EXISTS ix_takedowns_state ON takedowns (state, created_at DE
 -- Works a reader wants to hear about when they change.
 --
 -- The one thing every archive offers and a cross-archive index otherwise cannot:
--- "tell me when this updates", for works on AO3, FanFiction.net and FicAlley in
+-- "tell me when this updates", for works on AO3, FanFiction.net and FictionAlley in
 -- one list rather than three sets of subscriptions.
 --
 -- No event fan-out. What the reader has already seen is recorded here, and an

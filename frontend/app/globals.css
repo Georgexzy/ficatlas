@@ -965,7 +965,7 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 }
 .library-clear:hover { color: var(--red); border-color: var(--red); }
 
-/* ── Site badge for FicAlley ──────────────────────────────────────────────── */
+/* ── Site badge for FictionAlley ──────────────────────────────────────────────── */
 .badge--site-fictionalley {
   background: rgba(160,110,180,0.18); color: #c890d4;
   border: 1px solid rgba(160,110,180,0.3);

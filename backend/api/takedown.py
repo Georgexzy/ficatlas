@@ -3,7 +3,7 @@ Takedown requests for rehosted story text.
 ==========================================
 
 FicAtlas indexes ~19.7M works as metadata and hosts the full text of about
-30,000 of them — mostly from FicAlley and HPFFA, archives that closed. Indexing
+30,000 of them — mostly from FictionAlley and HPFFA, archives that closed. Indexing
 metadata is what a search engine does. Rehosting someone's complete story is a
 different thing, and those authors posted to those archives, not here.
 
@@ -70,7 +70,7 @@ RELATIONSHIPS = {"author", "agent", "other"}
 # The answer cannot be to verify claimants. Fandom is pseudonymous by design —
 # people write under a pen name precisely to keep it apart from their identity —
 # so demanding proof of authorship is both a serious breach of that norm and
-# useless here: most hosted works came from FicAlley, an archive that no longer
+# useless here: most hosted works came from FictionAlley, an archive that no longer
 # exists, so there is no account left for anyone to prove control of.
 #
 # So the protection is structural instead. Real takedowns arrive in ones and

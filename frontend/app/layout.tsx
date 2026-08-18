@@ -47,7 +47,7 @@ export const metadata: Metadata = {
   // shared link says whose site it is without the story page repeating it.
   // `default` is what every page without a title of its own still gets.
   title: {
-    default: "FicAtlas — search AO3, FanFiction.net and FicAlley at once",
+    default: "FicAtlas — search AO3, FanFiction.net and FictionAlley at once",
     template: "%s · FicAtlas",
   },
   description:
@@ -56,7 +56,7 @@ export const metadata: Metadata = {
     // index only ever grows — so a "+" stays true indefinitely where "19.8M"
     // starts going stale the moment a worker adds a row.
     "Search 19+ million fanworks across Archive of Our Own, FanFiction.net and "
-    + "FicAlley in one place, then read them on the archive that hosts them. "
+    + "FictionAlley in one place, then read them on the archive that hosts them. "
     + "No adverts, no tracking, no AI trained on fic.",
   manifest: "/manifest.json",
   // What a link to the site looks like when someone pastes it into Discord,
@@ -74,7 +74,7 @@ export const metadata: Metadata = {
     type: "website",
     siteName: "FicAtlas",
     url: "/",
-    title: "FicAtlas — search AO3, FanFiction.net and FicAlley at once",
+    title: "FicAtlas — search AO3, FanFiction.net and FictionAlley at once",
     description:
       "Search 19+ million fanworks across three archives in one place, then "
       + "read them on the archive that hosts them.",
@@ -82,7 +82,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "FicAtlas — search AO3, FanFiction.net and FicAlley at once",
+    title: "FicAtlas — search AO3, FanFiction.net and FictionAlley at once",
     description:
       "Search 19+ million fanworks across three archives in one place, then "
       + "read them on the archive that hosts them.",
@@ -133,7 +133,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             "@type": "WebSite",
             name: "FicAtlas",
             url: SITE,
-            description: "Search 19+ million fanworks across Archive of Our Own, FanFiction.net and FicAlley.",
+            description: "Search 19+ million fanworks across Archive of Our Own, FanFiction.net and FictionAlley.",
             potentialAction: {
               "@type": "SearchAction",
               target: {

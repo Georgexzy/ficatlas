@@ -15,7 +15,7 @@
 //                       the feed keeps. Admin only, and genuinely shared.
 //
 // The server value stays useful as the starting point: an operator who indexes
-// only FicAlley can set that as the default every first-time visitor gets, and
+// only FictionAlley can set that as the default every first-time visitor gets, and
 // any reader can then choose otherwise. Read order is device → server → built-in,
 // which is the order the reader page already used for font and width.
 export interface Prefs {

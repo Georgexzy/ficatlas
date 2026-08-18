@@ -46,7 +46,7 @@ interface Hub {
 const SITE_LABELS: Record<string, string> = {
   ao3: "AO3",
   ffnet: "FanFiction.net",
-  fictionalley: "FicAlley",
+  fictionalley: "FictionAlley",
 }
 
 async function fetchHub(slug: string): Promise<Hub | null> {
@@ -71,7 +71,7 @@ export async function generateMetadata(
   if (!hub) return {}
   const description =
     `Browse ${hub.work_count.toLocaleString()} ${hub.name} fanworks indexed from `
-    + `Archive of Our Own, FanFiction.net and FicAlley. Search them all in one `
+    + `Archive of Our Own, FanFiction.net and FictionAlley. Search them all in one `
     + `place, then read on the archive that hosts them.`
   const title = `${hub.name} fanfiction`
   return {
@@ -132,7 +132,7 @@ export default async function FandomHub(
             name: `${hub.name} fanfiction`,
             description:
               `${hub.work_count.toLocaleString()} ${hub.name} fanworks indexed from ` +
-              `Archive of Our Own, FanFiction.net and FicAlley.`,
+              `Archive of Our Own, FanFiction.net and FictionAlley.`,
             url: `${SITE}/fandom/${hub.slug}`,
             isPartOf: { "@type": "WebSite", name: "FicAtlas", url: SITE },
             mainEntity: {
@@ -156,7 +156,7 @@ export default async function FandomHub(
       <h1>{hub.name}</h1>
       <p className="hub__lede">
         {hub.work_count.toLocaleString()} works indexed from Archive of Our Own,
-        FanFiction.net and FicAlley. {" "}
+        FanFiction.net and FictionAlley. {" "}
         {/* The search box is the real tool; this page is a doorway to it. The
             link carries the fandom through as a filter so it lands on results
             rather than an empty box. */}
