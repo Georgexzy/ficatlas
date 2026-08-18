@@ -1196,6 +1196,52 @@ async def _popularity_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _analyze_loop() -> None:
+    """Keep the planner's statistics on `stories` honest.
+
+    This exists because they were not, and the cost was the whole search
+    experience. Found with pg_stat_user_tables: last_analyze NEVER,
+    last_autoanalyze NEVER, last_autovacuum NEVER, and n_live_tup = 84,799 on a
+    table holding 20,133,737 rows. Postgres was planning every query against a
+    table it believed was 0.4% of its real size.
+
+    What that looked like from outside was not "slow", it was ERRATIC, which is
+    much harder to diagnose: the same filtered search measured 0.78s, 4.6s, 18.9s
+    and a 60s statement-timeout 503 on different runs, because a bad row estimate
+    makes the planner flip between an index walk and a full scan on small changes
+    in the query. Running one ANALYZE took a filtered browse from 18.9s to 0.28s
+    and a tag search from a timeout to 1.18s, with no code change at all.
+
+    Autovacuum is enabled and this table even carries tuned per-table thresholds,
+    so this is a belt-and-braces loop rather than a replacement for it: PostgreSQL
+    keeps cumulative statistics in shared memory and DISCARDS them after an
+    unclean shutdown, which leaves the counters that drive autoanalyze reading
+    near zero on a table that is never quiet enough to rebuild them quickly. A
+    cheap periodic ANALYZE closes that hole permanently.
+
+    ANALYZE is not VACUUM: it samples (300k rows by default), takes only a
+    SHARE UPDATE EXCLUSIVE lock, and does not block readers or writers.
+    """
+    from sqlalchemy import text as sql_text
+    from db.session import db_session
+
+    interval = _num("ANALYZE_INTERVAL_HOURS", 6) * 3600
+    await asyncio.sleep(_num("ANALYZE_START_DELAY_SEC", 300))
+    while True:
+        try:
+            def _run() -> None:
+                with db_session() as db:
+                    # ANALYZE cannot run inside a transaction block with a
+                    # statement timeout hanging over it on a table this size.
+                    db.execute(sql_text("SET statement_timeout = 0"))
+                    db.execute(sql_text("ANALYZE stories"))
+            await asyncio.to_thread(_run)
+            log.info("ANALYZE stories complete")
+        except Exception as e:
+            log.warning(f"ANALYZE failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _ffnet_wayback_cdx_loop() -> None:
     """Discover recently-archived FanFiction.net stories.
 
@@ -1380,6 +1426,10 @@ async def main() -> None:
 
     if _flag("REBUILD_POPULARITY", "true"):
         tasks.append(asyncio.create_task(_popularity_loop()))
+    # On by default. The failure it prevents is silent and expensive — see the
+    # docstring — and the cost is one sampled scan every few hours.
+    if _flag("RUN_ANALYZE", "true"):
+        tasks.append(asyncio.create_task(_analyze_loop()))
         log.info("popularity rebuild enabled (cross-archive sort stays current)")
 
     if _flag("FFNET_WAYBACK", "true"):

@@ -9,7 +9,8 @@ import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
          DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getTopHubs, type TopHub, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
-import { parseQuery, parsedToSearchParams, type ParsedToken } from "@/lib/queryParser"
+import { parseQuery, parsedToSearchParams, quoteValue, type ParsedToken } from "@/lib/queryParser"
+import SiteIcon from "./SiteIcon"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
 import { rememberSearch } from "@/lib/lastSearch"
@@ -458,7 +459,15 @@ function StoryCard({ story }: { story: StoryCard }) {
         <div className="card__title-row">
           <Link href={`/story/${story.id}`} className="card__title">{displayTitle(story.title)}</Link>
           <div className="card__badges">
-            <span className={`badge badge--site-${story.site}`}>{SITE_LABELS[story.site] ?? story.site}</span>
+            {/* Icon AND word, not icon instead of word. The three badges were
+                distinguished only by hue, which is the one channel a
+                colourblind reader cannot use — and the archive a result came
+                from is the first thing anyone scanning a mixed-index result
+                list needs. */}
+            <span className={`badge badge--site-${story.site}`}>
+              <SiteIcon site={story.site} />
+              {SITE_LABELS[story.site] ?? story.site}
+            </span>
             {/* Only ever set in an admin's results — the API drops delisted rows
                 for everyone else. Loud on purpose: this card is invisible to
                 every reader, and an operator scanning results needs to know
@@ -1542,7 +1551,12 @@ function SearchPageInner() {
   const serializeFiltersToQuery = useCallback((): string => {
     const pq = parseQuery(query)
     const freeText = pq.cleanText.trim()
-    const q = (v: string) => (/\s/.test(v) ? `"${v}"` : v)
+    // Quote only when the value would not survive the trip back through the
+    // parser — see needsQuoting(). Quoting on any whitespace turned the ordinary
+    // two-chip search into `fandom:"Harry Potter" char:"Hermione Granger"`, which
+    // is noise to read and a trap to edit: delete one quote by hand and the
+    // search silently changes.
+    const q = quoteValue
     const parts: string[] = []
     incFandoms.forEach(v => parts.push(`fandom:${q(v)}`))
     incShips.forEach(v => parts.push(`ship:${q(v)}`))

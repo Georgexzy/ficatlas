@@ -438,6 +438,14 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   font-size: 10px; font-family: var(--font-mono); letter-spacing: 0.05em;
   padding: 2px 6px; border-radius: 3px; white-space: nowrap;
 }
+/* The archive mark inside a site badge. Sized in em so it tracks the badge's
+   own font-size, and given a nudge off the baseline because an optical centre
+   is lower than a geometric one for these silhouettes. currentColor means the
+   per-site colours below paint the glyph with no extra rules, in either theme. */
+.site-icon { flex: none; margin-right: 4px; vertical-align: -0.11em; }
+.badge--site-ao3, .badge--site-ffnet, .badge--site-fictionalley {
+  display: inline-flex; align-items: center;
+}
 .badge--site-ao3   { background: rgba(160,60,60,0.18);  color: #d4908f; border: 1px solid rgba(160,60,60,0.3); }
 .badge--site-ffnet { background: rgba(70,110,180,0.18); color: #90a8d4; border: 1px solid rgba(70,110,180,0.3); }
 .badge--complete   { background: var(--green-bg); color: var(--green); border: 1px solid rgba(90,185,120,0.25); }
@@ -3711,7 +3719,11 @@ body.is-resizing * { cursor: col-resize !important; }
 .admin-bar__fill.is-mid { background: #d9a03a; }
 .admin-bar__fill.is-bad { background: var(--danger, #d9534f); }
 .admin-bar__pct {
-  flex: 0 0 34px; text-align: right; color: var(--text-faint);
+  /* Widened from 34px: the value now reads "12% missing" rather than a bare
+     percentage, because a lone "0%" against "Summary" was being read as the
+     share that HAS one. tabular-nums keeps the column aligned as the digits
+     change. */
+  flex: 0 0 76px; text-align: right; color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
 /* A field this site does not have. Dimmed and with an empty track, so it reads
@@ -3810,6 +3822,7 @@ body.is-resizing * { cursor: col-resize !important; }
   .admin-facts { grid-template-columns: 1fr; gap: 2px 0; }
   .admin-facts dd { margin-bottom: 10px; }
   .admin-bar__label { flex-basis: 66px; }
+  .admin-bar__pct { flex-basis: 68px; }
 }
 
 /* Shelf ordering control. Sits above the covers, wraps on a phone. */

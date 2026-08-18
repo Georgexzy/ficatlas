@@ -169,6 +169,48 @@ function isWordCountShorthand(word: string): boolean {
 // Find all "key:" positions
 const KEY_RE = /(-?)(\w+)\s*:\s*/gi
 
+/** Does this operator value need quoting to survive a round trip through
+ *  parseQuery?
+ *
+ *  The serialiser used to quote ANY value containing a space, which meant the
+ *  bar filled up with `fandom:"Harry Potter" char:"Hermione Granger"` for the
+ *  ordinary case of clicking two chips — noisy to read and worse to edit by
+ *  hand, since a reader who deletes one quote silently changes what is searched.
+ *
+ *  A bare multi-word value is already fine: _take_value runs it to the next
+ *  operator key. Quotes are only load-bearing in three cases, all checked here
+ *  rather than guessed at the call site:
+ *
+ *    1. the value ENDS in a shorthand word, which the parser strips as belonging
+ *       to the query ("complete", "wip", ">100k") — a fandom really called
+ *       "... Complete" would lose its last word
+ *    2. the value contains something that reads as `key:`, which would end the
+ *       value early and start a second operator
+ *    3. the value contains a double quote of its own
+ */
+export function needsQuoting(value: string): boolean {
+  const v = value.trim()
+  if (!v) return false
+  if (v.includes('"')) return true
+
+  const words = v.split(/\s+/)
+  if (words.length > 1 && SHORTHAND_RE.test(words[words.length - 1])) return true
+
+  // Any `word:` inside the value that the parser would recognise as an operator.
+  const embedded = /(?:^|\s)-?(\w+)\s*:/g
+  let m: RegExpExecArray | null
+  while ((m = embedded.exec(v)) !== null) {
+    if (FIELD_ALIASES[m[1].toLowerCase()]) return true
+  }
+  return false
+}
+
+/** Render an operator value for the search bar, quoting only when it matters. */
+export function quoteValue(value: string): string {
+  return needsQuoting(value) ? `"${value}"` : value
+}
+
+
 export function parseQuery(raw: string): ParsedQuery {
   const pq: ParsedQuery = {
     cleanText: "", fandoms: [], relationships: [], characters: [],

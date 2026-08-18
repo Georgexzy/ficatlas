@@ -43,6 +43,35 @@ const RTL = new Set(["ar", "he", "fa", "ur"])
 // 250 wpm is the usual middle of the range quoted for adult prose reading.
 const WORDS_PER_MINUTE = 250
 
+// Next-chapter prefetch.
+//
+// The route was already prefetched (router.prefetch below), but that only warms
+// the Next.js bundle for /story/[id]/chapter/[num] — the chapter TEXT is fetched
+// by this component after it mounts. So "next chapter", which is the single most
+// repeated action anyone performs here, still paid a full round trip and showed
+// the loading state every time, on a page whose JS was already sitting ready.
+//
+// Warming the body too makes the common case instant. Deliberately small:
+//   * one chapter ahead only — reading forward is the pattern; hoarding more
+//     would spend a phone's data on chapters most readers never reach
+//   * a 2-entry cache, so going next → back → next does not refetch
+//   * failures are swallowed. A prefetch that fails must be invisible; the real
+//     load path runs again and owns the error reporting
+const CHAPTER_CACHE = new Map<string, any>()
+const CACHE_MAX = 2
+
+function cacheKey(storyId: string, num: number) { return `${storyId}/${num}` }
+
+function cachePut(key: string, value: any) {
+  if (CHAPTER_CACHE.has(key)) CHAPTER_CACHE.delete(key)
+  CHAPTER_CACHE.set(key, value)
+  while (CHAPTER_CACHE.size > CACHE_MAX) {
+    const oldest = CHAPTER_CACHE.keys().next()
+    if (oldest.done) break
+    CHAPTER_CACHE.delete(oldest.value)
+  }
+}
+
 export default function ChapterPage() {
   const params = useParams()
   const router = useRouter()
@@ -214,10 +243,13 @@ export default function ChapterPage() {
       if (cancelled) return
 
       try {
+        // A chapter warmed by the prefetch below is already in memory, so the
+        // usual next-chapter tap renders without a round trip or a spinner.
+        const warm = CHAPTER_CACHE.get(cacheKey(storyId, num))
         const [s, c] = await Promise.all([
           fetch(`${API_BASE}/api/stories/${storyId}`, { signal: ctl.signal })
             .then(r => { if (!r.ok) throw describeError(null, r.status); return r.json() }),
-          fetch(`${API_BASE}/api/stories/${storyId}/chapters/${num}`, { signal: ctl.signal })
+          warm ?? fetch(`${API_BASE}/api/stories/${storyId}/chapters/${num}`, { signal: ctl.signal })
             .then(r => { if (!r.ok) throw describeError(null, r.status); return r.json() }),
         ])
         if (cancelled) return
@@ -486,7 +518,35 @@ export default function ChapterPage() {
     for (const n of [nextNum, prevNum]) {
       if (n != null) router.prefetch(`/story/${storyId}/chapter/${n}`)
     }
-  }, [storyId, nextNum, prevNum, router])
+
+    // Warm the next chapter's TEXT as well as its route. Only forward, and only
+    // once the current chapter has actually rendered — a reader who lands and
+    // leaves immediately should not have paid for a chapter they never opened.
+    if (nextNum == null || !chapter) return
+    const key = cacheKey(storyId, nextNum)
+    if (CHAPTER_CACHE.has(key)) return
+    const ctl = new AbortController()
+    // requestIdleCallback keeps this off the critical path on a phone; the
+    // setTimeout fallback is for Safari, which still does not implement it.
+    const idle = (cb: () => void) =>
+      typeof (window as any).requestIdleCallback === "function"
+        ? (window as any).requestIdleCallback(cb, { timeout: 2000 })
+        : window.setTimeout(cb, 400)
+    const handle = idle(() => {
+      fetch(`${API_BASE}/api/stories/${storyId}/chapters/${nextNum}`, { signal: ctl.signal })
+        .then(r => r.ok ? r.json() : null)
+        .then(c => { if (c) cachePut(key, c) })
+        .catch(() => {})   // a failed prefetch must be silent — see CHAPTER_CACHE
+    })
+    return () => {
+      ctl.abort()
+      if (typeof (window as any).cancelIdleCallback === "function") {
+        (window as any).cancelIdleCallback(handle)
+      } else {
+        clearTimeout(handle as number)
+      }
+    }
+  }, [storyId, nextNum, prevNum, router, chapter])
 
   // Keyboard navigation
   useEffect(() => {

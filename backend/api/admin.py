@@ -175,8 +175,8 @@ def overview(refresh: bool = False,
                 "age_s": int(time.time() - _CACHED_AT)}
     out: dict = {}
 
-    # Row counts from the planner's own estimate. Accurate to a percent or so on
-    # a table that is analysed regularly, and free.
+    # Row counts from the planner's own estimate. Free, and accurate to a percent
+    # or so on a table that is analysed regularly.
     rows = db.execute(sql_text("""
         SELECT relname, reltuples::bigint
         FROM pg_class WHERE relname IN ('stories','chapters','facets','takedowns')
@@ -184,6 +184,19 @@ def overview(refresh: bool = False,
     out["tables"] = {r[0]: max(0, int(r[1])) for r in rows}
 
     out["coverage"] = _coverage(db)
+
+    # ...except for `stories`, where "analysed regularly" is exactly what a bulk
+    # import breaks. reltuples only moves when autovacuum gets round to the
+    # table, so during the import that makes the number interesting it lags by
+    # millions — the page said 18M while /api/stats and the per-site totals
+    # right below it said 20.1M, which reads as the index having lost 2M works.
+    #
+    # The per-site totals are exact counts and _coverage has just paid for them,
+    # so summing them costs nothing and makes the two halves of the page agree.
+    if out["coverage"]:
+        exact_total = sum(int(c.get("total") or 0) for c in out["coverage"])
+        if exact_total > 0:
+            out["tables"]["stories"] = exact_total
     out["coverage_sample"] = _SAMPLE
 
     # What the recent-works crawler is currently pointed at.

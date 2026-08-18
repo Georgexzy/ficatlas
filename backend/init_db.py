@@ -398,6 +398,35 @@ ALTER TABLE stories ADD COLUMN IF NOT EXISTS popularity REAL;
 CREATE INDEX IF NOT EXISTS ix_stories_popularity ON stories (popularity DESC)
     WHERE popularity IS NOT NULL;
 
+-- One partial index per remaining sort, for the same reason and on the same
+-- pattern as ix_stories_popularity above.
+--
+-- Every sort in SORT_MAP orders the candidate set BEFORE it is capped, because
+-- ordering after an unordered LIMIT ranks an arbitrary sample rather than the
+-- index -- `fandoms=Harry Potter&sort=updated_desc` reported the newest work as
+-- Feb 2026 when the true answer was 15 Aug 2026. Ordering first is only
+-- affordable if the sort column is indexed, and unfiltered browse then becomes
+-- a top-N walk instead of a sort of 20M rows (measured at 17.5s for hits and
+-- 19.7s for published_at with no index).
+--
+-- Partial, because engagement is sparse and that makes these cheap: 791,477
+-- works have hits, 950,479 comments, 941,998 bookmarks, out of 20.1M. The
+-- predicates are the ones api/search.py adds for an unfiltered browse
+-- (_PARTIAL_SORT_PREDICATE), so the planner can actually use them.
+--
+-- NOTE for the live database: these are created here NON-concurrently, which is
+-- fine for a fresh install and would block writes on the big table at startup.
+-- They were added to the live index with CREATE INDEX CONCURRENTLY first, so
+-- this is a no-op there. Do the same for any new one.
+CREATE INDEX IF NOT EXISTS ix_stories_hits_desc      ON stories (hits DESC)
+    WHERE hits > 0;
+CREATE INDEX IF NOT EXISTS ix_stories_comments_desc  ON stories (comments DESC)
+    WHERE comments > 0;
+CREATE INDEX IF NOT EXISTS ix_stories_bookmarks_desc ON stories (bookmarks DESC)
+    WHERE bookmarks > 0;
+CREATE INDEX IF NOT EXISTS ix_stories_published_desc ON stories (published_at DESC)
+    WHERE published_at IS NOT NULL;
+
 -- ── Dropped indexes ─────────────────────────────────────────────────────────
 -- ix_stories_non_explicit: DROPPED. Defined as
 --     btree (updated_at DESC) WHERE (rating)::text <> 'E'
