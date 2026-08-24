@@ -3706,6 +3706,17 @@ body.is-resizing * { cursor: col-resize !important; }
 .admin-site__n { font-size: 11px; font-weight: 400; color: var(--text-faint); }
 
 .admin-bars { display: flex; flex-direction: column; gap: 5px; }
+/* One coverage row: the bar itself, then a line of plain numbers under it.
+   The detail line is why the section stopped being a wall of percentages —
+   "94%" of a 33,485-row sample says nothing next to a heading reading
+   "13,506,241 works". */
+.admin-bar-row { margin: 0 0 9px; }
+.admin-bar-row:last-child { margin-bottom: 0; }
+.admin-bar__detail {
+  margin: 2px 0 0 86px; font-size: 10.5px; line-height: 1.45;
+  color: var(--text-faint);
+}
+.admin-bar__cause { font-style: italic; }
 .admin-bar { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
 .admin-bar__label { flex: 0 0 78px; color: var(--text-dim); }
 .admin-bar__track {
@@ -3719,11 +3730,11 @@ body.is-resizing * { cursor: col-resize !important; }
 .admin-bar__fill.is-mid { background: #d9a03a; }
 .admin-bar__fill.is-bad { background: var(--danger, #d9534f); }
 .admin-bar__pct {
-  /* Widened from 34px: the value now reads "12% missing" rather than a bare
-     percentage, because a lone "0%" against "Summary" was being read as the
-     share that HAS one. tabular-nums keeps the column aligned as the digits
-     change. */
-  flex: 0 0 76px; text-align: right; color: var(--text-faint);
+  /* Back to a narrow column. The value is a bare percentage again, but it is no
+     longer ambiguous: the bar now fills to COVERAGE, and the line underneath
+     spells out "1.2M of 13.5M works have this". The word that used to be needed
+     here moved to where it can say something useful. */
+  flex: 0 0 40px; text-align: right; color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
 /* A field this site does not have. Dimmed and with an empty track, so it reads
@@ -3822,7 +3833,8 @@ body.is-resizing * { cursor: col-resize !important; }
   .admin-facts { grid-template-columns: 1fr; gap: 2px 0; }
   .admin-facts dd { margin-bottom: 10px; }
   .admin-bar__label { flex-basis: 66px; }
-  .admin-bar__pct { flex-basis: 68px; }
+  .admin-bar__pct { flex-basis: 44px; }
+  .admin-bar__detail { margin-left: 0; }
 }
 
 /* Shelf ordering control. Sits above the covers, wraps on a phone. */
