@@ -106,11 +106,14 @@ const CAUSE: Record<string, string> = {
     "12.9M AO3 rows came from the bulk metadata dump, which has no summary field at all. Freshly crawled works do get one, so this closes only by re-crawling.",
   "ao3:no_kudos":
     "The same bulk dump carries no engagement figures. Works the crawler has visited since do have them.",
-  // No note for FanFiction.net kudos on purpose. The obvious one — "FF.net has
-  // favourites, not kudos" — is contradicted by the data: 359,203 FF.net rows
-  // carry a kudos figure and exactly 0 carry a favourites one, so whatever the
-  // importer is doing, that sentence would be false. A wrong explanation on an
-  // operator page is worse than none: it stops the question being asked.
+  // FF.net's note is deliberately NOT "it has favourites, not kudos", which is
+  // the obvious sentence and is wrong: 359,223 FF.net rows carry a kudos figure
+  // and exactly 0 carry a favourites one, because ffnet_wayback.py parses
+  // "Favs:" straight INTO the kudos column — that is the column the whole app
+  // ranks on, and there is a test pinning it. So the bar is real, and what it
+  // is actually measuring is how far enrichment has got.
+  "ffnet:no_kudos":
+    "FanFiction.net has no kudos of its own; its favourites are stored in this column as the nearest equivalent. The 6.6M-row bulk dump carries no engagement figures at all, so only the works the crawler has since enriched have one.",
 }
 
 export default function AdminPage() {

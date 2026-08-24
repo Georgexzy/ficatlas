@@ -1426,11 +1426,13 @@ async def main() -> None:
 
     if _flag("REBUILD_POPULARITY", "true"):
         tasks.append(asyncio.create_task(_popularity_loop()))
+        log.info("popularity rebuild enabled (cross-archive sort stays current)")
+
     # On by default. The failure it prevents is silent and expensive — see the
     # docstring — and the cost is one sampled scan every few hours.
     if _flag("RUN_ANALYZE", "true"):
         tasks.append(asyncio.create_task(_analyze_loop()))
-        log.info("popularity rebuild enabled (cross-archive sort stays current)")
+        log.info("planner statistics refresh enabled (ANALYZE stories)")
 
     if _flag("FFNET_WAYBACK", "true"):
         tasks.append(asyncio.create_task(_ffnet_wayback_cdx_loop()))
