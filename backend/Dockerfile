@@ -1,5 +1,21 @@
 FROM python:3.12-slim
 WORKDIR /app
+
+# Unbuffered stdout, and it is not a nicety here.
+#
+# Python block-buffers stdout when it is a pipe, which is exactly what Docker
+# gives it — so up to 8KB of output sits in the process rather than reaching
+# `docker logs`. uvicorn installs its own logging and is unaffected, which is why
+# the API looked fine and hid the problem. `python worker.py` is not: the worker
+# ran for SIX DAYS after a restart without emitting a single line, including its
+# own startup banner. It was alive and working the whole time — 47 database
+# connections, tasks running — but from outside it was indistinguishable from
+# hung, and every log-based check (the watchdog, `docker logs`, any attempt to
+# confirm a loop had fired) silently read nothing and concluded nothing.
+#
+# One line, and every process built from this image reports what it is doing.
+ENV PYTHONUNBUFFERED=1
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

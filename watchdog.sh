@@ -72,6 +72,35 @@ for svc in db backend frontend worker; do
   fi
 done
 
+# ── is the worker actually WORKING, not merely running ──────────────────────
+#
+# The loop above asks Docker whether the container is up, and that is not the
+# same question. The worker sat "Up 6 days" having emitted nothing since a
+# restart and having its stdout swallowed by Python's pipe buffering — alive,
+# holding 47 database connections, and completely unobservable. A hung event
+# loop looks identical to a busy one from `docker compose ps`.
+#
+# So this asks the database instead: the worker stamps crawled_at on every work
+# it fetches, continuously, from several independent loops. If the newest one is
+# hours old, nothing is being indexed whatever the container says.
+#
+# Six hours, not one: ao3_budget backs off to a two-hour cooldown when AO3
+# throttles, and a false restart mid-cooldown would throw away the backoff and
+# make the throttling worse. Six is comfortably longer than any legitimate pause
+# and far shorter than the six days this went unnoticed for.
+WORKER_STALE_H="${WATCHDOG_WORKER_STALE_H:-6}"
+worker_age=$(docker compose exec -T db psql -U ficatlas -d ficatlas -tAc \
+  "SELECT coalesce(round(extract(epoch from (now()-max(crawled_at)))/3600)::int, 9999) FROM stories" 2>/dev/null | tr -d ' \r')
+case "$worker_age" in
+  ''|*[!0-9]*) : ;;                      # query failed; the db check below owns that
+  *)
+    if [ "$worker_age" -ge "$WORKER_STALE_H" ]; then
+      problems+=("worker has indexed nothing for ${worker_age}h")
+      restart worker "nothing indexed for ${worker_age}h"
+    fi
+    ;;
+esac
+
 # ── database accepting connections ──────────────────────────────────────────
 if ! docker compose exec -T db pg_isready -U ficatlas -d ficatlas >/dev/null 2>&1; then
   problems+=("postgres not accepting connections")
