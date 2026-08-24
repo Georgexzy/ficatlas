@@ -59,6 +59,27 @@ export const metadata: Metadata = {
     + "FictionAlley in one place, then read them on the archive that hosts them. "
     + "No adverts, no tracking, no AI trained on fic.",
   manifest: "/manifest.json",
+  // The site had NO favicon. /favicon.ico was a 404, and the only icons that
+  // existed were the 192/512 PWA ones referenced from manifest.json — which a
+  // browser tab, an address-bar suggestion and a Google result do not read. The
+  // visible result was a generic globe everywhere the site was listed, which on
+  // a search engine is the one place identity has to survive being one row in a
+  // list of ten.
+  //
+  // favicon.ico carries 16/32/48 because browsers pick from inside it; the 48px
+  // PNG is there because Google Search wants a favicon of 48x48 or a multiple,
+  // from a stable crawlable URL (robots.txt allows these). Generated from the
+  // existing FA mark, cropped past its 12.5% margin so the letters still read at
+  // 16px — see the crop note where they are built.
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "16x16 32x32 48x48" },
+      { url: "/icon-48.png", type: "image/png", sizes: "48x48" },
+      { url: "/icon-192.png", type: "image/png", sizes: "192x192" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: { url: "/apple-icon.png", sizes: "180x180" },
+  },
   // What a link to the site looks like when someone pastes it into Discord,
   // Reddit or a group chat, which for a site like this is most of how it
   // travels. Without these it renders as a bare URL. Deliberately reusing the

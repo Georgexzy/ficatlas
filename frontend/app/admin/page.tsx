@@ -83,6 +83,36 @@ function pct(missing: number, total: number): number {
   return total > 0 ? Math.round((missing / total) * 100) : 0
 }
 
+/** Coverage — the share that HAS the field. The bars show this, not the gap. */
+function have(missing: number, sampled: number): number {
+  return sampled > 0 ? Math.round(((sampled - missing) / sampled) * 100) : 0
+}
+
+/** 12,700,000 -> "12.7M". Percentages of a sample do not give anyone a sense of
+ *  scale on a 20M-row index; "1.2M of 13.5M works" does. */
+function compact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`
+  if (n >= 1_000)     return `${Math.round(n / 1_000)}k`
+  return n.toLocaleString()
+}
+
+// WHY a field is thin, where the reason is known and fixed rather than a bug to
+// chase. This is the piece the page was missing: the two biggest bars on it are
+// AO3 kudos and AO3 summary, both at ~94%, and with no explanation they read as
+// "the index is broken" when they are a known property of where those rows came
+// from. Keyed `site:field`; anything absent just shows no note.
+const CAUSE: Record<string, string> = {
+  "ao3:no_summary":
+    "12.9M AO3 rows came from the bulk metadata dump, which has no summary field at all. Freshly crawled works do get one, so this closes only by re-crawling.",
+  "ao3:no_kudos":
+    "The same bulk dump carries no engagement figures. Works the crawler has visited since do have them.",
+  // No note for FanFiction.net kudos on purpose. The obvious one — "FF.net has
+  // favourites, not kudos" — is contradicted by the data: 359,203 FF.net rows
+  // carry a kudos figure and exactly 0 carry a favourites one, so whatever the
+  // importer is doing, that sentence would be false. A wrong explanation on an
+  // operator page is worse than none: it stops the question being asked.
+}
+
 export default function AdminPage() {
   const [tab, setTab] = useState<"health" | "takedowns" | "traffic">("health")
   useEffect(() => {
@@ -182,14 +212,17 @@ export default function AdminPage() {
           )}
 
           <section className="settings-group">
-            <h2 className="settings-group__title">What is thin</h2>
+            <h2 className="settings-group__title">Field coverage</h2>
             <p className="settings-group__hint">
-              Share of rows with nothing recorded for each field. Sites under
-              400,000 works are counted exactly; larger ones are estimated from a
-              sample of {data.coverage_sample.toLocaleString()}, which at that
-              size is accurate to well under a percent.
-              {" "}A gap is not a bug in itself — FF.net&apos;s bulk dump simply has no
-              kudos column. It becomes one when a filter looks like it works and
+              How much of each archive actually carries each field.{" "}
+              <strong>A longer bar is better</strong> — it is the share of works
+              that HAVE the field, not the share missing it. Sites under 400,000
+              works are counted exactly; larger ones are estimated from a sample
+              of {data.coverage_sample.toLocaleString()}, which at that size is
+              accurate to well under a percent.
+              {" "}A short bar is not automatically a bug: some of these fields do
+              not exist at the source, and the ones with a known cause say so
+              underneath. It becomes a bug when a filter looks like it works and
               matches almost nothing.
             </p>
             {data.coverage.map(c => (
@@ -213,28 +246,47 @@ export default function AdminPage() {
                     const na = c.na.includes(f.key as string)
                     const p = pct(c[f.key] as number, c.sampled)
                     if (na) return (
-                      <div key={f.key} className="admin-bar admin-bar--na"
-                        title={`${SITE_LABEL[c.site] ?? c.site} does not publish this field at all`}>
-                        <span className="admin-bar__label">{f.label}</span>
-                        <span className="admin-bar__track" />
-                        <span className="admin-bar__pct">n/a</span>
+                      <div key={f.key} className="admin-bar-row">
+                        <div className="admin-bar admin-bar--na">
+                          <span className="admin-bar__label">{f.label}</span>
+                          <span className="admin-bar__track" />
+                          <span className="admin-bar__pct">n/a</span>
+                        </div>
+                        {/* Spelled out rather than left as a dash. "n/a" next to
+                            a row of percentages invites the reading "we failed
+                            to measure it"; the truth is there is nothing to
+                            measure, and that is not a gap anyone should chase. */}
+                        <p className="admin-bar__detail">
+                          {SITE_LABEL[c.site] ?? c.site} does not publish this field
+                        </p>
                       </div>
                     )
+                    // The bar shows COVERAGE, not the gap. It used to fill to
+                    // the missing share, so AO3 kudos and summary painted two
+                    // nearly-full red bars for a page titled "Index health" —
+                    // the exact opposite of how a filled bar reads. Now a full
+                    // green bar means the field is there.
+                    const h = have(c[f.key] as number, c.sampled)
+                    const cause = CAUSE[`${c.site}:${String(f.key)}`]
+                    const hasN = Math.round(c.total * (h / 100))
                     return (
-                      <div key={f.key} className="admin-bar" title={`${p}% missing — ${f.why}`}>
-                        <span className="admin-bar__label">{f.label}</span>
-                        <span className="admin-bar__track">
-                          <span className={`admin-bar__fill ${p >= 90 ? "is-bad" : p >= 50 ? "is-mid" : "is-ok"}`}
-                                style={{ width: `${p}%` }} />
-                        </span>
-                        {/* "missing" stays on the number, not only in the
-                            tooltip and the paragraph above. Read on its own,
-                            "Summary 0%" for FF.net says none of its works have
-                            a summary — when it means the opposite, that none
-                            are MISSING one (6,571,851 of 6,571,982 have one).
-                            The one number a bar shows has to carry its own
-                            sense. */}
-                        <span className="admin-bar__pct">{p}% missing</span>
+                      <div key={f.key} className="admin-bar-row">
+                        <div className="admin-bar" title={f.why}>
+                          <span className="admin-bar__label">{f.label}</span>
+                          <span className="admin-bar__track">
+                            <span className={`admin-bar__fill ${h <= 10 ? "is-bad" : h <= 50 ? "is-mid" : "is-ok"}`}
+                                  style={{ width: `${h}%` }} />
+                          </span>
+                          {/* Percentage AND count. A share of a 33,485-row
+                              sample means nothing next to a heading that says
+                              13,506,241 works; "1.2M of 13.5M" is the number a
+                              person can act on. */}
+                          <span className="admin-bar__pct">{h}%</span>
+                        </div>
+                        <p className="admin-bar__detail">
+                          {compact(hasN)} of {compact(c.total)} works have this
+                          {cause && <> · <span className="admin-bar__cause">{cause}</span></>}
+                        </p>
                       </div>
                     )
                   })}
