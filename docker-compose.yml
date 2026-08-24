@@ -321,6 +321,10 @@ services:
       DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-12}
       DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-6}
       RUN_SCHEDULER: "true"
+      # Hub-change submissions to Bing/Yandex/Seznam/Naver. The matching key file
+      # is served at /<key>.txt by the frontend — see backend/indexnow.py.
+      INDEXNOW_KEY: ${INDEXNOW_KEY:-}
+      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-https://ficatlas.com}
       # The bulk AO3 dump stops at work id 63,178,258 (~mid-2024) while AO3 is
       # now issuing ~89.7M, so everything recent can only come from crawling.
       RECENT_WORKS: "true"
