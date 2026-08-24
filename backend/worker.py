@@ -1196,6 +1196,34 @@ async def _popularity_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _indexnow_loop() -> None:
+    """Submit changed hub pages to the IndexNow engines.
+
+    Discovery, not indexing quality. The hub pages are already well-formed —
+    unique titles, descriptions, canonicals, JSON-LD — and none of that does
+    anything while `site:ficatlas.com` returns nothing, which is where this site
+    actually is. A new domain with no inbound links can wait months to be
+    crawled; IndexNow asks instead of waiting, and needs no account.
+
+    Daily, not hourly: hub content moves when the worker rebuilds hubs, which is
+    itself a slow loop, and there is nothing to gain from asking more often than
+    the pages change. The watermark in indexnow.py means a quiet day sends
+    nothing at all rather than resubmitting the same list.
+    """
+    import indexnow
+
+    interval = _num("INDEXNOW_INTERVAL_HOURS", 24) * 3600
+    await asyncio.sleep(_num("INDEXNOW_START_DELAY_SEC", 600))
+    while True:
+        try:
+            n = await asyncio.to_thread(indexnow.run)
+            if n:
+                log.info(f"indexnow: {n:,} changed hub URLs submitted")
+        except Exception as e:
+            log.warning(f"indexnow submission failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _analyze_loop() -> None:
     """Keep the planner's statistics on `stories` honest.
 
@@ -1433,6 +1461,12 @@ async def main() -> None:
     if _flag("RUN_ANALYZE", "true"):
         tasks.append(asyncio.create_task(_analyze_loop()))
         log.info("planner statistics refresh enabled (ANALYZE stories)")
+
+    # Only runs if INDEXNOW_KEY is set; indexnow.run() no-ops otherwise, so this
+    # is safe to leave on for an install that has not set one up.
+    if _flag("RUN_INDEXNOW", "true"):
+        tasks.append(asyncio.create_task(_indexnow_loop()))
+        log.info("IndexNow submission enabled (hub changes -> Bing/Yandex)")
 
     if _flag("FFNET_WAYBACK", "true"):
         tasks.append(asyncio.create_task(_ffnet_wayback_cdx_loop()))
