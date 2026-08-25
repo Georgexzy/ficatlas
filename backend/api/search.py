@@ -1492,9 +1492,29 @@ def search(          # NOT async — see below
         # a title outrank everything else on its own.
         # A category query leans on readership and subject match; a title query
         # leans on the title. Same formula, different emphasis.
-        w_title = 0.7 if is_category else 3.0
-        w_exact = 0.6 if is_category else 4.0
-        w_pop = 3.0 if is_category else 1.0
+        # The category weights were still too kind to the title, and the failure
+        # was consistent: searching a TROPE returned tiny works NAMED after it
+        # above the works actually about it. "coffee shop au" gave a 810-word fic
+        # called "Coffee Shop AU" (156 kudos) above one with 15,097; "time travel"
+        # gave a 1,128-word fic called "time travel" (320 kudos) above works with
+        # 35,544 and 48,099.
+        #
+        # Three separate terms were all rewarding the same coincidence at once,
+        # which is why it compounded: an exactly-matching title collects
+        # exact_bonus AND a ~1.0 trigram title_sim AND an inflated ts_rank,
+        # because ts_rank normalisation divides by document length and these
+        # works have almost no document. Together that outweighed a 100x
+        # readership difference.
+        #
+        # So for a query that IS a category, the title nearly stops voting. It is
+        # not zeroed — "Dramione" sits at only 134 facet hits and a work of that
+        # name should still place if it is read — but it can no longer carry a
+        # work on its own. A title query is untouched: `all the young dudes` is 13
+        # facet hits, is not a category, and still puts the 318,463-kudos work
+        # first.
+        w_title = 0.35 if is_category else 3.0
+        w_exact = 0.15 if is_category else 4.0
+        w_pop = 3.5 if is_category else 1.0
         w_text = 2.5 if is_category else 1.5
 
         # A bonus, not a hard tier. As a tier, ANY work whose title contained the
