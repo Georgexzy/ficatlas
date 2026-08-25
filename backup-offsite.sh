@@ -125,7 +125,14 @@ ls -1t "$DEST_DIR"/ficatlas-*.dump 2>/dev/null | tail -n +$((KEEP + 1)) | while 
   log "pruning offsite $(basename "$old")"; rm -f "$old"
 done
 
+# Counted BEFORE unmounting. It used to be counted after, against a path that is
+# by then an empty unmounted directory — so a run that had just copied 628MB
+# successfully signed off with "done — 0 dump(s) offsite". Which is the one
+# sentence guaranteed to make you think the backup failed, on the one run where
+# it had worked.
+OFFSITE_COUNT=$(ls -1 "$DEST_DIR"/ficatlas-*.dump 2>/dev/null | wc -l)
+
 # Leave the share as we found it, so the laptop is free to sleep.
 [ "${WE_MOUNTED:-0}" = 1 ] && umount "$MOUNT" 2>/dev/null
 
-log "done — $(ls -1 "$DEST_DIR"/ficatlas-*.dump 2>/dev/null | wc -l) dump(s) offsite"
+log "done — ${OFFSITE_COUNT} dump(s) offsite"
