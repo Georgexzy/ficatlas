@@ -60,11 +60,32 @@ fi
 echo "==> backing up /etc/fstab"
 cp -a /etc/fstab "/etc/fstab.bak.$(date +%Y%m%d-%H%M%S)"
 
-echo "==> writing $CRED (0600)"
+# 0640 root:<user>, NOT 0600 root:root — and that distinction is the whole
+# reason the offsite backup silently stopped working.
+#
+# The fstab line carries `user`, so the share is meant to be mounted by the
+# unprivileged account, and backup-offsite.sh runs from that account's crontab.
+# mount.cifs is setuid root, but it reads the credentials file as the INVOKING
+# user on purpose — otherwise any user could point it at /etc/shadow. With the
+# file 0600 root:root the mount therefore failed with
+#   error 13 (Permission denied) opening credential file /etc/samba/ficatlas.cred
+# every single time, for the account that actually runs the backup.
+#
+# What made that hard to see is that it fails OPEN: backup-offsite.sh treats an
+# unmountable share as "the laptop is off" and exits 0, which is correct for a
+# laptop that is genuinely off and indistinguishable from this. The copies that
+# did land (5 and 15 August) were ones where somebody had already mounted the
+# share by hand as root, so the script found it mounted and skipped mounting.
+#
+# Group-readable widens the SMB password to exactly one account: the one that
+# already owns every backup file this protects.
+OWNER="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
+echo "==> writing $CRED (0640 root:$OWNER)"
 install -d -m 755 /etc/samba
 umask 077
 printf 'username=%s\npassword=%s\n' "$SMB_USER" "$SMB_PASS" > "$CRED"
-chmod 600 "$CRED"
+chown "root:$OWNER" "$CRED" 2>/dev/null || chown root:root "$CRED"
+chmod 640 "$CRED"
 
 mkdir -p "$MOUNT"
 umount "$MOUNT" 2>/dev/null || true
