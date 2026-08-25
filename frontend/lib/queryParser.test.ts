@@ -158,3 +158,51 @@ describe("quoteValue", () => {
     expect(pq.status).toBeNull()
   })
 })
+
+// ── Every filter the panel can set must survive the round trip ──────────────
+// The search bar REPLACES its own contents from the filter state, so a filter it
+// cannot write is a filter that gets silently dropped the next time anything
+// re-runs the search. These pin the operators for the five that used to be
+// unwritable: warnings, categories, sites, crossovers and updated-after.
+describe("filters the bar writes must parse back", () => {
+  it("warnings", () => {
+    const pq = parseQuery("warn:Underage")
+    expect(pq.warnings).toEqual(["Underage"])
+  })
+
+  it("categories", () => {
+    const pq = parseQuery("cat:F/F")
+    expect(pq.categories).toEqual(["F/F"])
+  })
+
+  it("sites, one operator per archive", () => {
+    const pq = parseQuery("site:ao3 site:fictionalley")
+    expect(pq.sites).toEqual(["ao3", "fictionalley"])
+  })
+
+  it("crossovers both ways", () => {
+    expect(parseQuery("xover:only").crossovers).toBe("only")
+    expect(parseQuery("xover:exclude").crossovers).toBe("exclude")
+  })
+
+  it("updated-after keeps the exact date the panel stored", () => {
+    expect(parseQuery("updated:2026-01-31").updatedAfter).toBe("2026-01-31")
+  })
+
+  it("a multi-word warning still round-trips with the quoting rule", () => {
+    const s = `warn:${quoteValue("Major Character Death")}`
+    expect(s).toBe("warn:Major Character Death")
+    expect(parseQuery(s).warnings).toEqual(["Major Character Death"])
+  })
+
+  it("all five together, alongside the older operators", () => {
+    const pq = parseQuery(
+      "fandom:Harry Potter warn:Underage cat:M/M site:ao3 xover:exclude updated:2026-01-31")
+    expect(pq.fandoms).toEqual(["Harry Potter"])
+    expect(pq.warnings).toEqual(["Underage"])
+    expect(pq.categories).toEqual(["M/M"])
+    expect(pq.sites).toEqual(["ao3"])
+    expect(pq.crossovers).toBe("exclude")
+    expect(pq.updatedAfter).toBe("2026-01-31")
+  })
+})

@@ -1,4 +1,5 @@
 """Search API — unified search across all indexed sites with hybrid live fetch"""
+import hashlib
 import logging
 from functools import lru_cache
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -42,6 +43,12 @@ SEARCH_COUNT_CEILING = int(os.getenv("SEARCH_COUNT_CEILING", "5000"))
 # costs is that a filtered browse says "2,000+" where it used to say "5,000+",
 # and both mean "more than you will page through".
 SEARCH_BROWSE_COUNT_CEILING = int(os.getenv("SEARCH_BROWSE_COUNT_CEILING", "2000"))
+
+# How long a filtered browse's total is reused for. Longer than the response
+# cache's 120s because the number is capped and therefore coarse — "2,000+" does
+# not become wrong in ten minutes — and because it is the expensive half of the
+# request. See the count cache in search() for the measurements.
+COUNT_CACHE_TTL = int(os.getenv("SEARCH_COUNT_CACHE_TTL", "900"))
 
 # Cap on the "N explicit works are hidden" count. Far lower than the search
 # ceiling because the number is a hint, not a result set: "999+" and "4,300" tell
@@ -460,16 +467,25 @@ _FAST_SORTS = {
                        lambda e: func.coalesce(e.updated_at, e.published_at).desc().nullslast()),
     "published_desc": (lambda e: e.published_at >= _TS_MIN,
                        lambda e: e.published_at.desc()),
-    # kudos_desc and word_count_desc were tried here and REMOVED, which is worth
-    # recording because the index exists and it looks like it should work.
+    # kudos_desc and word_count_desc were removed from this map once, on the
+    # strength of `tags=Fluff&sort=kudos_desc` measuring 47.3s. That measurement
+    # was taken while the planner believed `stories` held 84,799 rows instead of
+    # 20.1M — ANALYZE had never run — so it was not measuring these sorts at all,
+    # it was measuring a planner with no statistics. Re-measured afterwards, with
+    # the same queries: word_count 10.2ms (Harry Potter) and 10.1ms (Fluff),
+    # kudos 4.9ms and 19.0ms. They belong here.
     #
-    # The walk only pays off when the filtered rows are DENSE near the top of the
-    # index. That holds for dates — the newest works in a big fandom are within a
-    # few thousand rows of the newest works overall — and does not hold for
-    # engagement: the highest-kudos works on the site are mostly not in any one
-    # fandom or tag, so the scan reads a very long way before it fills a page.
-    # Measured: `tags=Fluff&sort=kudos_desc` went from 4.6s to 47.3s. Same shape,
-    # opposite result, entirely because of where the matches sit.
+    # Both are lossless: the bound is `>= 0` on columns that are never negative
+    # (checked, 0 rows each), so it selects exactly what IS NOT NULL selects, and
+    # their indexes are FULL rather than partial — nothing is excluded from the
+    # ordering the way a `> 0` bound against a partial index would exclude it.
+    #
+    # word_count's index is ASC and is walked backwards for DESC; kudos's is
+    # already DESC. Both therefore want a plain .desc() with no nullslast, which
+    # is what matches. hits/comments/bookmarks are still absent, and for the
+    # different reason spelled out above.
+    "kudos_desc":      (lambda e: e.kudos >= 0,      lambda e: e.kudos.desc()),
+    "word_count_desc": (lambda e: e.word_count >= 0, lambda e: e.word_count.desc()),
 }
 
 # Sorts whose own index already matches _sort_expr, so they pre-order with no
@@ -1565,16 +1581,43 @@ def search(          # NOT async — see below
         rows = [(r, None) for r in _fast_rows]
         # Count over an ID-ONLY capped subquery. `candidates` selects all 45
         # columns because the rows are read from it on the normal path; counting
-        # them makes the executor materialise 5,001 rows of ~1.3KB to throw the
-        # contents away. Selecting a single column instead measured 4.5-40s down
-        # to a steady ~4s on this box — the spread matters as much as the median,
-        # because the wide form is the one that goes off a cliff under write
-        # load, which is exactly when someone is searching.
-        total = db.query(func.count()).select_from(
+        # them makes the executor materialise thousands of ~1.3KB rows to throw
+        # the contents away.
+        #
+        # Cached separately from the response, and keyed on the FILTERS ALONE.
+        # Once the rows became an index walk this count was the entire remaining
+        # cost of a filtered browse — measured at 14,152ms of a 14,226ms request
+        # — and it is the same number for every sort and every page of the same
+        # search. So changing the sort, or paging, re-derived a total that could
+        # not have changed, which is exactly the "changing the sort takes ages"
+        # complaint. The response cache cannot help: sort and page are part of
+        # its key, so every one of them is a miss.
+        #
+        # The key is a hash of the count query's own compiled SQL. That is exact
+        # by construction — identical filters produce identical SQL, and sort and
+        # page do not appear in this query at all, so they cannot fragment it.
+        _count_q = db.query(func.count()).select_from(
             db_query.with_entities(Story.id)
-                    .limit(SEARCH_BROWSE_COUNT_CEILING + 1).subquery()
-        ).scalar() or 0
+                    .limit(SEARCH_BROWSE_COUNT_CEILING + 1).subquery())
         _ceiling = SEARCH_BROWSE_COUNT_CEILING
+        total = None
+        try:
+            _sig = str(_count_q.statement.compile(
+                db.bind, compile_kwargs={"literal_binds": True}))
+            _ckey = "count|" + hashlib.sha1(_sig.encode()).hexdigest()
+            _hit = shared_get(db, _ckey)
+            if _hit is not None:
+                total = int(_hit)
+        except Exception:
+            _ckey = None
+            log.debug("count cache key failed", exc_info=True)
+
+        if total is None:
+            total = _count_q.scalar() or 0
+            if _ckey:
+                # Longer than the response TTL: the number is capped anyway, so
+                # it is coarse, and it is the expensive half.
+                shared_put(db, _ckey, str(total), ttl=COUNT_CACHE_TTL)
     else:
         rows = ordered.offset(offset).limit(per_page).all()
     # count(*) OVER () repeats the same total on every row; it is only absent
