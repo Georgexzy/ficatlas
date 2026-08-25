@@ -1595,13 +1595,48 @@ function SearchPageInner() {
     // bar round-trips with the sidebar pills and with a typed operator.
     if (inSeries === "yes") parts.push("series:true")
     else if (inSeries === "no") parts.push("series:false")
+
+    // ── Everything below was filterable but unwritable ────────────────────
+    //
+    // These five narrow the search and were sent to the API, but never appeared
+    // in the bar. Because this function REPLACES the bar's contents, that was
+    // worse than cosmetic: tick "Rape/Non-Con" under warnings and the results
+    // narrowed while the bar rewrote itself without it, so the next thing to
+    // re-run the search — a sort change, a pill, pressing Enter — silently
+    // dropped the filter. The bar is meant to be the one place a reader can see
+    // what they have actually asked for, and it was lying by omission.
+    //
+    // Each uses the vocabulary queryParser already accepts, so a typed operator
+    // and a clicked control produce the same string and round-trip back.
+    incWarnings.forEach(v => parts.push(`warn:${q(v)}`))
+    incCats.forEach(v => parts.push(`cat:${q(v)}`))
+
+    // Only when it is a narrowing. All three archives selected IS the default,
+    // and spelling it out would put "site:ao3 site:ffnet site:fictionalley" in
+    // front of every search — the same noise the ratings guard above avoids.
+    if (sites.length > 0 && sites.length < 3) sites.forEach(v => parts.push(`site:${v}`))
+
+    // "include" is the default and says nothing.
+    if (crossovers === "only") parts.push("xover:only")
+    else if (crossovers === "exclude") parts.push("xover:exclude")
+
+    // parseDate accepts YYYY-MM-DD, a bare year, and relative forms like 30d.
+    // updatedAfter is already stored as YYYY-MM-DD, which is the form that
+    // round-trips exactly — a relative one would drift every day it sat there.
+    if (updatedAfter) parts.push(`updated:${updatedAfter}`)
+
     return [freeText, ...parts].filter(Boolean).join(" ")
   }, [query, incFandoms, incShips, incChars, incTags, excFandoms, excShips,
       excChars, excTags, incRatings, status, wordMin, wordMax, language,
       // sections was missing, so the serializer closed over an empty list and
       // the search bar never mentioned a chosen section — the bar is meant to
       // be the single visible statement of what you asked for.
-      authorFilter, explicit, sections, inSeries])
+      authorFilter, explicit, sections, inSeries,
+      // The five added above have to be listed here too, for the same reason
+      // the comment about `sections` gives: a useCallback that does not depend
+      // on a value closes over a stale one, so the bar would go on describing
+      // the previous warnings/categories/sites selection after it changed.
+      incWarnings, incCats, sites, crossovers, updatedAfter])
 
   // Build search params
   // The Apply bar compares a signature of the current filters against the
