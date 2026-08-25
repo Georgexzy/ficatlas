@@ -1,5 +1,6 @@
 """Stats endpoint — per-site counts, totals, last-updated info"""
 import logging
+import threading
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import bindparam, func, text
@@ -133,13 +134,67 @@ def _load_persisted_totals() -> dict | None:
         return None
 
 
+# Single-flight guard for the totals recompute.
+#
+# Without it, stale-while-revalidate amplifies traffic into an outage. The moment
+# the cache goes stale EVERY incoming request schedules its own background
+# recompute, and that recompute is a full scan of 20M rows taking ~40s. Observed
+# live: eight identical
+#     SELECT count(*) AS stories, count(*) FILTER (WHERE is_hosted) ...
+# running concurrently at 37-51s each, each holding a pooled connection, until
+# the API exhausted its pool and every request — including plain searches —
+# failed with
+#     QueuePool limit of size 12 overflow 6 reached, connection timed out
+# and the site returned 500s across the board.
+#
+# The cruelty of it is that it scales the wrong way: the more visitors arrive
+# while the cache is stale, the more concurrent full scans they trigger, so the
+# site breaks hardest exactly when it is being used. One refresh is all that was
+# ever wanted; the second onwards are pure harm.
+_totals_refreshing = False
+_totals_refresh_lock = threading.Lock()
+
+# Arbitrary but fixed. Advisory locks share one namespace per database, so this
+# only has to be unique against the other advisory locks this app takes.
+#
+# Taken with pg_try_advisory_xact_lock, NOT pg_try_advisory_lock. The session
+# form is held by the CONNECTION and must be released by hand, and connections
+# here come from a pool — so a request killed mid-scan (a client disconnect, a
+# proxy timeout) returns its connection to the pool with the lock still on it and
+# nothing ever releases it. That happened during testing: one idle pooled
+# connection held the lock permanently, which did not merely disable the guard,
+# it disabled the refresh entirely, since every later caller failed to acquire.
+# The transaction form is released by Postgres at COMMIT or ROLLBACK, so it
+# cannot leak however the request ends.
+_TOTALS_LOCK_KEY = 8_314_207_001
+
+
 def _recompute_totals() -> None:
-    """Refresh the cached totals off the request path."""
-    global _totals_cache, _totals_cached_at
+    """Refresh the cached totals off the request path. At most one at a time."""
+    global _totals_cache, _totals_cached_at, _totals_refreshing
     import time
     from db.session import db_session
+
+    with _totals_refresh_lock:
+        if _totals_refreshing:
+            return          # one is already running IN THIS PROCESS
+        _totals_refreshing = True
     try:
         with db_session() as db:
+            # ...and one running in any OTHER process. The in-process flag alone
+            # only divides the problem by the worker count: the public API runs
+            # two uvicorn workers and the dev stack four, and during a promote
+            # both colours are up, so "one per process" was still a handful of
+            # concurrent 40-second scans. Measured live with the flag alone:
+            # 19 of them from the public API at once.
+            #
+            # A Postgres advisory lock is the right shape for this. It is held on
+            # the connection, so it cannot outlive a crash the way a flag in a
+            # table could, and pg_try_advisory_lock never waits — a process that
+            # does not get it simply has nothing useful to do and returns.
+            if not db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"),
+                              {"k": _TOTALS_LOCK_KEY}).scalar():
+                return
             row = db.execute(_TOTALS_SQL).mappings().first()
             coverage = _compute_coverage(db)
         _totals_cache = {
@@ -158,6 +213,9 @@ def _recompute_totals() -> None:
         _persist_totals(_totals_cache)
     except Exception:
         pass  # keep serving the previous numbers
+    finally:
+        with _totals_refresh_lock:
+            _totals_refreshing = False
 
 
 # Field coverage, sampled. Served publicly because the search UI explains its
@@ -280,6 +338,41 @@ def total_stats(
         background_tasks.add_task(_recompute_totals)
         return _totals_cache
 
+    # The synchronous path is reachable by anyone: `refresh` is a plain query
+    # parameter on a public endpoint with no auth behind it, so
+    # `GET /api/stats/totals?refresh=1` runs a 40-second scan of 20M rows and
+    # holds a pooled connection for the duration. A handful of those in parallel
+    # is the same pool exhaustion the background path caused, except deliberate.
+    #
+    # Same advisory lock, so at most ONE full scan exists at a time whatever
+    # triggered it. A caller that cannot get the lock is not made to wait: if
+    # there are numbers to serve it gets those, and only a genuinely cold cache
+    # (no persisted totals at all, i.e. a fresh install) falls through to compute
+    # them itself.
+    _sync_lock = False
+    try:
+        _sync_lock = bool(db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"),
+                                     {"k": _TOTALS_LOCK_KEY}).scalar())
+    except Exception:
+        _sync_lock = False
+    if not _sync_lock:
+        # Somebody else is already scanning. Serve numbers rather than starting a
+        # second one — from memory if this process has any, and otherwise from
+        # the persisted copy, which is exactly what the cold-start branch at the
+        # top of this function does. That branch is skipped when refresh=1, and
+        # that gap WAS the whole vulnerability: a cold worker asked to refresh
+        # had no in-memory cache, so it fell through and scanned, and ten
+        # concurrent `?refresh=1` gave ten concurrent scans on an endpoint with
+        # no authentication in front of it.
+        if _totals_cache is not None:
+            return _totals_cache
+        stored = _load_persisted_totals()
+        if stored:
+            _totals_cache = stored
+            _totals_cached_at = now - _TOTALS_TTL_SECONDS - 1
+            return _totals_cache
+        # Genuinely nothing to serve — a fresh install with no persisted totals.
+        # Fall through and compute; there is no alternative and it happens once.
     row = db.execute(_TOTALS_SQL).mappings().first()
     _totals_cache = {
         "stories": row["stories"], "hosted": row["hosted"],
