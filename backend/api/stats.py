@@ -30,6 +30,42 @@ _SITES_TTL_SECONDS = 300
 _sites_cache: list | None = None
 _sites_cached_at: float = 0.0
 
+# Where the last computed per-site figures live between restarts.
+#
+# /totals learned this already and /sites did not, so it kept the flaw /totals
+# was fixed for: stale-while-revalidate only helps once a value EXISTS, and an
+# in-memory one does not survive a deploy. Measured immediately after a promote,
+# on the live site: 17.5s for /api/stats/sites, paid by whoever loaded a page
+# first. Every deploy handed one visitor a 17-second wait on a status widget.
+#
+# Persisting turns that into "serve the figures from before the restart, and
+# recompute behind the response". They are counts of a 20M-row index shown in a
+# widget; a few minutes stale is invisible, absent is not.
+_SITES_SETTING = "cached_sites_v1"
+
+
+def _persist_sites(payload: list) -> None:
+    try:
+        from db.session import db_session
+        from api.settings import put_setting
+        import json
+        with db_session() as db:
+            put_setting(db, _SITES_SETTING, json.dumps(payload))
+    except Exception:
+        pass  # a cache that fails to persist is slow later, not broken now
+
+
+def _load_persisted_sites() -> list | None:
+    try:
+        from db.session import db_session
+        from api.settings import get_setting
+        import json
+        with db_session() as db:
+            raw = get_setting(db, _SITES_SETTING)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
 
 def _compute_sites(db: Session) -> list:
     rows = (db.query(Story.site, func.count(Story.id), func.max(Story.indexed_at))
@@ -76,6 +112,7 @@ def _recompute_sites() -> None:
                 return
             _sites_cache = _compute_sites(db)
         _sites_cached_at = time.monotonic()
+        _persist_sites(_sites_cache)
     except Exception:
         pass  # keep serving the previous numbers
     finally:
@@ -92,6 +129,20 @@ def site_stats(
     global _sites_cache, _sites_cached_at
     import time
     now = time.monotonic()
+
+    # Cold process: adopt the figures from before the restart so this request can
+    # be answered now, and let the recompute happen behind it. Backdated past the
+    # TTL so it counts as stale and a refresh is scheduled immediately.
+    #
+    # Deliberately NOT gated on `not refresh`, which is the gap that made
+    # ?refresh=1 a denial of service on /totals: a cold worker asked to refresh
+    # had nothing cached, so it fell past the single-flight guard and scanned.
+    if _sites_cache is None:
+        stored = _load_persisted_sites()
+        if stored:
+            _sites_cache = stored
+            _sites_cached_at = now - _SITES_TTL_SECONDS - 1
+
     fresh = _sites_cache is not None and (now - _sites_cached_at) < _SITES_TTL_SECONDS
     if not refresh and fresh:
         return _sites_cache
@@ -114,6 +165,7 @@ def site_stats(
         # the first request after a restart on a cold cache, and it happens once.
     _sites_cache = _compute_sites(db)
     _sites_cached_at = now
+    _persist_sites(_sites_cache)
     return _sites_cache
 
 # The index status widget calls /totals on every page load, but these are
@@ -355,7 +407,12 @@ def total_stats(
 
     # Cold process: adopt the numbers from before the restart so this request
     # can be answered now, and let the recompute happen behind it.
-    if _totals_cache is None and not refresh:
+    # Not gated on `not refresh`. It used to be, and that was the gap: a cold
+    # worker asked to refresh had no in-memory cache, so it fell past the
+    # single-flight guard below and started its own full scan — ten concurrent
+    # `?refresh=1` gave ten concurrent scans on an endpoint with no auth. Adopting
+    # the persisted figures first costs nothing and closes it at the source.
+    if _totals_cache is None:
         stored = _load_persisted_totals()
         if stored:
             _totals_cache = stored
