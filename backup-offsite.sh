@@ -61,9 +61,23 @@ NEWEST=$(ls -1t "$SRC_DIR"/ficatlas-*.dump 2>/dev/null | head -1)
 # setup-windows-share.sh adds `user` to the fstab entry so this works without
 # root. If it has not been run yet, this fails and we leave quietly.
 if ! mountpoint -q "$MOUNT" 2>/dev/null; then
-  mount "$MOUNT" 2>/dev/null || {
-    log "share not mounted and could not mount it (run setup-windows-share.sh?)"
-    exit 0
+  # A mount failure HERE is a fault, not an absent laptop, and it must not be
+  # reported like one. The reachability probe above has already confirmed the
+  # machine is up and answering on 445 — so if the mount still fails, something
+  # is wrong with the configuration and nobody will ever be told unless this
+  # says so. It used to swallow the error and `exit 0`, which is the same thing
+  # a switched-off laptop does, and that is precisely how a credentials file
+  # readable only by root went unnoticed: the mount failed with EACCES on every
+  # run for weeks while the log said the calm thing.
+  mount_err=$(mount "$MOUNT" 2>&1) || {
+    log "ERROR: $HOST is up but $MOUNT would not mount: ${mount_err:-unknown error}"
+    # The exact command, not a pointer to setup-windows-share.sh. That script
+    # re-derives the credentials from /etc/fstab, and they were deliberately
+    # moved OUT of fstab when it was first run — so re-running it now just exits
+    # with "Could not find username=/password=". The existing file already holds
+    # the right credentials; only its ownership is wrong.
+    log "       fix: sudo chown root:$(id -un) /etc/samba/ficatlas.cred && sudo chmod 640 /etc/samba/ficatlas.cred"
+    exit 1
   }
   WE_MOUNTED=1
 fi
