@@ -44,16 +44,43 @@ def _compute_sites(db: Session) -> list:
     ]
 
 
+# The same single-flight guard /totals needed, for the same reason and on the
+# same endpoint shape. /sites groups a full scan (~9s at 18M rows), schedules its
+# refresh from a background task with no limit on how many get scheduled, and
+# takes `refresh` as an unauthenticated query parameter. That is the exact
+# combination that exhausted the connection pool and 500'd the whole site from
+# /totals; this one had simply not gone stale under load yet.
+#
+# Its own lock key: two different scans should be able to run at once, they just
+# must not each run N times.
+_SITES_LOCK_KEY = 8_314_207_002
+_sites_refreshing = False
+_sites_refresh_lock = threading.Lock()
+
+
 def _recompute_sites() -> None:
-    global _sites_cache, _sites_cached_at
+    global _sites_cache, _sites_cached_at, _sites_refreshing
     import time
     from db.session import db_session
+
+    with _sites_refresh_lock:
+        if _sites_refreshing:
+            return
+        _sites_refreshing = True
     try:
         with db_session() as db:
+            # Transaction-level, so it cannot outlive a request that dies
+            # mid-scan — see the note on _TOTALS_LOCK_KEY.
+            if not db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"),
+                              {"k": _SITES_LOCK_KEY}).scalar():
+                return
             _sites_cache = _compute_sites(db)
         _sites_cached_at = time.monotonic()
     except Exception:
         pass  # keep serving the previous numbers
+    finally:
+        with _sites_refresh_lock:
+            _sites_refreshing = False
 
 
 @router.get("/sites")
@@ -75,6 +102,16 @@ def site_stats(
         background_tasks.add_task(_recompute_sites)
         return _sites_cache
 
+    # Synchronous path, reachable by anyone via ?refresh=1. Same rule: at most
+    # one scan exists at a time, and a caller that cannot get the lock serves
+    # what it has rather than starting a second one.
+    if not db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"),
+                      {"k": _SITES_LOCK_KEY}).scalar():
+        if _sites_cache is not None:
+            return _sites_cache
+        # Nothing cached anywhere and someone else is mid-scan. Unlike /totals
+        # there is no persisted copy to fall back on, so this computes — it is
+        # the first request after a restart on a cold cache, and it happens once.
     _sites_cache = _compute_sites(db)
     _sites_cached_at = now
     return _sites_cache
