@@ -75,11 +75,34 @@ services:
     # 1.5GB keeps a modest gain over the original 1GB while leaving the page
     # cache room to do the rest of the work. If FicAtlas ever gets a box that
     # owns its RAM, 3GB+ is the right number and the measurements above say so.
+    # work_mem is 16MB, not 32MB, and the number is a budget rather than a
+    # preference. It is per SORT NODE, not per connection, so the ceiling is
+    # (connections x nodes x work_mem) on top of shared_buffers. At 32MB with the
+    # 78-connection budget that is 1536 + 2496 = 4032MB against what was a 3072MB
+    # container limit — 960MB over. The database was configured so that enough
+    # concurrent searches would OOM-kill it, and that is not theoretical:
+    #
+    #   LOG: server process (PID 761745) was terminated by signal 9: Killed
+    #   LOG: terminating any other active server processes
+    #   LOG: all server processes terminated; reinitializing
+    #
+    # One backend being SIGKILLed takes the WHOLE cluster down: Postgres cannot
+    # know what shared memory the dead process was mutating, so it kills every
+    # other backend and enters crash recovery. A single heavy query becomes a
+    # total outage.
+    #
+    # 16MB with the limit raised to 4g puts the worst case at 2784MB, with real
+    # headroom. The largest HashAggregate observed in a search plan used 8.4MB,
+    # so nothing in the normal workload is pushed to spill by halving this.
+    #
+    # NOTE: keep comments OUT of the `command: >` block below — it is a folded
+    # scalar, so a `#` line inside it becomes part of the command string and
+    # compose fails with "invalid command line string".
     command: >
       postgres
       -c shared_buffers=1536MB
       -c effective_cache_size=4GB
-      -c work_mem=32MB
+      -c work_mem=16MB
       -c maintenance_work_mem=512MB
       -c random_page_cost=1.1
       -c effective_io_concurrency=200
@@ -121,7 +144,10 @@ services:
     # live with `docker update --cpus`, widening when the host is idle and
     # tightening under memory pressure. So this does not peg the database at three
     # cores — it sets where it begins, and where a restart returns it to.
-    mem_limit: 3g
+    # Raised from 3g. See the work_mem note above: the previous limit was
+    # below the database's own worst-case footprint, and the host has ~10GB
+    # available, so the headroom costs nothing.
+    mem_limit: 4g
     cpus: 3.0
     shm_size: "1gb"
     ports:

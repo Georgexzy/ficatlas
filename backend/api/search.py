@@ -1359,7 +1359,11 @@ def search(          # NOT async — see below
         # at 300 terminates almost immediately when a large share of rows match,
         # which is what "broad" means. It is NOT done for narrow queries, where
         # that same walk is the pathological case the ceiling exists to avoid.
-        if _query_is_category(db, q_norm) >= 100:
+        # Captured, not just tested: the same number decides whether this arm
+        # runs AND how high its kudos floor should be. _query_is_category is
+        # lru_cached, so this is one lookup either way.
+        _breadth = _query_is_category(db, q_norm)
+        if _breadth >= 100:
             # kudos > 0 is not a filter on what may appear — it narrows only
             # this extra source. Without it the planner had to bitmap the whole
             # match set and top-N sort 700,000 rows, which cost 6s on "harry
@@ -1368,13 +1372,66 @@ def search(          # NOT async — see below
             # arrive through the other two branches; this one exists purely to
             # guarantee the best-READ works are present, and a work with zero
             # recorded kudos is by definition not one of those.
-            parts.append(db_query.filter(Story.kudos > 0)
-                         .order_by(Story.kudos.desc().nullslast())
+            # Plain .desc(), NOT nullslast(). ix_stories_kudos_desc is
+            # `btree (kudos DESC)`, and a DESC btree is NULLS FIRST — so
+            # `kudos DESC NULLS LAST` does not match it and Postgres cannot walk
+            # it in order. What it did instead was BitmapAnd the FTS index with
+            # the kudos index over 1,696,107 rows and SORT the result, and this
+            # single arm then took 38.8 SECONDS of a 32-second query on
+            # `q=harry potter` — the arm that exists to make broad queries fast
+            # was the entire reason they were slow.
+            #
+            # `kudos > 0` already excludes NULLs, so dropping nullslast changes
+            # nothing about which rows come back or in what order; it only lets
+            # the planner stop after 300, which is what the comment above always
+            # claimed this did.
+            # The kudos floor scales with how broad the query is, and it is the
+            # difference between this arm costing 2 seconds and 28.
+            #
+            # This arm intersects the FTS match set with the kudos index and
+            # sorts. For a genuinely broad query that match set is enormous —
+            # `harry potter` matches 1,308,857 rows — so the intersection and
+            # the heap fetches behind it dominate everything else in the query.
+            # Measured on `q=harry potter`, this arm alone:
+            #
+            #     kudos > 0      27.9s        kudos > 500    13.0s
+            #     kudos > 100    17.8s        kudos > 1000    2.3s
+            #
+            # It was 38.8s of a 32s query in the live plan: the arm that exists
+            # to make broad queries good was the entire reason they were slow.
+            #
+            # A FIXED floor cannot work — 1000 would empty this arm for a
+            # mid-sized pairing whose best works sit at 300 kudos. But breadth is
+            # already measured: breadth is 686,558 for "harry potter", 45,960
+            # for "time travel" and 134 for "dramione". The broader the query,
+            # the more well-read works exist, and the higher the floor can safely
+            # go.
+            #
+            # Crucially this arm is ADDITIVE — it guarantees the best-read works
+            # are present, on top of the other arms which return everything else.
+            # So a floor can only change what this arm ADDS. It can never remove
+            # a match from the results, which is what makes tuning it safe.
+            _kudos_floor = (1000 if _breadth >= 100_000
+                            else 250 if _breadth >= 20_000
+                            else 0)
+            parts.append(db_query.filter(Story.kudos > _kudos_floor)
+                         .order_by(Story.kudos.desc())
                          .limit(POPULAR_CANDIDATES))
-        merged = parts[0]
-        for part in parts[1:]:
-            merged = merged.union(part)
-        candidates = merged.subquery()
+        # ONE n-ary union, not a chain of pairwise ones.
+        #
+        # `for part in parts[1:]: merged = merged.union(part)` builds
+        # ((a ∪ b) ∪ c) ∪ d, and every ∪ is a separate dedup. UNION deduplicates
+        # on the whole row, and these rows are entities — so the plan carried
+        # THREE stacked HashAggregates whose Group Key was all 45 columns of
+        # stories, 2,019 bytes wide, right down to `search_vector` (which is
+        # NULL in every row of the table and read by nothing). Measured on
+        # `q=hogwarts`: 3,038ms total, of which the nested Appends and their
+        # dedups were ~2,300ms.
+        #
+        # A single union(*rest) asks for the same set — UNION is associative and
+        # duplicate-free either way — but dedups once instead of three times.
+        candidates = parts[0].union(*parts[1:]).subquery() if len(parts) > 1 \
+            else parts[0].subquery()
     else:
         # Plain browse (no text): db_query is a filter over the whole index.
         # An unordered LIMIT 5001 slice is an arbitrary sample of 19.7M rows, so
