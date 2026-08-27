@@ -119,8 +119,52 @@ if [ ${#fixed[@]} -gt 0 ]; then
   sleep "${WATCHDOG_SETTLE:-30}"
 fi
 
-check_http "api" "$API"  || restart backend "health check failed"
-check_http "web" "$WEB"  || restart frontend "home page failed"
+# Restart only after CONSECUTIVE failures, never on a single one.
+#
+# A restart kills every in-flight request, so the bar for doing it has to be
+# higher than "one probe timed out". It was not: on 2026-08-27 at 20:50 this
+# restarted the API because /health did not answer within 20s, and the reason it
+# did not answer is that several broad searches were in flight and the workers
+# were busy. That is the worst possible response to load — the site is slow, so
+# we destroy the requests that are slowly succeeding, and everyone gets a
+# connection error instead of a slow page.
+#
+# The failure this check EXISTS for — a hung or dead API — does not heal itself
+# between probes, so it will still be caught, just two cycles (10 minutes) later.
+# A transient one will not be "fixed" at the cost of an outage.
+strike() {                            # name -> current consecutive-failure count
+  local f="$SC_DIR/.watchdog-fails-$1"
+  local n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$f"; echo "$n"
+}
+clear_strikes() { rm -f "$SC_DIR/.watchdog-fails-$1"; }
+
+SC_DIR="$(pwd)/backups"
+NEEDED="${WATCHDOG_STRIKES:-3}"
+
+if check_http "api" "$API"; then
+  clear_strikes api
+else
+  n=$(strike api)
+  if [ "$n" -ge "$NEEDED" ]; then
+    restart backend "health check failed ${n}x consecutively"
+    clear_strikes api
+  else
+    log "api health check failed (${n}/${NEEDED}) — not restarting yet"
+  fi
+fi
+
+if check_http "web" "$WEB"; then
+  clear_strikes web
+else
+  n=$(strike web)
+  if [ "$n" -ge "$NEEDED" ]; then
+    restart frontend "home page failed ${n}x consecutively"
+    clear_strikes web
+  else
+    log "web check failed (${n}/${NEEDED}) — not restarting yet"
+  fi
+fi
 
 # Re-check once after any restart, so the heartbeat reflects reality rather than
 # the state we found on arrival.

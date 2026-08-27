@@ -1174,6 +1174,26 @@ def search(          # NOT async — see below
     # 3. published_at covers 46%, so the coalesce makes the filter ~275x more
     # useful, and for a completed work the publication date is a fair proxy for
     # its last activity anyway.
+    # Dates are coerced, and an unparseable one DROPS its filter rather than
+    # reaching the database.
+    #
+    # These three arrive as raw strings and were interpolated straight into a
+    # timestamptz comparison, so `?updated_after=notadate` reached Postgres as
+    # `>= 'notadate'` and came back as
+    #     DataError: invalid input syntax for type timestamp with time zone
+    # which FastAPI turns into a 500 on a public, unauthenticated endpoint. Any
+    # crawler mangling a URL, or anyone editing one by hand, could trigger it.
+    #
+    # Dropping the filter matches how the rest of this endpoint treats input it
+    # cannot use — an unrecognised archive drops the site filter rather than
+    # keeping one nothing can match — and it reuses query_parser's own date
+    # rules, so `2024`, `30d` and `2024-01-31` mean the same thing typed into
+    # the search bar as passed in the URL.
+    from query_parser import _parse_date as _coerce_date
+    updated_after   = _coerce_date(updated_after)   if updated_after   else None
+    updated_before  = _coerce_date(updated_before)  if updated_before  else None
+    published_after = _coerce_date(published_after) if published_after else None
+
     _last_activity = func.coalesce(Story.updated_at, Story.published_at)
     if updated_after:
         filters.append(_or_unknown(_last_activity >= updated_after, _last_activity.is_(None)))
@@ -1695,6 +1715,16 @@ def search(          # NOT async — see below
                 # Longer than the response TTL: the number is capped anyway, so
                 # it is coarse, and it is the expensive half.
                 shared_put(db, _ckey, str(total), ttl=COUNT_CACHE_TTL)
+    elif offset >= COUNT_CEILING:
+        # Beyond the candidate ceiling there is nothing to fetch, so do not ask.
+        #
+        # Skipping only the COUNT was not enough: the rows query still had to
+        # build the entire candidate set — for a text query, the whole UNION —
+        # before OFFSET could throw all of it away. `q=harry&page=99999` still
+        # took 92 seconds to return zero rows it could have known were zero.
+        # OFFSET is not a way to avoid work in Postgres; it is a way to do the
+        # work and discard it.
+        rows = []
     else:
         rows = ordered.offset(offset).limit(per_page).all()
     # count(*) OVER () repeats the same total on every row; it is only absent
@@ -1703,11 +1733,25 @@ def search(          # NOT async — see below
         pass
     elif rows:
         total = int(rows[0][1])
+    elif page > 1 and offset >= _ceiling:
+        # Past the candidate ceiling, so the page is empty BY CONSTRUCTION and
+        # the total is the capped one. No query can tell us anything more.
+        #
+        # This is the cheap answer to a case that was catastrophically expensive:
+        # the fallback below re-counts the whole candidate set, which for a text
+        # query means re-running the entire UNION. Measured on `q=harry&page=500`
+        # — an offset of 10,000 against a 5,001-row ceiling, so a page that
+        # cannot contain anything — 57.9 SECONDS, which on the public tier is
+        # past the proxy timeout and surfaced as a 500. A crawler walking
+        # pagination links, or anyone who edits the page number in the URL, could
+        # trip it.
+        total = _ceiling
     elif page > 1:
-        # An empty page past the first tells us nothing about the total — the
-        # window count only rides along on rows that came back. Paging beyond
-        # the end would otherwise report "0 results" for a search that has
-        # thousands, so fall back to counting for this uncommon case.
+        # An empty page past the first, but still WITHIN the ceiling, genuinely
+        # tells us nothing about the total — the window count only rides along on
+        # rows that came back. Paging beyond the end would otherwise report
+        # "0 results" for a search that has thousands, so count for this case.
+        # Bounded, because the candidate set it counts is bounded.
         total = db.query(func.count()).select_from(candidates).scalar() or 0
     else:
         total = 0
