@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 import Link from "next/link"
+import { notFound } from "next/navigation"
 import StoryClient from "./StoryClient"
 import ShortLinkButton from "./ShortLinkButton"
 import { escapeJsonLd } from "@/lib/jsonLd"
@@ -47,21 +48,44 @@ interface StoryMeta {
   hubs?: HubLink[]
 }
 
-async function fetchStory(id: string): Promise<StoryMeta | null> {
+/** Distinguishes "this story does not exist" from "the lookup failed".
+ *
+ * Both used to return null, and the page rendered regardless — so a request for
+ * a story id that is not in the index came back as HTTP 200 with the generic
+ * site title and no content. That is a soft 404, and it is the one failure mode
+ * that actively costs this site: Google treats a 200 with no content as a signal
+ * to devalue the whole domain, robots.txt ALLOWS /story/, and there are ~750k
+ * such URLs — every one that is delisted, withdrawn or mistyped became one.
+ *
+ * The old behaviour was still right for the OTHER case. A timeout or a 5xx means
+ * the API blipped, and returning 404 then would delete a real story from the
+ * index over a transient failure. So only a genuine 404 from the API is treated
+ * as missing; everything else still falls through and lets the client component
+ * fetch and report for itself.
+ */
+type StoryLookup =
+  | { kind: "found"; story: StoryMeta }
+  | { kind: "missing" }
+  | { kind: "unavailable" }
+
+async function lookupStory(id: string): Promise<StoryLookup> {
   try {
     const r = await fetch(`${INTERNAL_API}/api/stories/${id}`, {
       next: { revalidate },
       headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
       signal: AbortSignal.timeout(8000),
     })
-    if (!r.ok) return null
-    return await r.json()
+    if (r.status === 404) return { kind: "missing" }
+    if (!r.ok) return { kind: "unavailable" }
+    return { kind: "found", story: await r.json() }
   } catch {
-    // A metadata lookup must never be the reason a page fails to render. The
-    // client component fetches the story itself and handles its own errors, so
-    // falling back to the site defaults costs a good preview and nothing else.
-    return null
+    return { kind: "unavailable" }
   }
+}
+
+async function fetchStory(id: string): Promise<StoryMeta | null> {
+  const r = await lookupStory(id)
+  return r.kind === "found" ? r.story : null
 }
 
 function summarise(s: StoryMeta): string {
@@ -120,7 +144,11 @@ export default async function StoryPage(
 ) {
   const { id } = await params
   const SITE = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
-  const story = await fetchStory(id)
+  const lookup = await lookupStory(id)
+  // A confirmed 404 from the API is a real 404 here. Anything else renders and
+  // lets the client component try again — see lookupStory.
+  if (lookup.kind === "missing") notFound()
+  const story = lookup.kind === "found" ? lookup.story : null
 
   // A story page is a CreativeWork: title, author, fandoms, counts, and above
   // all a summary — most of the index's stories have none, so the ones that do
