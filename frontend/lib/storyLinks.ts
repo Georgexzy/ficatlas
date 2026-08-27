@@ -10,12 +10,25 @@
 //     page. Linking straight at the synthetic URL gave a dead "Open on AO3"
 //     button. These rows exist to tell you a fic EXISTS, so send the reader to an
 //     AO3 search for the title and author instead, which is the useful next step.
+//
+//   ficatlas://  — a work uploaded here as an EPUB. There is no external page at
+//     all: this reader IS the source. It was falling through to the default and
+//     rendering "Read on AO3 ↗" pointing at `ficatlas://upload/<uuid>`, which no
+//     browser can open — a dead button sitting next to the working "Read here"
+//     on the owner's own upload.
 
 export type StoryLinkTarget = {
   href: string
   label: string
   /** True when this points at a search rather than the work itself. */
   isSearch: boolean
+  /** True when there is NO external source and callers should render no link. */
+  isInternal?: boolean
+}
+
+/** An EPUB uploaded here. The reader is the source; there is nowhere else to go. */
+export function isUploadUrl(url: string | undefined | null): boolean {
+  return !!url && url.startsWith("ficatlas://")
 }
 
 export function isSeedUrl(url: string | undefined | null): boolean {
@@ -33,6 +46,17 @@ export function storyLink(
   story: { url: string; site: string; title: string; author?: string | null },
   siteLabels: Record<string, string> = {},
 ): StoryLinkTarget {
+  if (isUploadUrl(story.url)) {
+    // href is the local page rather than the unopenable scheme, so a caller that
+    // ignores isInternal still degrades to something that works.
+    return {
+      href: `/story/${(story as { id?: string }).id ?? ""}`,
+      label: "Uploaded here",
+      isSearch: false,
+      isInternal: true,
+    }
+  }
+
   if (isSeedUrl(story.url)) {
     return {
       href: ao3SearchUrl(story.title, story.author),

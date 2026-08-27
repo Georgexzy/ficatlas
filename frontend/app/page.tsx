@@ -441,7 +441,8 @@ function StoryCard({ story }: { story: StoryCard }) {
     }
   }
 
-  const { href: externalUrl, label: externalLabel } = storyLink(story, SITE_LABELS)
+  const { href: externalUrl, label: externalLabel, isInternal: noExternalSource } =
+    storyLink(story, SITE_LABELS)
 
   // Can we one-click import? Only sites FicHub handles, not already hosted, and
   // not a metadata-only seed row — there is no real page for FicHub to fetch.
@@ -652,17 +653,28 @@ function StoryCard({ story }: { story: StoryCard }) {
             <Link href={`/story/${story.id}/chapter/1`} className="card-btn card-btn--primary">
               Read here
             </Link>
-            <a href={externalUrl} target="_blank" rel="noopener noreferrer" className="card-btn">
-              {externalLabel}
-            </a>
+            {/* An upload has no external source, so it gets no external button.
+                It used to render "Read on AO3 ↗" pointing at
+                ficatlas://upload/<uuid>, which no browser can open. */}
+            {!noExternalSource && (
+              <a href={externalUrl} target="_blank" rel="noopener noreferrer" className="card-btn">
+                {externalLabel}
+              </a>
+            )}
             <Link href={`/story/${story.id}`} className="card-btn">Details</Link>
           </>
         ) : (
           <>
-            <a href={externalUrl} target="_blank" rel="noopener noreferrer"
-              className="card-btn card-btn--primary">
-              {externalLabel}
-            </a>
+            {noExternalSource ? (
+              <Link href={`/story/${story.id}`} className="card-btn card-btn--primary">
+                Open
+              </Link>
+            ) : (
+              <a href={externalUrl} target="_blank" rel="noopener noreferrer"
+                className="card-btn card-btn--primary">
+                {externalLabel}
+              </a>
+            )}
             <Link href={`/story/${story.id}`} className="card-btn">Details</Link>
             {canImport && (
               <button className="card-btn" onClick={importToRead} disabled={importing}>
@@ -1523,10 +1535,22 @@ function SearchPageInner() {
         const el = document.querySelector<HTMLInputElement>(".search-input")
         el?.focus()
       }
+      // The filter drawer is the INNERMOST mode, so it gets Escape first.
+      //
+      // The comment below already assumed this existed — it says Escape must not
+      // be stolen from "the mobile filter drawer" — but nothing ever handled it
+      // there. On mobile the drawer covers the screen and locks body scroll, and
+      // the only way out was to find the ✕ or tap the backdrop. Escape is the
+      // conventional way out of a modal and this file uses it everywhere else.
+      if (e.key === "Escape" && filtersOpen) {
+        e.preventDefault()
+        setFiltersOpen(false)
+        return
+      }
       // Escape is the conventional way out of a mode, and search results ARE a
       // mode — everything on screen is about a query you have finished with.
       // Only when nothing is focused, so it never steals Escape from a text
-      // field, the help panel or the mobile filter drawer.
+      // field or the help panel.
       if (e.key === "Escape" && searchIsActive) {
         e.preventDefault()
         exitSearch()
@@ -1539,7 +1563,7 @@ function SearchPageInner() {
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [searchIsActive, exitSearch])
+  }, [searchIsActive, exitSearch, filtersOpen])
 
   const tog = (arr: string[], set: (v: string[]) => void, id: string) =>
     set(arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id])
