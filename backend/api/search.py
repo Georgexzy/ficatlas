@@ -268,6 +268,109 @@ def _both_orders(term: str) -> list[str]:
     return [term, f"{parts[1]}/{parts[0]}"]
 
 
+# Nickname -> canonical pairing, cached per process. The table is rebuilt weekly
+# at most, and a search must not pay a lookup per token per request.
+@lru_cache(maxsize=4096)
+def _ship_alias_cached(term: str) -> str:
+    """'' when the term is not a nickname — lru_cache cannot memoise None usefully."""
+    from db.session import db_session
+    import ship_aliases
+    try:
+        with db_session() as db:
+            return ship_aliases.lookup(db, term) or ""
+    except Exception:
+        return ""
+
+
+_STRIP = "\"',.!?;:()[]"
+
+# A kill switch, because this arm adds an OR to the hottest predicate on the
+# site. If a search ever gets slow and this is the newest thing that changed,
+# SEARCH_SHIP_ALIASES=false takes it out without a deploy.
+_SHIP_ALIASES_ON = os.getenv("SEARCH_SHIP_ALIASES", "true").lower() not in ("0", "false", "no")
+
+
+def _ship_nickname(q: str) -> tuple[str, str] | None:
+    """Split a query into (canonical relationship, the rest of the words).
+
+    Readers type the ship the way fandom says it — "wolfstar", "taejin",
+    "yoonmin" — and the archives file it under the full canonical pairing. The
+    traffic log has the cost written down: `Bts taejin jealousy` returned 20
+    works where `Bts jin and taehyung jealousy` returned 799, because the
+    nickname is a freeform tag on a couple of hundred works while the pairing
+    is a relationship on tens of thousands.
+
+    Only one nickname per query. Two would be a crossover-shaped question that
+    the ordinary text search already answers better than a guess would.
+    """
+    words = [w for w in re.split(r"\s+", q.strip()) if w]
+    if len(words) > 8:          # a sentence, not a ship name plus qualifiers
+        return None
+    for i, w in enumerate(words):
+        token = w.strip(_STRIP).lower()
+        if len(token) < 5:
+            continue
+        canonical = _ship_alias_cached(token)
+        if canonical:
+            rest = " ".join(words[:i] + words[i + 1:])
+            return canonical, rest
+    return None
+
+
+# The pairing a reader means by "jin and jimin". Cached per process for the same
+# reason as the nickname lookup: one lookup per query, not per request.
+_PAIR_SQL = sql_text("""
+    SELECT value FROM facets
+     WHERE kind = 'relationship'
+       AND value ILIKE :a AND value ILIKE :b
+       -- Two-part pairings only. Without this the top hit for "jin and jimin"
+       -- is the seven-way BTS OT7 tag, which contains both names and is more
+       -- used than the pairing actually asked for.
+       AND value !~ '/.*/' AND value !~ '&'
+     ORDER BY count DESC
+     LIMIT 1
+""")
+
+
+@lru_cache(maxsize=2048)
+def _pair_lookup(a: str, b: str) -> str:
+    from db.session import db_session
+    try:
+        with db_session() as db:
+            row = db.execute(_PAIR_SQL, {"a": f"%{a}%", "b": f"%{b}%"}).fetchone()
+            return row[0] if row else ""
+    except Exception:
+        return ""
+
+
+def _spelled_out_pair(q: str) -> tuple[str, str] | None:
+    """"Bts jin and jimin" -> the pairing, and the words that were not the ship.
+
+    460 of the 588 searches this site has recorded are this shape: a fandom, two
+    characters joined by "and", sometimes a trope. It returned a capped 5,000
+    bag-of-words hits, because "jin" and "jimin" appear together in a great many
+    BTS works that are not about that pairing — while the pairing itself,
+    `Kim Seokjin | Jin/Park Jimin`, is 1,884 works that all are.
+
+    Only the words either side of "and" are tried, and both must be long enough
+    not to match half the vocabulary as a substring.
+    """
+    parts = re.split(r"\s+(?:and|x|/|\+)\s+", q.strip(), flags=re.I)
+    if len(parts) != 2:
+        return None
+    left, right = parts[0].split(), parts[1].split()
+    if not left or not right:
+        return None
+    a, b = left[-1].strip(_STRIP), right[0].strip(_STRIP)
+    if len(a) < 3 or len(b) < 3 or a.lower() == b.lower():
+        return None
+    canonical = _pair_lookup(a.lower(), b.lower())
+    if not canonical:
+        return None
+    rest = " ".join(left[:-1] + right[1:])
+    return canonical, rest
+
+
 def _facet_variants(db, col_name: str, term: str) -> list[str]:
     """Vocabulary entries a user's term should match, most-used first."""
     kind = _FACET_KIND.get(col_name)
@@ -869,6 +972,7 @@ def search(          # NOT async — see below
     # be rebuilt later from the same filter list minus this one predicate. See
     # `hidden_explicit` below.
     _explicit_pred = None
+    ship_canonical = None      # set below if the text resolved to a pairing
     if not explicit:
         # Hide only stories KNOWN to be explicit. `rating != 'E'` is NULL (not TRUE)
         # for NULL-rating rows in SQL, which silently dropped the entire NULL-rating
@@ -894,9 +998,28 @@ def search(          # NOT async — see below
         # Mild spelling tolerance lives in the title-candidate UNION below, not
         # here. An OR similarity() against the whole table forced a seq scan of
         # 19.7M titles and turned a 200ms search into a 60s timeout.
-        filters.append(
-            _story_tsv().op("@@")(func.websearch_to_tsquery(_REGCONFIG, q))
-        )
+        text_pred = _story_tsv().op("@@")(func.websearch_to_tsquery(_REGCONFIG, q))
+
+        # A ship nickname resolves to the pairing the archives actually file it
+        # under (see `_ship_nickname`). It is OR-ed BESIDE the text match, never
+        # substituted for it: this table is mined by inference from user-written
+        # tags, so a wrong entry must only ever be able to widen a search. The
+        # rest of the words still apply to the added branch, so "taejin
+        # jealousy" gains the pairing's jealousy works rather than all of them.
+        nickname = None
+        if _SHIP_ALIASES_ON:
+            nickname = _ship_nickname(q) or _spelled_out_pair(q)
+        ship_canonical = nickname[0] if nickname else None
+        if nickname:
+            canonical, rest = nickname
+            ship_pred = Story.relationships.op("&&")(
+                cast(_both_orders(canonical), PG_ARRAY(Text)))
+            if rest.strip():
+                ship_pred = and_(ship_pred, _story_tsv().op("@@")(
+                    func.websearch_to_tsquery(_REGCONFIG, rest)))
+            filters.append(or_(text_pred, ship_pred))
+        else:
+            filters.append(text_pred)
 
     if dlp_min_rating is not None:
         # The rating lives in a `dlp_stars:4.67` tag rather than a column, so it
@@ -1617,8 +1740,26 @@ def search(          # NOT async — see below
         text_rank = func.ts_rank(_story_tsv(S),
                                  func.websearch_to_tsquery(_REGCONFIG, q), 1)
 
+        # A resolved pairing is the one part of a free-text query that is not a
+        # guess: the reader named a ship and this work is tagged with it. Recall
+        # alone does not help there — "Bts jin and jimin" already returned the
+        # 5,000-result ceiling, and the 1,884 works actually about the pairing
+        # were scattered through it. So the resolution votes in the ranking too.
+        #
+        # A bonus rather than a tier, for the reason exact_bonus is: it lifts
+        # pairing matches above works that merely mention both names, while a
+        # much-read work can still place among them. It is constant across every
+        # work carrying the pairing, so within that set the ordinary signals
+        # still decide the order.
+        ship_bonus = literal_column("0.0")
+        if ship_canonical:
+            ship_bonus = case(
+                (S.relationships.op("&&")(
+                    cast(_both_orders(ship_canonical), PG_ARRAY(Text))), 2.5),
+                else_=0.0)
+
         relevance = (w_title * title_sim + exact_bonus
-                     + w_text * text_rank + w_pop * pop)
+                     + w_text * text_rank + w_pop * pop + ship_bonus)
 
         ordered = ordered.order_by(
             relevance.desc(),

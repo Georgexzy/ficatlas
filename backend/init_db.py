@@ -2,8 +2,9 @@
 import os
 from sqlalchemy import text
 from models.story import get_engine
+from db.dsn import default_database_url
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://ficatlas:ficatlas@localhost:5432/ficatlas")
+DATABASE_URL = os.environ.get("DATABASE_URL") or default_database_url(host="localhost")
 engine = get_engine(DATABASE_URL)
 
 SQL = """
@@ -861,6 +862,17 @@ CREATE TABLE IF NOT EXISTS ship_hubs (
     built_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_ship_hubs_count ON ship_hubs (work_count DESC);
+
+-- Ship nicknames mined from the index, so free text can resolve "wolfstar" to
+-- the pairing the archives file it under. Rebuilt whole by ship_aliases.py --
+-- nothing here is authored, so there is nothing to preserve across a rebuild.
+CREATE TABLE IF NOT EXISTS ship_aliases (
+    alias        TEXT PRIMARY KEY,
+    relationship TEXT NOT NULL,
+    works        INTEGER,
+    share        REAL,
+    built_at     TIMESTAMP DEFAULT now()
+);
 
 -- When a hub's CONTENTS last changed, as opposed to when it was last rebuilt.
 --
