@@ -16,7 +16,8 @@ from db.session import get_db
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 from models.user import User, ROLE_ADMIN
 from api.auth import get_current_user
-from search_cache import CACHE, cache_key, shared_get, shared_put
+from search_cache import (CACHE, cache_key, shared_get,
+                          shared_get_with_ttl, shared_put)
 
 # Shorter than the 60s session default — see the note in search() on why a long
 # timeout is what turns a slow search into a failed one.
@@ -1104,13 +1105,18 @@ def search(          # NOT async — see below
         # L1 missed. Before paying for the query, ask the shared tier: with four
         # workers this is usually a sibling that has already done exactly this
         # search. ~1ms to ask, ~10s to be wrong about it.
-        _shared = shared_get(db, _ck)
-        if _shared is not None:
+        _shared_row = shared_get_with_ttl(db, _ck)
+        if _shared_row is not None:
+            _shared, _remaining = _shared_row
             try:
                 _hit = SearchResponse.model_validate_json(_shared)
                 CACHE.put(_ck, _hit)   # promote, so the next one skips both hops
                 _note_total(request, _hit)
-                _apply_cache_headers(response, viewer)
+                # Advertise what is LEFT of the entry, not what this lookup cost.
+                # A popular expensive search is served from here nearly every
+                # time, so charging the floor would tell the edge to come back in
+                # two minutes for something worth keeping for fifteen.
+                _apply_cache_headers(response, viewer, max(_remaining, 0) or None)
                 return _hit
             except Exception:
                 # A stale entry from before a response-shape change. Fall through
