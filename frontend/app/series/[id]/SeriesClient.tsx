@@ -94,6 +94,40 @@ export default function SeriesClient({ params }: { params: Promise<{ id: string 
           : "Grouped by FicAtlas. This archive has no series field, so these were matched on distinctive words in their titles and ordered by publication. It may be wrong."}
       </p>
 
+      {/* Says plainly when we do NOT hold the whole series.
+          
+          AO3 positions are the AUTHOR'S numbering, and we record them faithfully
+          — so a series where FicAtlas has indexed works 7, 8 and 9 renders a
+          list that starts at 7. 42,563 series have no work at position 1 and
+          21,768 are a single work numbered above 1, which is not corruption: it
+          is the author saying "this is the 7th" about a work whose siblings are
+          not in this index.
+          
+          Rendering that silently is what makes it look broken — a list starting
+          at #7, or a lone "part 4", reads as a bug rather than as incomplete
+          coverage. The numbers stay as the author wrote them, because changing
+          them to 1,2,3 would be inventing an order; what is added is the
+          sentence explaining why they start where they do. */}
+      {(() => {
+        const main = data.works.filter(w => w.role !== "side")
+        const pos = main.map(w => w.position).filter((n): n is number => typeof n === "number")
+        if (pos.length === 0) return null
+        const lowest = Math.min(...pos)
+        const missingBefore = lowest > 1
+        const gaps = pos.length > 1 && (Math.max(...pos) - lowest + 1) !== pos.length
+        if (!missingBefore && !gaps) return null
+        return (
+          <p className="series-page__note">
+            {missingBefore && gaps
+              ? `The numbering is the author's own, and this index does not hold every work in it — it starts at ${lowest} and has gaps.`
+              : missingBefore
+              ? `The numbering is the author's own. This index does not hold the ${lowest === 2 ? "work" : "works"} before number ${lowest}, so the list starts there.`
+              : "The numbering is the author's own, and there are gaps — this index does not hold every work in the series."}
+            {" "}The missing ones are on {SITE_LABELS[data.site] ?? data.site}.
+          </p>
+        )
+      })()}
+
       {/* Split, because a series is usually not a flat list. Reading the
           Dangerverse in the order the numbers imply would put a 1,843-word
           vignette between two 500,000-word novels. The main run is the thing

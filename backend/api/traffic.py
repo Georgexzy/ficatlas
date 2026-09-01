@@ -82,8 +82,20 @@ def hit(request: Request, path: str = Form(...), ref: str = Form("")):
 
 # ── read (owner only) ───────────────────────────────────────────────────────
 
+def _span(days: int):
+    """The window as whole calendar days, inclusive of today.
+
+    The reports used to run off a rolling n x 24h cut, which is subtly not what
+    the chart draws: at 14:00 a "last 7 days" chart carries 8 date labels and
+    the earliest of them is half a day short. Whole days keep the bars and the
+    tables below them describing the same period."""
+    n = max(1, min(days, 365))
+    today = datetime.utcnow().date()
+    return today - timedelta(days=n - 1), today
+
+
 def _window(days: int) -> datetime:
-    return datetime.utcnow() - timedelta(days=max(1, min(days, 365)))
+    return datetime.combine(_span(days)[0], datetime.min.time())
 
 
 @router.get("/summary")
@@ -91,17 +103,53 @@ def summary(days: int = Query(30, ge=1, le=365),
             include_bots: bool = Query(False),
             db: Session = Depends(get_db),
             _owner=Depends(require_owner)):
-    """Day-by-day visitors, pageviews and searches, plus the totals."""
-    bots = "" if include_bots else "AND NOT bot"
+    """Day-by-day visitors, pageviews and searches, plus the totals.
+
+    EVERY day in the window is returned, including the empty ones. Grouping by
+    the dates that happened to appear in the table drew a chart with no gaps in
+    it: 77 searches spread across 4 days rendered as 4 adjacent bars, which
+    reads as four consecutive busy days rather than four scattered ones in a
+    month of silence. On a site this quiet the zero-fill is the difference
+    between "we are growing" and "somebody came by on the 14th".
+    """
+    first, last = _span(days)
+    bots = "" if include_bots else "AND NOT e.bot"
     rows = db.execute(text(f"""
-        SELECT at::date                             AS day,
-               count(*) FILTER (WHERE kind='page')   AS views,
-               count(*) FILTER (WHERE kind='search') AS searches,
-               count(DISTINCT visitor)               AS visitors
-        FROM visit_events
-        WHERE at >= :cut {bots}
+        SELECT d::date                                    AS day,
+               count(e.id) FILTER (WHERE e.kind='page')    AS views,
+               count(e.id) FILTER (WHERE e.kind='search')  AS searches,
+               count(DISTINCT e.visitor)                   AS visitors
+        FROM generate_series(CAST(:first AS date), CAST(:last AS date),
+                             interval '1 day') d
+        -- CAST(...), not the shorthand double-colon cast. SQLAlchemy scans
+        -- the text for named parameters itself, so a bind written with that
+        -- cast reads to it as the parameter, then a SECOND parameter called
+        -- `date` which nothing ever binds: "syntax error at or near". Any
+        -- bind needing a cast has to be written the long way.
+        -- (Naming the shorthand here would trip the guard in
+        --  tests/test_series_detect_sql.py, which is the same rule.)
+        -- LEFT JOIN, and the window belongs in the ON clause. Moved to WHERE,
+        -- it discards the very days this query exists to keep.
+        LEFT JOIN visit_events e
+               ON e.at >= d AND e.at < d + interval '1 day' {bots}
         GROUP BY 1 ORDER BY 1
-    """), {"cut": _window(days)}).fetchall()
+    """), {"first": first, "last": last}).fetchall()
+
+    # Crawlers are reported separately rather than folded in or left out
+    # entirely. They are excluded from every other number here by design, but
+    # "nobody visited" and "nobody except crawlers visited" are different facts,
+    # and on a site waiting to be indexed the second is the encouraging one.
+    # Note what this can and cannot say: a search is seen server-side, so a
+    # crawler running one is counted, while a pageview arrives from a browser
+    # beacon that crawlers do not run. A low crawler PAGEVIEW figure therefore
+    # means very little -- that question needs the access log. See tracking.py.
+    bot_views, bot_searches = db.execute(text("""
+        SELECT count(*) FILTER (WHERE kind='page'),
+               count(*) FILTER (WHERE kind='search')
+        FROM visit_events WHERE at >= :cut AND bot
+    """), {"cut": _window(days)}).first()
+
+    busiest = max(rows, key=lambda r: r[3], default=None)
 
     # Unique visitors do not add up across days — the hash is per-day by
     # design, so the same person is a different visitor tomorrow. Summing the
@@ -113,10 +161,23 @@ def summary(days: int = Query(30, ge=1, le=365),
             "day": r[0].isoformat(), "views": r[1],
             "searches": r[2], "visitors": r[3],
         } for r in rows],
+        # The window said out loud. "Last 30 days" is a control, not a record of
+        # what you are looking at, and the two stop agreeing the moment anyone
+        # screenshots it or compares it with something.
+        "range": {"from": first.isoformat(), "to": last.isoformat(),
+                  "days": (last - first).days + 1},
         "totals": {
             "views": sum(r[1] for r in rows),
             "searches": sum(r[2] for r in rows),
-            "busiest_day_visitors": max((r[3] for r in rows), default=0),
+            "busiest_day_visitors": busiest[3] if busiest else 0,
+            # WHICH day that was. A peak with no date attached is a number you
+            # cannot line up against anything you did.
+            "busiest_day": busiest[0].isoformat() if busiest and busiest[3] else None,
+            # The honest denominator for a sparse window: 396 views across 14 of
+            # 30 days is a different site from 396 views across all 30.
+            "active_days": sum(1 for r in rows if r[1] or r[2]),
+            "bot_views": bot_views or 0,
+            "bot_searches": bot_searches or 0,
         },
         "retention_days": tracking.RETENTION_DAYS,
         "enabled": tracking.ENABLED,
@@ -207,7 +268,8 @@ def pages(days: int = Query(30, ge=1, le=365),
           _owner=Depends(require_owner)):
     """Most-viewed paths, with ids resolved to titles where they have one."""
     rows = db.execute(text("""
-        SELECT path, count(*) AS views, count(DISTINCT visitor) AS visitors
+        SELECT path, count(*) AS views, count(DISTINCT visitor) AS visitors,
+               min(at)::date AS first_seen, max(at)::date AS last_seen
         FROM visit_events
         WHERE at >= :cut AND kind = 'page' AND NOT bot
         GROUP BY path ORDER BY views DESC LIMIT :lim
@@ -216,8 +278,16 @@ def pages(days: int = Query(30, ge=1, le=365),
     # `label` is added alongside `path`, never in place of it: the path is what
     # identifies the row and what a link has to point at.
     labels = _labels(db, [r[0] for r in rows])
+    # first/last seen turn a ranking into a history. Ordered by views alone,
+    # a page somebody hammered once in July and a page read steadily all month
+    # sit next to each other looking identical, and only one of them is still
+    # happening. Dates are also the cheapest thing this table can carry: they
+    # are aggregates of a column already stored, so nothing new is kept about
+    # anybody to show them.
     return {"pages": [{"path": r[0], "label": labels.get(r[0]),
-                       "views": r[1], "visitors": r[2]} for r in rows]}
+                       "views": r[1], "visitors": r[2],
+                       "first_seen": r[3].isoformat(),
+                       "last_seen": r[4].isoformat()} for r in rows]}
 
 
 @router.get("/searches")
@@ -236,22 +306,39 @@ def searches(days: int = Query(30, ge=1, le=365),
     top = db.execute(text("""
         SELECT lower(q) AS query, count(*) AS runs,
                count(DISTINCT visitor) AS visitors,
-               max(results) AS best_results
+               max(results) AS best_results,
+               min(at)::date AS first_seen, max(at)::date AS last_seen
         FROM visit_events
         WHERE at >= :cut AND kind = 'search' AND NOT bot AND q IS NOT NULL AND q <> ''
         GROUP BY 1 ORDER BY runs DESC LIMIT :lim
     """), {"cut": cut, "lim": limit}).fetchall()
     empty = db.execute(text("""
-        SELECT lower(q) AS query, count(*) AS runs
+        SELECT lower(q) AS query, count(*) AS runs,
+               max(at)::date AS last_seen
         FROM visit_events
         WHERE at >= :cut AND kind = 'search' AND NOT bot
           AND q IS NOT NULL AND q <> '' AND results = 0
         GROUP BY 1 ORDER BY runs DESC LIMIT :lim
     """), {"cut": cut, "lim": limit}).fetchall()
+    # Totals over the WHOLE window, not just the rows above. Both lists are
+    # capped at `limit`, so summing what is displayed answers a question about
+    # the top 30 queries while looking like an answer about the site.
+    totals = db.execute(text("""
+        SELECT count(*),
+               count(*) FILTER (WHERE results = 0),
+               count(DISTINCT lower(q))
+        FROM visit_events
+        WHERE at >= :cut AND kind = 'search' AND NOT bot
+          AND q IS NOT NULL AND q <> ''
+    """), {"cut": cut}).first()
     return {
         "top": [{"query": r[0], "runs": r[1], "visitors": r[2],
-                 "results": r[3]} for r in top],
-        "empty": [{"query": r[0], "runs": r[1]} for r in empty],
+                 "results": r[3], "first_seen": r[4].isoformat(),
+                 "last_seen": r[5].isoformat()} for r in top],
+        "empty": [{"query": r[0], "runs": r[1],
+                   "last_seen": r[2].isoformat()} for r in empty],
+        "totals": {"runs": totals[0] or 0, "empty_runs": totals[1] or 0,
+                   "distinct": totals[2] or 0},
     }
 
 
@@ -263,10 +350,12 @@ def referrers(days: int = Query(30, ge=1, le=365),
     """Which other sites send readers here. Self-referrals are already dropped
     at write time, so everything in this list is genuinely external."""
     rows = db.execute(text("""
-        SELECT ref_host, count(*) AS hits, count(DISTINCT visitor) AS visitors
+        SELECT ref_host, count(*) AS hits, count(DISTINCT visitor) AS visitors,
+               min(at)::date AS first_seen, max(at)::date AS last_seen
         FROM visit_events
         WHERE at >= :cut AND NOT bot AND ref_host IS NOT NULL
         GROUP BY 1 ORDER BY hits DESC LIMIT :lim
     """), {"cut": _window(days), "lim": limit}).fetchall()
-    return {"referrers": [{"host": r[0], "hits": r[1], "visitors": r[2]}
-                          for r in rows]}
+    return {"referrers": [{"host": r[0], "hits": r[1], "visitors": r[2],
+                           "first_seen": r[3].isoformat(),
+                           "last_seen": r[4].isoformat()} for r in rows]}

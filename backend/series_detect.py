@@ -50,7 +50,8 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, "/app")
-os.environ.setdefault("DATABASE_URL", "postgresql://ficatlas:ficatlas@db:5432/ficatlas")
+from db.dsn import default_database_url  # noqa: E402 — needs the sys.path above
+os.environ.setdefault("DATABASE_URL", default_database_url())
 
 from sqlalchemy import text as sql_text
 
@@ -128,6 +129,34 @@ MAX_INFERRED_WORKS = int(os.getenv("SERIES_MAX_INFERRED", "25"))
 def tokens(title: str) -> set[str]:
     t = re.sub(r"[^a-z0-9 ]", " ", (title or "").lower())
     return {w for w in t.split() if len(w) > 3 and w not in STOP}
+
+
+# The largest number that can honestly be a position in a series.
+#
+# A summary saying "Kinktober 2021" was read as position 2021, and annual event
+# series are common enough that this was not rare: 4,345 memberships across 1,841
+# series held a YEAR where a position belongs, which is why a series page could
+# list "2, 2023, 2024" and read as broken. _PART_RE already caps at two digits;
+# the named-series cues in series_cues.py do not, and that is where these came
+# from.
+#
+# 200 rather than something tighter because long series genuinely exist — a
+# drabble collection can run past 100 — and rather than something looser because
+# nothing above it is ever a position, while everything from 1900 up is a year.
+MAX_PLAUSIBLE_POSITION = 200
+
+
+def plausible_position(pos: int | None) -> int | None:
+    """A position, or None when the number cannot be one.
+
+    None is the right answer rather than a guess: the caller already falls back
+    to publication order, which is AO3's own fallback for a series with no
+    positions set, and an ordering derived from dates beats one derived from a
+    misread year.
+    """
+    if pos is None:
+        return None
+    return pos if 1 <= pos <= MAX_PLAUSIBLE_POSITION else None
 
 
 def parse_position(summary: str | None) -> int | None:
@@ -464,7 +493,8 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                 # Author-stated position wins; otherwise publication order, which
                 # is AO3's own fallback for a series with no positions set.
                 for m in members:
-                    m["pos"] = m.get("cue_pos") or parse_position(m.get("summary"))
+                    m["pos"] = plausible_position(
+                        m.get("cue_pos") or parse_position(m.get("summary")))
                     # Main sequence or companion piece.
                     #
                     # The author stating a position — "third in the Dangerverse"
