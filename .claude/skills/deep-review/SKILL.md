@@ -136,6 +136,64 @@ in `CLAUDE.md`: this codebase argues with itself in prose, and a comment saying
 "this looks wrong and is not, because…" is an answer, not a target. Read it
 before flagging what it defends.
 
+## Fix what you find
+
+A review that only lists is a review that gets read once and re-run next week
+against the same faults. **Fix them in the same pass**, in this order, and stop
+at the first line you cannot cross:
+
+1. **Fix, with a test**, anything in classes 1–4 (data loss, wrong output at
+   scale, live faults, faults under load) where the fix is contained and the
+   correct behaviour is not a judgement call. Add the regression test first,
+   watch it fail, then fix it.
+2. **Fix and flag** where the fix is contained but the *right answer* is
+   arguable. Make the conservative choice, say plainly in the report that you
+   chose it, and say what the alternative was.
+3. **Do not fix, report instead**, when any of these is true:
+   * the correct behaviour is a product decision (what a page should SAY, what
+     a threshold should BE, which of two defensible orderings is wanted);
+   * the change is to work someone else is visibly mid-way through;
+   * the fix is large enough to need its own design;
+   * you cannot construct a test that would have caught it.
+   Say which of these applies. "Not fixed" with a reason is a finding; "not
+   fixed" in silence is an omission.
+
+Rules for fixing:
+
+* **Verify the fault before you fix it.** A finding you did not reproduce is a
+  finding you may be about to "fix" into a real bug. This has happened here: a
+  date helper was changed on a well-argued but false report and the change
+  introduced the bug the report described.
+* **Re-run the whole affected surface afterwards**, not just the new test:
+  `docker exec ficatlas-backend-1 python -m pytest tests/ -q` and
+  `docker compose run --rm --no-deps -T frontend npx vitest run`.
+* **One commit per fault**, with the message explaining what was wrong and how
+  it was established. Never chain `commit && promote` — a rejected commit hook
+  will otherwise deploy an uncommitted tree.
+* **Do not deploy as part of the review.** Leave that to a human, and say what
+  is waiting.
+
+## Sequential coverage
+
+The site is bigger than one pass. Reviewing "the diff" forever means the
+untouched 90% is never looked at, and that is where the oldest faults are.
+
+`.claude/skills/deep-review/COVERAGE.md` holds the areas and when each was last
+reviewed. On each run:
+
+1. Read it. Pick the area with the **oldest** review date, unless the current
+   diff touches an area — then take that one, since it is both changed and due.
+2. Review that area to the full depth above. Rings 1–3 apply to the area rather
+   than to a diff: read all of it, test it against the live system, and ask what
+   it makes the rest of the system do.
+3. Ring 4 is checked **every** run regardless of area — it is cheap and it is
+   what tells you the site is actually up and serving what you think.
+4. Update the area's row: the date, what you fixed, what you left and why.
+
+An area is "covered" when you have read all of its code, exercised its main
+paths against the live system, and either fixed or consciously accepted every
+fault you found. Covering one area properly beats skimming four.
+
 ## Output
 
 Findings first, most severe first. For each:
