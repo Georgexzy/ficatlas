@@ -132,6 +132,10 @@ def allowed(name, label, line=""):
                for part, key in ALLOWED)
 
 
+_CREDENTIAL_KEY = re.compile(r"(PASSWORD|PASSWD|TOKEN|SECRET|_KEY|APIKEY)$", re.I)
+SKIPPED = []
+
+
 def env_values():
     """Live secret values, longest first so the report names the specific one."""
     env = ROOT / ".env"
@@ -144,10 +148,17 @@ def env_values():
             continue
         key, value = line.split("=", 1)
         value = value.strip().strip('"').strip("'")
-        # Short values are words, not secrets: SIGNUP_MODE=open would match
-        # every line of prose containing it.
-        if len(value) >= 12:
-            out.append((key.strip(), value))
+        # Short values are usually words, not secrets: SIGNUP_MODE=open would
+        # match every line of prose containing it. But a key NAMED as a
+        # credential is a credential at any length — an 8-character
+        # POSTGRES_PASSWORD is well within what someone sets by hand, and a
+        # flat 12-character floor skipped it silently.
+        key = key.strip()
+        floor = 6 if _CREDENTIAL_KEY.search(key) else 12
+        if len(value) >= floor:
+            out.append((key, value))
+        elif value:
+            SKIPPED.append(key)
     return sorted(out, key=lambda kv: -len(kv[1]))
 
 
@@ -194,8 +205,11 @@ def main():
         print("tests/check-secrets.py with the reason.\n")
         return 1
 
-    print(f"No credentials in {len(files)} {scope}"
-          f" ({len(secrets)} live values checked).")
+    note = f" ({len(secrets)} live values checked"
+    if SKIPPED:
+        # Naming them is the point: a silent skip is how a gap becomes permanent.
+        note += f"; too short to match safely: {', '.join(sorted(set(SKIPPED)))}"
+    print(f"No credentials in {len(files)} {scope}{note}).")
     return 0
 
 
