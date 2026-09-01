@@ -169,6 +169,21 @@ def fetch(days: int = 30) -> dict:
     if body.get("errors"):
         msg = "; ".join(str(e.get("message", e))[:200] for e in body["errors"][:3])
         log.warning("cloudflare analytics: %s", msg)
+        # The most likely failure by far, and Cloudflare states it as an actor
+        # id and a permission string that mean nothing to the person reading an
+        # admin page. It happens because token permissions REPLACE rather than
+        # add: granting a token Cache Rules Edit (to apply the caching rule in
+        # deploy/cloudflare_cache_rule.py) drops Analytics Read unless both are
+        # ticked, and the traffic page then goes blank with a sentence nobody
+        # can act on.
+        if "analytics.read" in msg or "analytics" in msg.lower():
+            return {"configured": True,
+                    "error": "The API token cannot read analytics",
+                    "fix": "Add Zone > Analytics > Read to the token at "
+                           "dash.cloudflare.com > My Profile > API Tokens. "
+                           "Permissions replace rather than add, so tick it "
+                           "alongside anything else the token needs.",
+                    "detail": msg}
         return {"configured": True, "error": "GraphQL error", "detail": msg}
 
     try:

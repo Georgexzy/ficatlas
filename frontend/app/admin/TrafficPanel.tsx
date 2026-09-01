@@ -87,6 +87,7 @@ interface Cloudflare {
   missing?: string[]
   error?: string
   detail?: string
+  fix?: string
   days?: CfDay[]
   totals?: { requests: number; page_views: number; cached: number; bytes: number; threats: number; uniques: number }
   cache_ratio?: number | null
@@ -394,7 +395,10 @@ export default function TrafficPanel() {
         </p>
       ) : cf.error ? (
         <p className="admin-note admin-warn">
-          Cloudflare answered with “{cf.error}”. {cf.detail}
+          {cf.error}. {cf.fix ?? cf.detail}
+          {cf.fix && cf.detail && (
+            <span className="traffic-table__path"> Cloudflare said: {cf.detail}</span>
+          )}
         </p>
       ) : cf.totals ? (
         <>

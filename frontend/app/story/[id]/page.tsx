@@ -183,7 +183,12 @@ export default async function StoryPage(
         <script type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: escapeJsonLd(jsonLd) }} />
       )}
-      <StoryClient />
+      {/* A main landmark, which this route had none of -- so a screen-reader
+          user had no way to jump past the header, and the skip link had nothing
+          to target. The client tree renders inside it unchanged. */}
+      <main id="main">
+        <StoryClient initialStory={story as any} />
+      </main>
       {/* Server-rendered links out of the story page, and the only ones on it.
           The body below renders on the client and links its fandoms and ships to
           `/?fandoms=…` and `/?relationships=…` — search URLs, which robots.txt

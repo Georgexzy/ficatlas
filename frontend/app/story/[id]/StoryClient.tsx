@@ -38,11 +38,21 @@ const STATUS_LABEL: Record<string, string> = {
   unknown: "Not stated",
 }
 
-export default function StoryClient() {
+export default function StoryClient({ initialStory }: { initialStory?: StoryDetail | null }) {
   const params = useParams()
   const id = params?.id as string
   const { user } = useAuth()
-  const [story, setStory] = useState<StoryDetail | null>(null)
+  // Seeded from the server, which already fetched this exact story to build the
+  // page's metadata. Without it the server rendered "Loading…" and nothing else:
+  // measured on the live site, a story page arrived with 323 characters of
+  // visible text, the work's title present only in <head>, and the body reading
+  // "← Back to search Loading…". That is what a crawler without JavaScript sees
+  // on ~750k pages, and what every reader sees for one network round trip.
+  //
+  // The effect below still runs and still replaces this with a fresh copy, so
+  // nothing about liveness changes -- but the first paint now has the story in
+  // it rather than a spinner.
+  const [story, setStory] = useState<StoryDetail | null>(initialStory ?? null)
   const [error, setError] = useState<Failure | null>(null)
   // True when what is on screen came from the offline copy rather than the API.
   const [fromCache, setFromCache] = useState(false)
