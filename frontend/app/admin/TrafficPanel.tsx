@@ -57,22 +57,22 @@ const shortDate = (iso: string) => fmt(iso, { day: "numeric", month: "short" })
 const longDate = (iso: string) =>
   fmt(iso, { weekday: "short", day: "numeric", month: "short", year: "numeric" })
 
-// Today in the LOCAL calendar, which is the frame asDate puts every label in.
-// `new Date().toISOString().slice(0,10)` is the UTC date, and pairing it with a
-// local-midnight parse reintroduced the off-by-one asDate exists to prevent —
-// just on the "now" side instead of the label side. West of Greenwich, between
-// evening and midnight, UTC is already tomorrow and every row read a day older;
-// east of it, early in the morning, yesterday's row read "today".
-const startOfToday = () => {
-  const n = new Date()
-  return new Date(n.getFullYear(), n.getMonth(), n.getDate())
-}
-
 // "2 days ago" answers "is this still happening?", which is the question a
 // ranking by volume cannot answer on its own.
+//
+// Both sides stay in the UTC frame, because that is the frame the DATA is in:
+// visit_events.at is `timestamp without time zone` written from utcnow(), the
+// day buckets are `min(at)::date` on a UTC session, and api/traffic.py builds
+// its day series from utcnow().date(). asDate() then parses both at local
+// midnight purely so the label renders on the right calendar day -- it is the
+// same transform applied to both sides, so the subtraction is unaffected.
+//
+// Taking "today" from the LOCAL calendar instead looks more correct and is not:
+// it compares a local day against UTC-bucketed rows, so a viewer in UTC+2 at
+// 00:30 sees traffic from five minutes ago labelled "yesterday".
 function ago(iso: string): string {
   const days = Math.round(
-    (startOfToday().getTime() - asDate(iso).getTime())
+    (asDate(new Date().toISOString().slice(0, 10)).getTime() - asDate(iso).getTime())
     / 86_400_000)
   if (days <= 0) return "today"
   if (days === 1) return "yesterday"
