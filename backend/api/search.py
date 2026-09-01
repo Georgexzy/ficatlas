@@ -245,10 +245,40 @@ def _query_is_category(db, term: str) -> int:
     ordering degrades rather than breaks — a category query still ranks title
     matches highly, it just stops ranking them above everything else.
     """
+    words = term.split()
+    # Every contiguous sub-phrase, longest first, so a query that NAMES a
+    # category and then narrows it is still recognised as one.
+    #
+    # Matching only the whole phrase meant "harry potter" was a category and
+    # "harry potter time travel" was not -- so the title weight jumped from 0.35
+    # to 3.0 and the exact-title bonus from 0.15 to 4.0, and the top results
+    # became works literally titled "Harry Potter Time Travel" and "Harry Potter
+    # Time" with 0 kudos, above every real time-travel story in the fandom.
+    # That is the exact failure this function's docstring describes, in the case
+    # it did not cover: the category is a PREFIX of the query rather than all of
+    # it. Reported from the site as "incomplete listings showing up way too
+    # early", which is what a stub with a matching title looks like to a reader.
+    #
+    # Single words are excluded: "harry" and "potter" are each a character facet
+    # with a large count, and any two-word title containing a common name would
+    # otherwise be demoted as a category. A category has to be at least the
+    # phrase somebody would actually browse by.
+    candidates = [term] + [
+        " ".join(words[i:j])
+        for n in range(len(words) - 1, 1, -1)
+        for i, j in [(i, i + n) for i in range(len(words) - n + 1)]
+    ]
+    seen, uniq = set(), []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            uniq.append(c)
     try:
+        # One indexed lookup for all of them (ix_facets_value_lower), rather
+        # than a query per sub-phrase.
         return int(db.execute(sql_text(
-            "SELECT COALESCE(max(count), 0) FROM facets WHERE lower(value) = :v"
-        ), {"v": term}).scalar() or 0)
+            "SELECT COALESCE(max(count), 0) FROM facets WHERE lower(value) = ANY(:vs)"
+        ), {"vs": uniq}).scalar() or 0)
     except Exception:
         return 0
 
