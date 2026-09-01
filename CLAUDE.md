@@ -70,6 +70,14 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **A low Cloudflare cache ratio here is mostly arithmetic, not a fault.**
+  Measured: 2,305 story requests hit 2,277 DISTINCT urls — a 1.2% repeat rate.
+  Crawlers walk ~750k unique story pages, so almost every request is a first
+  request and no cache can absorb it. The 6.7% hit ratio was read as a problem
+  and largely is not one. Edge caching still earns its place for repeat
+  visitors, for several search engines fetching the same page, and for
+  re-crawls inside `stale-while-revalidate` — but do not expect it to move
+  origin load much, and measure the repeat rate before claiming it will.
 - **Documents are edge-cacheable but browser-revalidated, and the two halves live
   apart.** `next.config.ts` sends `public, max-age=0, must-revalidate,
   s-maxage=900` on `/story|series|fandom|ship|s/*` only; a Cloudflare cache rule
