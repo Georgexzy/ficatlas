@@ -119,8 +119,39 @@ const nextConfig: NextConfig = {
       //
       // Costs nothing: the ETag still yields a 304 when nothing changed, so
       // this is a conditional request, not a re-download.
+      // Public content pages: revalidate in the BROWSER, cache at the EDGE.
+      //
+      // The rule below exists because a bad CSP went sticky on phones, and that
+      // property is preserved exactly -- `max-age=0, must-revalidate` still
+      // means a browser never serves this from its own cache without asking.
+      // What is added is `s-maxage`, which only shared caches read, so
+      // Cloudflare may answer for 15 minutes without touching the origin.
+      //
+      // Measured on the live site before this: 7,065 of ~12,000 edge requests
+      // were /story/{id}, the cache hit ratio was 6.7%, and Cloudflare counted
+      // 1,032,799 requests in 30 days against 865 human pageviews. That gap is
+      // crawlers walking ~750k story pages, and every one of them was travelling
+      // to a home server. Crawl budget spent on latency is indexing not
+      // happening, which is the opposite of the point of these pages.
+      //
+      // Safe to share between visitors because NOTHING under app/ calls
+      // `cookies()` -- checked, zero matches -- so the server HTML is identical
+      // for everyone and all reader state is fetched after hydration. The
+      // Cloudflare rule additionally bypasses cache when the `sat` cookie is
+      // present, which is the same guard the existing API rule uses.
+      //
+      // 900s matches `export const revalidate = 900` on the story page, so the
+      // edge and Next's own incremental cache expire together rather than one
+      // holding content the other has already replaced.
       {
-        source: "/((?!_next/static|_next/image|icon-|manifest.json).*)",
+        source: "/:prefix(story|series|fandom|ship|s)/:path*",
+        headers: [{
+          key: "Cache-Control",
+          value: "public, max-age=0, must-revalidate, s-maxage=900, stale-while-revalidate=86400",
+        }],
+      },
+      {
+        source: "/((?!_next/static|_next/image|icon-|manifest.json|story/|series/|fandom/|ship/|s/).*)",
         headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }],
       },
     ]
