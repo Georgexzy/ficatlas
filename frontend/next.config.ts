@@ -127,12 +127,17 @@ const nextConfig: NextConfig = {
       // What is added is `s-maxage`, which only shared caches read, so
       // Cloudflare may answer for 15 minutes without touching the origin.
       //
-      // Measured on the live site before this: 7,065 of ~12,000 edge requests
-      // were /story/{id}, the cache hit ratio was 6.7%, and Cloudflare counted
-      // 1,032,799 requests in 30 days against 865 human pageviews. That gap is
-      // crawlers walking ~750k story pages, and every one of them was travelling
-      // to a home server. Crawl budget spent on latency is indexing not
-      // happening, which is the opposite of the point of these pages.
+      // Measured before this: 7,065 of ~12,000 edge requests were /story/{id},
+      // the hit ratio was 6.7%, and Cloudflare counted 1,032,799 requests in 30
+      // days against 865 human pageviews.
+      //
+      // Measured AFTER, which corrects why: those 2,305 story requests hit 2,277
+      // DISTINCT urls — a 1.2% repeat rate. Crawlers walk unique pages, so edge
+      // caching absorbs almost none of that and the 6.7% was mostly arithmetic
+      // rather than a fault. What this does buy is real but smaller: repeat
+      // visitors, several search engines fetching the same page, and re-crawls
+      // inside stale-while-revalidate. Verified 36ms from the edge against 52ms
+      // through to the origin.
       //
       // Safe to share between visitors because NOTHING under app/ calls
       // `cookies()` -- checked, zero matches -- so the server HTML is identical
