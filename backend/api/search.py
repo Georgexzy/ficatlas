@@ -81,6 +81,32 @@ _BROKEN_TITLE_TAIL = (
 # Matches the in-process TTL, so the two layers cannot disagree about how stale
 # a result may be.
 SEARCH_CACHE_SECONDS = int(os.getenv("SEARCH_CACHE_SECONDS", "120"))
+
+# The ceiling on how long an expensive search may be kept, and how much of its
+# own cost it earns in cache time.
+#
+# A flat TTL charges a 150ms query and a 7,300ms query the same rent, which is
+# backwards: the expensive one is precisely the one nobody should pay for twice.
+# Measured on this index, cold: "harry potter" 7,301ms, "drarry" 2,518ms,
+# "harry potter marriage law" 924ms. At a flat 120s the seven-second query was
+# recomputed up to thirty times an hour.
+#
+# Scaling TTL with measured cost is safe in the direction that matters. A cheap
+# query is cheap because it is narrow, and narrow results are the ones a reader
+# most expects to be current -- those keep the short TTL. A broad, slow query
+# returns thousands of works where a few minutes of staleness is invisible.
+#
+# It compounds at the edge: the Cloudflare rule for /api/search respects the
+# origin's Cache-Control, so a longer max-age here means Cloudflare answers the
+# repeat without touching this server at all.
+SEARCH_CACHE_MAX_SECONDS = int(os.getenv("SEARCH_CACHE_MAX_SECONDS", "1800"))
+SEARCH_CACHE_COST_FACTOR = float(os.getenv("SEARCH_CACHE_COST_FACTOR", "0.15"))
+
+
+def _cost_ttl(elapsed_ms: float) -> int:
+    """Cache time earned by what the search actually cost to compute."""
+    return max(SEARCH_CACHE_SECONDS,
+               min(SEARCH_CACHE_MAX_SECONDS, int(elapsed_ms * SEARCH_CACHE_COST_FACTOR)))
 from query_parser import parse_query, parsed_to_search_params
 import re
 from character_aliases import character_variants, relationship_variants
@@ -817,7 +843,7 @@ def _should_fetch_live(sort: str, page: int, q: Optional[str]) -> bool:
 
 # ── Main endpoint ─────────────────────────────────────────────────────────────
 
-def _apply_cache_headers(response, viewer) -> None:
+def _apply_cache_headers(response, viewer, ttl: int | None = None) -> None:
     """Tell a shared cache in front of us what it may do with this response.
 
     Every exit from search() must call this, including the cache hits. It used to
@@ -838,9 +864,10 @@ def _apply_cache_headers(response, viewer) -> None:
     if response is None:
         return
     if viewer is None:
+        secs = ttl or SEARCH_CACHE_SECONDS
         response.headers["Cache-Control"] = (
-            f"public, max-age={SEARCH_CACHE_SECONDS}, "
-            f"stale-while-revalidate={SEARCH_CACHE_SECONDS * 4}")
+            f"public, max-age={secs}, "
+            f"stale-while-revalidate={secs * 4}")
     else:
         response.headers["Cache-Control"] = "private, no-store"
 
@@ -1068,6 +1095,7 @@ def search(          # NOT async — see below
     _ck = None
     if request is not None:
         _ck = cache_key(str(request.url.query), is_operator)
+        _t0 = time.monotonic()   # what this search costs, if it misses
         _hit = CACHE.get(_ck)
         if _hit is not None:
             _note_total(request, _hit)
@@ -2205,6 +2233,10 @@ def search(          # NOT async — see below
         hidden_explicit=hidden_explicit,
         parsed_tokens=[ParsedToken(**t) for t in parsed_tokens],
     )
+    # What it cost, and therefore what it has earned. Computed before the cache
+    # writes below so the in-process copy, the shared row and the edge all agree.
+    _earned_ttl = _cost_ttl((time.monotonic() - _t0) * 1000) if _ck is not None \
+        else SEARCH_CACHE_SECONDS
     if _ck is not None:
         CACHE.put(_ck, _response)
         # Share it, so the other three workers never recompute this one. Skipped
@@ -2213,7 +2245,7 @@ def search(          # NOT async — see below
         # entry would hand another reader a stale copy of something whose whole
         # point is that it is live.
         if not live_cards:
-            shared_put(db, _ck, _response.model_dump_json(), SEARCH_CACHE_SECONDS)
+            shared_put(db, _ck, _response.model_dump_json(), _earned_ttl)
 
     # Let a shared cache in front of us do the work the per-worker cache can
     # only do four times over.
@@ -2225,7 +2257,7 @@ def search(          # NOT async — see below
     # shared by every visitor, which is the same Zipf-shaped win multiplied by
     # the whole audience instead of by one process.
     _note_total(request, _response)
-    _apply_cache_headers(response, viewer)
+    _apply_cache_headers(response, viewer, _earned_ttl)
     return _response
 
 
