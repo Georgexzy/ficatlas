@@ -20,11 +20,25 @@ SESSION_COOKIE  = "sat"            # session-auth-token
 
 # ── Brute-force protection ───────────────────────────────────────────────────
 # Track failed login attempts per username. After too many fails in a window,
-# lock that username briefly. In-memory is fine for single-process hobby scale.
+# lock that username briefly.
+#
+# The counter is a module-level dict, so there is ONE PER UVICORN WORKER and an
+# attacker's attempts are spread across all of them by the accept queue. This
+# said "in-memory is fine for single-process hobby scale" while the public API
+# has been running WEB_CONCURRENCY=2, which made the real threshold 16 attempts
+# rather than the 8 written here.
+#
+# ratelimit.py divides its limits by the worker count for exactly this reason,
+# so the same divisor is used rather than a second mechanism. Approximate by
+# construction — the distribution across workers is only roughly even — but
+# approximately 8 is what this was always claiming to be.
 import time as _time
+from ratelimit import _per_worker as _rl_per_worker
+
 _login_fails: dict[str, list[float]] = {}
 _LOGIN_FAIL_WINDOW   = 300    # 5 min sliding window
-_LOGIN_FAIL_MAX      = 8      # this many fails in the window → temporary lock
+LOGIN_FAIL_MAX_TOTAL = 8      # across the whole site, not per worker
+_LOGIN_FAIL_MAX      = _rl_per_worker(LOGIN_FAIL_MAX_TOTAL)
 _LOGIN_LOCK_SECONDS  = 300    # lock duration
 
 
