@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 
 sys.path.insert(0, "/app")
@@ -46,7 +47,15 @@ log = logging.getLogger("ao3_series_fill")
 
 # AO3 shows 20 works per series page. Most series are one page; a handful are
 # enormous. Capped so a single pathological series cannot monopolise a batch.
-MAX_PAGES = 5
+MAX_PAGES = int(os.getenv("SERIES_FILL_MAX_PAGES", "10"))
+
+# How long before a series is worth another look. Nothing recorded an attempt,
+# so the ranking -- which favours the series missing the MOST works -- handed
+# back the same five every cycle forever. Every one of the current top targets
+# needs more than MAX_PAGES * 20 positions, so none of them can ever be
+# completed, and the loop spent ~25 AO3 requests every 15 minutes achieving
+# nothing while the 42,563 series it was written for were never reached.
+RETRY_AFTER_DAYS = float(os.getenv("SERIES_FILL_RETRY_DAYS", "30"))
 
 
 def incomplete_series(db, limit: int) -> list[tuple[str, str, str | None]]:
@@ -56,7 +65,9 @@ def incomplete_series(db, limit: int) -> list[tuple[str, str, str | None]]:
     them. A series whose held works run 1..N contiguously is complete as far as
     anyone can tell from here, and is not worth a request.
 
-    Ordered by how much is missing, so the worst pages improve first.
+    Ordered by how much is missing, so the worst pages improve first -- but
+    only among series not tried recently. Without that clause the ordering is
+    deterministic and the un-fixable sort to the top permanently.
     """
     rows = db.execute(sql_text("""
         SELECT se.id, se.ao3_id, se.name,
@@ -64,15 +75,33 @@ def incomplete_series(db, limit: int) -> list[tuple[str, str, str | None]]:
                min(sw.position) - 1                              AS missing_before
         FROM series se
         JOIN series_works sw ON sw.series_id = se.id
+        LEFT JOIN series_fill_log fl ON fl.series_id = se.id
         WHERE se.ao3_id IS NOT NULL
+          AND (fl.attempted_at IS NULL
+               OR fl.attempted_at < now() - (:retry_days * INTERVAL '1 day'))
         GROUP BY se.id, se.ao3_id, se.name
         HAVING min(sw.position) > 1
             OR (max(sw.position) - min(sw.position) + 1) <> count(*)
         ORDER BY (max(sw.position) - min(sw.position) + 1 - count(*))
                + (min(sw.position) - 1) DESC
         LIMIT :lim
-    """), {"lim": limit}).fetchall()
+    """), {"lim": limit, "retry_days": RETRY_AFTER_DAYS}).fetchall()
     return [(str(r[0]), r[1], r[2]) for r in rows]
+
+
+def record_attempt(db, series_id: str, complete: bool, listed: int) -> None:
+    """Mark a series tried, so the queue advances whatever the outcome.
+
+    Recorded for every outcome including failure -- a series AO3 404s, or one
+    larger than the page cap, is exactly the case that otherwise re-ranks to
+    the head forever.
+    """
+    db.execute(sql_text("""
+        INSERT INTO series_fill_log (series_id, attempted_at, complete, listed)
+        VALUES (:s, now(), :c, :n)
+        ON CONFLICT (series_id) DO UPDATE
+           SET attempted_at = now(), complete = :c, listed = :n
+    """), {"s": series_id, "c": complete, "n": listed})
 
 
 async def fetch_series_works(ao3_id: str) -> tuple[list[dict], bool]:
@@ -197,9 +226,15 @@ async def run(limit: int = 50, dry_run: bool = False) -> dict:
             entries, complete = await fetch_series_works(ao3_id)
         except Exception as e:
             log.warning("series %s fetch failed: %s: %s", ao3_id, type(e).__name__, e)
+            if not dry_run:
+                with db_session() as db:
+                    record_attempt(db, series_id, False, 0)
             continue
         if not entries:
             stats["empty"] += 1
+            if not dry_run:
+                with db_session() as db:
+                    record_attempt(db, series_id, False, 0)
             continue
         if dry_run:
             log.info("would fill %-40s %s -> %d works listed",
@@ -208,6 +243,7 @@ async def run(limit: int = 50, dry_run: bool = False) -> dict:
             continue
         with db_session() as db:
             ix, lk = fill_one(db, series_id, ao3_id, entries, complete)
+            record_attempt(db, series_id, complete, len(entries))
         stats["series"] += 1
         stats["indexed"] += ix
         stats["linked"] += lk

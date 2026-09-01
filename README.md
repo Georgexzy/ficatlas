@@ -588,6 +588,26 @@ Romantic (`/`) and platonic (`&`) pairings stay distinct: `Draco/Hermione` does 
 return works tagged `Draco & Hermione`. Names outside the alias table fall back to
 substring matching, so other fandoms behave as before.
 
+Ship *nicknames* are a separate, mined table. Readers search `wolfstar`, not
+`Sirius Black/Remus Lupin`, and the two are unrelated strings — so
+`backend/ship_aliases.py` learns the mapping from the index itself: of the works
+tagged `wolfstar`, 94% carry that pairing and the runner-up carries 27%. 595
+nicknames at present, rebuilt weekly by the worker, because they are coined faster
+than any hand-written list keeps up with. A resolved nickname is OR-ed beside the
+text search rather than replacing it, so a wrong entry can only widen a search.
+
+## Contributing
+
+```bash
+git config core.hooksPath .githooks   # enable the pre-commit checks
+```
+
+Cloning does not install hooks, and without that line nothing runs
+`tests/check-secrets.py` before a push — which is how a credential reaches a
+public repo and comes back as a scanner alert. It checks that no value in your
+`.env` appears in a tracked file, and that nothing credential-shaped is written
+down anywhere.
+
 ## Architecture
 
 ```
