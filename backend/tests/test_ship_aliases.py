@@ -30,9 +30,8 @@ def nickname(monkeypatch):
 
     table = {"wolfstar": "Sirius Black/Remus Lupin",
              "taejin": "Kim Seokjin | Jin/Kim Taehyung | V"}
-    monkeypatch.setattr(search_mod, "_ship_alias_cached",
-                        lambda term: table.get(term, ""))
-    return search_mod._ship_nickname
+    monkeypatch.setattr(search_mod, "_alias_table", lambda db: table)
+    return lambda q: search_mod._ship_nickname(None, q)
 
 
 def test_plain_nickname_resolves(nickname):
@@ -58,10 +57,15 @@ def test_unknown_words_resolve_to_nothing(nickname):
 def test_short_tokens_are_never_probed(nickname, monkeypatch):
     """A three-letter word is an initialism or an English word, never a ship."""
     probed = []
+
+    class Probe(dict):
+        def get(self, k, default=None):
+            probed.append(k)
+            return None
+
     from api import search as search_mod
-    monkeypatch.setattr(search_mod, "_ship_alias_cached",
-                        lambda t: probed.append(t) or "")
-    search_mod._ship_nickname("bts jin and v au")
+    monkeypatch.setattr(search_mod, "_alias_table", lambda db: Probe())
+    search_mod._ship_nickname(None, "bts jin and v au")
     assert all(len(p) >= 5 for p in probed)
 
 
@@ -88,3 +92,57 @@ def test_thresholds_are_the_ones_that_were_measured():
     # wolfstar is 96% one fandom, "hurt-comfort" 72% and "canon" far lower.
     assert ship_aliases.MIN_FANDOM_SHARE >= 0.60
     assert ship_aliases.MAX_WORKS <= 50_000
+
+
+# ── the spelled-out pairing, and what it must refuse ──────────────────────────
+
+@pytest.fixture
+def pair(monkeypatch):
+    """_spelled_out_pair with the database answering "yes, that is a pairing".
+
+    The point of these is the guards in front of the query, so the query itself
+    is stubbed to the permissive answer. A resolver that reaches the database
+    for "Harry Potter and the Philosopher's Stone" has already failed.
+    """
+    from api import search as search_mod
+    asked = []
+
+    def fake(db, a, b):
+        asked.append((a, b))
+        return "Some Character/Another Character"
+
+    monkeypatch.setattr(search_mod, "_pair_lookup", fake)
+    return lambda q: (search_mod._spelled_out_pair(None, q), asked)
+
+
+@pytest.mark.parametrize("title", [
+    # Reached production. "the" is a substring of THEodore, so the most-searched
+    # book title on the site resolved to Theodore Nott/Harry Potter — and the
+    # ranking bonus then put that ship on page one of a plain title search.
+    "Harry Potter and the Philosopher's Stone",
+    "the good and the bad",
+    "beauty and the beast",
+    # Both halves hit the bracketed fandom rather than either character:
+    # `Mr. Bennet/Mrs. Bennet (Pride and Prejudice)`. Guarded in SQL by
+    # requiring the halves to land on opposite sides with the brackets stripped.
+    "a story about pride and prejudice in the modern era",
+])
+def test_titles_and_phrases_are_not_pairings(pair, title):
+    result, _ = pair(title)
+    assert result is None
+
+
+def test_a_stopword_half_never_reaches_the_database(pair):
+    _, asked = pair("Harry Potter and the Philosopher's Stone")
+    assert asked == []
+
+
+def test_a_long_query_is_not_probed(pair):
+    _, asked = pair("looking for a fic where harry and draco are aurors together")
+    assert asked == []
+
+
+def test_a_real_pairing_still_resolves(pair):
+    result, asked = pair("Bts jin and jimin")
+    assert result == ("Some Character/Another Character", "Bts")
+    assert asked == [("jin", "jimin")]

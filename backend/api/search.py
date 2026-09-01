@@ -5,6 +5,8 @@ from functools import lru_cache
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session, aliased
 import os
+import threading
+import time
 from sqlalchemy import and_, or_, func, literal_column, cast, case, Text, text as sql_text
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from typing import Dict, Optional, List
@@ -268,18 +270,44 @@ def _both_orders(term: str) -> list[str]:
     return [term, f"{parts[1]}/{parts[0]}"]
 
 
-# Nickname -> canonical pairing, cached per process. The table is rebuilt weekly
-# at most, and a search must not pay a lookup per token per request.
-@lru_cache(maxsize=4096)
-def _ship_alias_cached(term: str) -> str:
-    """'' when the term is not a nickname — lru_cache cannot memoise None usefully."""
-    from db.session import db_session
-    import ship_aliases
-    try:
-        with db_session() as db:
-            return ship_aliases.lookup(db, term) or ""
-    except Exception:
-        return ""
+# The whole nickname table, held in memory and refreshed on a timer.
+#
+# It was a per-token lookup behind an lru_cache, which was wrong twice over.
+# It opened a SECOND pooled connection while the request already held one, so
+# under load every search could sit on POOL_TIMEOUT waiting for a connection
+# the caller was itself holding — and `except Exception` swallowed the timeout,
+# which is the "500 with nothing in the API log" this codebase has been bitten
+# by before. And an lru_cache has no expiry, so a token searched before the
+# first weekly mine finished was memoised as "not a nickname" for the life of
+# the process: `wolfstar` could be in the table and still resolve to nothing
+# until the next deploy.
+#
+# 595 rows is nothing to hold. One query per TTL replaces both problems.
+_ALIAS_TTL = float(os.getenv("SHIP_ALIAS_CACHE_SEC", "600"))
+_alias_cache: dict[str, str] = {}
+_alias_loaded_at = 0.0
+_alias_lock = threading.Lock()
+
+
+def _alias_table(db) -> dict[str, str]:
+    """nickname -> canonical pairing, reloaded every _ALIAS_TTL seconds."""
+    global _alias_cache, _alias_loaded_at
+    now = time.monotonic()
+    if _alias_cache and now - _alias_loaded_at < _ALIAS_TTL:
+        return _alias_cache
+    with _alias_lock:
+        if _alias_cache and time.monotonic() - _alias_loaded_at < _ALIAS_TTL:
+            return _alias_cache
+        try:
+            rows = db.execute(sql_text(
+                "SELECT alias, relationship FROM ship_aliases")).fetchall()
+            _alias_cache = {a: r for a, r in rows}
+            _alias_loaded_at = time.monotonic()
+        except Exception:
+            # Table not built yet, or unavailable. Keep whatever we have and
+            # retry on the next request rather than caching the failure.
+            log.debug("ship alias table unavailable")
+    return _alias_cache
 
 
 _STRIP = "\"',.!?;:()[]"
@@ -290,7 +318,7 @@ _STRIP = "\"',.!?;:()[]"
 _SHIP_ALIASES_ON = os.getenv("SEARCH_SHIP_ALIASES", "true").lower() not in ("0", "false", "no")
 
 
-def _ship_nickname(q: str) -> tuple[str, str] | None:
+def _ship_nickname(db, q: str) -> tuple[str, str] | None:
     """Split a query into (canonical relationship, the rest of the words).
 
     Readers type the ship the way fandom says it — "wolfstar", "taejin",
@@ -310,7 +338,7 @@ def _ship_nickname(q: str) -> tuple[str, str] | None:
         token = w.strip(_STRIP).lower()
         if len(token) < 5:
             continue
-        canonical = _ship_alias_cached(token)
+        canonical = _alias_table(db).get(token)
         if canonical:
             rest = " ".join(words[:i] + words[i + 1:])
             return canonical, rest
@@ -319,31 +347,69 @@ def _ship_nickname(q: str) -> tuple[str, str] | None:
 
 # The pairing a reader means by "jin and jimin". Cached per process for the same
 # reason as the nickname lookup: one lookup per query, not per request.
-_PAIR_SQL = sql_text("""
-    SELECT value FROM facets
-     WHERE kind = 'relationship'
-       AND value ILIKE :a AND value ILIKE :b
-       -- Two-part pairings only. Without this the top hit for "jin and jimin"
-       -- is the seven-way BTS OT7 tag, which contains both names and is more
-       -- used than the pairing actually asked for.
-       AND value !~ '/.*/' AND value !~ '&'
+# The two halves must land on OPPOSITE SIDES of the pairing, and the fandom
+# AO3 appends in brackets does not count as a name.
+#
+# Matching the value as one string was wrong in two ways that reached
+# production. "Harry Potter and the Philosopher's Stone" split to
+# ("potter", "the") and "the" matched THEODORE — resolving the most-searched
+# book title on the site to `Theodore Nott/Harry Potter` and, through the
+# ranking bonus, floating that ship onto page one. And "pride and prejudice"
+# matched `Mr. Bennet/Mrs. Bennet (Pride and Prejudice)`, where both halves hit
+# the bracketed fandom rather than either character.
+_PAIR_SQL = sql_text(r"""
+    WITH sides AS (
+        SELECT value, count,
+               regexp_replace(split_part(value, '/', 1), '\s*\([^)]*\)\s*$', '') AS l,
+               regexp_replace(split_part(value, '/', 2), '\s*\([^)]*\)\s*$', '') AS r
+          FROM facets
+         WHERE kind = 'relationship'
+           AND value ILIKE :a AND value ILIKE :b
+           -- Two-part pairings only. Without this the top hit for "jin and
+           -- jimin" is the seven-way BTS OT7 tag, which contains both names and
+           -- is more used than the pairing actually asked for.
+           AND value !~ '/.*/' AND value !~ '&'
+    )
+    SELECT value FROM sides
+     WHERE (l ILIKE :a AND r ILIKE :b) OR (l ILIKE :b AND r ILIKE :a)
      ORDER BY count DESC
      LIMIT 1
 """)
 
 
-@lru_cache(maxsize=2048)
-def _pair_lookup(a: str, b: str) -> str:
-    from db.session import db_session
+# Words that are not half of a ship. "the" is the one that mattered — it is a
+# substring of Theodore, Thea, Ethel and Bethany — but any of these either side
+# of "and" means the query is a title or a phrase, not a pairing.
+_NOT_A_NAME = {
+    "the", "and", "a", "an", "of", "for", "in", "on", "to", "with", "at", "by",
+    "from", "into", "out", "up", "down", "not", "but", "or", "his", "her",
+    "its", "our", "their", "my", "your", "you", "him", "she", "he", "they",
+    "all", "one", "two", "new", "old", "other", "more", "some", "any", "who",
+    "what", "how", "why", "when", "then", "than", "that", "this", "these",
+    "was", "were", "are", "is", "be", "been", "has", "had", "have", "will",
+}
+
+_pair_cache: dict[tuple[str, str], tuple[str, float]] = {}
+
+
+def _pair_lookup(db, a: str, b: str) -> str:
+    """Cached on the request's own session — never a second pooled connection."""
+    key = (a, b)
+    hit = _pair_cache.get(key)
+    if hit and time.monotonic() - hit[1] < _ALIAS_TTL:
+        return hit[0]
     try:
-        with db_session() as db:
-            row = db.execute(_PAIR_SQL, {"a": f"%{a}%", "b": f"%{b}%"}).fetchone()
-            return row[0] if row else ""
+        row = db.execute(_PAIR_SQL, {"a": f"%{a}%", "b": f"%{b}%"}).fetchone()
+        found = row[0] if row else ""
     except Exception:
-        return ""
+        return ""       # do not cache a failure as "no such pairing"
+    if len(_pair_cache) > 4096:
+        _pair_cache.clear()
+    _pair_cache[key] = (found, time.monotonic())
+    return found
 
 
-def _spelled_out_pair(q: str) -> tuple[str, str] | None:
+def _spelled_out_pair(db, q: str) -> tuple[str, str] | None:
     """"Bts jin and jimin" -> the pairing, and the words that were not the ship.
 
     460 of the 588 searches this site has recorded are this shape: a fandom, two
@@ -355,16 +421,24 @@ def _spelled_out_pair(q: str) -> tuple[str, str] | None:
     Only the words either side of "and" are tried, and both must be long enough
     not to match half the vocabulary as a substring.
     """
+    words = q.split()
+    # Same bound as the nickname path. Without it every long free-text query
+    # containing " and " paid a facets lookup for a shape that is almost never
+    # a pairing.
+    if len(words) > 8:
+        return None
     parts = re.split(r"\s+(?:and|x|/|\+)\s+", q.strip(), flags=re.I)
     if len(parts) != 2:
         return None
     left, right = parts[0].split(), parts[1].split()
     if not left or not right:
         return None
-    a, b = left[-1].strip(_STRIP), right[0].strip(_STRIP)
-    if len(a) < 3 or len(b) < 3 or a.lower() == b.lower():
+    a, b = left[-1].strip(_STRIP).lower(), right[0].strip(_STRIP).lower()
+    if len(a) < 3 or len(b) < 3 or a == b:
         return None
-    canonical = _pair_lookup(a.lower(), b.lower())
+    if a in _NOT_A_NAME or b in _NOT_A_NAME:
+        return None
+    canonical = _pair_lookup(db, a, b)
     if not canonical:
         return None
     rest = " ".join(left[:-1] + right[1:])
@@ -1008,7 +1082,7 @@ def search(          # NOT async — see below
         # jealousy" gains the pairing's jealousy works rather than all of them.
         nickname = None
         if _SHIP_ALIASES_ON:
-            nickname = _ship_nickname(q) or _spelled_out_pair(q)
+            nickname = _ship_nickname(db, q) or _spelled_out_pair(db, q)
         ship_canonical = nickname[0] if nickname else None
         if nickname:
             canonical, rest = nickname
