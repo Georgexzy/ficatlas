@@ -2391,7 +2391,7 @@ function SearchPageInner() {
         />
 
         {/* ── Main ── */}
-        <main className="main">
+        <main id="main" className="main">
           {/* Waiting-filters bar.
           Filters used to search on their own after 350ms, so picking three of
           them ran three searches and the results moved while you were still
@@ -2838,7 +2838,7 @@ export default function SearchPage() {
         <div className="shell">
           <SiteHeader current="search" />
           <div className="layout">
-            <main className="main">
+            <main id="main" className="main">
               <div className="empty">
                 <LandingIntro />
               </div>

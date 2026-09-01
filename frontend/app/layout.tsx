@@ -138,6 +138,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         `.trim() }} />
       </head>
       <body>
+        {/* The stylesheet has carried `.skip-link` — off-screen until focused,
+            with its own focus-visible ring — since the reader was built, and
+            nothing ever rendered one. Without it a keyboard user tabs the whole
+            header on every page before reaching the first word of anything.
+            Every route's main region carries id="main" to land on. */}
+        <a href="#main" className="skip-link">Skip to content</a>
         <ServiceWorkerRegistration />
         {/* Suspense because NavRecorder reads useSearchParams(), and a
             component that does cannot be statically prerendered — without this
