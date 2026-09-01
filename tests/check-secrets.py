@@ -69,6 +69,11 @@ ALLOWED = [
     (".env.example", "password= literal"),
     ("IMPROVEMENTS.md", "hardcodes"),
     ("IMPROVEMENTS.md", "password="),
+
+    # A test for DSN handling has to contain a DSN. Narrowed to the one file
+    # and the one rule: the live-.env check still applies here, so a real value
+    # pasted in would still be caught.
+    ("backend/tests/test_db_dsn.py", "database URL with a password"),
 ]
 
 RULES = [

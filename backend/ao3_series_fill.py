@@ -214,11 +214,23 @@ def fill_one(db, series_id: str, ao3_id: str, entries: list[dict],
     return (indexed, linked)
 
 
-async def run(limit: int = 50, dry_run: bool = False) -> dict:
-    from db.session import db_session
+def _in_session(fn):
+    """Run one unit of blocking DB work in its own session.
 
+    Every DB call in run() goes through here and through asyncio.to_thread,
+    because run() is awaited on the worker's single event loop. psycopg2 is
+    blocking, so calling it inline stalled every other loop in the worker --
+    the crawlers, the refresh queue, the AO3 pacing budget -- for as long as a
+    GROUP BY over series_works plus a per-work lookup takes. Every other loop
+    in worker.py already does this; this one did not.
+    """
+    from db.session import db_session
     with db_session() as db:
-        targets = incomplete_series(db, limit)
+        return fn(db)
+
+
+async def run(limit: int = 50, dry_run: bool = False) -> dict:
+    targets = await asyncio.to_thread(_in_session, lambda db: incomplete_series(db, limit))
 
     stats = {"series": 0, "indexed": 0, "linked": 0, "empty": 0}
     for series_id, ao3_id, name in targets:
@@ -227,23 +239,40 @@ async def run(limit: int = 50, dry_run: bool = False) -> dict:
         except Exception as e:
             log.warning("series %s fetch failed: %s: %s", ao3_id, type(e).__name__, e)
             if not dry_run:
-                with db_session() as db:
-                    record_attempt(db, series_id, False, 0)
+                await asyncio.to_thread(
+                    _in_session, lambda db: record_attempt(db, series_id, False, 0))
             continue
         if not entries:
             stats["empty"] += 1
             if not dry_run:
-                with db_session() as db:
-                    record_attempt(db, series_id, False, 0)
+                await asyncio.to_thread(
+                    _in_session, lambda db: record_attempt(db, series_id, False, 0))
             continue
         if dry_run:
             log.info("would fill %-40s %s -> %d works listed",
                      (name or "")[:40], ao3_id, len(entries))
             stats["series"] += 1
             continue
-        with db_session() as db:
-            ix, lk = fill_one(db, series_id, ao3_id, entries, complete)
-            record_attempt(db, series_id, complete, len(entries))
+        def _fill(db, _sid=series_id, _aid=ao3_id, _e=entries, _c=complete):
+            r = fill_one(db, _sid, _aid, _e, _c)
+            record_attempt(db, _sid, _c, len(_e))
+            return r
+
+        try:
+            ix, lk = await asyncio.to_thread(_in_session, _fill)
+        except Exception as e:
+            # The attempt still has to be recorded, in its own session: the
+            # failed one is aborted, and without a log row this series sorts
+            # straight back to the head of a deterministic queue and re-fails
+            # every cycle -- which is the starvation the log exists to stop.
+            log.warning("series %s fill failed: %s: %s", ao3_id, type(e).__name__, e)
+            try:
+                await asyncio.to_thread(
+                    _in_session,
+                    lambda db: record_attempt(db, series_id, False, len(entries)))
+            except Exception:
+                log.warning("series %s: could not even record the attempt", ao3_id)
+            continue
         stats["series"] += 1
         stats["indexed"] += ix
         stats["linked"] += lk

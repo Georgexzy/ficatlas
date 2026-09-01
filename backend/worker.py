@@ -1280,6 +1280,9 @@ async def _series_fill_loop() -> None:
     await asyncio.sleep(_num("SERIES_FILL_START_DELAY_SEC", 1200))
     while True:
         try:
+            # Stays on this loop: run()'s AO3 fetches share the ao3_budget
+            # pacing primitives, which are bound to it. run() moves its own
+            # blocking psycopg2 work to a thread instead -- see the note there.
             stats = await ao3_series_fill.run(limit=batch)
             if stats.get("series"):
                 log.info("series fill: %(series)s series, +%(indexed)s works indexed, "

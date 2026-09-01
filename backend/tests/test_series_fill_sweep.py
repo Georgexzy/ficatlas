@@ -76,3 +76,26 @@ def test_every_outcome_records_an_attempt():
     assert src.count("record_attempt") >= 3
     assert "series_fill_log" in inspect.getsource(ao3_series_fill.record_attempt)
     assert "attempted_at" in inspect.getsource(ao3_series_fill.incomplete_series)
+
+
+def test_the_db_work_is_moved_off_the_event_loop():
+    """run() is awaited on the worker's single event loop, and psycopg2 blocks.
+
+    Calling it inline stalled every other loop in the worker -- the crawlers,
+    the refresh queue, the AO3 pacing budget -- for as long as a GROUP BY over
+    series_works took. The AO3 fetches must stay ON the loop, because the
+    pacing primitives are bound to it, so only the DB work moves.
+    """
+    import inspect
+    src = inspect.getsource(ao3_series_fill.run)
+    assert "asyncio.to_thread" in src
+    assert "with db_session()" not in src, "a session opened inline blocks the loop"
+
+
+def test_a_failed_fill_still_records_the_attempt():
+    """Otherwise the series sorts back to the head of a deterministic queue and
+    re-fails every cycle -- the starvation the log table exists to prevent."""
+    import inspect
+    src = inspect.getsource(ao3_series_fill.run)
+    fail_block = src[src.index("except Exception as e:"):]
+    assert "record_attempt" in fail_block

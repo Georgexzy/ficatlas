@@ -215,30 +215,28 @@ def rebuild(limit: int | None = None, verbose: bool = False) -> int:
         db.execute(text("CREATE TABLE IF NOT EXISTS ship_aliases ("
                         "alias text PRIMARY KEY, relationship text NOT NULL, "
                         "works integer, share real, built_at timestamp DEFAULT now())"))
-        db.execute(text("DELETE FROM ship_aliases"))
+        if limit is None:
+            db.execute(text("DELETE FROM ship_aliases"))
+        else:
+            # A --limit run is a trial: it only ever looks at the N most-used
+            # candidates, so replacing the table with its output deletes every
+            # alias it did not get to. CLAUDE.md already records this exact trap
+            # for the hub builders, where `--limit 10` deleted 5,015 hubs.
+            log.warning("--limit %d: adding to the table, not replacing it", limit)
         for r in rows:
             db.execute(text("INSERT INTO ship_aliases (alias, relationship, works, share) "
                             "VALUES (:alias, :relationship, :works, :share) "
-                            "ON CONFLICT (alias) DO NOTHING"), r)
+                            "ON CONFLICT (alias) DO UPDATE SET "
+                            "  relationship = EXCLUDED.relationship, "
+                            "  works = EXCLUDED.works, share = EXCLUDED.share, "
+                            "  built_at = now() "
+                            "WHERE EXCLUDED.works > ship_aliases.works"), r)
         db.commit()
         # Not len(rows): a nickname can be mined twice, once bare and once with
         # AO3's type suffix, and ON CONFLICT keeps the more-used one.
         stored = db.execute(text("SELECT count(*) FROM ship_aliases")).scalar()
     log.info("ship_aliases: %d nicknames (%d mined)", stored, len(rows))
     return stored
-
-
-def lookup(db, term: str) -> str | None:
-    """The canonical relationship a nickname stands for, or None."""
-    t = term.strip().lower()
-    if not t or " " in t:
-        return None
-    try:
-        row = db.execute(text("SELECT relationship FROM ship_aliases WHERE alias = :a"),
-                         {"a": t}).fetchone()
-        return row[0] if row else None
-    except Exception:
-        return None      # table not built yet — caller falls back to full text
 
 
 if __name__ == "__main__":
