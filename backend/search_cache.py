@@ -150,7 +150,9 @@ def cache_key(query_string: str, is_operator: bool) -> str:
 # that no longer matches it — which is the difference between a deploy that
 # quietly serves malformed results for two minutes and one that does not.
 # v2: SearchResponse gained `hidden_explicit`.
-SCHEMA_VERSION = "v2"
+# v3: free text can now resolve a ship nickname to its canonical pairing,
+# so the same query returns a different (wider) set than a v2 entry holds.
+SCHEMA_VERSION = "v3"
 
 # Expired rows are swept probabilistically on write rather than by a scheduled
 # job: 1 write in 200 pays for the cleanup, which at any real request rate keeps

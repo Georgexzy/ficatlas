@@ -43,7 +43,8 @@ import os
 import sys
 
 sys.path.insert(0, "/app")
-os.environ.setdefault("DATABASE_URL", "postgresql://ficatlas:ficatlas@db:5432/ficatlas")
+from db.dsn import default_database_url  # noqa: E402 — needs the sys.path above
+os.environ.setdefault("DATABASE_URL", default_database_url())
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1196,6 +1197,36 @@ async def _popularity_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _ship_alias_loop() -> None:
+    """Re-mine the ship nicknames readers actually type.
+
+    `wolfstar`, `taekook`, `drarry` — fandom's own name for a pairing, which is
+    what goes into the search box and is not what the archives file the work
+    under. The traffic log priced it: `Bts taejin jealousy` found 20 works where
+    `Bts jin and taehyung jealousy` found 799.
+
+    A loop rather than a one-off build for the same reason `_popularity_loop`
+    exists. Nicknames are coined constantly and a new ship's name is exactly the
+    query a new reader arrives with, so a table built once is a table that is
+    wrong about everything after the month it was built. Nothing here is
+    authored, so a rebuild is a whole replacement and there is nothing to lose.
+
+    Weekly. It samples up to 4,000 works for each of ~5,000 candidate tags, and
+    a vocabulary that took years to form does not move in a day.
+    """
+    import ship_aliases
+
+    interval = _num("SHIP_ALIAS_INTERVAL_HOURS", 168) * 3600
+    await asyncio.sleep(_num("SHIP_ALIAS_START_DELAY_SEC", 1800))
+    while True:
+        try:
+            n = await asyncio.to_thread(ship_aliases.rebuild)
+            log.info(f"ship aliases rebuilt: {n:,} nicknames")
+        except Exception as e:
+            log.warning(f"ship alias rebuild failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _indexnow_loop() -> None:
     """Submit changed hub pages to the IndexNow engines.
 
@@ -1221,6 +1252,40 @@ async def _indexnow_loop() -> None:
                 log.info(f"indexnow: {n:,} changed hub URLs submitted")
         except Exception as e:
             log.warning(f"indexnow submission failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
+async def _series_fill_loop() -> None:
+    """Fetch the works we are missing from series we only partly hold.
+
+    AO3 positions are the author's own numbering, recorded faithfully — so a
+    series where this index holds works 7, 8 and 9 renders a list starting at 7.
+    Measured before this loop existed: 42,563 series had no work at position 1
+    and 21,768 were a single work numbered above 1. Nothing was corrupt; the
+    siblings had simply never been indexed, and a reader looking at "part 4 of"
+    with no parts 1-3 has no way to tell those apart.
+
+    109,398 series carry an ao3_id, and AO3 lists a series' members at
+    /series/<id>, so the works can be fetched. See ao3_series_fill.py.
+
+    Small batches, slowly. Every fetch goes through the shared ao3_budget, and
+    the goal is to close a long tail steadily rather than to re-crawl AO3 — at
+    this rate the backlog takes weeks, which is fine for something that has been
+    wrong for months and harms nobody while it is being fixed.
+    """
+    import ao3_series_fill
+
+    interval = _num("SERIES_FILL_INTERVAL_SEC", 900)
+    batch = int(_num("SERIES_FILL_BATCH", 5))
+    await asyncio.sleep(_num("SERIES_FILL_START_DELAY_SEC", 1200))
+    while True:
+        try:
+            stats = await ao3_series_fill.run(limit=batch)
+            if stats.get("series"):
+                log.info("series fill: %(series)s series, +%(indexed)s works indexed, "
+                         "%(linked)s memberships recorded" % stats)
+        except Exception as e:
+            log.warning(f"series fill failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
 
 
@@ -1461,6 +1526,17 @@ async def main() -> None:
     if _flag("RUN_ANALYZE", "true"):
         tasks.append(asyncio.create_task(_analyze_loop()))
         log.info("planner statistics refresh enabled (ANALYZE stories)")
+
+    # On by default. The cost is one weekly sampling pass; the failure it
+    # prevents is a reader typing the only name they know for a ship and being
+    # told the index has twenty works.
+    if _flag("REBUILD_SHIP_ALIASES", "true"):
+        tasks.append(asyncio.create_task(_ship_alias_loop()))
+        log.info("ship alias mining enabled (nicknames resolve to pairings)")
+
+    if _flag("RUN_SERIES_FILL", "true"):
+        tasks.append(asyncio.create_task(_series_fill_loop()))
+        log.info("series fill enabled (fetch missing works for partial series)")
 
     # Only runs if INDEXNOW_KEY is set; indexnow.run() no-ops otherwise, so this
     # is safe to leave on for an install that has not set one up.
