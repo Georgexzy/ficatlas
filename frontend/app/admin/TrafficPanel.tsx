@@ -408,7 +408,8 @@ export default function TrafficPanel() {
             <Tile label="Unique visitors, busiest day" value={cf.totals.uniques}
                   sub="Cloudflare's own count, not the beacon's" />
             <Tile label="Bandwidth" value={cf.totals.bytes}
-                  sub={bytes(cf.totals.bytes)} />
+                  display={bytes(cf.totals.bytes)}
+                  sub="served through Cloudflare" />
           </div>
 
           {/* The gap IS the finding. These two numbers measure different
@@ -461,10 +462,13 @@ export default function TrafficPanel() {
   )
 }
 
-function Tile({ label, value, sub }: { label: string; value: number; sub?: string }) {
+function Tile({ label, value, sub, display }:
+              { label: string; value: number; sub?: string; display?: string }) {
   return (
     <div className="admin-tile">
-      <span className="admin-tile__value">{value.toLocaleString()}</span>
+      {/* `display` for values whose readable form is not a plain count --
+          8,129,390,899 is not a number anybody reads, "7.6 GB" is. */}
+      <span className="admin-tile__value">{display ?? value.toLocaleString()}</span>
       <span className="admin-tile__label">{label}</span>
       {sub && <span className="admin-tile__sub">{sub}</span>}
     </div>
