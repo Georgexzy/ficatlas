@@ -12,7 +12,7 @@ system, and every fault either fixed or consciously accepted with a reason. Not
 | Search — query path | `api/search.py`, `query_parser.py`, `frontend/lib/queryParser.ts`, `search_cache.py` | 2026-09-01 | Ship-alias resolution reviewed and fixed across 4 passes. Rest of the path not read in full. |
 | Search — ranking & relevance | `api/search.py` relevance block, `popularity_rank.py` | 2026-09-01 | Ship bonus verified reaching page 1. Weights and `is_category` not re-examined. |
 | Series | `ao3_series.py`, `ao3_series_fill.py`, `series_detect.py`, `frontend/lib/seriesNote.ts`, `series/[id]` | 2026-09-01 | Fill loop and the completeness note fixed. `plausible_position` role demotion open by choice. |
-| Traffic & admin | `tracking.py`, `api/traffic.py`, `frontend/app/admin/*` | — | Never reviewed as an area. |
+| Traffic & admin | `tracking.py`, `api/traffic.py`, `cloudflare_analytics.py`, `frontend/app/admin/*` | 2026-09-01 | Covered. Write path, all five read endpoints and the length limits exercised against the live DB. Fixed: shell-vs-.env credential precedence. Open: edge cache ratio 6.7% (needs its own design — see report). |
 | Hubs & SEO | `hub_build.py`, `fandom_hubs.py`, `ship_hubs.py`, `api/hubs.py`, `indexnow.py`, sitemap, robots | — | Never. |
 | Auth, sessions & permissions | `api/auth.py`, `api/password_reset.py`, `author_permission.py`, `ratelimit.py` | — | Never. Highest security surface. |
 | Reader, offline & library | `frontend/lib/offline.ts`, reader routes, `api/library.py` | — | Never. `IMPROVEMENTS.md` P0 (silent eviction of saved stories) may still be open. |
