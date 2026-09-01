@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { seriesNote } from "@/lib/seriesNote"
 import BackLink from "../../BackLink"
 import { use, useEffect, useState } from "react"
 import SiteHeader from "../../SiteHeader"
@@ -109,21 +110,19 @@ export default function SeriesClient({ params }: { params: Promise<{ id: string 
           them to 1,2,3 would be inventing an order; what is added is the
           sentence explaining why they start where they do. */}
       {(() => {
-        const main = data.works.filter(w => w.role !== "side")
-        const pos = main.map(w => w.position).filter((n): n is number => typeof n === "number")
-        if (pos.length === 0) return null
-        const lowest = Math.min(...pos)
-        const missingBefore = lowest > 1
-        const gaps = pos.length > 1 && (Math.max(...pos) - lowest + 1) !== pos.length
-        if (!missingBefore && !gaps) return null
+        const note = seriesNote(data.source, data.works)
+        if (!note) return null
+        const { whose, missingBefore, gaps, lowest } = note
         return (
           <p className="series-page__note">
             {missingBefore && gaps
-              ? `The numbering is the author's own, and this index does not hold every work in it — it starts at ${lowest} and has gaps.`
+              ? `${whose}, and this index does not hold every work in it — it starts at ${lowest} and has gaps.`
               : missingBefore
-              ? `The numbering is the author's own. This index does not hold the ${lowest === 2 ? "work" : "works"} before number ${lowest}, so the list starts there.`
-              : "The numbering is the author's own, and there are gaps — this index does not hold every work in the series."}
-            {" "}The missing ones are on {SITE_LABELS[data.site] ?? data.site}.
+              ? `${whose}. This index does not hold the ${lowest === 2 ? "work" : "works"} before number ${lowest}, so the list starts there.`
+              : `${whose}, and there are gaps — this index does not hold every work in the series.`}
+            {note.canPointAtArchive
+              ? <> The missing ones are on {SITE_LABELS[data.site] ?? data.site}.</>
+              : null}
           </p>
         )
       })()}

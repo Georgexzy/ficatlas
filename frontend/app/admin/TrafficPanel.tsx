@@ -57,11 +57,22 @@ const shortDate = (iso: string) => fmt(iso, { day: "numeric", month: "short" })
 const longDate = (iso: string) =>
   fmt(iso, { weekday: "short", day: "numeric", month: "short", year: "numeric" })
 
+// Today in the LOCAL calendar, which is the frame asDate puts every label in.
+// `new Date().toISOString().slice(0,10)` is the UTC date, and pairing it with a
+// local-midnight parse reintroduced the off-by-one asDate exists to prevent —
+// just on the "now" side instead of the label side. West of Greenwich, between
+// evening and midnight, UTC is already tomorrow and every row read a day older;
+// east of it, early in the morning, yesterday's row read "today".
+const startOfToday = () => {
+  const n = new Date()
+  return new Date(n.getFullYear(), n.getMonth(), n.getDate())
+}
+
 // "2 days ago" answers "is this still happening?", which is the question a
 // ranking by volume cannot answer on its own.
 function ago(iso: string): string {
   const days = Math.round(
-    (asDate(new Date().toISOString().slice(0, 10)).getTime() - asDate(iso).getTime())
+    (startOfToday().getTime() - asDate(iso).getTime())
     / 86_400_000)
   if (days <= 0) return "today"
   if (days === 1) return "yesterday"

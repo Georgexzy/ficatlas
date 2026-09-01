@@ -69,6 +69,14 @@ def incomplete_series(db, limit: int) -> list[tuple[str, str, str | None]]:
     only among series not tried recently. Without that clause the ordering is
     deterministic and the un-fixable sort to the top permanently.
     """
+    # This aggregates the whole series/series_works join, and db/session.py
+    # applies a 60s statement timeout by default. At ~340ms today that is not
+    # close, but the margin shrinks as the table grows and the failure mode is
+    # not a slow cycle -- it is the whole fill loop raising and logging a
+    # warning once a week while nothing gets filled. Give the one statement
+    # room; if it ever needs minutes, it wants a queue table like
+    # ao3_refresh_queue rather than a longer timeout.
+    db.execute(sql_text("SET LOCAL statement_timeout = '300s'"))
     rows = db.execute(sql_text("""
         SELECT se.id, se.ao3_id, se.name,
                max(sw.position) - min(sw.position) + 1 - count(*) AS gaps,
