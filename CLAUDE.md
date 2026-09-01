@@ -70,6 +70,15 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **No credential literals in tracked source, and a hook that enforces it.**
+  `backend/db/dsn.py` composes the fallback DSN from `POSTGRES_*`; eighteen
+  files used to carry `postgresql://ficatlas:<password>@…` instead. That was never
+  the live password (which is in `.env`, never committed, and confirmed absent
+  from every blob in history) but a scanner cannot tell, which is how the repo
+  earned a GitGuardian alert. `tests/check-secrets.py` checks two things: that
+  no value in `.env` appears in a tracked file, and that nothing credential-
+  shaped is written down. Enable the hook on a fresh clone with
+  `git config core.hooksPath .githooks` — cloning does not install it.
 - Never point a DB test at the live index — `conftest.py` refuses unless the DB
   name ends in `_test`.
 - **`backup.sh essential` selects text by `is_hosted OR a row in user_hosted`,

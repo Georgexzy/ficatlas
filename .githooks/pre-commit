@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Refuse a commit that carries a credential.
+#
+# Not installed by cloning — git will not run hooks it was handed. Enable with:
+#
+#     git config core.hooksPath .githooks
+#
+# That line is the whole install, and it is in README/CLAUDE.md so the next
+# clone does it. Skip a single commit with `git commit --no-verify` if you are
+# deliberately committing something that trips it; add it to ALLOWED in
+# tests/check-secrets.py if you will be doing that twice.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+if [ -x "$root/tests/check-secrets.py" ]; then
+    python3 "$root/tests/check-secrets.py" --staged
+fi

@@ -4,10 +4,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://ficatlas:ficatlas@localhost:5432/ficatlas"
-)
+from db.dsn import default_database_url
+
+# Outside the stack there is no compose to set DATABASE_URL, so the fallback
+# is composed from POSTGRES_* rather than carrying a password literal.
+DATABASE_URL = os.getenv("DATABASE_URL") or default_database_url(host="localhost")
 
 # Pool and timeouts, sized against the threadpool that now serves requests.
 #

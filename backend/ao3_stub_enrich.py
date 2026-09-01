@@ -61,7 +61,8 @@ import re
 import sys
 
 sys.path.insert(0, "/app")
-os.environ.setdefault("DATABASE_URL", "postgresql://ficatlas:ficatlas@db:5432/ficatlas")
+from db.dsn import default_database_url  # noqa: E402 — needs the sys.path above
+os.environ.setdefault("DATABASE_URL", default_database_url())
 
 import httpx
 from sqlalchemy import text as sql_text
