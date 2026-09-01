@@ -30,6 +30,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 import tracking
+import cloudflare_analytics
 from api.auth import require_owner
 from db.session import get_db
 from ratelimit import client_ip
@@ -151,6 +152,23 @@ def summary(days: int = Query(30, ge=1, le=365),
 
     busiest = max(rows, key=lambda r: r[3], default=None)
 
+    # The SAME window again, immediately before this one. "Is it growing?" is
+    # the only question a traffic page on a new site is really being asked, and
+    # a single window cannot answer it -- 396 views is neither good nor bad
+    # until you know last month was 200. Compared over equal spans so the
+    # answer is not an artefact of one being longer.
+    span = (last - first).days + 1
+    prev_last = first - timedelta(days=1)
+    prev_first = prev_last - timedelta(days=span - 1)
+    prev = db.execute(text(f"""
+        SELECT count(e.id) FILTER (WHERE e.kind='page')   AS views,
+               count(e.id) FILTER (WHERE e.kind='search') AS searches,
+               count(DISTINCT e.visitor)                  AS visitors
+        FROM visit_events e
+        WHERE e.at >= CAST(:pf AS date) AND e.at < CAST(:pl AS date) + interval '1 day'
+        {bots}
+    """), {"pf": prev_first, "pl": prev_last}).first()
+
     # Unique visitors do not add up across days — the hash is per-day by
     # design, so the same person is a different visitor tomorrow. Summing the
     # column would count a daily regular thirty times and call it thirty people.
@@ -178,6 +196,15 @@ def summary(days: int = Query(30, ge=1, le=365),
             "active_days": sum(1 for r in rows if r[1] or r[2]),
             "bot_views": bot_views or 0,
             "bot_searches": bot_searches or 0,
+        },
+        # Named "previous" rather than folded into a percentage: a delta on
+        # small numbers is mostly noise, and the raw pair lets the reader see
+        # that 3 -> 5 is not a 67% surge.
+        "previous": {
+            "from": prev_first.isoformat(), "to": prev_last.isoformat(),
+            "views": (prev[0] if prev else 0) or 0,
+            "searches": (prev[1] if prev else 0) or 0,
+            "visitors": (prev[2] if prev else 0) or 0,
         },
         "retention_days": tracking.RETENTION_DAYS,
         "enabled": tracking.ENABLED,
@@ -340,6 +367,21 @@ def searches(days: int = Query(30, ge=1, le=365),
         "totals": {"runs": totals[0] or 0, "empty_runs": totals[1] or 0,
                    "distinct": totals[2] or 0},
     }
+
+
+@router.get("/cloudflare")
+def cloudflare(days: int = Query(30, ge=1, le=365), _owner=Depends(require_owner)):
+    """Edge totals from Cloudflare, or a plain statement of why there are none.
+
+    Separate endpoint rather than folded into /summary, deliberately. This one
+    calls a third party, and the traffic page must still render in full when
+    that call is slow, unconfigured or refused -- see the autopoll note in
+    CLAUDE.md for what happens when a handler waits on an outbound request
+    inside the response path. It is cached for CF_ANALYTICS_CACHE_SEC and
+    bounded by an 8s timeout, so the worst case is a section of the page
+    saying so.
+    """
+    return cloudflare_analytics.fetch(days)
 
 
 @router.get("/referrers")

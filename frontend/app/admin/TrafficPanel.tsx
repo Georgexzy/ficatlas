@@ -20,6 +20,7 @@ interface Summary {
     busiest_day_visitors: number; busiest_day: string | null
     active_days: number; bot_views: number; bot_searches: number
   }
+  previous?: { from: string; to: string; views: number; searches: number; visitors: number }
   retention_days: number
   enabled: boolean
 }
@@ -79,12 +80,45 @@ function ago(iso: string): string {
   return `${days} days ago`
 }
 
+interface CfDay { day: string; requests: number; page_views: number; cached: number; uniques: number }
+interface Cloudflare {
+  configured: boolean
+  reason?: string
+  missing?: string[]
+  error?: string
+  detail?: string
+  days?: CfDay[]
+  totals?: { requests: number; page_views: number; cached: number; bytes: number; threats: number; uniques: number }
+  cache_ratio?: number | null
+  countries?: { country: string; requests: number }[]
+}
+
+// A change worth showing, or nothing. Percentages on tiny numbers are theatre:
+// 3 -> 5 is not a 67% surge, and a traffic page that says it is will be
+// disbelieved on the one occasion it matters.
+function trend(now: number, before: number): string | undefined {
+  if (!before && !now) return undefined
+  if (!before) return `first ${now === 1 ? "one" : now.toLocaleString()} in this window`
+  if (now + before < 20) return `was ${before.toLocaleString()}`
+  const pct = Math.round(((now - before) / before) * 100)
+  if (pct === 0) return `level with the previous ${"period"}`
+  return `${pct > 0 ? "up" : "down"} ${Math.abs(pct)}% on ${before.toLocaleString()}`
+}
+
+const bytes = (n: number) => {
+  const u = ["B", "kB", "MB", "GB", "TB"]
+  let i = 0, v = n
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
+  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`
+}
+
 export default function TrafficPanel() {
   const [days, setDays] = useState(30)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [pages, setPages] = useState<PageRow[] | null>(null)
   const [searches, setSearches] = useState<Searches | null>(null)
   const [refs, setRefs] = useState<RefRow[] | null>(null)
+  const [cf, setCf] = useState<Cloudflare | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async (d: number) => {
@@ -102,6 +136,14 @@ export default function TrafficPanel() {
       ])
       setSummary(s); setPages(p.pages); setSearches(q); setRefs(rf.referrers)
     } catch (e: any) { setError(e.message) }
+
+    // Deliberately NOT in the Promise.all above. This one leaves the building
+    // to reach Cloudflare, and the rest of the page must not wait on it or
+    // fail with it -- so it lands whenever it lands, and its own section says
+    // what happened.
+    setCf(null)
+    try { setCf(await get("cloudflare")) }
+    catch (e: any) { setCf({ configured: true, error: "Could not load", detail: e.message }) }
   }, [])
 
   useEffect(() => { load(days) }, [days, load])
@@ -115,6 +157,7 @@ export default function TrafficPanel() {
   const peak = Math.max(1, ...summary.days.map(d => Math.max(d.views, d.searches)))
   const nothing = summary.totals.views === 0 && summary.totals.searches === 0
   const t = summary.totals
+  const prev = summary.previous ?? { views: 0, searches: 0, visitors: 0, from: "", to: "" }
 
   // Every day is drawn, so at 90 days there are 90 labels and they collide.
   // Label roughly eight of them, always including the last, so the axis stays
@@ -152,8 +195,8 @@ export default function TrafficPanel() {
       )}
 
       <div className="admin-tiles">
-        <Tile label="Pageviews" value={t.views} />
-        <Tile label="Searches" value={t.searches} />
+        <Tile label="Pageviews" value={t.views} sub={trend(t.views, prev.views)} />
+        <Tile label="Searches" value={t.searches} sub={trend(t.searches, prev.searches)} />
         <Tile label="Visitors, busiest day" value={t.busiest_day_visitors}
               sub={t.busiest_day ? longDate(t.busiest_day) : undefined} />
         {/* Crawlers are excluded from every other number on this page, but
@@ -329,12 +372,90 @@ export default function TrafficPanel() {
         </p>
       )}
 
+      {/* The half of the traffic this page otherwise cannot see.
+          
+          Everything above comes from a beacon the BROWSER sends, so it counts
+          only pages a human's browser actually rendered — and crawlers do not
+          run JavaScript. On a site whose growth depends on being indexed, "is
+          Google crawling us?" is therefore the one question the rest of this
+          page structurally cannot answer. Cloudflare already counts every
+          request at the edge because it is the thing serving them. */}
+      <h2 className="admin-site__name">At the edge, from Cloudflare</h2>
+      {!cf ? (
+        <p className="loading">Asking Cloudflare…</p>
+      ) : !cf.configured ? (
+        <p className="admin-note">
+          Not connected — {cf.reason ?? "no credentials"}. Cloudflare counts every
+          request that reaches the site, including the crawlers this page cannot
+          see. Set <code>CLOUDFLARE_API_TOKEN</code> (its own token, with{" "}
+          <strong>Zone → Analytics → Read</strong> — not the tunnel token) and{" "}
+          <code>CLOUDFLARE_ZONE_ID</code> in <code>.env</code>, then restart. It is
+          read-only and stores nothing new.
+        </p>
+      ) : cf.error ? (
+        <p className="admin-note admin-warn">
+          Cloudflare answered with “{cf.error}”. {cf.detail}
+        </p>
+      ) : cf.totals ? (
+        <>
+          <div className="admin-tiles">
+            <Tile label="Requests at the edge" value={cf.totals.requests}
+                  sub="pages, images, JSON and crawlers" />
+            <Tile label="Served from cache" value={cf.totals.cached}
+                  sub={cf.cache_ratio != null
+                    ? `${Math.round(cf.cache_ratio * 100)}% of all requests`
+                    : undefined} />
+            <Tile label="Unique visitors, busiest day" value={cf.totals.uniques}
+                  sub="Cloudflare's own count, not the beacon's" />
+            <Tile label="Bandwidth" value={cf.totals.bytes}
+                  sub={bytes(cf.totals.bytes)} />
+          </div>
+
+          {/* The gap IS the finding. These two numbers measure different
+              things and must never be added together — the useful signal is
+              one growing while the other does not. */}
+          <p className="admin-note">
+            Cloudflare saw{" "}
+            <strong>{cf.totals.requests.toLocaleString()} requests</strong> while the
+            beacon recorded <strong>{t.views.toLocaleString()} pageviews</strong>.
+            These count different things and do not add up: the first is every
+            file fetched by anyone including crawlers, the second is pages
+            rendered by a human&rsquo;s browser. A gap that grows while pageviews
+            stay flat is something crawling the site.
+            {cf.totals.threats > 0 && <>
+              {" "}Cloudflare blocked{" "}
+              <strong>{cf.totals.threats.toLocaleString()}</strong> requests it
+              judged malicious.
+            </>}
+          </p>
+
+          {cf.countries?.length ? (
+            <table className="traffic-table">
+              <thead><tr><th>Country</th><th>Requests</th><th>Share</th></tr></thead>
+              <tbody>
+                {cf.countries.map(c => (
+                  <tr key={c.country}>
+                    <td className="traffic-table__q">{c.country}</td>
+                    <td>{c.requests.toLocaleString()}</td>
+                    <td>{cf.totals!.requests
+                      ? `${Math.round((c.requests / cf.totals!.requests) * 100)}%`
+                      : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
+        </>
+      ) : null}
+
       <p className="admin-note">
         No address, user agent or account is stored with any of this. A visitor
         is a keyed hash that includes the calendar day, so the same person is
         one visitor today and an unrelated one tomorrow — which is why the dates
         above are days rather than times, and why visitor counts are never added
-        across them. Rows are deleted after {summary.retention_days} days.
+        across them. Rows are deleted after {summary.retention_days} days. The
+        Cloudflare figures are read from an account that already has them and
+        add nothing to what is stored here.
       </p>
     </>
   )

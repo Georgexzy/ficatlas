@@ -221,6 +221,12 @@ services:
       retries: 3
       start_period: 90s
     environment:
+      # Read-only edge analytics for the admin traffic page: the beacon there
+      # cannot see crawlers, because crawlers do not run JavaScript. Optional --
+      # unset, the panel says it is not connected. NOT the tunnel token; needs
+      # its own token with Zone > Analytics > Read. See .env.example.
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
       # See backend/ratelimit.py — marks our own SSR traffic so it is not
       # counted as one very busy client. Same value in both services.
       INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
