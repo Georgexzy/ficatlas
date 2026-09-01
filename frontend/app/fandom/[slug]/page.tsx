@@ -106,6 +106,7 @@ export default async function FandomHub(
       {/* Not current="browse": that suppresses the link, and from a single
           fandom the index of all of them is somewhere you actually want to go. */}
       <SiteHeader />
+      <main id="main">
       <nav className="hub__crumbs" aria-label="Breadcrumb">
         <Link href="/fandoms">All fandoms</Link>
       </nav>
@@ -226,6 +227,7 @@ export default async function FandomHub(
         FicAtlas indexes what these archives publish and links you back to them.
         Authors can <Link href="/permissions">manage how their work appears here</Link>.
       </p>
+      </main>
     </div>
   )
 }
