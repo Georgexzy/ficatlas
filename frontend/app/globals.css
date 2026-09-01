@@ -3543,6 +3543,15 @@ body.is-resizing * { cursor: col-resize !important; }
 .badge--series:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 
 .series-page__by { font-size: 13px; color: var(--text-dim); margin: -14px 0 14px; }
+/* "We do not have all of this series." Sits with the provenance note above it
+   and is deliberately styled the same way: both are the page admitting the
+   limits of what it knows, and they should read as one voice rather than as a
+   note and a warning. */
+.series-page__note {
+  margin: 0 0 14px; padding: 8px 12px; font-size: 12.5px; line-height: 1.5;
+  color: var(--text-dim); border-left: 3px solid var(--border);
+  background: var(--surface-2, transparent);
+}
 .series-page__source {
   font-size: 12.5px; line-height: 1.6; color: var(--text-dim);
   margin: 0 0 22px; padding: 9px 12px; border-radius: 8px;
@@ -3697,6 +3706,13 @@ body.is-resizing * { cursor: col-resize !important; }
 .admin-tile__label {
   font-size: 11px; color: var(--text-dim); letter-spacing: 0.02em;
 }
+/* The context under a tile: which day a peak was, what a total is made of. A
+   number on its own is a trivium; the same number with its date is something
+   you can line up against whatever you did that week. */
+.admin-tile__sub {
+  font-size: 10.5px; color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
 
 .admin-site { margin: 16px 0 4px; }
 .admin-site__name {
@@ -3774,6 +3790,22 @@ body.is-resizing * { cursor: col-resize !important; }
    A day is one bar. Deliberately not a line chart: the series is short, often
    has gaps (a day with no traffic has no row at all), and a line drawn through
    a gap invents days that were never recorded. */
+.traffic-range {
+  margin: 0 0 16px; font-size: 12.5px; color: var(--text-dim);
+  display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline;
+}
+.traffic-range__sub { color: var(--text-faint); font-size: 11px; }
+
+.traffic-legend {
+  float: right; font-size: 10.5px; font-weight: 400;
+  color: var(--text-faint); display: inline-flex; align-items: center; gap: 5px;
+}
+.traffic-legend__key {
+  width: 9px; height: 9px; border-radius: 2px; display: inline-block;
+}
+.traffic-legend__key--views { background: color-mix(in srgb, var(--accent) 60%, transparent); }
+.traffic-legend__key--searches { background: color-mix(in srgb, var(--accent) 95%, black 25%); }
+
 .traffic-days {
   display: flex; align-items: flex-end; gap: 3px;
   height: 120px; margin: 0 0 20px; padding: 0 0 18px;
@@ -3784,20 +3816,34 @@ body.is-resizing * { cursor: col-resize !important; }
   display: flex; flex-direction: column; justify-content: flex-end;
   align-items: center; position: relative;
 }
+/* Views and searches sit side by side in the same column, sharing one scale so
+   they can be compared with each other. A day with NOTHING draws no bar at all
+   rather than a minimum-height stub — an empty day has to look empty, which is
+   the entire reason the series is zero-filled. */
+.traffic-day__bars {
+  width: 100%; height: 100%; display: flex; align-items: flex-end;
+  justify-content: center; gap: 1px;
+}
 .traffic-day__bar {
-  width: 100%; border-radius: 3px 3px 0 0;
+  flex: 1 1 0; border-radius: 3px 3px 0 0;
   background: color-mix(in srgb, var(--accent) 60%, transparent);
   /* A day with views but a tiny share of the peak still has to be visible, or
      the chart reads as "nothing happened" on every day but the best one. */
   min-height: 2px;
 }
+.traffic-day__bar--searches {
+  background: color-mix(in srgb, var(--accent) 95%, black 25%);
+}
 .traffic-day__label {
   position: absolute; bottom: -16px; font-size: 9px; color: var(--text-faint);
   white-space: nowrap; font-variant-numeric: tabular-nums;
 }
-/* Past a fortnight the labels collide, so they go and the tooltip carries the
-   date instead. */
-.traffic-days > :nth-child(n+15) .traffic-day__label { display: none; }
+/* Which labels get drawn is decided in TrafficPanel (roughly eight across the
+   range, always including the most recent day). It used to be this rule:
+   `:nth-child(n+15) .traffic-day__label { display: none }` — which did not thin
+   the labels, it truncated them, so a 30-day chart was labelled for a fortnight
+   and then simply stopped. Every bar still carries the full date in its
+   tooltip. */
 
 .traffic-table {
   width: 100%; border-collapse: collapse; margin: 0 0 22px;
@@ -3824,6 +3870,9 @@ body.is-resizing * { cursor: col-resize !important; }
 /* The raw path under a resolved title. Present because the title is a lookup
    and the path is the fact — but demoted, since the whole point of resolving it
    is that the uuid is not what you are reading the report for. */
+.traffic-table__ago {
+  display: block; color: var(--text-faint); font-size: 10px; margin-top: 1px;
+}
 .traffic-table__path {
   display: block; color: var(--text-faint); font-size: 10.5px;
   margin-top: 1px; word-break: break-all;

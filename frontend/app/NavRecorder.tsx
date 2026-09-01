@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { usePathname } from "next/navigation"
+import { usePathname, useSearchParams } from "next/navigation"
 import { recordPath } from "@/lib/navStack"
 
 // Writes down every page this tab visits, so "Back" can mean something — and
@@ -20,13 +20,26 @@ import { recordPath } from "@/lib/navStack"
 // no user agent, no account.
 export default function NavRecorder() {
   const pathname = usePathname()
+  // The QUERY matters to the back stack and to nothing else here.
+  //
+  // usePathname() returns the path without it, so a search — which lives
+  // entirely in the query, `/?q=harry&page=3` — was recorded as bare `/`. That
+  // is what made "Back to search" on a story page go to the HOME PAGE instead:
+  // BackLink asks navStack where you came from, navStack said "/", and the
+  // query and the page number you were on had never been written down.
+  const searchParams = useSearchParams()
   // Guards the double-invoked effect in development's StrictMode, and a
   // re-render that does not actually change the path, from counting twice.
   const sent = useRef<string | null>(null)
 
   useEffect(() => {
     if (!pathname) return
-    recordPath(pathname)
+    // Full URL for the back stack, so returning to a search returns to THAT
+    // search — same filters, same page. navStack.isWithin() strips the query
+    // before comparing, so a story page is still recognised as "inside" itself
+    // regardless of what is recorded here.
+    const qs = searchParams?.toString() ?? ""
+    recordPath(qs ? `${pathname}?${qs}` : pathname)
 
     // Honour Do Not Track. The numbers this feeds are for the operator's own
     // curiosity, which does not outrank somebody having said no.
@@ -44,6 +57,12 @@ export default function NavRecorder() {
     sent.current = pathname
 
     const fd = new FormData()
+    // Deliberately the bare path, NOT the full URL. The traffic table is a
+    // count of pages viewed, and putting the query string in it would start
+    // recording what individual people searched for against a visitor hash —
+    // a different and much more sensitive thing than this module collects.
+    // Searches are already counted separately, without a visitor. See
+    // backend/tracking.py.
     fd.append("path", pathname)
     // Only an EXTERNAL referrer, and only once per page load.
     //
@@ -68,7 +87,7 @@ export default function NavRecorder() {
     // analytics — offline, this simply does not happen.
     fetch("/api/traffic/hit", { method: "POST", body: fd, keepalive: true })
       .catch(() => {})
-  }, [pathname])
+  }, [pathname, searchParams])
 
   return null
 }

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next"
 import { AuthProvider } from "@/lib/auth"
 import ServiceWorkerRegistration from "./ServiceWorkerRegistration"
+import { Suspense } from "react"
 import NavRecorder from "./NavRecorder"
 import SiteFooter from "./SiteFooter"
 import PreviewBanner from "./PreviewBanner"
@@ -138,7 +139,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <ServiceWorkerRegistration />
-        <NavRecorder />
+        {/* Suspense because NavRecorder reads useSearchParams(), and a
+            component that does cannot be statically prerendered — without this
+            every static page (/about, /permissions, /takedown …) fails the
+            build with "useSearchParams() should be wrapped in a suspense
+            boundary". It renders nothing, so the boundary needs no fallback:
+            the pages prerender as before and the recorder hydrates after. */}
+        <Suspense fallback={null}>
+          <NavRecorder />
+        </Suspense>
         <AuthProvider>
           <HealthBanner />
           <PreviewBanner />

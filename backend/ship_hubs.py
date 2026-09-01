@@ -75,12 +75,29 @@ WORKS_PER_SITE = 50
 #     >=  500 works   3,256 pairings
 #     >= 1000 works   1,451 pairings
 #
-# 500 keeps the new crawlable surface to roughly the size of the existing fandom
-# set (5,025) rather than doubling it in one step, and every page it produces
-# has enough works behind it to be worth landing on. It is a dial, not a law:
-# lowering it is safe once the hubs are being crawled at all, which is currently
-# unknown.
-MIN_WORKS_FOR_HUB = 500
+# 500 kept the new crawlable surface to roughly the size of the existing fandom
+# set (5,025) rather than doubling it in one step. The note that used to sit here
+# said this was "a dial, not a law: lowering it is safe once the hubs are being
+# crawled at all, which is currently unknown."
+#
+# It is no longer unknown, so the dial has moved to 200. The evidence, from this
+# site's own traffic table:
+#
+#   * search engines are crawling. Bot hits per day went 1 (24 Aug) -> 39 -> 126
+#     (26 Aug), after the hub URLs were submitted through IndexNow.
+#   * ship hubs are what RANKS. Of the organic referrals recorded, five of seven
+#     Google landings were /ship/ pages and one Yandex landing was /fandom/ —
+#     no other page type has brought a visitor in.
+#   * and they rank in the LONG TAIL, not the famous fandoms: Papa Emeritus
+#     III/Reader, Kim Seokjin/Park Jimin, Charlie Magne/Vaggie, Kim
+#     Seungmin/Yang Jeongin. Exactly where a cross-archive index has something
+#     to say and AO3's own tag pages compete least.
+#
+# 200 adds ~3,965 pairings to the ~2,768 already over 500. It is deliberately not
+# 100 (a further 5,740) — one measured step, so the effect on crawl rate and
+# ranking can be read before taking another. A pairing with 200 works still fills
+# the page, which caps at WORKS_PER_SITE per archive, so nothing thin is created.
+MIN_WORKS_FOR_HUB = 200
 
 # Fandom names for a pairing, keyed by slug.
 #
