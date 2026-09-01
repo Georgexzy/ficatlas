@@ -285,18 +285,26 @@ def _both_orders(term: str) -> list[str]:
 # 595 rows is nothing to hold. One query per TTL replaces both problems.
 _ALIAS_TTL = float(os.getenv("SHIP_ALIAS_CACHE_SEC", "600"))
 _alias_cache: dict[str, str] = {}
-_alias_loaded_at = 0.0
+# A separate sentinel, not `_alias_cache` truthiness: an EMPTY table is a
+# perfectly good answer, and testing the dict meant a successful load of zero
+# rows never counted as loaded. The table is empty for the first 30 minutes
+# after any deploy (SHIP_ALIAS_START_DELAY_SEC), so that put a query on the
+# hottest path of every free-text search for as long as it stayed empty.
+_alias_loaded_at: float | None = None
 _alias_lock = threading.Lock()
+
+
+def _fresh(loaded_at) -> bool:
+    return loaded_at is not None and time.monotonic() - loaded_at < _ALIAS_TTL
 
 
 def _alias_table(db) -> dict[str, str]:
     """nickname -> canonical pairing, reloaded every _ALIAS_TTL seconds."""
     global _alias_cache, _alias_loaded_at
-    now = time.monotonic()
-    if _alias_cache and now - _alias_loaded_at < _ALIAS_TTL:
+    if _fresh(_alias_loaded_at):
         return _alias_cache
     with _alias_lock:
-        if _alias_cache and time.monotonic() - _alias_loaded_at < _ALIAS_TTL:
+        if _fresh(_alias_loaded_at):
             return _alias_cache
         try:
             rows = db.execute(sql_text(
@@ -304,8 +312,12 @@ def _alias_table(db) -> dict[str, str]:
             _alias_cache = {a: r for a, r in rows}
             _alias_loaded_at = time.monotonic()
         except Exception:
-            # Table not built yet, or unavailable. Keep whatever we have and
-            # retry on the next request rather than caching the failure.
+            # This runs on the REQUEST'S session, which search() is about to use
+            # for the real query. Swallowing the error without rolling back
+            # leaves the transaction aborted, so the next statement raises
+            # InFailedSqlTransaction and the whole search 500s — naming neither
+            # this function nor the thing that actually failed.
+            db.rollback()
             log.debug("ship alias table unavailable")
     return _alias_cache
 
@@ -402,6 +414,9 @@ def _pair_lookup(db, a: str, b: str) -> str:
         row = db.execute(_PAIR_SQL, {"a": f"%{a}%", "b": f"%{b}%"}).fetchone()
         found = row[0] if row else ""
     except Exception:
+        # Roll back for the same reason as _alias_table: this is the request's
+        # own session and search() has not run its real query yet.
+        db.rollback()
         return ""       # do not cache a failure as "no such pairing"
     if len(_pair_cache) > 4096:
         _pair_cache.clear()

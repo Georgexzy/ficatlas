@@ -63,3 +63,16 @@ def test_complete_defaults_to_false():
     import inspect
     sig = inspect.signature(ao3_series_fill.fill_one)
     assert sig.parameters["complete"].default is False
+
+
+def test_every_outcome_records_an_attempt():
+    """The queue orders by most-missing and is deterministic, so a series that
+    cannot be completed sorts to the head forever unless the attempt is written
+    down. The worst current targets all need more works than the page cap can
+    fetch, so without this the loop never reaches the backlog at all."""
+    import inspect
+    src = inspect.getsource(ao3_series_fill.run)
+    # failure, empty listing and success must each record
+    assert src.count("record_attempt") >= 3
+    assert "series_fill_log" in inspect.getsource(ao3_series_fill.record_attempt)
+    assert "attempted_at" in inspect.getsource(ao3_series_fill.incomplete_series)

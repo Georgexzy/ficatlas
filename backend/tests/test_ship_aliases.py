@@ -146,3 +146,64 @@ def test_a_real_pairing_still_resolves(pair):
     result, asked = pair("Bts jin and jimin")
     assert result == ("Some Character/Another Character", "Bts")
     assert asked == [("jin", "jimin")]
+
+
+# ── the cache, which is on the request's own session ──────────────────────────
+
+class RecordingDB:
+    """Counts queries and records whether it was rolled back."""
+
+    def __init__(self, rows=(), fail=False):
+        self.rows, self.fail = rows, fail
+        self.queries = 0
+        self.rolled_back = False
+
+    def execute(self, *a, **k):
+        self.queries += 1
+        if self.fail:
+            raise RuntimeError("connection blip")
+        return self
+
+    def fetchall(self):
+        return list(self.rows)
+
+    def fetchone(self):
+        return None
+
+    def rollback(self):
+        self.rolled_back = True
+
+
+def _reset_alias_cache():
+    from api import search as m
+    m._alias_cache = {}
+    m._alias_loaded_at = None
+
+
+def test_an_empty_table_is_still_a_loaded_table():
+    """An empty dict is falsy, and testing truthiness put a query on the hottest
+    path of every free-text search for the 30 minutes after each deploy."""
+    from api import search as m
+    _reset_alias_cache()
+    db = RecordingDB(rows=[])
+    m._alias_table(db)
+    m._alias_table(db)
+    m._alias_table(db)
+    assert db.queries == 1
+    _reset_alias_cache()
+
+
+def test_a_failed_lookup_rolls_back_the_request_session():
+    """search() runs its real query on this same session afterwards. Swallowing
+    the error without a rollback leaves the transaction aborted, so the next
+    statement raises InFailedSqlTransaction and the whole search 500s."""
+    from api import search as m
+    _reset_alias_cache()
+    db = RecordingDB(fail=True)
+    assert m._alias_table(db) == {}
+    assert db.rolled_back
+
+    db2 = RecordingDB(fail=True)
+    assert m._pair_lookup(db2, "jin", "jimin") == ""
+    assert db2.rolled_back
+    _reset_alias_cache()

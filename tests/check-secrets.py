@@ -61,8 +61,14 @@ ALLOWED = [
     # Instructions telling a reader to substitute their own password, and the
     # note recording which literal was removed from the tree and why.
     ("CLAUDE.md", "<pw>"),
-    (".env.example", ""),
-    ("IMPROVEMENTS.md", ""),
+    # Narrow, not blanket. An empty key means "matches everything", which for
+    # IMPROVEMENTS.md exempted the one file most likely to have a real token
+    # pasted into it while someone documents an incident -- the exact accident
+    # this exists to catch.
+    (".env.example", "database URL with a password"),
+    (".env.example", "password= literal"),
+    ("IMPROVEMENTS.md", "hardcodes"),
+    ("IMPROVEMENTS.md", "password="),
 ]
 
 RULES = [

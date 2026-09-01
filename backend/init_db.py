@@ -866,6 +866,21 @@ CREATE INDEX IF NOT EXISTS ix_ship_hubs_count ON ship_hubs (work_count DESC);
 -- Ship nicknames mined from the index, so free text can resolve "wolfstar" to
 -- the pairing the archives file it under. Rebuilt whole by ship_aliases.py --
 -- nothing here is authored, so there is nothing to preserve across a rebuild.
+-- One row per series the fill loop has tried, whatever the outcome.
+--
+-- Without it `incomplete_series` re-ranked the same handful every cycle: the
+-- ordering favours the series missing the most works, and the worst of those
+-- are larger than the page cap can ever fetch, so they could never stop being
+-- the worst. The loop burned AO3 requests on five series indefinitely and
+-- never reached the 42,563 it exists for.
+CREATE TABLE IF NOT EXISTS series_fill_log (
+    series_id    UUID PRIMARY KEY,
+    attempted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    complete     BOOLEAN NOT NULL DEFAULT false,
+    listed       INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_series_fill_log_attempted ON series_fill_log (attempted_at);
+
 CREATE TABLE IF NOT EXISTS ship_aliases (
     alias        TEXT PRIMARY KEY,
     relationship TEXT NOT NULL,
