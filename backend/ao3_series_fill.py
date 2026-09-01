@@ -75,12 +75,20 @@ def incomplete_series(db, limit: int) -> list[tuple[str, str, str | None]]:
     return [(str(r[0]), r[1], r[2]) for r in rows]
 
 
-async def fetch_series_works(ao3_id: str) -> list[dict]:
-    """Every work AO3 lists for a series, in the order it lists them.
+async def fetch_series_works(ao3_id: str) -> tuple[list[dict], bool]:
+    """Every work AO3 lists for a series -> (entries, complete).
 
     That order IS the position: AO3 renders a series in the author's sequence, so
     the nth blurb is part n. Taking it from the listing rather than from each work
     page is what makes this one request instead of twenty.
+
+    `complete` says whether the listing was walked to its end. It matters
+    because the caller renumbers everything past the last entry it saw: a 525
+    or a rate-limit on page 2 of a 60-work series used to look exactly like a
+    complete 20-work series, and the sweep would then rewrite the author's own
+    positions for works 21..60 into publication order. That is unrecoverable —
+    the stated positions are gone — and one network blip was enough to cause
+    it.
     """
     import httpx
     from live_fetch.ao3_feeds import _get_with_fallback, HEADERS, AO3_TIMEOUT
@@ -95,24 +103,27 @@ async def fetch_series_works(ao3_id: str) -> list[dict]:
             path = f"/series/{bare}?page={page}"
             r = await _get_with_fallback(client, path)
             if r is None or r.status_code != 200:
-                break
+                return out, False       # fetch failed part-way: not complete
             # parse_works_page returns (entries, has_next) — NOT a list. Treating
             # it as one silently "found" 2 works in every series, because that is
             # the length of a 2-tuple, and the numbers looked plausible enough to
             # nearly ship.
             entries, has_next = parse_works_page(r.text, page=page)
             if not entries:
-                break
+                return out, False
             out.extend(entries)
             # Otwarchive's own next-page marker, which is what the scraper uses;
             # a "fewer than 20 means last page" guess is wrong for a series whose
             # final page happens to hold exactly 20.
             if not has_next:
-                break
-    return out
+                return out, True
+    # Ran out of page budget with more to fetch. The works past the cap are
+    # real and correctly positioned; saying "complete" here would renumber them.
+    return out, False
 
 
-def fill_one(db, series_id: str, ao3_id: str, entries: list[dict]) -> tuple[int, int]:
+def fill_one(db, series_id: str, ao3_id: str, entries: list[dict],
+             complete: bool = False) -> tuple[int, int]:
     """Index any works we lack and record their positions. -> (indexed, linked)"""
     from live_fetch.persist import persist_live_results
     import ao3_series
@@ -151,6 +162,11 @@ def fill_one(db, series_id: str, ao3_id: str, entries: list[dict]) -> tuple[int,
     # genuinely associated with the series, we simply no longer know where. An
     # order derived from publication date beats leaving a year in the list, and
     # beats dropping a work the reader might want.
+    # ONLY when the listing was walked to its end. Everything below rewrites
+    # positions past `maxpos`, and a short listing makes `maxpos` a lie.
+    if not complete:
+        return (indexed, linked)
+
     db.execute(sql_text("""
         WITH stale AS (
             SELECT sw.story_id,
@@ -178,7 +194,7 @@ async def run(limit: int = 50, dry_run: bool = False) -> dict:
     stats = {"series": 0, "indexed": 0, "linked": 0, "empty": 0}
     for series_id, ao3_id, name in targets:
         try:
-            entries = await fetch_series_works(ao3_id)
+            entries, complete = await fetch_series_works(ao3_id)
         except Exception as e:
             log.warning("series %s fetch failed: %s: %s", ao3_id, type(e).__name__, e)
             continue
@@ -191,7 +207,7 @@ async def run(limit: int = 50, dry_run: bool = False) -> dict:
             stats["series"] += 1
             continue
         with db_session() as db:
-            ix, lk = fill_one(db, series_id, ao3_id, entries)
+            ix, lk = fill_one(db, series_id, ao3_id, entries, complete)
         stats["series"] += 1
         stats["indexed"] += ix
         stats["linked"] += lk
