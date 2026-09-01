@@ -164,13 +164,26 @@ _writes_lock = threading.Lock()
 
 def shared_get(db, key: str) -> Optional[str]:
     """The cached JSON body, or None. Never raises."""
+    return (shared_get_with_ttl(db, key) or (None, 0))[0]
+
+
+def shared_get_with_ttl(db, key: str) -> Optional[tuple[str, int]]:
+    """The cached body AND how long it has left, or None.
+
+    The remaining life matters to the caller because it is what the response
+    should advertise. Answering a cache hit with the floor TTL throws away the
+    fact that the underlying search was expensive -- and popular searches are
+    served from cache almost every time, so the expensive ones would advertise
+    the floor permanently and the edge would re-ask every two minutes.
+    """
     try:
         from sqlalchemy import text
         row = db.execute(text(
-            "SELECT payload FROM search_cache_entries "
+            "SELECT payload, GREATEST(0, round(extract(epoch from (expires_at - now()))))::int "
+            "  FROM search_cache_entries "
             " WHERE key = :k AND expires_at > now()"
         ), {"k": f"{SCHEMA_VERSION}|{key}"}).first()
-        return row[0] if row else None
+        return (row[0], row[1]) if row else None
     except Exception:
         # Rolled back so the caller's session is still usable for the real
         # query. Without this a cache miss caused by a broken table would
