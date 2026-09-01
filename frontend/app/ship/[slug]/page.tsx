@@ -122,6 +122,7 @@ export default async function ShipHub(
   return (
     <div className="hub-page hub">
       <SiteHeader />
+      <main id="main">
       <nav className="hub__crumbs" aria-label="Breadcrumb">
         <Link href="/ships">All pairings</Link>
       </nav>
@@ -241,6 +242,7 @@ export default async function ShipHub(
         FicAtlas indexes what these archives publish and links you back to them.
         Authors can <Link href="/permissions">manage how their work appears here</Link>.
       </p>
+      </main>
     </div>
   )
 }

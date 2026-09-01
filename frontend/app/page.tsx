@@ -30,6 +30,22 @@ import { useAuth } from "@/lib/auth"
 // that produced it.
 let lastSearchCache: { url: string; data: SearchResponse } | null = null
 
+// Results fetched before they were asked for.
+//
+// Pagination ran a full round trip on click, and on this index a search is not
+// cheap -- so "Next" meant watching a spinner every time. Prefetching on HOVER
+// and FOCUS rather than eagerly is the whole trick: an eager prefetch of every
+// next page would double the query load on a home server for pages most readers
+// never open, while a reader who is about to click has already moved the pointer
+// or tabbed to the button. By the time the click lands the request is usually
+// finished, and doSearch below serves it from here.
+//
+// Keyed by the full URL, like lastSearchCache, so a different filter combination
+// can never be served a neighbouring page's results. Capped, because a reader
+// paging through a long result set would otherwise accumulate every page.
+const prefetched = new Map<string, SearchResponse>()
+const PREFETCH_MAX = 8
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function csv(s?: string): string[] {
   return s ? s.split(",").map(x => x.trim()).filter(Boolean) : []
@@ -1351,6 +1367,14 @@ function SearchPageInner() {
     // results immediately instead of re-fetching. Keyed on the exact URL, so a
     // facet link (different URL) still runs a fresh search. The cache is only
     // written after a fetch resolves, so nothing is served before it exists.
+    const pre = prefetched.get(rawParams.toString())
+    if (pre) {
+      setResults(pre)
+      setParsedTokens((pre as any).parsed_tokens ?? [])
+      setLoading(false)
+      setAppliedSig(filterSig)
+      return
+    }
     if (lastSearchCache && lastSearchCache.url === rawParams.toString()) {
       setResults(lastSearchCache.data)
       setParsedTokens((lastSearchCache.data as any).parsed_tokens ?? [])
@@ -1804,7 +1828,13 @@ function SearchPageInner() {
       // been merged into the response. So the retry could not fix anything, and
       // it doubled the load in precisely the circumstance where the index was
       // already struggling — every user's every failed search became two.
-      const data = await searchStories({ ...p, live: true } as any, { signal: ctl.signal })
+      // A page the reader hovered before clicking is already here. Removed as it
+      // is used: holding it would serve a stale set the next time the same URL
+      // is visited, which is what lastSearchCache is for and what it bounds.
+      const waiting = prefetched.get(qs.toString())
+      if (waiting) prefetched.delete(qs.toString())
+      const data = waiting
+        ?? await searchStories({ ...p, live: true } as any, { signal: ctl.signal })
       if (seq !== searchSeqRef.current) return   // a newer search superseded this one
       setResults(data)
       setParsedTokens((data as any).parsed_tokens ?? [])
@@ -1838,6 +1868,39 @@ function SearchPageInner() {
       if (seq === searchSeqRef.current) setLoading(false)
     }
   }, [buildParams, page, pathname, router, query, sites, refreshing, filterSig])
+
+
+  // Fetch a page the reader has not asked for yet, on hover or focus.
+  //
+  // Never eagerly: an automatic prefetch of every next page would double the
+  // query load on this index for pages most readers never open, and a search
+  // here is not cheap. Hover and keyboard focus are the cheapest available
+  // signals of intent, and they arrive far enough ahead of the click to cover
+  // most of the wait.
+  //
+  // Deliberately quiet. It sets no loading state, shows no error, and never
+  // touches the results on screen -- if it fails, the click that follows simply
+  // does what it always did.
+  const prefetchPage = useCallback((target: number) => {
+    if (target < 1) return
+    const p = buildParams(target)
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(p)) {
+      if (v === undefined || v === null || v === "") continue
+      if (URL_DEFAULTS[k] === String(v)) continue
+      qs.set(k, String(v))
+    }
+    const key = qs.toString()
+    if (prefetched.has(key)) return
+    // Reserve the key before awaiting, so hovering twice does not fetch twice.
+    prefetched.set(key, undefined as any)
+    searchStories({ ...p, live: false } as any)
+      .then(data => {
+        if (prefetched.size > PREFETCH_MAX) prefetched.clear()
+        prefetched.set(key, data)
+      })
+      .catch(() => { prefetched.delete(key) })
+  }, [buildParams])
 
   // Editing the bar edits the filters.
   //
@@ -2761,10 +2824,14 @@ function SearchPageInner() {
                 <div className="pagination">
                   <button disabled={page <= 1}
                     onClick={() => doSearch(false, Math.max(1, page - 1))}
+                    onMouseEnter={() => prefetchPage(page - 1)}
+                    onFocus={() => prefetchPage(page - 1)}
                     className="page-btn">← Previous</button>
                   <span className="pagination__info">Page {page} of {totalPages}</span>
                   <button disabled={page >= totalPages}
                     onClick={() => doSearch(false, page + 1)}
+                    onMouseEnter={() => prefetchPage(page + 1)}
+                    onFocus={() => prefetchPage(page + 1)}
                     className="page-btn">Next →</button>
                 </div>
               )}

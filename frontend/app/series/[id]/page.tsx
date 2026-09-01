@@ -115,7 +115,11 @@ export default async function SeriesPage(
         <script type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: escapeJsonLd(jsonLd) }} />
       )}
-      <SeriesClient params={params} />
+      {/* Same landmark as the story route: without it a screen-reader user has
+          no way past the header and the skip link has nothing to target. */}
+      <main id="main">
+        <SeriesClient params={params} />
+      </main>
     </>
   )
 }
