@@ -70,6 +70,17 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **Documents are edge-cacheable but browser-revalidated, and the two halves live
+  apart.** `next.config.ts` sends `public, max-age=0, must-revalidate,
+  s-maxage=900` on `/story|series|fandom|ship|s/*` only; a Cloudflare cache rule
+  (`deploy/cloudflare_cache_rule.py`) has to match the SAME paths with
+  `respect_origin`, or the caching silently does not happen. `max-age=0,
+  must-revalidate` is load-bearing — a bad CSP once went sticky in phone caches,
+  and only shared caches read `s-maxage`. Safe to share between visitors *only
+  because nothing under `frontend/app/` calls `cookies()`*: the server HTML is
+  identical for everyone and reader state arrives after hydration. Adding a
+  server component that reads the session would make these pages
+  un-cacheable — check before you do.
 - **No credential literals in tracked source, and a hook that enforces it.**
   `backend/db/dsn.py` composes the fallback DSN from `POSTGRES_*`; eighteen
   files used to carry `postgresql://ficatlas:<password>@…` instead. That was never
