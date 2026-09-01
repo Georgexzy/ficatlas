@@ -1227,6 +1227,46 @@ async def _ship_alias_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _stats_loop() -> None:
+    """Recompute the index totals on a timer, so no request ever has to.
+
+    /api/stats/totals is whole-table arithmetic -- count(*), sum(word_count),
+    filtered counts -- which no index can answer, so it reads all 20M rows.
+    Measured on the live database: 17.1s for the totals and 20.9s for the
+    per-site figures, and slow-query logging caught both running DURING a search
+    and competing with it for the same disk.
+
+    The API defended this well already (a 300s cache, an in-process flag and a
+    Postgres advisory lock, each added after a real outage) but the last step was
+    missing: something still had to pay for the scan, and it was whichever
+    request happened to arrive when the cache went stale. Since
+    /api/stats/totals is the second most requested path on the site, that was
+    often, and always at the worst moment.
+
+    So the worker pays instead. It is already the process that does slow whole-
+    table work, it has its own connection pool, and nothing is waiting on it.
+    The API adopts what this writes and scans only if these numbers stop moving
+    for STATS_TRUST_PERSISTED_SEC, which means this loop has died.
+    """
+    from api import stats
+
+    interval = _num("STATS_INTERVAL_MIN", 30) * 60
+    await asyncio.sleep(_num("STATS_START_DELAY_SEC", 120))
+    while True:
+        try:
+            # force=True: this is the one caller that SHOULD scan rather than
+            # adopt, or nothing would ever refresh the stored figures.
+            await asyncio.to_thread(stats._recompute_totals, True)
+            # Sites is a second whole-table pass (22-25s measured) with its own
+            # advisory lock, so it is refreshed here too rather than left to
+            # land on a visitor.
+            await asyncio.to_thread(stats._recompute_sites, True)
+            log.info("index totals and per-site figures recomputed")
+        except Exception as e:
+            log.warning(f"totals refresh failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _indexnow_loop() -> None:
     """Submit changed hub pages to the IndexNow engines.
 
@@ -1536,6 +1576,12 @@ async def main() -> None:
     if _flag("REBUILD_SHIP_ALIASES", "true"):
         tasks.append(asyncio.create_task(_ship_alias_loop()))
         log.info("ship alias mining enabled (nicknames resolve to pairings)")
+
+    # On by default. Without it the scan lands on a visitor's request instead,
+    # and it is a 17-21 second read of the whole table.
+    if _flag("REFRESH_STATS", "true"):
+        tasks.append(asyncio.create_task(_stats_loop()))
+        log.info("index totals refresh enabled (keeps the scan off the API)")
 
     if _flag("RUN_SERIES_FILL", "true"):
         tasks.append(asyncio.create_task(_series_fill_loop()))
