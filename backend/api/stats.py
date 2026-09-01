@@ -1,5 +1,6 @@
 """Stats endpoint — per-site counts, totals, last-updated info"""
 import logging
+import os
 import threading
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
@@ -48,9 +49,13 @@ def _persist_sites(payload: list) -> None:
     try:
         from db.session import db_session
         from api.settings import put_setting
-        import json
+        import json, time as _t
         with db_session() as db:
-            put_setting(db, _SITES_SETTING, json.dumps(payload))
+            # Wrapped so it can carry a wall-clock stamp, for the same reason
+            # the totals payload does: freshness has to be readable from another
+            # process, and the list itself has nowhere to put it.
+            put_setting(db, _SITES_SETTING,
+                        json.dumps({"sites": payload, "_computed_at": _t.time()}))
     except Exception:
         pass  # a cache that fails to persist is slow later, not broken now
 
@@ -62,7 +67,12 @@ def _load_persisted_sites() -> list | None:
         import json
         with db_session() as db:
             raw = get_setting(db, _SITES_SETTING)
-        return json.loads(raw) if raw else None
+        stored = json.loads(raw) if raw else None
+        # Older rows are a bare list; newer ones are wrapped with a stamp.
+        if isinstance(stored, dict):
+            _sites_persisted_at[0] = float(stored.get("_computed_at") or 0)
+            return stored.get("sites")
+        return stored
     except Exception:
         return None
 
@@ -93,11 +103,29 @@ _SITES_LOCK_KEY = 8_314_207_002
 _sites_refreshing = False
 _sites_refresh_lock = threading.Lock()
 
+# When the STORED sites figures were last computed, as wall-clock seconds. A
+# one-element list because it is written from inside a helper.
+_sites_persisted_at = [0.0]
 
-def _recompute_sites() -> None:
+
+def _recompute_sites(force: bool = False) -> None:
+    """Refresh the per-site figures. `force` is for the worker's timer.
+
+    Measured on the live database at 22-25 seconds: it is count(*) and
+    max(indexed_at) per site over 20M rows, which no index answers. Everything
+    except the worker adopts what the worker wrote -- see _stats_loop.
+    """
     global _sites_cache, _sites_cached_at, _sites_refreshing
     import time
     from db.session import db_session
+
+    if not force:
+        stored = _load_persisted_sites()
+        if stored is not None and (time.time() - _sites_persisted_at[0]
+                                   ) <= _TOTALS_TRUST_PERSISTED_SECONDS:
+            _sites_cache = stored
+            _sites_cached_at = time.monotonic()
+            return
 
     with _sites_refresh_lock:
         if _sites_refreshing:
@@ -204,9 +232,15 @@ def _persist_totals(payload: dict) -> None:
     try:
         from db.session import db_session
         from api.settings import put_setting
-        import json
+        import json, time as _t
         with db_session() as db:
-            put_setting(db, _TOTALS_SETTING, json.dumps(payload))
+            # Stamped with wall-clock time, not the monotonic clock the
+            # in-process cache uses: this value crosses processes and restarts,
+            # and monotonic means nothing on the other side of either. It is how
+            # another worker can tell that somebody has already paid for a scan
+            # recently, which is the whole point of writing it down.
+            put_setting(db, _TOTALS_SETTING,
+                        json.dumps({**payload, "_computed_at": _t.time()}))
     except Exception:
         pass  # a cache that fails to persist is slow later, not broken now
 
@@ -258,11 +292,52 @@ _totals_refresh_lock = threading.Lock()
 _TOTALS_LOCK_KEY = 8_314_207_001
 
 
-def _recompute_totals() -> None:
-    """Refresh the cached totals off the request path. At most one at a time."""
+# How stale a PERSISTED value may be before this process will pay for a scan
+# itself. Longer than the in-process TTL on purpose: the worker refreshes on a
+# timer (see _stats_loop in worker.py), so in normal running every API process
+# adopts what the worker computed and nothing scans on a request path at all.
+# If the worker is dead, this is the fallback that keeps the numbers moving.
+_TOTALS_TRUST_PERSISTED_SECONDS = float(os.getenv("STATS_TRUST_PERSISTED_SEC", "2700"))
+
+
+def _adopt_persisted_totals() -> bool:
+    """Take a recent stored value instead of recomputing. True if adopted.
+
+    The scan behind these figures reads the whole 20M-row table and was measured
+    at 17-21 seconds, running every time a process's 300-second cache went stale.
+    The advisory lock already stopped several running at once, but one every five
+    minutes still competes with searches for the same disk -- and /api/stats/totals
+    is the second most requested path on the site (24,914 requests at the edge in
+    a month), so it goes stale constantly.
+
+    Nothing about the numbers needs that. They are informational and move slowly,
+    and one process paying for them is enough for all of them.
+    """
+    global _totals_cache, _totals_cached_at
+    import time
+    stored = _load_persisted_totals()
+    if not stored:
+        return False
+    age = time.time() - float(stored.get("_computed_at") or 0)
+    if age > _TOTALS_TRUST_PERSISTED_SECONDS:
+        return False
+    _totals_cache = stored
+    _totals_cached_at = time.monotonic()
+    return True
+
+
+def _recompute_totals(force: bool = False) -> None:
+    """Refresh the cached totals off the request path. At most one at a time.
+
+    `force` is for the worker's timer, which is the thing that SHOULD scan.
+    Everything else adopts what it wrote.
+    """
     global _totals_cache, _totals_cached_at, _totals_refreshing
     import time
     from db.session import db_session
+
+    if not force and _adopt_persisted_totals():
+        return
 
     with _totals_refresh_lock:
         if _totals_refreshing:
