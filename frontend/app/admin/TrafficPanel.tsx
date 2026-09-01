@@ -80,18 +80,22 @@ function ago(iso: string): string {
   return `${days} days ago`
 }
 
-interface CfDay { day: string; requests: number; page_views: number; cached: number; uniques: number }
+interface CfDay { day: string; requests: number; bytes: number }
 interface Cloudflare {
   configured: boolean
   reason?: string
   missing?: string[]
   error?: string
-  detail?: string
   fix?: string
+  detail?: string
   days?: CfDay[]
-  totals?: { requests: number; page_views: number; cached: number; bytes: number; threats: number; uniques: number }
+  totals?: { requests: number; bytes: number; cache_hits: number
+             server_errors: number; client_errors: number }
   cache_ratio?: number | null
+  cache_breakdown?: { status: string; requests: number }[]
   countries?: { country: string; requests: number }[]
+  statuses?: { status: number; requests: number }[]
+  paths?: { path: string; requests: number }[]
 }
 
 // A change worth showing, or nothing. Percentages on tiny numbers are theatre:
@@ -104,6 +108,23 @@ function trend(now: number, before: number): string | undefined {
   const pct = Math.round(((now - before) / before) * 100)
   if (pct === 0) return `level with the previous ${"period"}`
   return `${pct > 0 ? "up" : "down"} ${Math.abs(pct)}% on ${before.toLocaleString()}`
+}
+
+const pct = (n: number, total: number) =>
+  total ? `${n * 100 / total < 0.1 ? "<0.1" : (n * 100 / total).toFixed(1)}%` : "—"
+
+// Cloudflare's cacheStatus values, in words. Only `hit` was actually answered
+// without asking this server; `dynamic` means the response was never eligible
+// for caching, which for HTML is the default until a cache rule says otherwise.
+const CACHE_WORDS: Record<string, string> = {
+  hit: "Answered from cache",
+  miss: "Cacheable, but not held yet",
+  dynamic: "Not cacheable",
+  bypass: "Cache deliberately skipped",
+  expired: "Held but stale, refetched",
+  revalidated: "Held, checked, still good",
+  none: "No caching applied",
+  unknown: "Unclassified",
 }
 
 const bytes = (n: number) => {
@@ -374,13 +395,13 @@ export default function TrafficPanel() {
       )}
 
       {/* The half of the traffic this page otherwise cannot see.
-          
+
           Everything above comes from a beacon the BROWSER sends, so it counts
           only pages a human's browser actually rendered — and crawlers do not
           run JavaScript. On a site whose growth depends on being indexed, "is
-          Google crawling us?" is therefore the one question the rest of this
-          page structurally cannot answer. Cloudflare already counts every
-          request at the edge because it is the thing serving them. */}
+          anything crawling us?" is the question the rest of this page
+          structurally cannot answer. Cloudflare already counts every request at
+          the edge because it is the thing serving them. */}
       <h2 className="admin-site__name">At the edge, from Cloudflare</h2>
       {!cf ? (
         <p className="loading">Asking Cloudflare…</p>
@@ -388,67 +409,103 @@ export default function TrafficPanel() {
         <p className="admin-note">
           Not connected — {cf.reason ?? "no credentials"}. Cloudflare counts every
           request that reaches the site, including the crawlers this page cannot
-          see. Set <code>CLOUDFLARE_API_TOKEN</code> (its own token, with{" "}
-          <strong>Zone → Analytics → Read</strong> — not the tunnel token) and{" "}
-          <code>CLOUDFLARE_ZONE_ID</code> in <code>.env</code>, then restart. It is
-          read-only and stores nothing new.
+          see. Set <code>FICATLAS_CF_API_TOKEN</code> and{" "}
+          <code>FICATLAS_CF_ZONE_ID</code> in <code>.env</code>, then restart.
+          Read-only; it stores nothing new.
         </p>
       ) : cf.error ? (
         <p className="admin-note admin-warn">
           {cf.error}. {cf.fix ?? cf.detail}
           {cf.fix && cf.detail && (
-            <span className="traffic-table__path"> Cloudflare said: {cf.detail}</span>
+            <span className="traffic-table__path">Cloudflare said: {cf.detail}</span>
           )}
         </p>
       ) : cf.totals ? (
         <>
           <div className="admin-tiles">
             <Tile label="Requests at the edge" value={cf.totals.requests}
-                  sub="pages, images, JSON and crawlers" />
-            <Tile label="Served from cache" value={cf.totals.cached}
-                  sub={cf.cache_ratio != null
-                    ? `${Math.round(cf.cache_ratio * 100)}% of all requests`
-                    : undefined} />
-            <Tile label="Unique visitors, busiest day" value={cf.totals.uniques}
-                  sub="Cloudflare's own count, not the beacon's" />
+                  sub="everything: pages, JSON, images, crawlers" />
+            <Tile label="Served from cache" value={cf.totals.cache_hits}
+                  display={cf.cache_ratio != null
+                    ? `${(cf.cache_ratio * 100).toFixed(1)}%`
+                    : "—"}
+                  sub={`${cf.totals.cache_hits.toLocaleString()} answered without asking this server`} />
             <Tile label="Bandwidth" value={cf.totals.bytes}
                   display={bytes(cf.totals.bytes)}
                   sub="served through Cloudflare" />
+            <Tile label="Failed requests" value={cf.totals.server_errors}
+                  sub={`${cf.totals.client_errors.toLocaleString()} were 4xx — not found, or refused`} />
           </div>
 
           {/* The gap IS the finding. These two numbers measure different
-              things and must never be added together — the useful signal is
-              one growing while the other does not. */}
+              things and must never be added together. */}
           <p className="admin-note">
-            Cloudflare saw{" "}
-            <strong>{cf.totals.requests.toLocaleString()} requests</strong> while the
-            beacon recorded <strong>{t.views.toLocaleString()} pageviews</strong>.
-            These count different things and do not add up: the first is every
-            file fetched by anyone including crawlers, the second is pages
-            rendered by a human&rsquo;s browser. A gap that grows while pageviews
-            stay flat is something crawling the site.
-            {cf.totals.threats > 0 && <>
-              {" "}Cloudflare blocked{" "}
-              <strong>{cf.totals.threats.toLocaleString()}</strong> requests it
-              judged malicious.
-            </>}
+            Cloudflare saw <strong>{cf.totals.requests.toLocaleString()} requests</strong>{" "}
+            while the beacon recorded <strong>{t.views.toLocaleString()} pageviews</strong>.
+            They count different things and do not add up: the first is every file
+            fetched by anyone including crawlers, the second is pages rendered by a
+            human&rsquo;s browser. A gap that grows while pageviews stay flat is
+            something crawling the site — which is what you want.
           </p>
 
+          {cf.cache_breakdown?.length ? (
+            <>
+              <h3 className="admin-subhead">How the edge answered</h3>
+              <table className="traffic-table">
+                <thead><tr><th>Cloudflare said</th><th>Requests</th><th>Share</th></tr></thead>
+                <tbody>
+                  {cf.cache_breakdown.map(c => (
+                    <tr key={c.status}>
+                      <td className="traffic-table__q">
+                        {CACHE_WORDS[c.status] ?? c.status}
+                        <span className="traffic-table__path">{c.status}</span>
+                      </td>
+                      <td>{c.requests.toLocaleString()}</td>
+                      <td>{pct(c.requests, cf.totals!.requests)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          ) : null}
+
+          {cf.paths?.length ? (
+            <>
+              {/* Crawler-visible, unlike the pageview table above. Story pages do
+                  not appear here however heavily they are crawled, because each
+                  one is a distinct path and this groups by exact path. */}
+              <h3 className="admin-subhead">Most-requested single paths</h3>
+              <table className="traffic-table">
+                <thead><tr><th>Path</th><th>Requests</th><th>Share</th></tr></thead>
+                <tbody>
+                  {cf.paths.map(p => (
+                    <tr key={p.path}>
+                      <td className="traffic-table__q">{p.path}</td>
+                      <td>{p.requests.toLocaleString()}</td>
+                      <td>{pct(p.requests, cf.totals!.requests)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          ) : null}
+
           {cf.countries?.length ? (
-            <table className="traffic-table">
-              <thead><tr><th>Country</th><th>Requests</th><th>Share</th></tr></thead>
-              <tbody>
-                {cf.countries.map(c => (
-                  <tr key={c.country}>
-                    <td className="traffic-table__q">{c.country}</td>
-                    <td>{c.requests.toLocaleString()}</td>
-                    <td>{cf.totals!.requests
-                      ? `${Math.round((c.requests / cf.totals!.requests) * 100)}%`
-                      : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <h3 className="admin-subhead">Where the requests came from</h3>
+              <table className="traffic-table">
+                <thead><tr><th>Country</th><th>Requests</th><th>Share</th></tr></thead>
+                <tbody>
+                  {cf.countries.map(c => (
+                    <tr key={c.country}>
+                      <td className="traffic-table__q">{c.country}</td>
+                      <td>{c.requests.toLocaleString()}</td>
+                      <td>{pct(c.requests, cf.totals!.requests)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           ) : null}
         </>
       ) : null}

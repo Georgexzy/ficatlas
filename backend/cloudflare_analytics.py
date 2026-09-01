@@ -46,11 +46,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 
 log = logging.getLogger("cloudflare_analytics")
 
 GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"
+ACCOUNTS_URL = "https://api.cloudflare.com/client/v4/accounts"
 
 # Cloudflare's daily rollups settle over minutes, not seconds, and the admin
 # page is refreshed by hand. A short cache turns a page reload into zero
@@ -66,32 +67,55 @@ TIMEOUT = float(os.getenv("CF_ANALYTICS_TIMEOUT_SEC", "8"))
 
 _lock = threading.Lock()
 _cache: dict[int, tuple[float, dict]] = {}
+_account_id: str | None = None
 
-# httpRequests1dGroups is the daily zone rollup and is available on every plan,
-# which matters: the adaptive datasets that carry a bot score are Bot Management
-# features and would make this work only on a paid plan. Bot classification is
-# therefore NOT attempted here -- see the module docstring for what is inferred
-# from the request/pageview gap instead, which is honest on any plan.
+# ACCOUNT-scoped rather than zone-scoped, which is not a stylistic choice.
+#
+# Cloudflare splits these into two separate permissions -- "Zone > Analytics >
+# Read" and the account-level one -- and a token can easily hold one without the
+# other. Measured on this installation: the zone dataset answered
+#
+#   Actor '...' does not have permission
+#   'com.cloudflare.api.account.zone.analytics.read' for zone ...
+#
+# while the identical question asked through `accounts(...)` with a zoneTag
+# filter returned data immediately. Asking the way the token can answer beats
+# telling the operator to go back to the dashboard.
+#
+# httpRequestsAdaptiveGroups also carries more than the daily rollup did:
+# cacheStatus, clientRequestPath and edgeResponseStatus are all here, and those
+# are the three that say something the site's own beacon structurally cannot --
+# what the edge served without asking us, what crawlers actually fetch, and
+# what proportion of it failed. It has no `uniq{uniques}`, so unique visitors
+# are simply not reported rather than being faked from something else.
 QUERY = """
-query FicAtlasTraffic($zone: String!, $since: Date!, $until: Date!) {
+query FicAtlasEdge($account: String!, $zone: String!, $since: Time!, $until: Time!) {
   viewer {
-    zones(filter: {zoneTag: $zone}) {
-      httpRequests1dGroups(
-        limit: 366
-        filter: {date_geq: $since, date_leq: $until}
-        orderBy: [date_ASC]
-      ) {
-        dimensions { date }
-        sum {
-          requests
-          pageViews
-          cachedRequests
-          bytes
-          threats
-          countryMap { clientCountryName requests }
-        }
-        uniq { uniques }
-      }
+    accounts(filter: {accountTag: $account}) {
+      daily: httpRequestsAdaptiveGroups(
+        limit: 400, orderBy: [date_ASC]
+        filter: {datetime_geq: $since, datetime_leq: $until, zoneTag: $zone}
+      ) { count dimensions { date } sum { edgeResponseBytes } }
+
+      cache: httpRequestsAdaptiveGroups(
+        limit: 20, orderBy: [count_DESC]
+        filter: {datetime_geq: $since, datetime_leq: $until, zoneTag: $zone}
+      ) { count dimensions { cacheStatus } }
+
+      countries: httpRequestsAdaptiveGroups(
+        limit: 12, orderBy: [count_DESC]
+        filter: {datetime_geq: $since, datetime_leq: $until, zoneTag: $zone}
+      ) { count dimensions { clientCountryName } }
+
+      statuses: httpRequestsAdaptiveGroups(
+        limit: 12, orderBy: [count_DESC]
+        filter: {datetime_geq: $since, datetime_leq: $until, zoneTag: $zone}
+      ) { count dimensions { edgeResponseStatus } }
+
+      paths: httpRequestsAdaptiveGroups(
+        limit: 15, orderBy: [count_DESC]
+        filter: {datetime_geq: $since, datetime_leq: $until, zoneTag: $zone}
+      ) { count dimensions { clientRequestPath } }
     }
   }
 }
@@ -115,6 +139,12 @@ def configured() -> bool:
     return not _missing()
 
 
+def _get(url: str, token: str) -> dict:
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
 def _post(token: str, payload: dict) -> dict:
     req = urllib.request.Request(
         GRAPHQL_URL,
@@ -125,6 +155,25 @@ def _post(token: str, payload: dict) -> dict:
     )
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def _account(token: str) -> str | None:
+    """The account the zone belongs to, discovered once and remembered.
+
+    Not configuration: asking for it costs one call and one fewer thing for an
+    operator to paste in wrongly.
+    """
+    global _account_id
+    if _account_id:
+        return _account_id
+    try:
+        body = _get(ACCOUNTS_URL, token)
+        results = body.get("result") or []
+        if results:
+            _account_id = results[0]["id"]
+    except Exception:
+        return None
+    return _account_id
 
 
 def fetch(days: int = 30) -> dict:
@@ -144,19 +193,28 @@ def fetch(days: int = 30) -> dict:
         if hit and now - hit[0] < CACHE_SECONDS:
             return hit[1]
 
-    until = date.today()
-    since = until - timedelta(days=days - 1)
+    token = os.getenv("CLOUDFLARE_API_TOKEN")
+    account = _account(token)
+    if not account:
+        return {"configured": True, "error": "The API token cannot list accounts",
+                "fix": "Give the token Account > Account Analytics > Read, or "
+                       "Zone > Analytics > Read, at dash.cloudflare.com > My "
+                       "Profile > API Tokens. Permissions replace rather than "
+                       "add, so tick it alongside anything else the token needs."}
+
+    until = datetime.utcnow().replace(microsecond=0)
+    since = (until - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0)
     try:
-        body = _post(os.getenv("CLOUDFLARE_API_TOKEN"), {
+        body = _post(token, {
             "query": QUERY,
-            "variables": {"zone": os.getenv("CLOUDFLARE_ZONE_ID"),
-                          "since": since.isoformat(), "until": until.isoformat()},
+            "variables": {"account": account, "zone": os.getenv("CLOUDFLARE_ZONE_ID"),
+                          "since": since.isoformat() + "Z",
+                          "until": until.isoformat() + "Z"},
         })
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300] if e.fp else ""
-        out = {"configured": True, "error": f"HTTP {e.code}", "detail": detail}
         log.warning("cloudflare analytics: HTTP %s", e.code)
-        return out
+        return {"configured": True, "error": f"HTTP {e.code}", "detail": detail}
     except Exception as e:
         # Includes the timeout. Named, because "no data" and "we gave up after
         # eight seconds" are different things to see on an admin page.
@@ -169,78 +227,73 @@ def fetch(days: int = 30) -> dict:
     if body.get("errors"):
         msg = "; ".join(str(e.get("message", e))[:200] for e in body["errors"][:3])
         log.warning("cloudflare analytics: %s", msg)
-        # The most likely failure by far, and Cloudflare states it as an actor
-        # id and a permission string that mean nothing to the person reading an
-        # admin page. It happens because token permissions REPLACE rather than
-        # add: granting a token Cache Rules Edit (to apply the caching rule in
-        # deploy/cloudflare_cache_rule.py) drops Analytics Read unless both are
-        # ticked, and the traffic page then goes blank with a sentence nobody
-        # can act on.
-        if "analytics.read" in msg or "analytics" in msg.lower():
+        if "analytics" in msg.lower() and "permission" in msg.lower():
             return {"configured": True,
                     "error": "The API token cannot read analytics",
-                    "fix": "Add Zone > Analytics > Read to the token at "
-                           "dash.cloudflare.com > My Profile > API Tokens. "
-                           "Permissions replace rather than add, so tick it "
-                           "alongside anything else the token needs.",
+                    "fix": "Add Account > Account Analytics > Read (or Zone > "
+                           "Analytics > Read) at dash.cloudflare.com > My "
+                           "Profile > API Tokens. Permissions replace rather "
+                           "than add, so tick it alongside anything else the "
+                           "token needs.",
                     "detail": msg}
         return {"configured": True, "error": "GraphQL error", "detail": msg}
 
     try:
-        zones = body["data"]["viewer"]["zones"]
+        accounts = body["data"]["viewer"]["accounts"]
     except (KeyError, TypeError):
         return {"configured": True, "error": "Unexpected response shape",
                 "detail": json.dumps(body)[:300]}
-    if not zones:
-        return {"configured": True, "error": "Zone not found",
-                "detail": "CLOUDFLARE_ZONE_ID does not match a zone this token can read"}
+    if not accounts:
+        return {"configured": True, "error": "No data for that zone",
+                "detail": "The token reached Cloudflare but the zone returned nothing"}
 
-    groups = zones[0].get("httpRequests1dGroups") or []
-    out = _shape(groups)
+    out = _shape(accounts[0])
     out["configured"] = True
     with _lock:
         _cache[days] = (time.monotonic(), out)
     return out
 
 
-def _shape(groups: list) -> dict:
-    days_out, countries = [], {}
-    totals = {"requests": 0, "page_views": 0, "cached": 0,
-              "bytes": 0, "threats": 0, "uniques": 0}
+def _rows(block, key):
+    return [(g["dimensions"][key], g["count"]) for g in (block or [])
+            if g.get("dimensions", {}).get(key) is not None]
 
-    for g in groups:
-        s = g.get("sum") or {}
-        u = g.get("uniq") or {}
-        day = (g.get("dimensions") or {}).get("date")
-        days_out.append({
-            "day": day,
-            "requests": s.get("requests", 0),
-            "page_views": s.get("pageViews", 0),
-            "cached": s.get("cachedRequests", 0),
-            "uniques": u.get("uniques", 0),
-        })
-        totals["requests"] += s.get("requests", 0) or 0
-        totals["page_views"] += s.get("pageViews", 0) or 0
-        totals["cached"] += s.get("cachedRequests", 0) or 0
-        totals["bytes"] += s.get("bytes", 0) or 0
-        totals["threats"] += s.get("threats", 0) or 0
-        # Uniques are per-day and do not add up across days, for the same reason
-        # visit_events' visitor hash does not: the same person on two days is
-        # two uniques. Summed here it would be a "visitors" figure that grows
-        # with the window rather than with the audience, so it is reported as a
-        # peak day instead.
-        totals["uniques"] = max(totals["uniques"], u.get("uniques", 0) or 0)
-        for c in (s.get("countryMap") or []):
-            name = c.get("clientCountryName") or "??"
-            countries[name] = countries.get(name, 0) + (c.get("requests") or 0)
 
-    top_countries = sorted(countries.items(), key=lambda kv: -kv[1])[:12]
-    cache_ratio = (totals["cached"] / totals["requests"]) if totals["requests"] else None
+def _shape(a: dict) -> dict:
+    daily = a.get("daily") or []
+    days_out = [{"day": g["dimensions"]["date"], "requests": g["count"],
+                 "bytes": (g.get("sum") or {}).get("edgeResponseBytes", 0)}
+                for g in daily]
+
+    requests = sum(g["count"] for g in daily)
+    total_bytes = sum((g.get("sum") or {}).get("edgeResponseBytes", 0) or 0 for g in daily)
+
+    # Cloudflare reports a cacheStatus per request: hit, miss, bypass, dynamic,
+    # expired and a few others. Only `hit` was actually answered without asking
+    # this server, which is the number worth showing -- lumping expired or
+    # revalidated in with it would flatter the figure.
+    cache = dict(_rows(a.get("cache"), "cacheStatus"))
+    hits = cache.get("hit", 0)
+
+    statuses = _rows(a.get("statuses"), "edgeResponseStatus")
+    errors = sum(n for code, n in statuses if isinstance(code, int) and code >= 500)
+    client_errors = sum(n for code, n in statuses if isinstance(code, int) and 400 <= code < 500)
 
     return {
         "days": days_out,
-        "totals": totals,
-        "busiest_uniques": totals["uniques"],
-        "cache_ratio": cache_ratio,
-        "countries": [{"country": c, "requests": n} for c, n in top_countries],
+        "totals": {
+            "requests": requests,
+            "bytes": total_bytes,
+            "cache_hits": hits,
+            "server_errors": errors,
+            "client_errors": client_errors,
+        },
+        "cache_ratio": (hits / requests) if requests else None,
+        "cache_breakdown": [{"status": k, "requests": v}
+                            for k, v in sorted(cache.items(), key=lambda kv: -kv[1])],
+        "countries": [{"country": c, "requests": n}
+                      for c, n in _rows(a.get("countries"), "clientCountryName")],
+        "statuses": [{"status": c, "requests": n} for c, n in statuses],
+        "paths": [{"path": p, "requests": n}
+                  for p, n in _rows(a.get("paths"), "clientRequestPath")],
     }
