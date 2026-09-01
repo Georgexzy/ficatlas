@@ -22,7 +22,8 @@ import os, sys, argparse, logging
 from datetime import datetime
 
 sys.path.insert(0, "/app")
-os.environ.setdefault("DATABASE_URL", "postgresql://ficatlas:ficatlas@db:5432/ficatlas")
+from db.dsn import default_database_url  # noqa: E402 — needs the sys.path above
+os.environ.setdefault("DATABASE_URL", default_database_url())
 
 from db.session import db_session
 from models.story import Story, Chapter, SiteEnum, RatingEnum, StatusEnum
@@ -53,8 +54,9 @@ def import_all(limit, include_hidden, include_corrupt, with_chapters):
     import psycopg2
     from psycopg2.extras import RealDictCursor
 
-    src = psycopg2.connect(host="db", port=5432, user="ficatlas",
-                            password="ficatlas", dbname=TEMP_DB)
+    # The scratch import database, not the index. Same server, so the same
+    # credentials — read from the environment rather than written here.
+    src = psycopg2.connect(dsn=default_database_url(dbname=TEMP_DB))
     cur = src.cursor(cursor_factory=RealDictCursor)
 
     log.info("Loading authors...")
