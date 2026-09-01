@@ -863,9 +863,6 @@ CREATE TABLE IF NOT EXISTS ship_hubs (
 );
 CREATE INDEX IF NOT EXISTS ix_ship_hubs_count ON ship_hubs (work_count DESC);
 
--- Ship nicknames mined from the index, so free text can resolve "wolfstar" to
--- the pairing the archives file it under. Rebuilt whole by ship_aliases.py --
--- nothing here is authored, so there is nothing to preserve across a rebuild.
 -- One row per series the fill loop has tried, whatever the outcome.
 --
 -- Without it `incomplete_series` re-ranked the same handful every cycle: the
@@ -881,6 +878,9 @@ CREATE TABLE IF NOT EXISTS series_fill_log (
 );
 CREATE INDEX IF NOT EXISTS ix_series_fill_log_attempted ON series_fill_log (attempted_at);
 
+-- Ship nicknames mined from the index, so free text can resolve "wolfstar" to
+-- the pairing the archives file it under. Rebuilt whole by ship_aliases.py --
+-- nothing here is authored, so there is nothing to preserve across a rebuild.
 CREATE TABLE IF NOT EXISTS ship_aliases (
     alias        TEXT PRIMARY KEY,
     relationship TEXT NOT NULL,

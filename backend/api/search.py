@@ -303,22 +303,27 @@ def _alias_table(db) -> dict[str, str]:
     global _alias_cache, _alias_loaded_at
     if _fresh(_alias_loaded_at):
         return _alias_cache
+    # The query runs OUTSIDE the lock. Holding it across a round trip means
+    # that when the TTL expires under load, every thread in the search
+    # threadpool queues behind one query rather than just one of them paying
+    # for it. A duplicated read on a 595-row table costs less than that.
+    try:
+        rows = db.execute(sql_text(
+            "SELECT alias, relationship FROM ship_aliases")).fetchall()
+        loaded = {a: r for a, r in rows}
+    except Exception:
+        # This runs on the REQUEST'S session, which search() is about to use for
+        # the real query. Swallowing the error without rolling back leaves the
+        # transaction aborted, so the next statement raises
+        # InFailedSqlTransaction and the whole search 500s — naming neither this
+        # function nor the thing that actually failed.
+        db.rollback()
+        log.debug("ship alias table unavailable")
+        return _alias_cache
+
     with _alias_lock:
-        if _fresh(_alias_loaded_at):
-            return _alias_cache
-        try:
-            rows = db.execute(sql_text(
-                "SELECT alias, relationship FROM ship_aliases")).fetchall()
-            _alias_cache = {a: r for a, r in rows}
-            _alias_loaded_at = time.monotonic()
-        except Exception:
-            # This runs on the REQUEST'S session, which search() is about to use
-            # for the real query. Swallowing the error without rolling back
-            # leaves the transaction aborted, so the next statement raises
-            # InFailedSqlTransaction and the whole search 500s — naming neither
-            # this function nor the thing that actually failed.
-            db.rollback()
-            log.debug("ship alias table unavailable")
+        _alias_cache = loaded
+        _alias_loaded_at = time.monotonic()
     return _alias_cache
 
 

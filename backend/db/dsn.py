@@ -20,15 +20,34 @@ whatever a stale default happens to still open.
 """
 
 import os
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 
 def default_database_url(host: str | None = None, dbname: str | None = None) -> str:
-    """Compose a DSN from the POSTGRES_* environment, with no password literal.
+    """A DSN with no password literal in this file.
+
+    `DATABASE_URL` first, with the database name swapped if one is asked for.
+    That is where the credentials actually live in this deployment: compose
+    sets DATABASE_URL on the backend and worker and sets POSTGRES_PASSWORD only
+    on the `db` service, so a process inside the stack has no POSTGRES_* at all.
+    Composing purely from those produced `postgresql://ficatlas@db/...` with no
+    password and broke the FictionAlley importer, which is the one caller that
+    asks for a DSN rather than just seeding the environment variable.
 
     `host` defaults to the compose service name; pass "localhost" for a process
-    that runs on the host rather than inside the stack.
+    that runs on the host rather than inside the stack. It applies only to the
+    POSTGRES_* path -- an explicit DATABASE_URL already names its own host.
     """
+    existing = os.getenv("DATABASE_URL")
+    if existing:
+        if not dbname:
+            return existing
+        try:
+            parts = urlsplit(existing)
+            return urlunsplit(parts._replace(path="/" + quote(dbname, safe="")))
+        except ValueError:
+            pass        # unparseable: fall through and compose one
+
     user = os.getenv("POSTGRES_USER", "ficatlas")
     password = os.getenv("POSTGRES_PASSWORD", "")
     host = host or os.getenv("POSTGRES_HOST", "db")
