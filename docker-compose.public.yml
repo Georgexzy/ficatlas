@@ -233,8 +233,8 @@ services:
       REQUIRE_LOGIN_TO_READ: "true"
       SIGNUP_MODE: ${SIGNUP_MODE:-invite}
       SIGNUP_CODE: ${SIGNUP_CODE:-}
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
-      CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
+      CLOUDFLARE_API_TOKEN: ${FICATLAS_CF_API_TOKEN:-}
+      CLOUDFLARE_ZONE_ID: ${FICATLAS_CF_ZONE_ID:-}
       INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
       # The scheduler belongs to the dev project's worker. Set explicitly rather
       # than left to a default, because two schedulers on one database is the
