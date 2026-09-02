@@ -124,8 +124,31 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   lowercases internally. Keep them aligned with `api/search.py` predicates.
 - README figures are checked by `python3 tests/check-readme.py` — run it after
   editing README numbers.
+- **robots.txt must have no blank line inside a user-agent group.** RFC 9309
+  (2022) ends a group at the next `User-agent:` line; the 1994 draft it replaced
+  ended it at a blank line, and parsers written to the older reading are still
+  common. A blank line sat directly under `User-agent: *`, so to any of them the
+  wildcard group produced **zero** rules — no `Disallow: /*?`, no private routes,
+  no `Crawl-delay`. Google, Bing and Amazon read it correctly throughout
+  (Amzn-SearchBot arrives once every 10.0s, pinned to the Crawl-delay), so
+  nothing looked wrong. Comments do the spacing instead; blank lines BETWEEN
+  groups are correct and required. `python3 tests/check-robots.py` enforces it
+  and re-parses the file with the strict parser to check the rules still land.
+  - `*` and `$` in a path are RFC 9309 extensions with no 1994 equivalent, so
+    `Disallow: /*?` cannot be made to work for a legacy parser however it is
+    written — the checker asserts those two rules are present rather than
+    effective. The residual gap is that hub pages carry ~157 un-nofollowed links
+    into `/?…`; it is theoretical today (over a full day, every request to `/?…`
+    came from a browser or this project's own scanner, none from any crawler).
+- **SEO-audit crawlers were 18% of story-page load and sent nobody.** SemrushBot
+  made 7,287 requests in one day, 7,024 of them story pages, against Googlebot's
+  52 requests in the same day. It reads robots.txt (70 fetches that day) and is
+  now disallowed, along with Ahrefs/MJ12/DotBot/DataForSeo/BLEXBot/Barkrowler/
+  Seekport named pre-emptively. Applebot (25,597/day) and Amzn-SearchBot
+  (8,940/day) are deliberately NOT blocked — they have a search product behind
+  them, so their load buys discovery.
 - **There are two hub tables, built by one module.** `fandom_hubs` (5,025 rows,
-  one per fandom) and `ship_hubs` (2,553 rows, one per romantic pairing) have an
+  one per fandom) and `ship_hubs` (6,165 rows, one per romantic pairing) have an
   identical shape and are both written by `hub_build.build_groups`; `api/hubs.py`
   serves both through one pair of helpers, mounted at `/api/hubs` and
   `/api/ships`. They exist because search URLs are blocked in robots.txt, so a
