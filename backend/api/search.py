@@ -1087,7 +1087,7 @@ def search(          # NOT async — see below
     # the next request gets it. SET LOCAL so it applies to this transaction only
     # and cannot leak to whatever reuses the connection.
     try:
-        db.execute(text("SET LOCAL statement_timeout = :ms"),
+        db.execute(sql_text("SET LOCAL statement_timeout = :ms"),
                    {"ms": SEARCH_TIMEOUT_MS})
         # And enough memory to hold the bitmap this query builds.
         #
@@ -1112,9 +1112,15 @@ def search(          # NOT async — see below
         # CONNECTION, and raising it globally would multiply by every connection
         # in the pool for queries that do not need it. This way only a search
         # asks for it, and the transaction gives it back.
-        db.execute(text("SET LOCAL work_mem = :wm"), {"wm": SEARCH_WORK_MEM})
+        db.execute(sql_text("SET LOCAL work_mem = :wm"), {"wm": SEARCH_WORK_MEM})
     except Exception:
-        pass  # a missing timeout is slower, not broken
+        # Narrow, and it logs. This block silently did NOTHING for as long as it
+        # has existed: `text` is imported here as `sql_text`, so every call
+        # raised NameError straight into a bare `pass`. The statement timeout
+        # the comment above argues for was never once applied, and neither was
+        # work_mem when it was added. A swallowed exception that hides a
+        # never-executed statement is worse than the failure it was guarding.
+        log.warning("search session settings not applied", exc_info=True)
 
     # Search is the one endpoint bound by disk rather than CPU (see
     # search_cache.py), so a repeated query is the only cheap capacity there is.
