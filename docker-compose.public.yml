@@ -100,7 +100,26 @@ services:
     logging: *logging
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: tunnel --no-autoupdate run
+    # `--protocol http2` forces the tunnel onto TCP instead of its default QUIC.
+    #
+    # This is not a preference. On QUIC the tunnel dropped and re-registered
+    # about twenty times an hour, continuously — 698 "Connection terminated"
+    # events in 72 hours, 565 of them on one connection — with the give-away
+    # error "timeout: no recent network activity" arriving on all four
+    # connections at the same instant. That is the UDP path going dead, not
+    # cloudflared misbehaving, and a home connection is where that happens.
+    #
+    # The cost was measured at the edge, where it is invisible from inside: 2,182
+    # HTTP 530s in thirty days — Cloudflare's "origin unreachable" — including
+    # 1,470 in a single day. Nothing reaches nginx during one, so nothing appears
+    # in any log on this box; the site simply was not there. It is also the one
+    # kind of error a search engine responds to by crawling less, which matters
+    # on a site whose entire growth plan is being crawled.
+    #
+    # HTTP/2 mode cannot carry UDP-based services. Nothing here is one: the
+    # tunnel's only origin is nginx over plain HTTP. Revert by deleting the flag
+    # if the UDP path is ever fixed — QUIC is the better transport when it works.
+    command: tunnel --no-autoupdate --protocol http2 run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
     # Shares nginx's network namespace. Also means cloudflared cannot reach any
