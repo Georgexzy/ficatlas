@@ -4532,7 +4532,20 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   --accent:      #7d5f22;
   --accent-bg:   rgba(125,95,34,0.13);
   --accent-dim:  rgba(125,95,34,0.38);
-  --green:       #1f7a3d;
+  /* Green sits on its OWN tint in .badge--complete, and a colour measured
+     against the page is not measured against a chip of itself. #1f7a3d on
+     --green-bg over the page is 3.69:1, and on a card 4.38:1 — under 4.5:1
+     both times, on 10px text that gets no large-text exemption. A scan of the
+     browse hubs found it 5,025 times on /fandoms and 6,165 on /ships, once per
+     row, on the two pages search engines actually crawl.
+     #196331 is 5.03:1 on the tint over the page and 5.97:1 on a card.
+     Measured on the same tint, for the record: --accent is 4.08:1 and --warn
+     4.06:1 over the page and both clear on a card. Neither is currently
+     rendered as text on its own tint anywhere a scan reaches, so neither is
+     changed here — --accent alone is a text colour in 162 rules and darkening
+     it on a calculation rather than a finding would be a redesign. If a chip
+     using either ever ships, it needs the same treatment. */
+  --green:       #196331;
   --green-bg:    rgba(31,122,61,0.13);
   --red:         #a32c22;
   --red-bg:      rgba(163,44,34,0.11);
@@ -4610,7 +4623,10 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 :root[data-theme="light"] .badge--m  { color: #8a5a00; background: rgba(138,90,0,0.10);   border-color: rgba(138,90,0,0.26); }
 :root[data-theme="light"] .badge--e  { color: #a32c22; background: rgba(163,44,34,0.10);  border-color: rgba(163,44,34,0.26); }
 :root[data-theme="light"] .badge--nr { color: #5a5855; background: rgba(90,88,85,0.08);   border-color: rgba(90,88,85,0.24); }
-:root[data-theme="light"] .badge--complete { color: #1f7a3d; border-color: rgba(31,122,61,0.28); }
+/* var(--green), not a literal. This rule carried its own copy of #1f7a3d,
+   so darkening the token for contrast changed nothing here and the badge
+   kept failing at 3.69:1 while the palette said it had been fixed. */
+:root[data-theme="light"] .badge--complete { color: var(--green); border-color: rgba(31,122,61,0.28); }
 
 /* Ship chips sit on --surface2, which is darker than the page, so the accent
    that clears AA against --bg (4.74:1) drops to 4.23 there. A slightly deeper
@@ -4787,7 +4803,14 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   columns: 3; column-gap: 28px;
 }
 .hub__az li { break-inside: avoid; margin-bottom: 6px; font-size: 14px; }
-.hub__az-count { color: var(--text-ghost); font-size: 11px; font-family: var(--font-mono); }
+/* --text-faint, not --text-ghost. Ghost is 0.40 alpha and measures 2.45:1
+   on the page — a bit over half the 4.5:1 floor. It is a fine colour for
+   something decorative, and this is not decorative: it is how many works
+   the ship has, which is the number the reader is scanning the column for.
+   One rule, but it renders once per row: a scan found it 6,165 times on
+   /ships and 5,025 on /fandoms, which were the worst two pages on the site
+   and are also the two search engines crawl most. */
+.hub__az-count { color: var(--text-faint); font-size: 11px; font-family: var(--font-mono); }
 
 /* The works list on a single hub. */
 .hub__list { list-style: none; padding: 0; margin: 0; }
