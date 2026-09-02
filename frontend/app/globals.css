@@ -2376,7 +2376,12 @@ body:has(.reader-shell[data-theme="sepia"]) {
   --border2:    rgba(74,63,47,0.30);
   --text:       #4a3f2f;
   --text-dim:   #6b5d45;
-  --text-faint: rgba(74,63,47,0.62);
+  /* 0.62 measured 3.26:1 on sepia's page and 3.13:1 on its surface2 — the
+     worst contrast anywhere on the site, and invisible to a scan because a
+     scanner only ever renders the DEFAULT reader theme. Found by computing
+     every theme's tokens rather than by testing the one that loads.
+     0.825 gives 5.47 / 5.26 / 5.06 across page, surface and surface2. */
+  --text-faint: rgba(74,63,47,0.825);
   --text-ghost: rgba(74,63,47,0.38);
 }
 .reader-shell[data-theme="dark"]::before  { background: #0e0e10; }
@@ -2422,7 +2427,10 @@ body:has(.reader-shell[data-theme="default"]) {
   --border2:    #c3bcac;
   --text:       #1f1d1a;
   --text-dim:   #5a564e;
-  --text-faint: rgba(31,29,26,0.58);
+  /* 0.58 was 4.13:1 on the reader page and 3.99 on surface2 — under the
+     4.5:1 floor on all three surfaces. A scan of a chapter page found it on
+     .reader-nav__index and .reader-hint. 0.655 gives 5.25 / 5.12 / 5.05. */
+  --text-faint: rgba(31,29,26,0.655);
   --text-ghost: rgba(31,29,26,0.34);
 }
 .reader-shell[data-theme="default"] .reader,
@@ -4528,8 +4536,15 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   --text-faint:  rgba(26,24,21,0.65);
   --text-ghost:  rgba(26,24,21,0.40);
   /* The dark theme's #c8a96e is 2.12:1 on paper. Same hue, darkened until it
-     clears AA on both the page and a card. */
-  --accent:      #7d5f22;
+     clears AA on both the page and a card.
+     ...which was the wrong pair of surfaces to check. --accent is also set as
+     text ON --accent-bg, a chip of its own hue, in around ten components
+     (.card-btn--primary, .pill--lit, .chip--lit, .btn--on and friends). There
+     it was 4.07:1 — under the floor — and a scan found it on /about. Darkened
+     again until it clears the TINT, which is the tightest surface it lands on:
+     5.03:1 there, 5.94 on the page, 7.15 on a card. Patching the one component
+     a scan happened to reach would have left the other nine failing. */
+  --accent:      #6c521d;
   --accent-bg:   rgba(125,95,34,0.13);
   --accent-dim:  rgba(125,95,34,0.38);
   /* Green sits on its OWN tint in .badge--complete, and a colour measured
@@ -4539,12 +4554,12 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
      browse hubs found it 5,025 times on /fandoms and 6,165 on /ships, once per
      row, on the two pages search engines actually crawl.
      #196331 is 5.03:1 on the tint over the page and 5.97:1 on a card.
-     Measured on the same tint, for the record: --accent is 4.08:1 and --warn
-     4.06:1 over the page and both clear on a card. Neither is currently
-     rendered as text on its own tint anywhere a scan reaches, so neither is
-     changed here — --accent alone is a text colour in 162 rules and darkening
-     it on a calculation rather than a finding would be a redesign. If a chip
-     using either ever ships, it needs the same treatment. */
+     Measured on the same tint at the time: --accent 4.08:1 and --warn 4.06:1.
+     That note said neither was rendered as text on its own tint anywhere a scan
+     reaches, and it was wrong about --accent within the hour: .card-btn--primary
+     does exactly that, and /about was failing on it. --accent has since been
+     darkened to #6c521d (see its own note above). --warn is still not paired
+     with --warn-bg as text anywhere; if it ever is, it needs the same. */
   --green:       #196331;
   --green-bg:    rgba(31,122,61,0.13);
   --red:         #a32c22;
@@ -4631,7 +4646,13 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 /* Ship chips sit on --surface2, which is darker than the page, so the accent
    that clears AA against --bg (4.74:1) drops to 4.23 there. A slightly deeper
    gold for this one case rather than darkening the accent everywhere. */
-:root[data-theme="light"] .tag--ship { color: #7d5f22; }
+:root[data-theme="light"] .tag--ship { color: var(--accent); }
+/* .tag--warn had NO light value, so the dark theme's salmon
+   rgba(220,110,90,0.85) rendered on cream: #e08270 at 2.47:1, barely half
+   the floor, on the archive-warning tag of every story page. --red is
+   5.78:1 on the page and 6.38 on a card, and is the colour this tag means. */
+:root[data-theme="light"] .tag--warn { color: var(--red); border-color: rgba(163,44,34,0.34); }
+:root[data-theme="light"] .tag--warn.tag--clickable:hover { color: var(--red); border-color: rgba(163,44,34,0.7); }
 
 /* The header on a phone carries the logo, the theme toggle, the index pill and
    the Explicit switch. Adding the theme toggle pushed the Explicit label to
