@@ -248,6 +248,19 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   back to a session cookie, dropped on browser close, which is indistinguishable
   from "stay signed in didn't work" and shows up in one browser only. Whatever
   you change there, the unticked-box path must send NEITHER attribute.
+- **A 530 with nothing in ANY log on this box is the tunnel, and it was QUIC.**
+  Cloudflare 530 means the edge could not reach the origin at all, so nothing
+  gets as far as nginx and no log here records it — the only place it is visible
+  is Cloudflare's own analytics, where it was 2,182 requests in thirty days
+  (1,470 of them in one day). Cause: cloudflared's default QUIC transport over a
+  home connection, dropping and re-registering ~20 times an hour — 698
+  "Connection terminated" events in 72 hours, and "timeout: no recent network
+  activity" arriving on all four connections at once, which is the UDP path
+  going dead rather than anything cloudflared did. `--protocol http2` in
+  `docker-compose.public.yml` moves it to TCP; after the switch cloudflared's own
+  precheck reports `suggested_protocol=http2`. Recreate the container to apply
+  (it shares nginx's netns). This matters beyond uptime: 5xx is the signal a
+  search engine answers by crawling less.
 - **A 500 with nothing in the API log is a proxy failure, not an app failure.**
   Check `docker logs <web-colour>` for `socket hang up`/`ECONNRESET`: the request
   died between Next and nginx and never reached uvicorn. It used to hit the first
