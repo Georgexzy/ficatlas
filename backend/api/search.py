@@ -83,6 +83,9 @@ _BROKEN_TITLE_TAIL = (
 # a result may be.
 SEARCH_CACHE_SECONDS = int(os.getenv("SEARCH_CACHE_SECONDS", "120"))
 
+# Per-transaction work_mem for the search query — see the note where it is set.
+SEARCH_WORK_MEM = os.getenv("SEARCH_WORK_MEM", "64MB")
+
 # The ceiling on how long an expensive search may be kept, and how much of its
 # own cost it earns in cache time.
 #
@@ -1086,6 +1089,30 @@ def search(          # NOT async — see below
     try:
         db.execute(text("SET LOCAL statement_timeout = :ms"),
                    {"ms": SEARCH_TIMEOUT_MS})
+        # And enough memory to hold the bitmap this query builds.
+        #
+        # The full-text index matches 1,261,654 rows for "harry potter". At the
+        # server's 16MB work_mem that bitmap does not fit, so Postgres degrades
+        # it to page granularity -- and every row on a lossy page must then be
+        # rechecked, which means recomputing to_tsvector(fic_doc(...)) over
+        # title, summary, author and four arrays. The plan showed the bill:
+        #
+        #   Heap Blocks: exact=315 lossy=1866
+        #   Rows Removed by Index Recheck: 14048
+        #
+        # 14,048 documents rebuilt from scratch purely to throw them away.
+        # Measured on the same query, warm cache, back to back:
+        #
+        #   work_mem 16MB   5,322ms and 5,867ms   (lossy both times)
+        #   work_mem 64MB   1,970ms               (exact)
+        #   work_mem 128MB  1,945ms               (no better)
+        #
+        # 64MB is where it stops paying, so that is the default. SET LOCAL, not
+        # a server-wide change: work_mem is per sort or hash node PER
+        # CONNECTION, and raising it globally would multiply by every connection
+        # in the pool for queries that do not need it. This way only a search
+        # asks for it, and the transaction gives it back.
+        db.execute(text("SET LOCAL work_mem = :wm"), {"wm": SEARCH_WORK_MEM})
     except Exception:
         pass  # a missing timeout is slower, not broken
 
