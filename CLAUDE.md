@@ -70,6 +70,17 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **SQLAlchemy's pool is per PROCESS, so every pool size multiplies by
+  `WEB_CONCURRENCY`.** Against a server-wide `max_connections = 100`, the
+  configured maxima were: dev backend 4x(16+8)=96, worker 12+6=18, public api
+  2x(24+12)=72 — 186, and 258 while a promote has both colours up. Pools are
+  lazy so measured use is ~43 and it has never been hit, but `api/stats.py`
+  records the outage shape when it is: "QueuePool limit of size 12 overflow 6
+  reached" and every request 500s, searches included. The dev backend is now
+  6+3 (=36) because it serves one person over the tailnet while sharing a
+  ceiling with the public site. The public tier is still 72 and is the
+  remaining large consumer — shrink it only with a measurement, and remember a
+  search may now hold 64MB of `work_mem`, so more connections is not free.
 - **A low Cloudflare cache ratio here is mostly arithmetic, not a fault.**
   Measured: 2,305 story requests hit 2,277 DISTINCT urls — a 1.2% repeat rate.
   Crawlers walk ~750k unique story pages, so almost every request is a first
