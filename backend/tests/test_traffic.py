@@ -183,6 +183,36 @@ def test_searches_report_names_the_gaps(db):
     assert [e["query"] for e in out["empty"]] == ["drarry coffee shop"]
 
 
+def test_search_rows_keep_the_time_of_day_not_just_the_date(db):
+    """Rounding a search to its calendar day destroys the thing that separates
+    one reader refining a phrase from several readers asking the same question.
+
+    A real example from the live index: one query ran 474 times over seven days.
+    As six dates that is unreadable; as timestamps it resolves into sessions of
+    40-89 runs inside a couple of hours, which is a different fact about demand.
+
+    /pages and /referrers deliberately still round to the day -- they are read
+    as volume over a window. This asymmetry is the contract being pinned here.
+    """
+    v = tracking.visitor_hash("198.51.100.9", "Firefox")
+    tracking.record("search", "/api/search", v, q="wolfstar", results=0)
+    tracking.record("page", "/ship/remus-lupin-sirius-black", v)
+    tracking.flush()
+
+    out = traffic.searches(days=7, limit=10, db=db, _owner=None)
+    for field in (out["top"][0]["first_seen"], out["top"][0]["last_seen"],
+                  out["empty"][0]["last_seen"]):
+        # "2026-09-02T13:13:41.816050", not "2026-09-02".
+        assert "T" in field, f"search stamp lost its time: {field!r}"
+        # Naive: the client marks these UTC before rendering them locally, and
+        # an offset appearing here would mean it marks them twice.
+        assert not field.endswith("Z") and "+" not in field, field
+
+    # The day-grained reports must NOT have been dragged along with it.
+    assert "T" not in traffic.pages(days=7, limit=10, db=db,
+                                    _owner=None)["pages"][0]["last_seen"]
+
+
 def test_visitors_are_never_summed_across_days(db):
     """A visitor id is per-day by design, so adding the daily counts would
     report a single regular as thirty people. The summary gives the busiest day

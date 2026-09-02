@@ -58,6 +58,26 @@ const shortDate = (iso: string) => fmt(iso, { day: "numeric", month: "short" })
 const longDate = (iso: string) =>
   fmt(iso, { weekday: "short", day: "numeric", month: "short", year: "numeric" })
 
+// Search rows carry a full instant rather than a bare day, because when a query
+// was run is part of what it tells you (see the /searches docstring).
+//
+// Those instants arrive WITHOUT an offset -- `at` is `timestamp without time
+// zone` written from utcnow(), so the server emits "2026-09-02T13:13:41". Left
+// alone, JS parses a bare date-time as LOCAL, which silently shifts every
+// search by the viewer's offset and would put a run from 00:30 UTC on the wrong
+// day for anyone west of Greenwich. Appending Z states the frame the data is
+// actually in; toLocaleString then renders it in the viewer's own zone, which
+// is the one they can compare against their own memory of the day.
+const asInstant = (iso: string) =>
+  new Date(/([zZ]|[+-]\d\d:?\d\d)$/.test(iso) ? iso : `${iso}Z`)
+const stamp = (iso: string) => asInstant(iso).toLocaleString(undefined, {
+  day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+})
+const longStamp = (iso: string) => asInstant(iso).toLocaleString(undefined, {
+  weekday: "short", day: "numeric", month: "short", year: "numeric",
+  hour: "2-digit", minute: "2-digit", second: "2-digit",
+})
+
 // "2 days ago" answers "is this still happening?", which is the question a
 // ranking by volume cannot answer on its own.
 //
@@ -72,8 +92,13 @@ const longDate = (iso: string) =>
 // it compares a local day against UTC-bucketed rows, so a viewer in UTC+2 at
 // 00:30 sees traffic from five minutes ago labelled "yesterday".
 function ago(iso: string): string {
+  // slice(0, 10) takes the UTC calendar day out of either shape this receives --
+  // a bare "2026-09-02" from /pages, or a full instant from /searches. Both
+  // sides of the subtraction stay UTC-bucketed, which is the invariant the
+  // comment above depends on.
   const days = Math.round(
-    (asDate(new Date().toISOString().slice(0, 10)).getTime() - asDate(iso).getTime())
+    (asDate(new Date().toISOString().slice(0, 10)).getTime()
+     - asDate(iso.slice(0, 10)).getTime())
     / 86_400_000)
   if (days <= 0) return "today"
   if (days === 1) return "yesterday"
@@ -301,8 +326,8 @@ export default function TrafficPanel() {
                   {/* null means no exit recorded a count, which is not the same
                       as a search that found nothing — see _note_total. */}
                   <td>{s.results == null ? "—" : s.results.toLocaleString()}</td>
-                  <td title={`first run ${longDate(s.first_seen)}`}>
-                    {shortDate(s.last_seen)}
+                  <td title={`first run ${longStamp(s.first_seen)}\nlast run ${longStamp(s.last_seen)}`}>
+                    {stamp(s.last_seen)}
                     <span className="traffic-table__ago">{ago(s.last_seen)}</span>
                   </td>
                 </tr>
@@ -327,7 +352,8 @@ export default function TrafficPanel() {
                 <tr key={s.query}>
                   <td className="traffic-table__q">{s.query}</td>
                   <td>{s.runs}</td>
-                  <td>{shortDate(s.last_seen)}
+                  <td title={`last run ${longStamp(s.last_seen)}`}>
+                    {stamp(s.last_seen)}
                     <span className="traffic-table__ago">{ago(s.last_seen)}</span>
                   </td>
                 </tr>

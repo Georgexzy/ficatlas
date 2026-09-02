@@ -328,20 +328,31 @@ def searches(days: int = Query(30, ge=1, le=365),
     reader who left with nothing, and it names the gap precisely — which is a
     far more direct answer to "what should be crawled next" than any coverage
     percentage.
+
+    Search timestamps keep their TIME, where /pages and /referrers round to the
+    day. The asymmetry is deliberate. A query is a single deliberate act and the
+    clock around it carries meaning a date destroys: six runs of one query are a
+    reader refining a phrase over four minutes or six people over a fortnight,
+    and "2 Sep" cannot tell those apart. Page views and referrers are read as
+    volume over a window, where the day is the unit and a time would be noise.
+
+    These are naive UTC instants (`at` is `timestamp without time zone`, written
+    from utcnow()), so isoformat() emits no offset. The client is what marks
+    them UTC before rendering them in the viewer's own zone.
     """
     cut = _window(days)
     top = db.execute(text("""
         SELECT lower(q) AS query, count(*) AS runs,
                count(DISTINCT visitor) AS visitors,
                max(results) AS best_results,
-               min(at)::date AS first_seen, max(at)::date AS last_seen
+               min(at) AS first_seen, max(at) AS last_seen
         FROM visit_events
         WHERE at >= :cut AND kind = 'search' AND NOT bot AND q IS NOT NULL AND q <> ''
         GROUP BY 1 ORDER BY runs DESC LIMIT :lim
     """), {"cut": cut, "lim": limit}).fetchall()
     empty = db.execute(text("""
         SELECT lower(q) AS query, count(*) AS runs,
-               max(at)::date AS last_seen
+               max(at) AS last_seen
         FROM visit_events
         WHERE at >= :cut AND kind = 'search' AND NOT bot
           AND q IS NOT NULL AND q <> '' AND results = 0
