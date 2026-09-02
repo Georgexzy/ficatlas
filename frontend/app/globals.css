@@ -518,8 +518,13 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 
 /* ── Syntax help ───────────────────────────────────────────────────────────── */
 .syntax-help { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); z-index: 10; }
+/* 24px, not 20. WCAG 2.5.8 (AA, new in 2.2) sets 24x24 CSS px as the floor for
+ * a pointer target, and this was 20 — flagged on a live scan. The input already
+ * reserves 70px of right padding for this button and the clear (x), and at
+ * right:10 and right:38 their centres stay 28px apart, so widening both to 24
+ * neither overlaps them nor overruns the reserved space. */
 .syntax-help__btn {
-  width: 20px; height: 20px; border-radius: 50%;
+  width: 24px; height: 24px; border-radius: 50%;
   background: var(--surface3); border: 1px solid var(--border2);
   color: var(--text-faint); font-size: 11px; font-family: var(--font-mono);
   display: flex; align-items: center; justify-content: center; line-height: 1;
@@ -1022,7 +1027,10 @@ kbd {
   right: 38px;
   top: 50%;
   transform: translateY(-50%);
-  width: 20px; height: 20px; border-radius: 50%;
+  /* 24px for the same reason as .syntax-help__btn above. A scan did not flag
+     this one only because it is hidden while the input is empty, which is the
+     state a scanner finds the page in — not because it passed. */
+  width: 24px; height: 24px; border-radius: 50%;
   background: var(--surface3); border: 1px solid var(--border2);
   color: var(--text-faint); font-size: 10px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
@@ -4169,7 +4177,13 @@ body.is-resizing * { cursor: col-resize !important; }
   align-items: center; justify-content: center;
   font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
 }
-.site-footer a { color: var(--text-faint); text-decoration: none; }
+/* Footer links were 17.6px tall — under the 24px pointer-target floor of WCAG
+   2.5.8. The padding buys the height without changing the type or the layout,
+   because the row is taller than its text either way. */
+.site-footer a {
+  color: var(--text-faint); text-decoration: none;
+  display: inline-block; padding-block: 4px;
+}
 .site-footer a:hover { color: var(--accent); text-decoration: underline; }
 .site-footer__sep { opacity: 0.4; }
 
@@ -4490,8 +4504,16 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
      So: a tinted page, near-white cards. Separation is now 0.17 and cards read
      as objects sitting on paper rather than smudges in it.
      Measured on this palette — text / dim / faint:
-       on the page   14.35  7.17  4.30
-       on a card     17.27  7.98  4.61 */
+       on the page   14.35  7.17  5.07
+       on a card     17.27  7.98  5.43
+
+     `faint` was 0.60 alpha and measured 4.30 on the page — the number was
+     recorded correctly here and shipped anyway, 0.2 under the 4.5:1 AA floor
+     that 1.4.3 sets for body text. An automated scan found it on 30 elements.
+     0.615 is the arithmetic minimum (4.51) and is too tight to keep: any later
+     nudge to --bg silently breaks it again. 0.65 clears AA on every surface in
+     this theme with real headroom, and faint still reads as faint — 5.07
+     against body text's 14.35. */
   --bg:          #ebe7dd;
   --surface:     #fdfcf9;
   --surface2:    #f5f2ea;
@@ -4503,7 +4525,7 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   --border2:     rgba(26,24,21,0.26);
   --text:        #1a1815;
   --text-dim:    rgba(26,24,21,0.76);
-  --text-faint:  rgba(26,24,21,0.60);
+  --text-faint:  rgba(26,24,21,0.65);
   --text-ghost:  rgba(26,24,21,0.40);
   /* The dark theme's #c8a96e is 2.12:1 on paper. Same hue, darkened until it
      clears AA on both the page and a card. */
