@@ -5116,3 +5116,90 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   text-transform: uppercase;
   color: var(--muted);
 }
+
+/* ── Admin: background jobs, queues and storage ────────────────────────────
+   Added because this page could say a great deal about what the index CONTAINS
+   and nothing about whether the machinery filling it is alive — the one thing
+   that fails silently. The visual job here is triage: the state of every job
+   has to be readable without reading, so state is carried by a coloured left
+   edge and a pill, not by the text alone. */
+.admin-jobs {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px; margin: 4px 0 0;
+}
+.admin-job {
+  background: var(--surface); border: 1px solid var(--border);
+  /* The status rail. A border-left rather than a background tint so a healthy
+     page is calm — five green-washed cards read as five things wanting
+     attention, which is the opposite of what "ok" should look like. */
+  border-left: 3px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.admin-job--ok      { border-left-color: var(--green); }
+.admin-job--stale   { border-left-color: var(--warn); }
+.admin-job--unknown { border-left-color: var(--text-ghost); }
+.admin-job__head { display: flex; align-items: baseline; gap: 8px; }
+.admin-job__name { font-size: 13px; font-weight: 600; color: var(--text); }
+.admin-job__state {
+  margin-left: auto; font-family: var(--font-mono);
+  font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 3px; white-space: nowrap;
+}
+.admin-job__state--ok      { background: var(--green-bg); color: var(--green); }
+.admin-job__state--stale   { background: rgba(217,163,74,0.14); color: var(--warn); }
+.admin-job__state--unknown { background: var(--surface3); color: var(--text-faint); }
+.admin-job__when {
+  display: flex; align-items: baseline; gap: 8px;
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  font-size: 15px; color: var(--text);
+}
+.admin-job__budget { font-size: 10px; color: var(--text-faint); letter-spacing: .02em; }
+.admin-job__why { margin: 2px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--text-dim); }
+
+.admin-queues {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.admin-queue {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 11px 13px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.admin-queue__n {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  font-size: 19px; color: var(--text);
+}
+.admin-queue__label { font-size: 11px; color: var(--text-dim); }
+
+/* Storage. One row per object, the bar showing its share of the database, so
+   "which thing is the 39GB" is answered by looking rather than by arithmetic. */
+.admin-storage { display: flex; flex-direction: column; gap: 7px; }
+.admin-storage__row {
+  display: grid; grid-template-columns: 116px 1fr 72px 76px;
+  align-items: center; gap: 10px; font-size: 11.5px;
+}
+.admin-storage__name {
+  font-family: var(--font-mono); color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.admin-storage__track {
+  height: 7px; background: var(--surface3); border-radius: 999px; overflow: hidden;
+}
+.admin-storage__fill {
+  display: block; height: 100%; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.admin-storage__size {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  text-align: right; color: var(--text);
+}
+.admin-storage__rows {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  text-align: right; color: var(--text-faint); font-size: 10.5px;
+}
+@media (max-width: 560px) {
+  .admin-storage__row { grid-template-columns: 92px 1fr 64px; }
+  .admin-storage__rows { display: none; }
+}
