@@ -158,7 +158,11 @@ def cache_key(query_string: str, is_operator: bool) -> str:
 # ranking change invalidates the cache just as completely, and skipping this
 # bump is invisible. It cost half an hour here, verifying a fix against cached
 # results and concluding it had not worked.
-SCHEMA_VERSION = "v4"
+# v5: an operator value that ran on into the free text is now split back apart
+# against the vocabulary, so `fandom:Harry Potter time travel` returns 5,000
+# works instead of 0. Same URL, same shape, different results — which is
+# exactly the case the v4 note above was written about, and it caught this one.
+SCHEMA_VERSION = "v5"
 
 # Expired rows are swept probabilistically on write rather than by a scheduled
 # job: 1 write in 200 pays for the cleanup, which at any real request rate keeps
