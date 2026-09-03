@@ -600,6 +600,108 @@ def _facet_variants(db, col_name: str, term: str) -> list[str]:
         return []       # vocabulary unavailable -> caller falls back to trigram
 
 
+_EXACT_FACET_SQL = sql_text("""
+    SELECT 1 FROM facets
+     WHERE kind = :kind AND lower(value) = :v
+     LIMIT 1
+""")
+
+
+@lru_cache(maxsize=4096)
+def _facet_exact_cached(kind: str, term: str) -> bool:
+    from db.session import db_session
+    try:
+        with db_session() as db:
+            return db.execute(_EXACT_FACET_SQL,
+                              {"kind": kind, "v": term}).first() is not None
+    except Exception:
+        return False
+
+
+def _facet_exact(db, col_name: str, term: str) -> bool:
+    """Is there a facet of this kind named EXACTLY this? Served by
+    ix_facets_value_lower, and cached — the same handful of fandom names are
+    probed over and over."""
+    kind = _FACET_KIND.get(col_name)
+    if not kind:
+        return False
+    return _facet_exact_cached(kind, term.strip().lower())
+
+
+def _resolve_or_split(db, col_name: str, csv_val):
+    """Trim words off a facet value until the vocabulary recognises it, and hand
+    whatever was trimmed back to the free-text query.
+
+    `fandom:Harry Potter time travel` parses as ONE fandom named "Harry Potter
+    time travel", and it has to: a bare multi-word operator value runs to the
+    end of the text because that is the only thing that makes `tag:slow burn`
+    and `author:Some Long Pen Name` work. No syntactic rule separates those from
+    a fandom followed by a phrase — only the vocabulary can, and the parser
+    deliberately has none (it is mirrored in TypeScript and must stay pure).
+
+    So the split happens here, where the facets table is. Measured before this:
+
+        fandom:Harry Potter time travel   ->  0 results
+        fandom:Naruto time travel         ->  1 result
+        time travel fandom:Harry Potter   ->  5,000 results
+
+    The same query, correct only when the operator happened to come last. Worse,
+    the failure is silent and the one-result case looks like an answer.
+
+    TWO different probes, deliberately.
+
+    Whether the WHOLE value is fine is asked with `_facet_variants` — the same
+    substring/umbrella resolution the filter itself uses — so anything the
+    filter can work with is left alone. `tag:slow burn` passes on the first
+    probe and never reaches the rest of this function.
+
+    Where to CUT, though, is asked with an exact vocabulary match, and it has to
+    be. Substring matching says yes to almost any short prefix: probing "Some"
+    from `fandom:Some Fandom Nobody Has` matched a fandom merely containing the
+    letters, so an unknown value got chopped to `fandom:Some` plus three words
+    of text — a confident wrong answer where there had been an honest empty one.
+    "Is there a fandom called exactly this?" is the question actually being
+    asked, it is a btree lookup rather than a trigram scan, and it cannot invent
+    a boundary that is not really there.
+
+    The cost of that strictness is that a value the vocabulary does not hold
+    verbatim — `fandom:MCU time travel` — still will not split. That is the
+    behaviour it has today, so nothing regresses; it just is not improved.
+
+    A value nothing resolves is returned unchanged rather than chopped up: an
+    unknown fandom should keep behaving as it did, not silently become a text
+    search.
+    """
+    if not csv_val or col_name not in _FACET_KIND:
+        return csv_val, []
+
+    kept, leftover = [], []
+    for part in csv_val.split(","):
+        term = part.strip()
+        words = term.split()
+        # One word cannot be split, and a very long value is a pen name or a
+        # tag rather than a fandom plus a phrase.
+        # _facet_exact first: it is cached and a btree hit, and it answers yes
+        # for the overwhelming majority of real values, so the ordinary
+        # `fandom:Harry Potter` never pays for the trigram scan behind
+        # _facet_variants. That scan is only reached by a value the vocabulary
+        # does not hold verbatim, which is the only case that needs it.
+        if (len(words) < 2 or len(words) > 8
+                or _facet_exact(db, col_name, term)
+                or _facet_variants(db, col_name, term)):
+            kept.append(term)
+            continue
+        for n in range(len(words) - 1, 0, -1):
+            head = " ".join(words[:n])
+            if _facet_exact(db, col_name, head):
+                kept.append(head)
+                leftover.append(" ".join(words[n:]))
+                break
+        else:
+            kept.append(term)       # nothing resolved; leave it exactly as it was
+    return (",".join(k for k in kept if k) or None), leftover
+
+
 def _arr_text(col):
     """IMMUTABLE array->text used by the trigram indexes on the facet columns.
     Backed by ix_stories_{fandoms,characters,relationships,tags}_trgm."""
@@ -1231,6 +1333,25 @@ def search(          # NOT async — see below
         # bulk import (HF FFN dump etc.) from every default search. Permit NULL.
         _explicit_pred = or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None))
         filters.append(_explicit_pred)
+
+    # An operator value that ran on into the query gets handed back here, BEFORE
+    # anything reads `q` — ship resolution, the category test and the FTS
+    # predicate all have to see the recovered text. Cache keys are built from the
+    # raw URL above and stay correct: the same input always splits the same way.
+    for _col, _raw in (("fandoms", fandoms), ("characters", characters),
+                       ("relationships", relationships), ("tags", tags)):
+        _fixed, _spill = _resolve_or_split(db, _col, _raw)
+        if not _spill:
+            continue
+        if _col == "fandoms":
+            fandoms = _fixed
+        elif _col == "characters":
+            characters = _fixed
+        elif _col == "relationships":
+            relationships = _fixed
+        else:
+            tags = _fixed
+        q = " ".join(x for x in ([q] if q else []) + _spill).strip() or None
 
     if q:
         # Free text goes through Postgres full-text search against the GIN index

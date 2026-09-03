@@ -299,6 +299,30 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   rating matched AND no search text was left — the bar searched the whole index.
   Same for `site:`, `status:`, `updated:`, `words:`. `language` is deliberately
   NOT in the set ("Bahasa Indonesia" is a real value).
+- **An operator value runs to the end of the text, so mixed queries are split
+  back apart in the API, not the parser.** `fandom:Harry Potter time travel` is
+  read as ONE fandom of that name — it has to be, because the same rule is what
+  makes `tag:slow burn` and `author:Some Long Pen Name` work, and nothing
+  syntactic separates them. Only the vocabulary can, and the parser
+  deliberately has none (it is mirrored in TypeScript and must stay pure). So
+  `_resolve_or_split` in `api/search.py` trims words off a facet value until the
+  facets table recognises it and hands the rest back to `q`. Before it:
+  `fandom:Harry Potter time travel` 0 results, `fandom:Naruto time travel` 1
+  result, `time travel fandom:Harry Potter` 5,000 — the same search, correct
+  only when the operator came last.
+  - It runs BEFORE anything reads `q`: ship resolution, the category test and
+    the FTS predicate all need the recovered text.
+  - **The two probes are different on purpose.** "Does the whole value resolve?"
+    uses `_facet_variants` (substring, the same umbrella resolution the filter
+    uses), so anything the filter can work with is left alone. "Where do I cut?"
+    uses `_facet_exact`, and must: substring matching says yes to almost any
+    short prefix, so `fandom:Some Fandom Nobody Has` was being cut to
+    `fandom:Some` plus three words of text — a confident wrong answer replacing
+    an honest empty one. Exact is also cached and a btree hit, so the ordinary
+    `fandom:Harry Potter` costs 0.0ms and only an unrecognised value pays the
+    trigram scan.
+  - A value the vocabulary does not hold verbatim (`fandom:MCU time travel`)
+    still will not split. That is today's behaviour, so nothing regresses.
 - **The two query parsers must agree.** `backend/query_parser.py` and
   `frontend/lib/queryParser.ts` both parse the same string — the bar to render
   chips and build the URL, the API when it re-parses on the way in. They had
