@@ -17,9 +17,11 @@ Two things it deliberately does NOT do:
     where they are individually explained.
 """
 
+import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException
 from sqlalchemy import text as sql_text
@@ -164,6 +166,133 @@ def _coverage(db: Session) -> list[dict]:
     return out
 
 
+# How long each background job may go quiet before the page says so. These are
+# the job's own interval with room to spare, not a guess: a hub rebuild every
+# 24h flagged at 24h would show amber on a healthy system every single day.
+_JOB_EVIDENCE = [
+    # key, label, what it proves, hours before "stale", the SQL for its evidence
+    ("hubs", "Hub rebuild",
+     "Rebuilds the 11,190 fandom and ship pages crawlers walk. If this stops, "
+     "the only route search engines have into the index goes stale.", 36,
+     "SELECT max(built_at) FROM fandom_hubs"),
+    ("hub_content", "Hub content change",
+     "The last time a hub's listing actually changed, as opposed to being "
+     "rebuilt identically. Feeds the sitemap's lastmod.", 72,
+     "SELECT max(content_at) FROM ship_hubs"),
+    ("indexnow", "IndexNow submission",
+     "Tells Bing, Yandex and Seznam which hub pages changed. The only push "
+     "channel there is — everything else waits to be crawled.", 36,
+     "SELECT CAST(value AS timestamptz) FROM app_settings "
+     "WHERE key = 'indexnow_watermark'"),
+    ("ship_aliases", "Ship nickname mining",
+     "Maps 'dramione' and 'drarry' onto their canonical pairings. A search "
+     "for a nickname finds almost nothing without it.", 200,
+     "SELECT max(built_at) FROM ship_aliases"),
+    # NOT here, deliberately: the AO3 stale-WIP refresh. The obvious evidence for
+    # it is max(queued_at) on ao3_refresh_queue, and that is the wrong column —
+    # the queue is REFILLED in batches and drained a few at a time, so all 160
+    # rows carry one timestamp from the last refill. It read 34.3h old and was
+    # flagged stale on the first render of this panel while the loop was in fact
+    # running every 40 minutes and had logged a pass four minutes earlier. A
+    # panel that cries wolf is worse than no panel. Its queue DEPTH is honest and
+    # is in _JOB_QUEUES below; its liveness has no cheap evidence, so nothing
+    # here claims to measure it.
+    ("traffic", "Traffic recording",
+     "The buffered writer behind pageview and search stats. It drops events "
+     "rather than blocking a page, so it can fail without anything breaking.",
+     24, "SELECT max(at) FROM visit_events"),
+    ("series_fill", "Series detection",
+     "Groups works into series. Stalled indefinitely once before, on a SQL "
+     "error nothing surfaced.", 48,
+     "SELECT max(attempted_at) FROM series_fill_log"),
+]
+
+# Queues, which say the opposite thing to a timestamp: not "did it run" but
+# "is it keeping up". A queue that only grows is a job that is running and
+# losing.
+_JOB_QUEUES = [
+    ("ao3_refresh", "AO3 stale-WIP queue", "SELECT count(*) FROM ao3_refresh_queue"),
+    ("ffnet_wayback", "FF.net Wayback queue", "SELECT count(*) FROM ffnet_wayback_queue"),
+    ("search_cache", "Shared search cache", "SELECT count(*) FROM search_cache_entries"),
+]
+
+
+def _job_evidence(db: Session) -> dict:
+    """What each background job last managed to DO, and how stale that is."""
+    now = datetime.now(timezone.utc)
+    jobs = []
+    for key, label, why, stale_h, sql in _JOB_EVIDENCE:
+        last, age_h = None, None
+        try:
+            val = db.execute(sql_text(sql)).scalar()
+            if val is not None:
+                if val.tzinfo is None:
+                    val = val.replace(tzinfo=timezone.utc)
+                last = val.isoformat()
+                age_h = round((now - val).total_seconds() / 3600, 1)
+        except Exception:
+            db.rollback()          # a missing table must not take the page down
+        jobs.append({"key": key, "label": label, "why": why,
+                     "last_run": last, "age_h": age_h, "stale_after_h": stale_h,
+                     "state": ("unknown" if age_h is None
+                               else "stale" if age_h > stale_h else "ok")})
+
+    queues = []
+    for key, label, sql in _JOB_QUEUES:
+        try:
+            queues.append({"key": key, "label": label,
+                           "depth": int(db.execute(sql_text(sql)).scalar() or 0)})
+        except Exception:
+            db.rollback()
+    return {"evidence": jobs, "queues": queues}
+
+
+_GROWTH_KEY = "admin_growth_samples"
+_GROWTH_MAX = 60
+
+
+def _growth_sample(db: Session, total: int) -> dict:
+    """Append one (time, total) sample and read the rate off the ends.
+
+    Deliberately not a query over `stories.indexed_at`: that has no index and
+    measured 15.7s. Samples cost nothing and get more accurate on their own.
+    """
+    now = datetime.now(timezone.utc)
+    try:
+        raw = get_setting(db, _GROWTH_KEY)
+        samples = json.loads(raw) if raw else []
+    except Exception:
+        samples = []
+    if not isinstance(samples, list):
+        samples = []
+
+    if total > 0:
+        samples.append([now.isoformat(), int(total)])
+        samples = samples[-_GROWTH_MAX:]
+        try:
+            put_setting(db, _GROWTH_KEY, json.dumps(samples))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    # Need two samples at least an hour apart before quoting a daily rate; a
+    # ten-minute window multiplied up to a day is noise wearing a number's
+    # clothes.
+    if len(samples) >= 2:
+        try:
+            t0 = datetime.fromisoformat(samples[0][0])
+            t1 = datetime.fromisoformat(samples[-1][0])
+            hours = (t1 - t0).total_seconds() / 3600
+            if hours >= 1:
+                delta = samples[-1][1] - samples[0][1]
+                return {"per_day": int(round(delta / hours * 24)),
+                        "window_h": round(hours, 1),
+                        "samples": len(samples)}
+        except Exception:
+            pass
+    return {"per_day": None, "window_h": None, "samples": len(samples)}
+
+
 @router.get("/overview")
 def overview(refresh: bool = False,
                    db: Session = Depends(get_db),
@@ -249,6 +378,57 @@ def overview(refresh: bool = False,
         except Exception:
             db.rollback()
             out[key] = None            # rendered as "—" rather than a wrong 0
+
+    # ── Is anything actually running? ────────────────────────────────────────
+    #
+    # The page could say a great deal about what the index CONTAINS and nothing
+    # about whether the machinery filling it is alive. That is the gap that
+    # matters: `popularity_rank.py` once had no loop at all and sat frozen at
+    # whatever the last manual run produced, and nothing anywhere would have
+    # shown it. A loop that dies is silent by construction.
+    #
+    # Every figure here is EVIDENCE THE LOOP ITSELF LEFT — a build timestamp, a
+    # watermark, a queue draining — rather than a heartbeat the loop reports.
+    # That is deliberate: a heartbeat says "I ran", this says "I did something",
+    # and the second is the one that catches a loop running happily over a
+    # broken query. It also means no worker changes, so nothing here can affect
+    # indexing.
+    out["jobs"] = _job_evidence(db)
+
+    # ── Where the disk went ──────────────────────────────────────────────────
+    # 30ms, and the reason it is worth having on the page: this database is 39GB
+    # on a home box, and the two facts that matter (which object is biggest, and
+    # whether it is growing) previously needed psql.
+    try:
+        out["storage"] = {
+            "db_bytes": int(db.execute(sql_text(
+                "SELECT pg_database_size(current_database())")).scalar() or 0),
+            "objects": [
+                {"name": r[0], "bytes": int(r[1]), "rows": max(0, int(r[2]))}
+                for r in db.execute(sql_text("""
+                    SELECT relname, pg_total_relation_size(relid), n_live_tup
+                      FROM pg_stat_user_tables
+                     ORDER BY pg_total_relation_size(relid) DESC LIMIT 8
+                """)).fetchall()
+            ],
+        }
+    except Exception:
+        out["storage"] = None
+
+    # ── Growth, without paying for it ────────────────────────────────────────
+    #
+    # "Works added per day" is the one number that says the crawler is alive,
+    # and the obvious query for it — grouping `stories` by indexed_at — is a
+    # sequential scan of 20M rows that measured 15.7 SECONDS. There is no index
+    # on indexed_at and adding one costs ~600MB on a disk already at 71%, which
+    # is a bad trade for a chart.
+    #
+    # So it samples itself instead: each uncached overview appends (now, total)
+    # to a short list and the rate is read off the ends. The exact total is
+    # already computed above by _coverage, so this costs one small write. It
+    # says "collecting" for the first few hours and is accurate after that,
+    # which is the right shape for a number nobody needs to the minute.
+    out["growth"] = _growth_sample(db, out["tables"].get("stories") or 0)
 
     _CACHE, _CACHED_AT = out, time.time()
     return {**out, "cached": False, "age_s": 0}

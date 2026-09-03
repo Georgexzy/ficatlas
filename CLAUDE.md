@@ -278,6 +278,24 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     claims its window and returns in ~20ms, doing the poll in a background task.
     Distinguish the two by whether the endpoint does outbound network I/O: if it
     does, suspect the timeout before touching nginx.
+- **The admin panel's Background jobs section shows EVIDENCE, not heartbeats.**
+  Every row is something a loop left behind — a build timestamp, a watermark, a
+  log row — rather than something it reported about itself, because a heartbeat
+  says "I ran" and evidence says "I achieved something", and the second catches
+  a loop running happily over a broken query. `popularity_rank.py` sitting
+  frozen for months is the failure this exists to make visible.
+  - **Pick the column carefully; the obvious one is often wrong.** The AO3
+    stale-WIP refresh was added with `max(queued_at)` on `ao3_refresh_queue`
+    and flagged STALE on the very first render — while the loop was running
+    every 40 minutes and had logged a pass four minutes earlier. The queue is
+    refilled in batches and drained a few at a time, so all 160 rows carry one
+    timestamp from the last refill. It is now excluded, with the reason written
+    at the exclusion. A panel that cries wolf is worse than no panel.
+  - Growth (works/day) is SAMPLED into `app_settings.admin_growth_samples`, not
+    queried. `GROUP BY indexed_at` over `stories` has no index and measured
+    **15.7 seconds**; an index for it would cost ~600MB on a disk at 71%.
+  - Storage bars scale to the largest object, not the database total — `stories`
+    is 92% of 39GB, so against the total every other bar is a stub.
 - Anonymous traffic lives in `backend/tracking.py` (buffered writer, daily-rotating
   keyed visitor hash, 90-day retention) + `backend/api/traffic.py` (public
   `POST /hit` beacon, owner-only reports) + the Traffic tab on `/admin`.

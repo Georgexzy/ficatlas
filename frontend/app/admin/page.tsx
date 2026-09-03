@@ -54,6 +54,21 @@ interface Overview {
   }
   budget: { host: string; interval_s: number; queued_s: number }[]
   takedowns_pending: number
+  // What each background job last managed to DO, and how stale that is. Every
+  // figure is evidence the job left behind — a build timestamp, a watermark —
+  // rather than a heartbeat it reported, because a heartbeat says "I ran" and
+  // this says "I achieved something". See _job_evidence in api/admin.py.
+  jobs?: {
+    evidence: { key: string; label: string; why: string
+                last_run: string | null; age_h: number | null
+                stale_after_h: number; state: "ok" | "stale" | "unknown" }[]
+    queues: { key: string; label: string; depth: number }[]
+  }
+  storage?: { db_bytes: number
+              objects: { name: string; bytes: number; rows: number }[] } | null
+  // Sampled, not queried: grouping 20M rows by indexed_at measured 15.7s and
+  // there is no index for it. per_day is null until an hour of samples exist.
+  growth?: { per_day: number | null; window_h: number | null; samples: number }
   // null when the count timed out under write load — shown as "—" rather than
   // as a confident zero, which would read as "nothing is hosted".
   hosted_public: number | null
@@ -78,6 +93,25 @@ const FIELDS: { key: keyof Coverage; label: string; why: string }[] = [
   { key: "no_summary", label: "Summary",  why: "Cards show a title and nothing else" },
   { key: "no_date",    label: "Date",     why: "Excluded from date filters and 'recently updated'" },
 ]
+
+/** 39225434112 -> "36.5 GB". Bytes are unreadable and this page is read, not parsed. */
+function bytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1024 ** 3).toFixed(1)} GB`
+  if (n >= 1e6) return `${Math.round(n / 1024 ** 2)} MB`
+  return `${Math.round(n / 1024)} kB`
+}
+
+/** "6.3h ago", "2.1 days ago". An ISO timestamp tells an operator nothing at a
+ *  glance; the whole question about a background job is how long ago. */
+function ago(hours: number | null): string {
+  if (hours == null) return "never"
+  // "0 min ago" is what rounding gives for anything under thirty seconds, and it
+  // reads like a broken clock rather than like a job that has just run.
+  if (hours * 60 < 1) return "just now"
+  if (hours < 1) return `${Math.round(hours * 60)} min ago`
+  if (hours < 48) return `${hours.toFixed(1)}h ago`
+  return `${(hours / 24).toFixed(1)} days ago`
+}
 
 function pct(missing: number, total: number): number {
   return total > 0 ? Math.round((missing / total) * 100) : 0
@@ -198,7 +232,10 @@ export default function AdminPage() {
       {data && (
         <>
           <div className="admin-tiles">
-            <Tile label="Works indexed" value={data.tables.stories} approx />
+            <Tile label="Works indexed" value={data.tables.stories} approx
+                  sub={data.growth?.per_day != null
+                    ? `${data.growth.per_day >= 0 ? "+" : ""}${data.growth.per_day.toLocaleString()}/day`
+                    : `sampling · ${data.growth?.samples ?? 0} so far`} />
             <Tile label="Readable here" value={data.hosted_public} />
             <Tile label="Delisted" value={data.delisted} />
             <Tile label="Takedowns waiting" value={data.takedowns_pending}
@@ -310,6 +347,98 @@ export default function AdminPage() {
             ))}
           </section>
 
+          {data.jobs && (
+            <section className="settings-group">
+              <h2 className="settings-group__title">Background jobs</h2>
+              <p className="settings-group__hint">
+                A loop that dies is silent — it stops doing its work and nothing
+                anywhere says so. <code>popularity_rank</code> once had no loop
+                at all and sat frozen for months on exactly that basis. So every
+                row below is <strong>evidence the job left behind</strong> — a
+                build timestamp, a watermark, a queue draining — rather than a
+                heartbeat it reported about itself. A heartbeat says &ldquo;I
+                ran&rdquo;; this says &ldquo;I achieved something&rdquo;, which
+                is the one that catches a job running happily over a broken
+                query.
+              </p>
+              <div className="admin-jobs">
+                {data.jobs.evidence.map(j => (
+                  <div key={j.key} className={`admin-job admin-job--${j.state}`}>
+                    <div className="admin-job__head">
+                      <span className="admin-job__name">{j.label}</span>
+                      <span className={`admin-job__state admin-job__state--${j.state}`}>
+                        {j.state === "ok" ? "running" : j.state === "stale" ? "stale" : "no evidence"}
+                      </span>
+                    </div>
+                    <div className="admin-job__when">
+                      <strong>{ago(j.age_h)}</strong>
+                      <span className="admin-job__budget">
+                        flagged past {j.stale_after_h}h
+                      </span>
+                    </div>
+                    <p className="admin-job__why">{j.why}</p>
+                  </div>
+                ))}
+              </div>
+              {data.jobs.queues.length > 0 && (
+                <>
+                  <h3 className="admin-subhead">Queues</h3>
+                  <p className="settings-group__hint">
+                    A queue answers the opposite question to a timestamp: not
+                    whether the job ran, but whether it is keeping up. One that
+                    only grows is a job that is running and losing.
+                  </p>
+                  <div className="admin-queues">
+                    {data.jobs.queues.map(qq => (
+                      <div key={qq.key} className="admin-queue">
+                        <span className="admin-queue__n">{qq.depth.toLocaleString()}</span>
+                        <span className="admin-queue__label">{qq.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+          )}
+
+          {data.storage && (
+            <section className="settings-group">
+              <h2 className="settings-group__title">Storage</h2>
+              <p className="settings-group__hint">
+                The database is <strong>{bytes(data.storage.db_bytes)}</strong> on
+                a home box. Which object is biggest is the question worth being
+                able to answer without psql — dropping two unused trigram indexes
+                once took it from 40GB to 36GB. Bars compare each object with
+                the largest, not with the database total: <code>stories</code> is
+                most of it, and against the total every other bar is a stub.
+              </p>
+              <div className="admin-storage">
+                {/* Bars are scaled to the BIGGEST object, not to the database
+                    total. `stories` is 92% of it, so against the total every
+                    other bar collapses to a stub and six of eight rows say
+                    nothing at all. Scaled to the largest, the bar answers the
+                    question actually being asked — how these compare with each
+                    other — and the absolute size is right there in the row. */}
+                {data.storage.objects.map(o => {
+                  const biggest = Math.max(...data.storage!.objects.map(x => x.bytes), 1)
+                  const share = (o.bytes / biggest) * 100
+                  return (
+                    <div key={o.name} className="admin-storage__row">
+                      <span className="admin-storage__name">{o.name}</span>
+                      <span className="admin-storage__track">
+                        <span className="admin-storage__fill" style={{ width: `${share}%` }} />
+                      </span>
+                      <span className="admin-storage__size">{bytes(o.bytes)}</span>
+                      <span className="admin-storage__rows">
+                        {o.rows > 0 ? `${compact(o.rows)} rows` : ""}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+          )}
+
           <section className="settings-group">
             <h2 className="settings-group__title">What the crawler does next</h2>
             <dl className="admin-facts">
@@ -420,9 +549,9 @@ export default function AdminPage() {
   )
 }
 
-function Tile({ label, value, approx, href, onClick }: {
+function Tile({ label, value, approx, href, onClick, sub }: {
   label: string; value: number | null; approx?: boolean; href?: string
-  onClick?: () => void
+  onClick?: () => void; sub?: string
 }) {
   const body = (
     <>
@@ -431,6 +560,7 @@ function Tile({ label, value, approx, href, onClick }: {
           : `${approx && value > 1000 ? "~" : ""}${value.toLocaleString()}`}
       </span>
       <span className="admin-tile__label">{label}</span>
+      {sub && <span className="admin-tile__sub">{sub}</span>}
     </>
   )
   // onClick before href: the takedown tile now switches to a tab on this very
