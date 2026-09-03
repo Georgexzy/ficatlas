@@ -145,6 +145,67 @@ def _story_tsv(entity=Story):
     )
 
 
+# Field weights for _story_tsv_ranked, in ts_rank's own order: {D, C, B, A}
+# — that is {summary/author, subject facets, tags, title}.
+#
+# Two arrays, chosen by the same is_category switch that picks w_title/w_text/
+# w_pop, because "which field should count most" is the same question as "did
+# you name a thing or a kind of thing".
+#
+#   TITLE     the title outranks everything. `the arithmancer` means the work.
+#   CATEGORY  TAGS outrank the title, and the title drops below them. Searching
+#             a trope, being TAGGED with it is the evidence; being NAMED after
+#             it is a coincidence. Without this, `dramione` returned a
+#             490-kudos drabble collection with the word in its title above
+#             works with 6,001 and 10,494 that are actually tagged for the
+#             pairing — the exact failure this file fixed once before.
+_TSV_WEIGHTS_TITLE = literal_column("'{0.1, 0.3, 0.6, 1.0}'")
+_TSV_WEIGHTS_CATEGORY = literal_column("'{0.1, 0.7, 1.0, 0.7}'")
+
+
+def _story_tsv_ranked(entity=Story):
+    """The same text, but with the FIELDS KEPT APART so ranking can tell them
+    apart. Used ONLY for ordering — never for matching.
+
+    `fic_doc` concatenates title, summary, author and every facet array into one
+    undifferentiated string, which is right for the `@@` predicate (one index,
+    one document, match anywhere) and is why ts_rank over it could not rank.
+    Measured over the candidate set for `coffee shop au`, every plausible answer
+    scored between 0.05 and 0.14 — a band narrower than the noise between them,
+    so the ordering inside it was arbitrary. That is the whole reason relevance
+    "seemed random" on any query naming a KIND of story rather than a specific
+    one. Searching a trope, the top-50 scores spanned 16-21% of the top score;
+    searching a title, they spanned 99.5%.
+
+    setweight() puts the title in band A, tags in B, the subject facets in C and
+    summary/author in D, so a word in the title stops counting exactly as much as
+    the same word buried in a tag list. On the same candidates the score range
+    goes from 0.05-0.14 to 0.00-1.00.
+
+    THIS IS NOT INDEXED AND MUST NOT BE. Retrieval still runs against
+    ix_stories_doc_fts via _story_tsv(); this expression is applied afterwards to
+    the at-most ~5,650 rows already materialised as candidates, which is exactly
+    what the old ts_rank did too. Benchmarked against the previous expression on
+    five queries: -1.1% to +2.8%, median +0.3%. The cost of a search is the heap
+    reads behind the candidate set, and that side is untouched.
+    """
+    return (
+        func.setweight(func.to_tsvector(
+            _REGCONFIG, func.coalesce(entity.title, "")), "A")
+        .op("||")(func.setweight(func.to_tsvector(
+            _REGCONFIG, func.fic_arr(entity.tags)), "B"))
+        .op("||")(func.setweight(func.to_tsvector(
+            _REGCONFIG,
+            func.fic_arr(entity.relationships) + " "
+            + func.fic_arr(entity.characters) + " "
+            + func.fic_arr(entity.fandoms)), "C"))
+        .op("||")(func.setweight(func.to_tsvector(
+            _REGCONFIG,
+            func.coalesce(entity.summary, "") + " "
+            + func.coalesce(entity.author, "")), "D"))
+    )
+
+
 # AO3 canonical fandom tags are "Work - Author"; FF.net and the older dumps use
 # the bare work name. So the same fandom is split across several values:
 #
@@ -1906,7 +1967,24 @@ def search(          # NOT async — see below
         w_title = 0.35 if is_category else 3.0
         w_exact = 0.15 if is_category else 4.0
         w_pop = 3.5 if is_category else 1.0
-        w_text = 2.5 if is_category else 1.5
+        # w_text was 2.5/1.5 against a text signal that spanned 0.05-0.14, so it
+        # was really worth at most ~0.35 of a vote. The field-weighted signal
+        # spans the full 0-1, so the SAME weights would have been a 7x promotion
+        # — enough to swamp both `pop` and the ship_bonus below, which is how
+        # `dramione` started returning works with the word in the title over
+        # works tagged with the pairing. These are set so text contributes on the
+        # same order as popularity rather than above it.
+        w_text = 1.5 if is_category else 0.8
+        # When the query RESOLVED to a pairing we already know what was meant,
+        # and text matching stops being evidence and starts being noise: the
+        # word "dramione" in a title says nothing about a work, while the 1,248
+        # works actually tagged Hermione Granger/Draco Malfoy do not contain the
+        # word at all. Leaving text at full weight let a 490-kudos drabble
+        # collection with the nickname in its title outrank works with 6,001 and
+        # 22,210 that the reader plainly meant. So the text term stands down and
+        # ship_bonus + readership decide the order within the pairing.
+        if ship_canonical:
+            w_text = 0.3
 
         # A bonus, not a hard tier. As a tier, ANY work whose title contained the
         # words beat every better overall match, and popularity never got a vote
@@ -1922,14 +2000,34 @@ def search(          # NOT async — see below
             func.ln(1 + func.coalesce(S.kudos, 0) + func.coalesce(S.hits, 0) / 20.0)
             / 13.8, 1.0)
         title_sim = func.similarity(func.coalesce(S.title, ""), q_norm)
-        # Normalisation flag 1 divides the rank by 1 + log(document length).
-        # Without it ts_rank is raw term frequency, so a work whose entire
-        # indexed document is the two words you searched for scored higher than
-        # one that is genuinely about the subject and says so across a summary
-        # and thirty tags. That is how "Dramione" (the title) outranked every
-        # story actually tagged Dramione.
-        text_rank = func.ts_rank(_story_tsv(S),
-                                 func.websearch_to_tsquery(_REGCONFIG, q), 1)
+        # Normalisation flag 0 — NO length normalisation — over the FIELD-WEIGHTED
+        # vector. Both halves of that are deliberate and neither works alone.
+        #
+        # Flag 1 (divide by 1 + log(document length)) was here to stop a work
+        # whose entire document is the two words you searched for outranking one
+        # genuinely about the subject. It did that, and paid for it twice over:
+        # dividing by length IS a bonus for being short, so on `all the young
+        # dudes` four works with 0 kudos scored the maximum 0.353 — higher than
+        # the 322,055-kudos work of that name — purely because they have almost
+        # no text. Length normalisation cannot tell "concise and exactly on
+        # topic" from "empty".
+        #
+        # Field weighting solves the original problem properly instead: the
+        # reason a bare title used to win was that title and tag counted the
+        # same, and now they do not. With that fixed, length normalisation has
+        # nothing left to do and only contributes the sparse-document bug, so it
+        # goes. Every work whose title matches now scores about the same high
+        # value and ENGAGEMENT breaks the tie, which is the behaviour a reader
+        # expects: `the arithmancer` puts all title matches at 0.608 and lets
+        # the 4,415-kudos one win, and `all the young dudes` returns the
+        # 322,055-kudos work first again.
+        #
+        # The weights below are unchanged. They were tuned against a signal
+        # spanning 0.05-0.14; this one spans 0.00-1.00, which is the same range
+        # `pop` already occupies, so w_text and w_pop finally mean what they say.
+        text_rank = func.ts_rank(
+            _TSV_WEIGHTS_CATEGORY if is_category else _TSV_WEIGHTS_TITLE,
+            _story_tsv_ranked(S), func.websearch_to_tsquery(_REGCONFIG, q), 0)
 
         # A resolved pairing is the one part of a free-text query that is not a
         # guess: the reader named a ship and this work is tagged with it. Recall

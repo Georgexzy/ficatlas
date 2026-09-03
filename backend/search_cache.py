@@ -152,7 +152,13 @@ def cache_key(query_string: str, is_operator: bool) -> str:
 # v2: SearchResponse gained `hidden_explicit`.
 # v3: free text can now resolve a ship nickname to its canonical pairing,
 # so the same query returns a different (wider) set than a v2 entry holds.
-SCHEMA_VERSION = "v3"
+# v4: relevance ranks over a FIELD-WEIGHTED tsvector. The response shape is
+# unchanged — the ORDER inside it is not, and a cached v3 entry holds the old
+# ordering. Worth stating plainly because the rule above says "shape": a
+# ranking change invalidates the cache just as completely, and skipping this
+# bump is invisible. It cost half an hour here, verifying a fix against cached
+# results and concluding it had not worked.
+SCHEMA_VERSION = "v4"
 
 # Expired rows are swept probabilistically on write rather than by a scheduled
 # job: 1 write in 200 pays for the cleanup, which at any real request rate keeps
