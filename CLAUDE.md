@@ -313,6 +313,43 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   detection indefinitely (`syntax error at or near "twitter"`, from a Blogger
   share widget scraped as an author name). `tests/test_series_detect_sql.py`
   guards it at source.
+- **Relevance ranks over a FIELD-WEIGHTED tsvector, and that vector must never
+  be used for matching.** `fic_doc()` flattens title, summary, author and every
+  facet into one string — correct for the `@@` predicate (one index, match
+  anywhere) and the reason `ts_rank` over it could not rank: on `coffee shop au`
+  every plausible answer scored between 0.05 and 0.14, a band narrower than the
+  noise between them, so the order inside it was arbitrary. That is why relevance
+  "felt random" on any query naming a KIND of story. `_story_tsv_ranked()` uses
+  setweight() (title A, tags B, subject facets C, summary/author D) and is
+  applied AFTER retrieval to the ~5,650 materialised candidates, so there is no
+  second index and no reindex — benchmarked at +0.3% median over five queries.
+  `tests/test_search_ranking_tsv.py` asserts the two expressions stay distinct;
+  putting setweight into the matching side drops `ix_stories_doc_fts` and
+  seq-scans 20M rows.
+  - Normalisation flag is **0**, not 1. Flag 1 divides by document length, which
+    is a bonus for being short: on `all the young dudes` four 0-kudos works
+    scored the maximum because they have almost no text, above the 322,055-kudos
+    work of that name. Field weighting solves the problem flag 1 was added for
+    (a bare title outranking works tagged with the subject), so the length
+    division only contributed the sparse-document bug.
+  - **Two weight arrays.** A title query weights the title highest; a CATEGORY
+    query weights TAGS above the title, because being tagged with a trope is
+    evidence and being named after it is a coincidence. Without that split
+    `dramione` returned a 490-kudos drabble collection with the word in its
+    title above works with 6,001 and 22,210 actually tagged for the pairing.
+  - When the query resolved to a ship, `w_text` drops to 0.3. The pairing is
+    already known, and the 1,248 works tagged Hermione Granger/Draco Malfoy do
+    not contain the word "dramione" at all — so text can only reward a
+    coincidental title.
+  - Two approaches were tried first and BOTH measurably regressed, so do not
+    reach for them again: Reciprocal Rank Fusion (k=60 is tuned for lists of
+    tens, not 5,001 candidates — text ranks in the thousands make the text term
+    vanish and it collapses to a popularity sort) and percentile normalisation
+    (percentiles are relative to an arbitrary candidate sample, so it surfaced
+    400-kudos works and dropped the 322,055-kudos work off `all the young
+    dudes`). The score-spread metric that diagnosed the problem did NOT improve
+    with the fix that worked — it identified the right subsystem and was the
+    wrong thing to optimise.
 - The search cache is two-tier: in-process L1 plus a shared UNLOGGED
   `search_cache_entries` table, because the per-worker cache meant four uvicorn
   workers each paid a ~10s miss for the same popular query. Bump
