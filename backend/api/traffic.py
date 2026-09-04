@@ -348,6 +348,7 @@ def searches(days: int = Query(30, ge=1, le=365),
                min(at) AS first_seen, max(at) AS last_seen
         FROM visit_events
         WHERE at >= :cut AND kind = 'search' AND NOT bot AND q IS NOT NULL AND q <> ''
+          AND path = '/api/search'
         GROUP BY 1 ORDER BY runs DESC LIMIT :lim
     """), {"cut": cut, "lim": limit}).fetchall()
     empty = db.execute(text("""
@@ -356,15 +357,31 @@ def searches(days: int = Query(30, ge=1, le=365),
         FROM visit_events
         WHERE at >= :cut AND kind = 'search' AND NOT bot
           AND q IS NOT NULL AND q <> '' AND results = 0
+          AND path = '/api/search'
         GROUP BY 1 ORDER BY runs DESC LIMIT :lim
     """), {"cut": cut, "lim": limit}).fetchall()
     # Totals over the WHOLE window, not just the rows above. Both lists are
     # capped at `limit`, so summing what is displayed answers a question about
     # the top 30 queries while looking like an answer about the site.
+    # `runs` counts FIRST PAGES only. Every results page is a second
+    # /api/search request carrying the same `q`, so without this a reader
+    # paging through one search reads as a dozen searches — and this number is
+    # quoted as evidence elsewhere in the codebase.
+    #
+    # `search_only` is the other half of the same doubt, and it does not depend
+    # on the user-agent: pageviews come from the browser beacon, so a visitor
+    # that searched and never rendered a page is not a browser. Measured
+    # 2026-09-04, 18 such visitors accounted for 759 of 1,370 recorded searches
+    # and produced zero pageviews between them — one of them was a developer
+    # test session, complete with `wolfstar"; drop table--`. `is_bot` cannot
+    # see any of that: it matches on the user-agent string and says so.
     totals = db.execute(text("""
-        SELECT count(*),
-               count(*) FILTER (WHERE results = 0),
-               count(DISTINCT lower(q))
+        SELECT count(*) FILTER (WHERE path = '/api/search'),
+               count(*) FILTER (WHERE results = 0 AND path = '/api/search'),
+               count(DISTINCT lower(q)),
+               count(*) FILTER (WHERE path = '/api/search' AND visitor NOT IN (
+                   SELECT visitor FROM visit_events
+                    WHERE at >= :cut AND kind <> 'search'))
         FROM visit_events
         WHERE at >= :cut AND kind = 'search' AND NOT bot
           AND q IS NOT NULL AND q <> ''
@@ -376,7 +393,8 @@ def searches(days: int = Query(30, ge=1, le=365),
         "empty": [{"query": r[0], "runs": r[1],
                    "last_seen": r[2].isoformat()} for r in empty],
         "totals": {"runs": totals[0] or 0, "empty_runs": totals[1] or 0,
-                   "distinct": totals[2] or 0},
+                   "distinct": totals[2] or 0,
+                   "search_only": totals[3] or 0},
     }
 
 

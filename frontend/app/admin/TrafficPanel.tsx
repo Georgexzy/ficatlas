@@ -42,7 +42,7 @@ interface RefRow {
 }
 interface Searches {
   top: SearchRow[]; empty: EmptyRow[]
-  totals: { runs: number; empty_runs: number; distinct: number }
+  totals: { runs: number; empty_runs: number; distinct: number; search_only?: number }
 }
 
 const RANGES = [7, 30, 90]
@@ -313,6 +313,18 @@ export default function TrafficPanel() {
               found nothing.
             </>}
           </p>
+          {/* The doubt the user-agent check cannot answer. Pageviews come from
+              the browser beacon, so a visitor that searched and never rendered
+              a page was not a browser — a script, or a test session. Worth
+              seeing beside the counts, because these numbers get quoted. */}
+          {!!searches.totals.search_only && searches.totals.search_only > 0 && (
+            <p className="admin-note">
+              {searches.totals.search_only.toLocaleString()}
+              {" "}({Math.round((searches.totals.search_only / searches.totals.runs) * 100)}%)
+              came from visitors who never loaded a page — automated, most likely,
+              and not caught by the user-agent check.
+            </p>
+          )}
           <table className="traffic-table">
             <thead><tr>
               <th>Query</th><th>Runs</th><th>People</th><th>Found</th><th>Last run</th>
