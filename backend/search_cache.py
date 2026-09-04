@@ -162,7 +162,12 @@ def cache_key(query_string: str, is_operator: bool) -> str:
 # against the vocabulary, so `fandom:Harry Potter time travel` returns 5,000
 # works instead of 0. Same URL, same shape, different results — which is
 # exactly the case the v4 note above was written about, and it caught this one.
-SCHEMA_VERSION = "v5"
+# v6: query_intent.py reads the reader's own phrasing before the search runs —
+# framing removed, "long" turned into a word count, the phrase resolved against
+# the tag vocabulary. Same URL, same shape, different results and a different
+# order: "looking for a fic where harry raises teddy" went from 2 works to 633.
+# Same case as v4 and v5.
+SCHEMA_VERSION = "v6"
 
 # Expired rows are swept probabilistically on write rather than by a scheduled
 # job: 1 write in 200 pays for the cleanup, which at any real request rate keeps

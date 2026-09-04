@@ -112,6 +112,7 @@ def _cost_ttl(elapsed_ms: float) -> int:
     return max(SEARCH_CACHE_SECONDS,
                min(SEARCH_CACHE_MAX_SECONDS, int(elapsed_ms * SEARCH_CACHE_COST_FACTOR)))
 from query_parser import parse_query, parsed_to_search_params
+from query_intent import resolve_intent
 import re
 from character_aliases import character_variants, relationship_variants
 from language_aliases import language_variants
@@ -1353,6 +1354,69 @@ def search(          # NOT async — see below
             tags = _fixed
         q = " ".join(x for x in ([q] if q else []) + _spill).strip() or None
 
+    # ── The reader's own words ───────────────────────────────────────────────
+    #
+    # Request framing out ("looking for a fic where"), length words turned into
+    # a word-count filter, and the remaining phrase resolved against the tag
+    # vocabulary. See query_intent.py for why each of those is a different kind
+    # of operation and why only the middle one is gated.
+    #
+    # It runs AFTER _resolve_or_split for the same reason that does: everything
+    # below reads `q`, and it must read the recovered text. It runs BEFORE the
+    # FTS predicate, the ship resolution and the category test, all three of
+    # which are the things it exists to improve.
+    trope_tags: list[str] = []
+    trope_works = 0
+    trope_leftover = ""
+    trope_branch_ok = False
+    text_variants: list[str] = []
+    is_shorthand = False
+    # Built with the text predicate below and re-used by the ranking, so the
+    # two cannot disagree about which spellings the search was for.
+    text_tsq = None
+    if q:
+        intent = resolve_intent(db, q)
+        if intent.text:
+            q = intent.text
+            # Explicit parameters still win, the rule every operator follows —
+            # a reader who set the word-count slider did not mean "long".
+            if word_count_min is None and intent.word_count_min is not None:
+                word_count_min = intent.word_count_min
+            if word_count_max is None and intent.word_count_max is not None:
+                word_count_max = intent.word_count_max
+            if not status and intent.status:
+                status = intent.status
+            # "…on AO3" named an archive. An explicit ?sites= still wins, and
+            # so does a `site:` operator, which parse_query has already put
+            # into `sites` by the time this runs.
+            #
+            # A SECOND site predicate, and a narrowed `site_enums`. Both are
+            # needed and they do different jobs: the first predicate went into
+            # `filters` a hundred lines above — before the free text had been
+            # recovered from an operator value — so it cannot be rewritten, and
+            # two `IN` lists intersect, which is what narrowing an unset default
+            # to one archive should do. Reassigning `site_enums` is what makes
+            # everything READ from it afterwards agree: the fuzzy-title branch,
+            # the per-archive `site_counts` breakdown, and `sites_searched` in
+            # the response, which would otherwise claim three archives were
+            # searched when one was.
+            if not sites and intent.site:
+                site_enums = [SiteEnum(intent.site)]
+                filters.append(Story.site.in_(site_enums))
+                active_sites = [intent.site]
+            parsed_tokens.extend(intent.tokens)
+            trope_tags, trope_leftover = intent.tags, intent.tag_leftover
+            # The resolution always votes in the ranking; it only joins the
+            # PREDICATE when it can actually narrow something. See
+            # TROPE_BRANCH_MAX_WORKS — an unbounded branch over a 577,244-work
+            # tag matched what the text match had already matched and turned
+            # "hurt comfort" into a 20s timeout and a 503.
+            trope_branch_ok = intent.tag_branch_ok
+            # Only a tag that accounts for the WHOLE query says anything about
+            # what the reader meant by the whole query — see resolve_trope_tags.
+            trope_works = intent.tag_works if intent.tag_is_whole else 0
+            text_variants, is_shorthand = intent.text_variants, intent.is_shorthand
+
     if q:
         # Free text goes through Postgres full-text search against the GIN index
         # (ix_stories_doc_fts) covering title, summary, author and every facet array.
@@ -1371,7 +1435,25 @@ def search(          # NOT async — see below
         # Mild spelling tolerance lives in the title-candidate UNION below, not
         # here. An OR similarity() against the whole table forced a seq scan of
         # 19.7M titles and turned a 200ms search into a 60s timeout.
-        text_pred = _story_tsv().op("@@")(func.websearch_to_tsquery(_REGCONFIG, q))
+        # One tsquery, not one predicate per spelling.
+        #
+        # A rewritten spelling has to be searched beside what the reader typed
+        # (see the note on text_variants below), and the obvious way to do that
+        # — an OR of two or three `@@` predicates — asks the GIN index the same
+        # question two or three times over 20M rows. tsquery's own `||` is the
+        # same disjunction inside ONE index lookup:
+        #
+        #   ('wandcraft' & 'harri') | ('wandmak' & 'harri') | ('wandlor' & 'harri')
+        #
+        # It is also what makes the ranking cheap. `_story_tsv_ranked` is four
+        # to_tsvector calls per row; ranking against three separate queries
+        # would run it three times over every one of the ~5,000 materialised
+        # candidates, where one combined query runs it once.
+        text_tsq = func.websearch_to_tsquery(_REGCONFIG, q)
+        for _alt in text_variants:
+            text_tsq = text_tsq.op("||")(
+                func.websearch_to_tsquery(_REGCONFIG, _alt))
+        text_pred = _story_tsv().op("@@")(text_tsq)
 
         # A ship nickname resolves to the pairing the archives actually file it
         # under (see `_ship_nickname`). It is OR-ed BESIDE the text match, never
@@ -1383,6 +1465,7 @@ def search(          # NOT async — see below
         if _SHIP_ALIASES_ON:
             nickname = _ship_nickname(db, q) or _spelled_out_pair(db, q)
         ship_canonical = nickname[0] if nickname else None
+        branches = [text_pred]
         if nickname:
             canonical, rest = nickname
             ship_pred = Story.relationships.op("&&")(
@@ -1390,9 +1473,25 @@ def search(          # NOT async — see below
             if rest.strip():
                 ship_pred = and_(ship_pred, _story_tsv().op("@@")(
                     func.websearch_to_tsquery(_REGCONFIG, rest)))
-            filters.append(or_(text_pred, ship_pred))
-        else:
-            filters.append(text_pred)
+            branches.append(ship_pred)
+        # A resolved trope is OR-ed beside the text match for exactly the
+        # reason a resolved ship is: it is inferred from user-written tags, so
+        # it must only ever be able to WIDEN. The works tagged `Harry Potter
+        # Raises Teddy Lupin` are the answer to "fics where harry raises teddy"
+        # and most of them do not contain the word "raises" anywhere a text
+        # search can see it. Served by ix_stories_tags (GIN on the array), the
+        # same index every tag filter uses.
+        if trope_tags and trope_branch_ok:
+            trope_pred = Story.tags.op("&&")(cast(trope_tags, PG_ARRAY(Text)))
+            # Words the tag did not account for still have to hold, exactly as
+            # they do on the ship branch: `Time Travel` is 45,960 works and
+            # "time travel naruto" must not return the 44,000 that are not
+            # Naruto.
+            if trope_leftover.strip():
+                trope_pred = and_(trope_pred, _story_tsv().op("@@")(
+                    func.websearch_to_tsquery(_REGCONFIG, trope_leftover)))
+            branches.append(trope_pred)
+        filters.append(or_(*branches) if len(branches) > 1 else text_pred)
 
     if dlp_min_rating is not None:
         # The rating lives in a `dlp_stars:4.67` tag rather than a column, so it
@@ -2057,8 +2156,21 @@ def search(          # NOT async — see below
         title_l = func.lower(S.title)
 
         # Is this the name of a thing, or the name of a subject?
-        facet_hits = _query_is_category(db, q_norm)
-        is_category = facet_hits >= 100
+        # The trope lookup already asked the vocabulary this question and got a
+        # better answer than an exact-phrase probe can: _query_is_category only
+        # recognises a category the reader spelled the way the archive does, so
+        # `slytherin harry` was a category (490-work tag) and `harry slytherin`
+        # — the same request — was not, and ranked works with the two words in
+        # their title above the 2,450 actually tagged for it.
+        facet_hits = max(_query_is_category(db, q_norm), trope_works)
+        # A coined word is a category by construction. "wandcrafter" appears in
+        # none of the 1.57M tags and in no title — it is a thing readers say and
+        # archives do not, so the reader asked for a KIND of story and there is
+        # no work to be looking for by that name. Without this the query fell to
+        # the title weights and a 0-kudos work called "Wandcrafting" outranked
+        # every actual wandmaker fic. See _alias_expand for which aliases are
+        # trusted this far and why "mod" is not one of them.
+        is_category = facet_hits >= 100 or is_shorthand
 
         # Weights shift with that answer rather than there being two code paths.
         # A category query still rewards a matching title; it just stops letting
@@ -2146,9 +2258,13 @@ def search(          # NOT async — see below
         # The weights below are unchanged. They were tuned against a signal
         # spanning 0.05-0.14; this one spans 0.00-1.00, which is the same range
         # `pop` already occupies, so w_text and w_pop finally mean what they say.
+        # Ranked against the SAME combined tsquery that did the matching — a
+        # work found only through a rewritten spelling does not contain what
+        # the reader typed, so ranking it against that alone scores it zero and
+        # leaves readership to order it by accident.
         text_rank = func.ts_rank(
             _TSV_WEIGHTS_CATEGORY if is_category else _TSV_WEIGHTS_TITLE,
-            _story_tsv_ranked(S), func.websearch_to_tsquery(_REGCONFIG, q), 0)
+            _story_tsv_ranked(S), text_tsq, 0)
 
         # A resolved pairing is the one part of a free-text query that is not a
         # guess: the reader named a ship and this work is tagged with it. Recall
@@ -2168,8 +2284,35 @@ def search(          # NOT async — see below
                     cast(_both_orders(ship_canonical), PG_ARRAY(Text))), 2.5),
                 else_=0.0)
 
+        # The same argument as ship_bonus, one step less certain. The reader
+        # named a trope and this work is TAGGED with it, which the text rank
+        # cannot see: `fic_doc` flattens tags in with everything else, so a work
+        # tagged `Slytherin Harry Potter` and a work whose summary happens to
+        # use both words score alike. Lower than ship_bonus (2.5) because a
+        # pairing resolution is exact and a substring match over the tag
+        # vocabulary is a good guess. 1.0 against a `w_pop` of 3.5 is a little
+        # under a third of the whole popularity range — enough to lift the
+        # tagged works clear of coincidence, not enough to outrank readership.
+        # At 1.8 it was enough: on "fake dating stucky" a 6-kudos work tagged
+        # `Fake/Pretend Relationship` displaced a 4,005-kudos one.
+        #
+        # Gated on is_category, which is the same question asked once: a bonus
+        # for carrying the trope only makes sense if the reader asked for a
+        # trope. Ungated it re-created this file's oldest bug in a new place —
+        # `all the young dudes` is a 13-work TAG as well as the most-read work
+        # on the site, and +1.8 for carrying that tag put two 0-kudos works
+        # (one of them a translation) above the 322,055-kudos original. Below
+        # the category line the resolution still WIDENS the search; it just
+        # stops voting on the order.
+        trope_bonus = literal_column("0.0")
+        if trope_tags and is_category:
+            trope_bonus = case(
+                (S.tags.op("&&")(cast(trope_tags, PG_ARRAY(Text))), 1.0),
+                else_=0.0)
+
         relevance = (w_title * title_sim + exact_bonus
-                     + w_text * text_rank + w_pop * pop + ship_bonus)
+                     + w_text * text_rank + w_pop * pop
+                     + ship_bonus + trope_bonus)
 
         ordered = ordered.order_by(
             relevance.desc(),
