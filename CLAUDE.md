@@ -177,6 +177,35 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   everything. `_popularity_loop` runs it weekly (`REBUILD_POPULARITY`,
   `POPULARITY_INTERVAL_HOURS`). Do not remove it and go back to running the
   script by hand.
+  - **The loop was not enough, because it left no evidence.** Measured
+    2026-09-04: 549,515 works scored against **2,399,048** carrying an
+    engagement figure — the same number as before the loop was written, while
+    the eligible population had more than doubled as the crawler enriched rows.
+    "Most popular" was covering 2.7% of the index where the data supports 11.7%.
+    Its only trace was one line in a 75,000-line worker log, and the admin
+    panel — which exists *because this script once sat frozen* — had no row for
+    it. It now records `popularity_built_at`, `popularity_scored` and
+    `popularity_eligible` into `app_settings` on every successful pass, and the
+    panel shows both the timestamp and the backlog. Two numbers, not one: a
+    pass that runs on time and falls further behind every week is
+    indistinguishable from a healthy one by timestamp alone, and that is the
+    failure that actually happened.
+  - **11.7% is the ceiling, and it is a data ceiling, not a bug.** 88% of the
+    index has no engagement figure at all and none can be imported: the
+    HuggingFace FF.net dump has eight columns (source_file, category, rating,
+    chapters, words, story_url, summary, language), the archive.org SQLite dump
+    has nineteen, and neither carries favourites, follows or reviews; the AO3
+    bulk metadata dump carries id, title and metadata only. Coverage grows only
+    as the crawler enriches rows. Do not go looking for a column to widen the
+    eligibility predicate with — `favourites` is present, unused and 0 on every
+    row in the index.
+  - Consequently a FF.net work almost never wins a relevance sort: only 6.1% of
+    FF.net rows carry any engagement number (AO3: 13.9%), and the `pop` term in
+    `api/search.py` is raw `ln(1 + kudos + hits/20)`, which is 0 for the rest.
+    `popularity` — the percentile that exists precisely to make the archives
+    comparable — is a SORT option and is not a term in the relevance score.
+    Wiring it in as a fallback where raw engagement is null is a real change and
+    has not been measured.
 - **Do not re-add `ix_stories_tags_trgm` / `ix_stories_relationships_trgm`.** They
   were 4.4GB with zero scans (tag and relationship filtering uses facet
   resolution + array containment `&&`, served by the plain GIN indexes).

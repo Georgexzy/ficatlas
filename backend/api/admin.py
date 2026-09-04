@@ -188,6 +188,19 @@ _JOB_EVIDENCE = [
      "Maps 'dramione' and 'drarry' onto their canonical pairings. A search "
      "for a nickname finds almost nothing without it.", 200,
      "SELECT max(built_at) FROM ship_aliases"),
+    # The job this whole panel was written for, and the one row it did not have.
+    # Its absence cost exactly what the panel exists to prevent: the weekly loop
+    # left no trace but a line in a 75,000-line worker log, and the score sat at
+    # 549,515 works while 2,399,048 carried an engagement figure — "Most
+    # popular" silently covering 2.7% of the index instead of 11.7%.
+    #
+    # 200h rather than the weekly 168h, so an ordinary late run is not an alarm.
+    ("popularity", "Cross-archive popularity",
+     "Scores every work that has an engagement figure onto one scale, which is "
+     "what 'Most popular' sorts by. Frozen, it silently shrinks that sort to "
+     "whatever the last run covered.", 200,
+     "SELECT CAST(value AS timestamptz) FROM app_settings "
+     "WHERE key = 'popularity_built_at'"),
     # NOT here, deliberately: the AO3 stale-WIP refresh. The obvious evidence for
     # it is max(queued_at) on ao3_refresh_queue, and that is the wrong column —
     # the queue is REFILLED in batches and drained a few at a time, so all 160
@@ -211,6 +224,16 @@ _JOB_EVIDENCE = [
 # "is it keeping up". A queue that only grows is a job that is running and
 # losing.
 _JOB_QUEUES = [
+    # Not a queue in the usual sense — the works that HAVE an engagement figure
+    # and are still waiting for a score. It belongs here rather than beside the
+    # timestamp above because it answers the other question: a popularity pass
+    # that runs on time and falls further behind every week looks healthy from a
+    # timestamp alone. Read from what the last pass recorded, because counting
+    # it live is a sequential scan of 20M rows.
+    ("popularity_backlog", "Works awaiting a popularity score",
+     "SELECT GREATEST(0, "
+     "  COALESCE((SELECT value FROM app_settings WHERE key='popularity_eligible'), '0')::bigint"
+     "  - COALESCE((SELECT value FROM app_settings WHERE key='popularity_scored'), '0')::bigint)"),
     ("ao3_refresh", "AO3 stale-WIP queue", "SELECT count(*) FROM ao3_refresh_queue"),
     ("ffnet_wayback", "FF.net Wayback queue", "SELECT count(*) FROM ffnet_wayback_queue"),
     ("search_cache", "Shared search cache", "SELECT count(*) FROM search_cache_entries"),
