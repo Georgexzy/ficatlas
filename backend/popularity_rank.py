@@ -78,6 +78,7 @@ and the absolute term carries the rest.
 import argparse
 import logging
 import time
+from datetime import datetime, timezone
 
 import sqlalchemy
 from sqlalchemy import text
@@ -261,6 +262,49 @@ PERCENTILES = [
 ]
 
 
+# What this pass left behind, for the admin panel's Background jobs section.
+#
+# That panel exists because THIS script sat frozen for months and nothing
+# anywhere showed it — and it still had no row for this job, so the same thing
+# happened again quietly: 549,515 works scored against 2,399,048 carrying an
+# engagement figure, because the weekly loop's only trace was one line in a
+# 75,000-line worker log.
+#
+# Two numbers, not a heartbeat. The timestamp says the pass finished; the pair
+# says whether it is KEEPING UP, which is the failure that actually occurred —
+# a job that runs on time and falls further behind every week as the crawler
+# enriches rows looks identical to a healthy one from a timestamp alone. Both
+# are computed here because this is the only place they are already known;
+# counting eligible rows on the panel would be a sequential scan of 20M.
+#
+# Keys: popularity_built_at, popularity_scored, popularity_eligible. The panel
+# reads the first as its evidence timestamp and the last two as a backlog.
+_UPSERT = text("""
+    INSERT INTO app_settings (key, value) VALUES (:k, :v)
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+""")
+
+
+def _record_evidence(db, scored: int) -> None:
+    try:
+        eligible = db.execute(text("""
+            SELECT count(*) FROM stories
+             WHERE delisted_at IS NULL
+               AND (kudos > 0 OR bookmarks > 0 OR comments > 0 OR hits > 0)
+        """)).scalar() or 0
+        for key, value in (("popularity_built_at",
+                            datetime.now(timezone.utc).isoformat()),
+                           ("popularity_scored", str(scored)),
+                           ("popularity_eligible", str(int(eligible)))):
+            db.execute(_UPSERT, {"k": key, "v": value})
+        db.commit()
+    except Exception as e:
+        # Evidence is not the job. A panel row is not worth failing a pass that
+        # has already written 2.4M rows.
+        db.rollback()
+        log.warning("could not record popularity evidence: %s", e)
+
+
 def run(dry_run: bool = False) -> int:
     with db_session() as db:
         # This walks every scored row and writes most of them; the session's
@@ -308,6 +352,7 @@ def run(dry_run: bool = False) -> int:
                 res = db.execute(text(UPDATE_WRITE_SQL))
                 db.commit()
                 n = res.rowcount or 0
+                _record_evidence(db, n)
                 log.info("popularity written for %s works (attempt %s)", f"{n:,}", attempt)
                 return n
             except sqlalchemy.exc.OperationalError as e:
