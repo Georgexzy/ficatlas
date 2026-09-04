@@ -349,6 +349,122 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   fandom to the whole string and matched nothing when typed, while the same
   string sent to the API worked. `frontend/lib/queryParser.test.ts` asserts the
   same cases as `backend/tests/test_query_parser.py`; keep them mirrored.
+- **Reddit-shaped queries are handled in `query_intent.py`, NOT in the parsers.**
+  `websearch_to_tsquery` ANDs every term, so each word of request framing is a
+  hard filter over 20M rows: `drarry` returned the 5,000 ceiling and
+  `long drarry fics` returned 68 — two words carrying no information about any
+  story deleting 98.6% of the answer, and looking to the reader like a thin
+  index rather than an error. `looking for a fic where harry raises teddy`
+  returned **2**; `recs for slow burn destiel` returned **0**. Three passes, in
+  this order, and the order is load-bearing:
+  - **Framing out** ("looking for", "fics where", "recs", a trailing "please").
+    Dropping a term from an AND-query can only WIDEN, so this needs no gate.
+  - **Qualifiers into filters** — "long" is `word_count >= 50k`, not a word to
+    find. This NARROWS, so it is gated on the query being a request at all:
+    `The Long Way Home` has no framing and keeps its "long". The register test
+    runs on the RAW string, before framing is removed, or `long fics` loses the
+    "fics" that made it a request.
+  - **The phrase against the tag vocabulary.** This is the half that works in
+    every fandom without a per-fandom dictionary: `facets` already holds 1.57M
+    freeform tags, so "harry raises teddy" finds `Harry Potter Raises Teddy
+    Lupin` and "fics where zuko joins the gaang" finds
+    `Zuko Joins The Gaang (Avatar)` by one lookup. Word order does not matter,
+    which is the point — `harry slytherin` and `slytherin harry` are the same
+    request and the archive files both under `Slytherin Harry Potter`.
+  Measured: 71→1,947, 2→643, 0→1,630, 22→501, 116→1,901, 190→1,618, 3→318.
+  Overhead 12ms on a cold phrase, 0.05ms warm. `SEARCH_QUERY_INTENT=false`
+  removes the whole module from the request; `SEARCH_TROPE_TAGS=false` keeps
+  the framing and length reading and drops only the tag branch.
+  - **The tag branch only ever WIDENS**, like the ship-alias branch and for the
+    same reason: it is inferred from user-written tags. It is OR-ed beside the
+    text match, and words the tag did not account for are AND-ed onto it —
+    `Time Travel` is 45,960 works and "time travel naruto" must not return the
+    44,000 that are not Naruto.
+  - **Four guards, each written for a query it broke.** A tag matching the
+    reader's words only inside AO3's structural furniture is not a match
+    (`Dark Mark (Harry Potter)` for "dark!harry"). A word must start a word in
+    the tag, not merely appear in it (`along` matched "long", so
+    `the long way home` resolved to `this took way too long to write`). The
+    reader's words must be MOST of the tag — coverage ≥ 0.55, which separates
+    `Harry Potter Raises Teddy Lupin` (0.6) from `Time Travelling Karl Jacobs`
+    (0.5). And a query that names a fandom, ship or character is not a trope:
+    "toy story" is a 1,473-work FANDOM, and resolving it to the 46 works tagged
+    `Alternate Universe - Toy Story Fusion` replaced the fandom with fanworks
+    about it.
+  - **The ranking bonus is gated on `is_category`.** Ungated it re-created this
+    file's oldest bug in a new place: `all the young dudes` is a 13-work TAG as
+    well as the most-read work on the site, and +1.8 for carrying it put two
+    0-kudos works (one a translation) above the 322,055-kudos original. Below
+    the category line the resolution still widens the search; it just stops
+    voting on the order. 1.0, not 1.8, because at 1.8 a 6-kudos work tagged
+    `Fake/Pretend Relationship` displaced a 4,005-kudos one on "fake dating
+    stucky".
+  - **A resolved trope reaches the AO3 half of the index and nothing else, so
+    the alias table also rewrites the TEXT.** FF.net's `tags` array holds
+    provenance markers (`ffnet_dump`, `hf_meta_2024`) and no freeform tags at
+    all, and 85% of AO3 rows have no summary, so for a great many works the
+    title is the only text there is. The alias table is therefore
+    reader-word → the ARCHIVE's words, best first
+    (`wandcrafter` → wandmaker / wandcrafting / wandlore), and those spellings
+    are searched beside what the reader typed: "wandcrafter harry" went from 3
+    works to 318, including 40 on FF.net and a 6,502-kudos work that the tag
+    could never have found. The two highest-kudos matches are rated Explicit
+    and still correctly hidden by default.
+    - They go in as ONE tsquery (`websearch_to_tsquery(a) || …`), not one `@@`
+      predicate per spelling — same disjunction, one GIN lookup instead of
+      three over 20M rows, and one `ts_rank` instead of three over the
+      candidate set (`_story_tsv_ranked` is four `to_tsvector` calls per row).
+      Ranking uses that same combined query, or a work found only through a
+      rewritten spelling scores zero on text and gets ordered by accident.
+    - **An alias firing is itself evidence of a category query** — nobody
+      titles a work "wandcrafter harry", so a coined word means a KIND of
+      story. Without it the query fell to the title weights and a 0-kudos work
+      called "Wandcrafting" outranked every real wandmaker fic. Aliases under
+      four characters are excluded from that inference: "mod" is real fandom
+      shorthand (MoD!Harry) and also the title word of 242 works in this index,
+      most of them about Minecraft.
+  - The curated alias table is for ONE case only: a reader's word that does not
+    appear in the archive's word at all ("wandcrafter" for `Wandmaker`). If the
+    reader's words are already inside the tag, the vocabulary finds it and an
+    entry would only add a way to be wrong.
+  - It is NOT in `query_parser.py` and must not move there: that parser is
+    mirrored in TypeScript and must stay pure, and this needs the database.
+    Chips still reach the bar, because the UI renders the API's
+    `parsed_tokens`, not its own parse.
+  - **The framing patterns come from real request titles, not invention.** The
+    two long-running HP fic-finder communities on LiveJournal (hpficfinders,
+    potterficfinder) put the whole request in the post title, so their subject
+    lines are the corpus: "Fic search: Hermione's parents kidnapped a girl"
+    (returned 0 — "fic" and "search" were required of every result), "Looking
+    for an old Snarry fanfiction" (119 works led by *Dear Old Snakes*, because
+    "old" was a search term), "Searching for a specific drarry fic",
+    "Help! I'm looking for a deleted Harry/Draco story on AO3". The FORM is not
+    fandom-specific; only the nouns inside it are, which is why the pattern list
+    is written once and never per fandom. Adding a shape here is cheap — adding
+    one the community does not actually use is not.
+    - "…on AO3" is the `site:` filter, not a word every result must contain.
+    - `old`, `specific`, `deleted`, `lost` describe the REQUEST. They are gated
+      on request register like the length words, so `Old Man Logan` survives.
+    - `story`, `fic`, `book`, `chapter`, `work` are words for the ARTEFACT and
+      are never trope content: a bare "story" left by "a Harry/Draco story on
+      AO3" resolved through the stem `stor` to `Storytelling` and
+      `Storybrooke`, a 2,120-work tag branch and a category promotion.
+  - **Match a word however the archive inflected it.** The archives write one
+    trope every way round — `Sirius Black Raises Harry Potter` (236 works),
+    `Harry Potter was Raised by Sirius Black` (51), `Sirius raising Harry` — and
+    a reader types whichever they think in. `_stem` strips a short, safe suffix
+    list before the word-start regex. `er`/`ers` are NOT in it and must not be:
+    they turn "traveller" into "travell" and "master" into "mast", which stops
+    matching the words they came from. Never below four characters, because a
+    three-letter prefix anchored at a word start matches most of the vocabulary.
+  - **A partial trope resolution still says what the reader meant, if the rest
+    names a thing.** "omegaverse bakugou" is a trope and a character and nothing
+    else, so it is a category query — but `_query_is_category` cannot see that:
+    it probes exact sub-phrases and deliberately excludes single words, so a
+    one-word trope beside one character scored zero, the query fell to the title
+    weights, and works with the shorthand in their title and no readers came
+    first. `_names_a_thing` on the leftover is what distinguishes that from
+    "the long way home", whose leftover is "home".
 - Never put a `:param` token inside a `--` comment in a `text()` query.
   SQLAlchemy binds it there too and psycopg2 substitutes into the comment, so any
   value containing a newline escapes into executable SQL. This stalled series
