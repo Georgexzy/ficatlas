@@ -118,8 +118,21 @@ async def track_search_middleware(request: Request, call_next):
             q = (request.query_params.get("q") or "").strip()
             if q:
                 ua = request.headers.get("user-agent", "")
+                # The RESULTS PAGE, in the path, because paging is a second
+                # request with the same `q` and the log could not tell it from
+                # searching again. A reader working through a long result set
+                # wrote dozens of identical rows: "Bts jin and jimin" shows 474
+                # "searches", and an unknown share of them are page 2 onwards.
+                # That number is quoted as evidence in code comments, so it
+                # needs to mean what it says. Page 1 keeps the bare path, so
+                # nothing that already reads "/api/search" changes.
+                try:
+                    page = int(request.query_params.get("page") or 1)
+                except ValueError:
+                    page = 1
+                path = "/api/search" if page <= 1 else f"/api/search?page={page}"
                 tracking.record(
-                    "search", "/api/search",
+                    "search", path,
                     tracking.visitor_hash(client_ip(request), ua),
                     q=q,
                     # Set by search() next to each of its exits. Absent rather

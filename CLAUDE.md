@@ -328,6 +328,35 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
 - Anonymous traffic lives in `backend/tracking.py` (buffered writer, daily-rotating
   keyed visitor hash, 90-day retention) + `backend/api/traffic.py` (public
   `POST /hit` beacon, owner-only reports) + the Traffic tab on `/admin`.
+  - **The search log is NOT a clean record of what readers type, and it is
+    quoted as evidence in code comments — treat those numbers with suspicion.**
+    Two separate defects, measured 2026-09-04 over 1,370 recorded searches:
+    - **Paging counted as searching.** Every results page is a second
+      `/api/search` request carrying the same `q`, and `path` recorded the bare
+      `/api/search` either way, so one reader working through a long result set
+      wrote a dozen identical rows. `main.py` now puts `?page=N` in the path for
+      N>1 and the report counts first pages only, so "runs" means searches.
+      Rows written before that change cannot be told apart retrospectively.
+    - **`is_bot` is a user-agent substring match and says so in its own
+      comment.** 18 visitors accounted for 759 of the 1,370 searches and
+      produced ZERO pageviews between them — pageviews come from the browser
+      beacon, so a search with no pageview is a client that is not a browser.
+      One of them ran `wolfstar"; drop table--`, `aaaaa…`, `x and x` and
+      `a very narrow specific phrase xyz`: a developer test session, not
+      flagged, because its user agent looked like a browser. The report now
+      exposes that share as `search_only`.
+    - What survives the scrutiny: the 474 `Bts jin and jimin` searches are
+      probably real. 460 came from visitors who also opened 5-21 distinct story
+      pages, and their inter-search gaps are heavy-tailed (median ~30s, mean
+      ~130s, max ~1 hour, standard deviation 3-5x the mean) — the signature of
+      somebody reading between searches. The one exception is a visitor whose
+      39 searches were 7-31s apart with a standard deviation of 7, which is a
+      machine.
+    - So `_spelled_out_pair`'s "460 of the 588 searches this site has recorded
+      are this shape" is inflated by paging and by synthetic traffic. The
+      DESIGN conclusion it supports still holds — the result-count gap between
+      `Bts taejin jealousy` and `Bts jin and taehyung jealousy` is a property of
+      the index, not of the traffic — but do not re-quote the figure.
   Pageviews come from the browser (`NavRecorder`), searches from a middleware in
   `main.py`, and the result count is stashed on `request.state.search_total` by
   `_note_total` next to each of search()'s three exits. No IP, user agent or

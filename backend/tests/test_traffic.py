@@ -347,3 +347,38 @@ def test_a_deploy_does_not_lose_the_last_few_seconds(db):
     assert db.execute(text("""
         SELECT count(*) FROM visit_events WHERE path = '/last-second'
     """)).scalar() == 1
+
+
+def test_paging_is_not_counted_as_searching_again(db):
+    """Every results page is a second /api/search request carrying the same
+    `q`. Without the page in the path the log cannot tell "searched again" from
+    "went to page 4", and it read one reader working through a long result set
+    as a dozen searches — a number quoted as evidence elsewhere in this
+    codebase.
+    """
+    for path in ("/api/search", "/api/search?page=2", "/api/search?page=3"):
+        tracking.record("search", path, "v" * 16, q="drarry", results=5000)
+    tracking.flush()
+
+    rep = traffic.searches(days=7, limit=10, db=db, _owner=None)
+    assert rep["totals"]["runs"] == 1
+    assert rep["top"][0]["query"] == "drarry"
+    assert rep["top"][0]["runs"] == 1
+
+
+def test_a_visitor_that_never_loaded_a_page_is_counted_apart(db):
+    """The doubt the user-agent check cannot answer. Pageviews come from the
+    browser beacon, so a visitor that searched and never rendered a page was
+    not a browser. Measured on the live log: 18 such visitors accounted for 759
+    of 1,370 recorded searches and produced no pageviews between them — one was
+    a developer test session. `is_bot` saw none of it: it matches on the
+    user-agent string, and says so in its own comment.
+    """
+    tracking.record("search", "/api/search", "s" * 16, q="scripted", results=1)
+    tracking.record("search", "/api/search", "h" * 16, q="human", results=1)
+    tracking.record("pageview", "/story/abc", "h" * 16)
+    tracking.flush()
+
+    totals = traffic.searches(days=7, limit=10, db=db, _owner=None)["totals"]
+    assert totals["runs"] == 2
+    assert totals["search_only"] == 1
