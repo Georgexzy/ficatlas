@@ -190,6 +190,23 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     pass that runs on time and falls further behind every week is
     indistinguishable from a healthy one by timestamp alone, and that is the
     failure that actually happened.
+  - **It takes hours and it deadlocks with the worker, so run it detached.**
+    Measured 2026-09-04 on 2.4M rows: attempt 1 deadlocked with the worker at
+    the 1h25m mark, attempt 2 took a further 3h45m, and the pass wrote
+    2,402,123 rows — coverage 2.68% -> 11.71%. Two operational consequences.
+    The docstring's "weekly, rewrites ~500k rows" is five times out. And the
+    process must not be tied to a shell that can be reaped: a first attempt
+    launched with `nohup docker exec … &` was killed with its shell after
+    1h25m and rolled the whole transaction back, silently, with the count
+    unchanged. `docker exec -d ficatlas-backend-1 sh -c "python -u
+    popularity_rank.py > /tmp/popularity.log 2>&1"` survives.
+  - **Nothing after the write may assume `statement_timeout = 0`.** The pass
+    sets it at the top, but by the time the write has committed it is no longer
+    in force, and the evidence recorder's 20M-row count of the eligible
+    population died at 60s — so a pass that had just spent 3h45m writing 2.4M
+    rows recorded no evidence that it had happened. The count is now taken off
+    `pr_scored` at the top of the run, where it is cheap and the timeout is
+    still off, and passed down.
   - **11.7% is the ceiling, and it is a data ceiling, not a bug.** 88% of the
     index has no engagement figure at all and none can be imported: the
     HuggingFace FF.net dump has eight columns (source_file, category, rating,

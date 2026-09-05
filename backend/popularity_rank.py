@@ -285,16 +285,21 @@ _UPSERT = text("""
 """)
 
 
-def _record_evidence(db, scored: int) -> None:
+def _record_evidence(db, scored: int, eligible: int) -> None:
+    """`eligible` is counted off `pr_scored` at the top of the run, not here.
+
+    Counting it here is the same predicate over 20M rows, and it ran at the one
+    moment in the pass when the session could no longer afford it: after the
+    write, the `SET statement_timeout = 0` the rest of the job relies on was no
+    longer in force, and the count died at 60s — so a pass that had just spent
+    3h45m writing 2,402,123 rows recorded no evidence that it had happened.
+    `pr_scored` holds exactly the eligible population and is already ANALYZEd.
+    """
     try:
-        eligible = db.execute(text("""
-            SELECT count(*) FROM stories
-             WHERE delisted_at IS NULL
-               AND (kudos > 0 OR bookmarks > 0 OR comments > 0 OR hits > 0)
-        """)).scalar() or 0
+        db.execute(text("SET LOCAL statement_timeout = '30s'"))
         for key, value in (("popularity_built_at",
                             datetime.now(timezone.utc).isoformat()),
-                           ("popularity_scored", str(scored)),
+                           ("popularity_scored", str(int(scored))),
                            ("popularity_eligible", str(int(eligible)))):
             db.execute(_UPSERT, {"k": key, "v": value})
         db.commit()
@@ -326,6 +331,11 @@ def run(dry_run: bool = False) -> int:
             log.info("would score %s works", f"{n:,}")
             return int(n or 0)
         db.execute(text(STAGED))
+        # The eligible population, counted once off the staging table while it
+        # is cheap and while the session still has no statement timeout. See
+        # _record_evidence for what happens when this is left until the end.
+        eligible = int(db.execute(
+            text("SELECT count(*) FROM pr_scored")).scalar() or 0)
         for _, sql in PERCENTILES:
             db.execute(text(sql))
         db.execute(text(BLENDED_SQL))
@@ -352,7 +362,7 @@ def run(dry_run: bool = False) -> int:
                 res = db.execute(text(UPDATE_WRITE_SQL))
                 db.commit()
                 n = res.rowcount or 0
-                _record_evidence(db, n)
+                _record_evidence(db, n, eligible)
                 log.info("popularity written for %s works (attempt %s)", f"{n:,}", attempt)
                 return n
             except sqlalchemy.exc.OperationalError as e:
