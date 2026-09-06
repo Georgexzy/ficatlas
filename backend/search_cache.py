@@ -171,7 +171,9 @@ def cache_key(query_string: str, is_operator: bool) -> str:
 # has one, they tie at zero on every other signal, and their order among
 # themselves was arbitrary. Same URL, same shape, different order — the case
 # v4's note was written about.
-SCHEMA_VERSION = "v7"
+# v8: works the community recommends get a ranking bonus (`reddit_recs`). Same
+# URL, same shape, different order.
+SCHEMA_VERSION = "v8"
 
 # Expired rows are swept probabilistically on write rather than by a scheduled
 # job: 1 write in 200 pays for the cleanup, which at any real request rate keeps
