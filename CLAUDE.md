@@ -249,6 +249,23 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   0 under Most popular. It is kept ONLY for an unfiltered browse, where it is a
   top-N walk of the partial index instead of a sort of 20M rows; any narrowed
   search (`_narrowed`) uses `nullslast()` instead.
+- **A row with no summary is DEMOTED, never hidden.** 57% of the index has no
+  summary and it is not a crawl failure — the 12.9M-row AO3 bulk dump has no
+  summary field at all. Those same rows carry no engagement figure, so `pop` is
+  0 and `text_rank` barely separates them: the order AMONG them was arbitrary,
+  and a reader met works they could not judge interleaved with ones they could.
+  `_thin()` + `THIN_PENALTY` (0.6, `SEARCH_THIN_PENALTY`) subtract from the
+  relevance score, and lead the ordering on the no-query browse where there is
+  no sort contract to break. Measured on `fandoms=Naruto`: page 1 went from 1
+  of 20 without a summary to 0, page 248 is 18 of 20 and page 250 is 20 of 20,
+  with the total unchanged at 5,000.
+  - It must stay a subtraction and never a WHERE. The failure to avoid is a
+    work becoming unfindable; `exact_bonus` alone is 4.0, so a work titled
+    exactly what was typed still wins by a wide margin.
+  - It deliberately does NOT touch `updated_desc`, `kudos_desc` and the other
+    explicit sorts. Those have a contract — "most recently updated" means that
+    and nothing else — so a browse by date still shows thin rows where they
+    belong.
 - **Truncated titles are hidden from search, not repaired at read time.** The AO3
   dump ships titles cut mid-phrase ("Riding on Brooms With") and 688k rows are
   affected. `_BROKEN_TITLE_TAIL` excludes them by default;

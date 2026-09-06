@@ -167,7 +167,11 @@ def cache_key(query_string: str, is_operator: bool) -> str:
 # the tag vocabulary. Same URL, same shape, different results and a different
 # order: "looking for a fic where harry raises teddy" went from 2 works to 633.
 # Same case as v4 and v5.
-SCHEMA_VERSION = "v6"
+# v7: rows with no summary are demoted in the relevance score. 57% of the index
+# has one, they tie at zero on every other signal, and their order among
+# themselves was arbitrary. Same URL, same shape, different order — the case
+# v4's note was written about.
+SCHEMA_VERSION = "v7"
 
 # Expired rows are swept probabilistically on write rather than by a scheduled
 # job: 1 write in 200 pays for the cleanup, which at any real request rate keeps
