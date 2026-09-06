@@ -726,6 +726,18 @@ def _resolve_or_split(db, col_name: str, csv_val):
 # to a WHERE.
 THIN_PENALTY = float(os.getenv("SEARCH_THIN_PENALTY", "0.6"))
 
+# The tag `reddit_recs_import.py` writes on a work the community recommends,
+# and the prefix of the tag carrying how many times. Same shape as
+# `dlp_library` / `dlp_stars:` and read the same way.
+_RECS_MARKER = "reddit_recs"
+_RECS_PREFIX = "reddit_refs:"
+
+# How hard a community recommendation pushes. Configurable for the same reason
+# SEARCH_TROPE_TAGS and SEARCH_THIN_PENALTY are: it sits on the ranking of every
+# free-text search, and the list behind it covers ONE fandom, so if it ever
+# distorts a search this comes down without a deploy.
+RECS_BONUS = float(os.getenv("SEARCH_RECS_BONUS", "1.5"))
+
 
 def _thin(entity=Story):
     """1.0 for a row with no summary, 0.0 otherwise.
@@ -1169,6 +1181,13 @@ def search(          # NOT async — see below
                     "already curated, so this separates the best of it from the "
                     "merely-included.",
     ),
+    min_recs:              Optional[int] = Query(
+        None, ge=1,
+        description="Minimum number of times r/HPFanfiction linked this work "
+                    "(2012-2023). A recommendation count, which is a different "
+                    "measurement from kudos: it counts people pressing a work "
+                    "on other people rather than clicking a button on it.",
+    ),
     search_within:         Optional[str] = Query(None),
     include_broken_titles: bool          = Query(
         False,
@@ -1532,6 +1551,19 @@ def search(          # NOT async — see below
                     func.websearch_to_tsquery(_REGCONFIG, trope_leftover)))
             branches.append(trope_pred)
         filters.append(or_(*branches) if len(branches) > 1 else text_pred)
+
+    if min_recs is not None:
+        # Same shape as dlp_min_rating below, and the same reason it is safe:
+        # the count lives in a `reddit_refs:1376` tag rather than a column, so
+        # comparing it numerically needs a per-row unnest — but requiring the
+        # marker first narrows 20M rows to 958 through the GIN index before
+        # that ever runs.
+        filters.append(Story.tags.op("@>")(cast([_RECS_MARKER], PG_ARRAY(Text))))
+        filters.append(sql_text(
+            "EXISTS (SELECT 1 FROM unnest(stories.tags) AS t "
+            f"WHERE t LIKE '{_RECS_PREFIX}%' "
+            "AND split_part(t, ':', 2)::int >= :min_recs)"
+        ).bindparams(min_recs=int(min_recs)))
 
     if dlp_min_rating is not None:
         # The rating lives in a `dlp_stars:4.67` tag rather than a column, so it
@@ -2350,9 +2382,31 @@ def search(          # NOT async — see below
                 (S.tags.op("&&")(cast(trope_tags, PG_ARRAY(Text))), 1.0),
                 else_=0.0)
 
+        # Being RECOMMENDED is not the same measurement as being read, and this
+        # index was only ever able to make the second one. `popularity` blends
+        # kudos, bookmarks, comments and hits — readership — while the works a
+        # community presses on newcomers year after year are often older,
+        # longer, plot-driven and on FanFiction.net, which is exactly where
+        # there is least engagement data. Of the 1,462 most-linked works on
+        # r/HPFanfiction over 2012-2023, 836 had no engagement figure at all and
+        # so could not appear in "Most popular" at any position.
+        #
+        # A reference count is the missing measurement: how many times a person
+        # linked the work to another person. Flat rather than scaled by the
+        # count, because array containment is an index lookup while parsing
+        # `reddit_refs:N` out of the tag array is a per-row unnest over every
+        # candidate — and `min_recs` below is there when the exact number
+        # matters. 1.5 sits between trope_bonus (1.0) and ship_bonus (2.5): a
+        # stronger claim than a tag match, weaker than the reader naming the
+        # pairing outright.
+        rec_bonus = case(
+            (S.tags.op("&&")(cast([_RECS_MARKER], PG_ARRAY(Text))), RECS_BONUS),
+            else_=0.0)
+
         relevance = (w_title * title_sim + exact_bonus
                      + w_text * text_rank + w_pop * pop
-                     + ship_bonus + trope_bonus - THIN_PENALTY * _thin(S))
+                     + ship_bonus + trope_bonus + rec_bonus
+                     - THIN_PENALTY * _thin(S))
 
         ordered = ordered.order_by(
             relevance.desc(),

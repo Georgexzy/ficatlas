@@ -249,6 +249,28 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   0 under Most popular. It is kept ONLY for an unfiltered browse, where it is a
   top-N walk of the partial index instead of a sort of 20M rows; any narrowed
   search (`_narrowed`) uses `nullslast()` instead.
+- **Being RECOMMENDED is a different measurement from being read, and the index
+  could only ever make the second one.** `popularity` blends kudos, bookmarks,
+  comments and hits. The works a community presses on newcomers are often
+  older, longer, plot-driven and on FF.net — exactly where there is least
+  engagement data. Measured against r/HPFanfiction's most-linked list (1,462
+  works, 2012-2023): 1,131 FF.net / 331 AO3 recommended, 958 in the index, and
+  only **626 with a popularity score at all**. So 836 of the decade's
+  most-recommended HP fanfics could not appear in "Most popular" at any
+  position. That is missing data, not a ranking bug, and no reweighting fixes
+  it.
+  - `reddit_recs_import.py` writes `reddit_recs` + `reddit_refs:1376`, the same
+    shape as `dlp_library` / `dlp_stars:`. Matching is by ARCHIVE ID out of the
+    URL, never by title — this index holds five works called "Manacled".
+  - `RECS_BONUS` (1.5, `SEARCH_RECS_BONUS`) sits between trope_bonus (1.0) and
+    ship_bonus (2.5). Flat, not scaled by the count: array containment is an
+    index lookup where parsing `reddit_refs:N` is a per-row unnest over every
+    candidate. `min_recs=N` is there when the number itself matters.
+  - It covers ONE fandom, so it has a switch. Measured A/B on "harry potter"
+    and "dark harry": the top result is unchanged either way and positions 2-5
+    re-order in favour of recommended works.
+  - **504 of the listed works are not in the index at all.** They are a crawl
+    target, and the importer reports them rather than inventing rows.
 - **A row with no summary is DEMOTED, never hidden.** 57% of the index has no
   summary and it is not a crawl failure — the 12.9M-row AO3 bulk dump has no
   summary field at all. Those same rows carry no engagement figure, so `pop` is
