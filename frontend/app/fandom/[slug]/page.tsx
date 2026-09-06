@@ -35,12 +35,20 @@ interface Work {
   complete?: boolean
 }
 interface SiteSection { site: string; works: Work[] }
+interface RelatedHub {
+  kind: "fandom" | "ship"
+  slug: string
+  name: string
+  work_count: number
+}
+
 interface Hub {
   slug: string
   name: string
   work_count: number
   works: Work[]
   sections?: SiteSection[]
+  related?: RelatedHub[]
 }
 
 const SITE_LABELS: Record<string, string> = {
@@ -222,6 +230,33 @@ export default async function FandomHub(
           )}
         </section>
       ))}
+
+      {/* The site's only lateral link, and the reason it exists is measured:
+          Googlebot crawls this site 119 times a day and had reached 90 DISTINCT
+          hubs in the whole retained log, because `/ships` linked every hub, every
+          hub linked 100 story pages, and no hub linked to any other. A crawler
+          arriving on one pairing from a search result had nowhere to go but back
+          out. 56% of all referred visits land on a ship hub, so these are also
+          the pages whose authority is worth passing on.
+
+          Server-rendered and outside any client component, for the same reason
+          `.story-hubs` is on the story page: a link that needs JavaScript is not
+          a link a crawler follows. */}
+      {!!hub.related?.length && (
+        <nav className="hub__related" aria-label="Related pages">
+          <h2>Popular pairings in this fandom</h2>
+          <ul>
+            {hub.related.map(r => (
+              <li key={`${r.kind}-${r.slug}`}>
+                <Link href={`/${r.kind}/${r.slug}`}>{r.name}</Link>
+                <span className="hub__related-count">
+                  {r.work_count.toLocaleString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )}
 
       <p className="hub__foot">
         FicAtlas indexes what these archives publish and links you back to them.

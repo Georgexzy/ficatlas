@@ -55,6 +55,14 @@ class SiteSection(BaseModel):
     works: list[HubWork]
 
 
+class RelatedHub(BaseModel):
+    """Another hub worth a link from this one. `kind` is "fandom" or "ship"."""
+    kind: str
+    slug: str
+    name: str
+    work_count: int
+
+
 class HubDetail(BaseModel):
     slug: str
     name: str
@@ -66,6 +74,11 @@ class HubDetail(BaseModel):
     # Flat, interleaved across archives. Kept for anything reading the old shape.
     works: list[HubWork]
     sections: list[SiteSection]
+    # Hubs worth walking to from here. See `_related` — this is the site's only
+    # lateral link, and until it existed every hub was a crawl dead end
+    # sideways: the index linked 11,190 hubs, each hub linked 100 story pages,
+    # and no hub linked to any other.
+    related: list[RelatedHub] = []
 
 
 # Both hub tables have the same shape, so listing and detail differ only in the
@@ -100,6 +113,102 @@ def _list(kind: str, response: Response, limit: int, offset: int, db: Session):
             for r in rows]
 
 
+# How many lateral links a hub offers. Enough to be a real path for a crawler
+# and a real choice for a reader; few enough that the page is still about the
+# thing it is about.
+RELATED_CAP = 8
+
+
+def _related(db, kind: str, slug: str, name: str,
+             fandoms: list[str], rels: list[str]) -> list[RelatedHub]:
+    """Hubs worth linking to from this one.
+
+    Until this existed the site was two levels deep and had no sideways edges:
+    `/ships` linked all 6,165 ship hubs, each ship hub linked 100 story pages,
+    and no hub linked to any other hub. Measured consequence — Googlebot, which
+    crawls this site 119 times a day, had reached 90 DISTINCT hubs in the whole
+    of the retained log. A crawler that lands on one pairing from a search
+    result has nowhere to go but back out, and no authority flows between the
+    pages that actually earn traffic (56% of all referred visits land on a ship
+    hub).
+
+    Derived at read time from the works already loaded for the page, so there
+    is no new column, no rebuild, and nothing to fall out of date. `variants`
+    holds every archive spelling of a hub's subject, which is what lets a raw
+    fandom or relationship string off a work be matched back to its hub.
+
+    Never raises: a hub page that renders without its related links is a page,
+    and one that 500s is not.
+    """
+    def _modal(values: list[str], top: int) -> list[str]:
+        counts: dict[str, int] = {}
+        for v in values:
+            if v:
+                counts[v] = counts.get(v, 0) + 1
+        return [v for v, _ in sorted(counts.items(), key=lambda kv: -kv[1])[:top]]
+
+    out: list[RelatedHub] = []
+    seen = {slug}
+    try:
+        if kind == "ship":
+            # The fandom this pairing lives in. One link, and the most valuable
+            # one: it is the only edge from a niche pairing up into a page with
+            # standing.
+            for f in _modal(fandoms, 2):
+                row = db.execute(text(
+                    "SELECT slug, name, work_count FROM fandom_hubs "
+                    " WHERE :v = ANY(variants) ORDER BY work_count DESC LIMIT 1"
+                ), {"v": f}).fetchone()
+                if row and row[0] not in seen:
+                    seen.add(row[0])
+                    out.append(RelatedHub(kind="fandom", slug=row[0],
+                                          name=row[1], work_count=row[2]))
+                    break
+            # Other pairings for the same characters. "If you read Castiel/Dean,
+            # here is everything else either of them is shipped with" is a real
+            # reader question, and it is the edge that connects the long tail of
+            # pairings to each other rather than only to the A-Z index.
+            halves = [h.strip() for h in name.split("/") if len(h.strip()) > 2]
+            # Taken a slice at a time from EACH half in turn, not all of one
+            # then all of the other. Ordering by work_count across a single
+            # query filled the whole cap with "Castiel/..." and never reached
+            # Dean, which answers half the question a reader came with.
+            per_half = [db.execute(text(
+                "SELECT slug, name, work_count FROM ship_hubs "
+                " WHERE name ILIKE :pat AND slug <> :self"
+                " ORDER BY work_count DESC LIMIT :lim"
+            ), {"pat": f"%{half}%", "self": slug,
+                "lim": RELATED_CAP}).fetchall() for half in halves]
+            for i in range(RELATED_CAP):
+                for rows in per_half:
+                    if len(out) >= RELATED_CAP or i >= len(rows):
+                        continue
+                    r = rows[i]
+                    if r[0] not in seen:
+                        seen.add(r[0])
+                        out.append(RelatedHub(kind="ship", slug=r[0],
+                                              name=r[1], work_count=r[2]))
+        else:
+            # A fandom's most-written pairings. The fandom hubs are the ones
+            # that cannot outrank AO3 for their own name, so their job is to
+            # pass a crawler on to the ship hubs, which can.
+            for rel in _modal(rels, RELATED_CAP * 2):
+                if len(out) >= RELATED_CAP:
+                    break
+                row = db.execute(text(
+                    "SELECT slug, name, work_count FROM ship_hubs "
+                    " WHERE :v = ANY(variants) ORDER BY work_count DESC LIMIT 1"
+                ), {"v": rel}).fetchone()
+                if row and row[0] not in seen:
+                    seen.add(row[0])
+                    out.append(RelatedHub(kind="ship", slug=row[0],
+                                          name=row[1], work_count=row[2]))
+    except Exception:
+        db.rollback()
+        return []
+    return out[:RELATED_CAP]
+
+
 def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     table = _TABLES[kind]
     response.headers["Cache-Control"] = CACHE
@@ -114,6 +223,8 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
 
     ids = list(hub[3] or [])
     works: list[HubWork] = []
+    _fandoms: list[str] = []
+    _rels: list[str] = []
     if ids:
         # Re-checking delisted/restricted at read time rather than trusting the
         # snapshot: a hub may be hours or days old, and a work withdrawn since
@@ -121,13 +232,19 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
         # preserves the precomputed ranking without re-sorting by kudos here.
         rows = db.execute(text("""
             SELECT s.id, s.title, s.author, s.summary, s.word_count,
-                   s.chapter_count, s.kudos, s.site, s.status
+                   s.chapter_count, s.kudos, s.site, s.status,
+                   -- Only for _related below. Free here: these rows are
+                   -- already being read, and the alternative is a second pass
+                   -- over the same works.
+                   s.fandoms, s.relationships
               FROM unnest(CAST(:ids AS uuid[])) WITH ORDINALITY AS t(id, ord)
               JOIN stories s ON s.id = t.id
              WHERE s.delisted_at IS NULL
                AND s.source_restricted_at IS NULL
              ORDER BY t.ord
         """), {"ids": ids}).fetchall()
+        _fandoms = [f for r in rows for f in (r[9] or [])]
+        _rels = [v for r in rows for v in (r[10] or [])]
         works = [
             HubWork(
                 id=str(r[0]), title=r[1], author=r[2], summary=r[3],
@@ -155,8 +272,11 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
         from ship_hubs import nicknames_for
         nicknames = nicknames_for(hub[0])
 
+    related = _related(db, kind, hub[0], hub[1], _fandoms, _rels)
+
     return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2],
-                     nicknames=nicknames, works=works, sections=sections)
+                     nicknames=nicknames, works=works, sections=sections,
+                     related=related)
 
 
 @router.get("", response_model=list[HubSummary])
