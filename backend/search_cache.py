@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import urllib.parse
 import time
 from collections import OrderedDict
 from typing import Any, Optional
@@ -134,13 +135,41 @@ class _TTLCache:
 CACHE = _TTLCache()
 
 
+def _canonical(query_string: str) -> str:
+    """The same search, written the same way, whatever order it arrived in.
+
+    The key used to be the raw query string, so `?q=x&page=2` and `?page=2&q=x`
+    were different entries for one search — two computations, two rows, and a
+    miss whenever a caller reordered its parameters. Sorting the pairs makes the
+    key a property of the SEARCH rather than of how the URL was assembled, which
+    is also what lets `key_for_page` below construct the key another request
+    would have produced.
+    """
+    pairs = sorted(urllib.parse.parse_qsl(query_string, keep_blank_values=True))
+    return urllib.parse.urlencode(pairs)
+
+
 def cache_key(query_string: str, is_operator: bool) -> str:
     """The full query plus the viewer's visibility.
 
     Operators see delisted rows, so they must never share an entry with the
     public — see the module docstring.
     """
-    return f"{'op' if is_operator else 'pub'}|{query_string}"
+    return f"{'op' if is_operator else 'pub'}|{_canonical(query_string)}"
+
+
+def key_for_page(query_string: str, is_operator: bool, page: int) -> str:
+    """The key the same search would have on a different page.
+
+    Used to fill the entries for pages a reader has not asked for yet, off one
+    computation — see the prefetch in api/search.py. It is exact rather than
+    approximate because both sides go through `_canonical`.
+    """
+    pairs = [(k, v) for k, v in
+             urllib.parse.parse_qsl(query_string, keep_blank_values=True)
+             if k != "page"]
+    pairs.append(("page", str(page)))
+    return f"{'op' if is_operator else 'pub'}|{urllib.parse.urlencode(sorted(pairs))}"
 
 
 # --- L2: shared across workers -------------------------------------------------
@@ -173,7 +202,9 @@ def cache_key(query_string: str, is_operator: bool) -> str:
 # v4's note was written about.
 # v8: works the community recommends get a ranking bonus (`reddit_recs`). Same
 # URL, same shape, different order.
-SCHEMA_VERSION = "v8"
+# v9: the key is canonicalised (parameters sorted), so entries written under a
+# raw query string would never be found again anyway.
+SCHEMA_VERSION = "v9"
 
 # Expired rows are swept probabilistically on write rather than by a scheduled
 # job: 1 write in 200 pays for the cleanup, which at any real request rate keeps
