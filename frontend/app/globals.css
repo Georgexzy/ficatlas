@@ -336,6 +336,11 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   border-radius: var(--radius); padding: 0 20px; height: 40px;
   font-size: 14px; font-weight: 500; transition: opacity 0.12s;
   display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+  /* The label is replaced by a 14px spinner while a search runs, so without a
+     floor the button collapsed to a third of its width at the exact moment the
+     reader was looking at it — and the search bar beside it grew to fill the
+     gap. Holding the width means the only thing that changes is the glyph. */
+  min-width: 96px; justify-content: center;
 }
 .search-btn:hover { opacity: 0.85; }
 .search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -5222,4 +5227,49 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 @media (max-width: 560px) {
   .admin-storage__row { grid-template-columns: 92px 1fr 64px; }
   .admin-storage__rows { display: none; }
+}
+
+/* ── Paging: the rows stay, dimmed ───────────────────────────────────────────
+   Clicking "Next" used to empty the column. The search page is keyed on the
+   query string, so the click destroys the component holding the rows and its
+   replacement comes up with none — landing state for a frame, then six
+   skeletons where twenty results had been, then the new page. Three layouts
+   for one click, and the reader's place on the screen thrown away twice.
+
+   The rows now stay until their replacements arrive (see `stale` in page.tsx).
+   Everything here exists to say "these are on their way out" without moving
+   anything: a dim, and one 2px bar that is the only thing on the screen that
+   moves. */
+.results { position: relative; }
+.results .results-bar,
+.results .story-list { transition: opacity 0.18s ease; }
+.results--pending .results-bar,
+.results--pending .story-list { opacity: 0.42; }
+/* Not merely cosmetic: the dimmed rows are the PREVIOUS page, so a click on one
+   would open a story the reader is no longer looking at. */
+.results--pending .story-list { pointer-events: none; }
+
+.results__progress {
+  position: sticky; top: 0; z-index: 11;
+  height: 2px; margin-bottom: 10px;
+  border-radius: 2px; overflow: hidden;
+  background: var(--surface3);
+}
+.results__progress::after {
+  content: ""; display: block;
+  height: 100%; width: 38%;
+  border-radius: 2px; background: var(--accent);
+  animation: results-progress 1.15s ease-in-out infinite;
+}
+@keyframes results-progress {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(370%); }
+}
+
+/* Under a stated preference not to animate, the bar stays — it is the only
+   signal that anything is happening — and stops travelling. */
+@media (prefers-reduced-motion: reduce) {
+  .results .results-bar,
+  .results .story-list { transition: none; }
+  .results__progress::after { animation: none; width: 100%; opacity: 0.55; }
 }

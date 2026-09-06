@@ -14,7 +14,7 @@ import SiteIcon from "./SiteIcon"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
 import { rememberSearch } from "@/lib/lastSearch"
-import { saveScroll, restoreScroll } from "@/lib/scrollMemory"
+import { saveScroll, restoreScroll, clearScroll } from "@/lib/scrollMemory"
 import { describeError, type Failure } from "@/lib/errors"
 import { readAllPrefs, type Prefs } from "@/lib/prefs"
 import WordCountSlider from "./WordCountSlider"
@@ -45,6 +45,78 @@ let lastSearchCache: { url: string; data: SearchResponse } | null = null
 // paging through a long result set would otherwise accumulate every page.
 const prefetched = new Map<string, SearchResponse>()
 const PREFETCH_MAX = 8
+
+// The parameters that make a URL a search rather than the front door.
+//
+// Read in two places that must agree: the mount effect decides from them
+// whether to run a search, and the initial `loading` state decides from them
+// whether this instance is coming up mid-search. When they disagreed the page
+// either sat on a spinner nothing would ever clear, or rendered the landing
+// state over a search that was on its way.
+const SEARCH_PARAM_KEYS = [
+  "q", "fandoms", "relationships", "characters", "tags", "author",
+  "ratings", "warnings", "categories", "status", "language",
+  "word_count_min", "word_count_max", "updated_after", "sites",
+  "dlp_min_rating", "exclude_fandoms", "exclude_tags",
+  // Without this, a link like /?sections=Schnoogle&sites=fictionalley — which
+  // is exactly what the section badges on result cards produce — landed on
+  // the page and ran no search at all.
+  "sections",
+  "in_series",
+  // A browse has no classic filter in it at all, and until URL_DEFAULTS
+  // existed it still carried `sites=ao3,ffnet,fictionalley` — which is what
+  // made this check pass and the search run. Now that the defaults are
+  // dropped from the address, a URL like `/?sort=popularity_desc` is the
+  // whole of a legitimate search, and without these it would remount to a
+  // blank page.
+  "sort", "explicit", "page", "per_page", "crossovers",
+  "include_unknown", "match_mode",
+]
+
+// The rows currently on screen, and the URL that produced them.
+//
+// lastSearchCache above is the same pair and is NOT this: it is written when a
+// fetch resolves, which is what makes it a cache. This is written when results
+// are rendered, and it exists for the remount. Paging navigates, the component
+// is keyed on the URL (see SearchPageKeyed), so the instance showing page 3 is
+// destroyed at the click and its successor comes up holding nothing. Keeping
+// its rows here lets the new instance leave them on screen, dimmed, instead of
+// collapsing the column into skeletons and taking the reader's scroll position
+// down with it.
+let lastRendered: { url: string; data: SearchResponse } | null = null
+
+// Two URLs that differ only by which page of the same result set they ask for.
+// That is the one difference where the rows already on screen are a fair thing
+// to leave up while the next ones load; any other difference is a different
+// search, and its results would be a lie however dimmed.
+function sameSearchOtherPage(a: string, b: string): boolean {
+  if (a === b) return false
+  const strip = (url: string) => {
+    const q = new URLSearchParams(url)
+    q.delete("page")
+    q.sort()
+    return q.toString()
+  }
+  return strip(a) === strip(b)
+}
+
+// Results already in hand for this exact URL: a page the reader hovered before
+// clicking, or the search they have just navigated back to. `prefetched` holds
+// a bare reservation while a prefetch is in flight, so the truthiness test is
+// load-bearing.
+function cachedFor(url: string): SearchResponse | null {
+  const pre = prefetched.get(url)
+  if (pre) return pre
+  if (lastSearchCache && lastSearchCache.url === url) return lastSearchCache.data
+  return null
+}
+
+// Is this URL a search at all? Same list as the mount effect, deliberately.
+function isSearchUrl(url: string): boolean {
+  if (!url) return false
+  const q = new URLSearchParams(url)
+  return SEARCH_PARAM_KEYS.some(k => q.get(k))
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function csv(s?: string): string[] {
@@ -1187,11 +1259,45 @@ function SearchPageInner() {
     Number.isFinite(seededPage) && seededPage >= 1 ? Math.floor(seededPage) : 1)
 
   // Results
-  const [results,      setResults]      = useState<SearchResponse | null>(null)
+  //
+  // Seeded from module scope rather than from nothing, and that is what makes
+  // the keyed remount invisible. Every search and every page change navigates,
+  // which destroys this component and builds a new one (see SearchPageKeyed) —
+  // so each one used to arrive here with results=null AND loading=false, which
+  // is precisely the combination that renders the LANDING PAGE. Clicking "Next"
+  // meant a frame of the front door, then six skeletons where the results had
+  // been, then the new page. Three states for one click.
+  const initialUrl = rawParams.toString()
+  const [results,      setResults]      = useState<SearchResponse | null>(
+    () => cachedFor(initialUrl))
   const [error,        setError]        = useState<Failure | null>(null)
-  const [loading,      setLoading]      = useState(false)
+  // A search this instance is already mid-way through, not one it might start.
+  const [loading,      setLoading]      = useState(
+    () => !cachedFor(initialUrl) && isSearchUrl(initialUrl))
+  // The page being left, held while the next one loads. Only ever the SAME
+  // search on another page — see sameSearchOtherPage — and only when nothing
+  // truer is available. Rendered dimmed and aria-busy, and dropped the moment
+  // real results or an error arrive.
+  const [stale,        setStale]        = useState<SearchResponse | null>(() =>
+    cachedFor(initialUrl) ? null
+      : lastRendered && sameSearchOtherPage(lastRendered.url, initialUrl)
+        ? lastRendered.data
+        : null)
   const [parsedTokens, setParsedTokens] = useState<ParsedToken[]>([])
   const [refreshing,   setRefreshing]   = useState(false)
+
+  // What is actually on the screen, and whether it is on its way out. Every
+  // render below asks these rather than `results`, so "there are results here"
+  // and "they are the ones you just asked for" stay separate questions.
+  const shown = results ?? stale
+  const pending = loading && !results && stale !== null
+
+  // Hand the rows to the instance that replaces this one. Written on render
+  // rather than at the fetch, because a page restored from cache is just as
+  // good a thing to keep on screen as one just fetched.
+  useEffect(() => {
+    if (results) lastRendered = { url: rawParams.toString(), data: results }
+  }, [results, rawParams])
 
   // Tracks which query we've already auto-deepened for, so a thin-result search
   // pulls fresh AO3 data once without looping on every re-render.
@@ -1330,27 +1436,9 @@ function SearchPageInner() {
   // Runs once on mount only. Later navigations within the app set state
   // directly and search through their own handlers.
   useEffect(() => {
-    if (!rawParams.toString()) return
-    const SEARCH_PARAMS = [
-      "q", "fandoms", "relationships", "characters", "tags", "author",
-      "ratings", "warnings", "categories", "status", "language",
-      "word_count_min", "word_count_max", "updated_after", "sites",
-      "dlp_min_rating", "exclude_fandoms", "exclude_tags",
-      // Without this, a link like /?sections=Schnoogle&sites=fictionalley — which
-      // is exactly what the section badges on result cards produce — landed on
-      // the page and ran no search at all.
-      "sections",
-      "in_series",
-      // A browse has no classic filter in it at all, and until URL_DEFAULTS
-      // existed it still carried `sites=ao3,ffnet,fictionalley` — which is what
-      // made this check pass and the search run. Now that the defaults are
-      // dropped from the address, a URL like `/?sort=popularity_desc` is the
-      // whole of a legitimate search, and without these it would remount to a
-      // blank page.
-      "sort", "explicit", "page", "per_page", "crossovers",
-      "include_unknown", "match_mode",
-    ]
-    if (!SEARCH_PARAMS.some(k => rawParams.get(k))) return
+    // The list lives at module scope now: this test and the one that seeds
+    // `loading` have to be the same test.
+    if (!isSearchUrl(rawParams.toString())) return
 
     // Every search ran TWICE, and had done since the keyed remount was added.
     // doSearch writes its parameters into the URL; the key is that URL; so the
@@ -1401,6 +1489,9 @@ function SearchPageInner() {
   // only fire here, so the captured url is always the search page's own), and
   // the cleanup just writes that last-known pair.
   const scrollMemoRef = useRef<{ href: string; y: number }>({ href: "", y: 0 })
+  // Whether the reader has deliberately settled at the top, which is the one
+  // case where the flush below must NOT write the last position back.
+  const atTopRef = useRef(false)
   useEffect(() => {
     // Only the search page records a position. During a navigation in flight,
     // window.location is already the STORY url and Next.js fires a y=0 scroll
@@ -1413,17 +1504,43 @@ function SearchPageInner() {
       if (!isSearch()) return
       const href = window.location.pathname + window.location.search
       const y = window.scrollY
-      scrollMemoRef.current = { href, y }
+      // Only a real position is kept for the flush. A y of 0 arriving HERE is
+      // as likely to be the router as the reader: a client navigation scrolls
+      // the window to the top, and measured in a browser that scroll can arrive
+      // while location.pathname is still "/" — so the guard above does not
+      // catch it, and it was overwriting the reader's position with 0 a frame
+      // before the unmount flush read it. Clicking a story within 150ms of
+      // scrolling therefore lost the position every time.
+      if (y > 0) { scrollMemoRef.current = { href, y }; atTopRef.current = false }
       // Trailing debounce: persist the final resting position ~150ms after the
       // user stops scrolling. Clearing the timer on unmount means a navigation-
-      // triggered scroll event can never write a stale value after we leave,
-      // and the y>0 guard means a real scroll-to-top just clears the entry.
+      // triggered scroll event can never write a stale value after we leave.
       clearTimeout(timer)
-      timer = setTimeout(() => { if (y > 0) saveScroll(href, y) }, 150)
+      timer = setTimeout(() => {
+        // Reaching the top and STAYING there for the debounce is the reader
+        // saying where they want to be, so it forgets the entry rather than
+        // merely declining to save one — otherwise Back returned them to where
+        // they had been two visits ago. A router scroll never survives this
+        // long, because the unmount that follows it clears this timer.
+        if (y > 0) saveScroll(href, y)
+        else { atTopRef.current = true; clearScroll(href) }
+      }, 150)
     }
     capture()
     window.addEventListener("scroll", capture, { passive: true })
-    return () => { window.removeEventListener("scroll", capture); clearTimeout(timer) }
+    return () => {
+      window.removeEventListener("scroll", capture)
+      clearTimeout(timer)
+      // Flush whatever the debounce has not written yet. The comment above has
+      // claimed since it was written that "the cleanup just writes that
+      // last-known pair", and it did not — it dropped it, which is why
+      // scrollMemoRef was read by nothing at all. The cost was a reader who
+      // clicked a story within 150ms of their last scroll: their position was
+      // never recorded, and Back put them at the top of the results. Measured
+      // in a browser, clicking 40ms after scrolling lost it every time.
+      const { href, y } = scrollMemoRef.current
+      if (href && y > 0 && !atTopRef.current) saveScroll(href, y)
+    }
   }, [])
 
   // Restore a saved scroll position once results are on screen.
@@ -1514,7 +1631,7 @@ function SearchPageInner() {
     // Ratings only count as a filter when they are not the default set.
     (incRatings.length && incRatings.length < (explicit ? 5 : 4) ? 1 : 0) +
     (sites.length < 3 ? 1 : 0)
-  const searchIsActive = query.trim().length > 0 || activeFilters > 0 || !!results
+  const searchIsActive = query.trim().length > 0 || activeFilters > 0 || !!shown
 
   // Reset every filter in one action.
   //
@@ -1777,6 +1894,9 @@ function SearchPageInner() {
     const pg = explicitPage ?? (resetPage ? 1 : page)
     if (resetPage) setPage(1)
     else if (explicitPage) setPage(explicitPage)
+    // A new search, not another page of this one: whatever is dimmed on screen
+    // is about to become wrong, so drop it and show skeletons instead.
+    if (resetPage) setStale(null)
     const p = buildParams(pg, explicitQuery)
 
     const qs = new URLSearchParams()
@@ -1837,12 +1957,16 @@ function SearchPageInner() {
         ?? await searchStories({ ...p, live: true } as any, { signal: ctl.signal })
       if (seq !== searchSeqRef.current) return   // a newer search superseded this one
       setResults(data)
+      setStale(null)
       setParsedTokens((data as any).parsed_tokens ?? [])
       lastSearchCache = { url: qs.toString(), data }
-      // Scroll to top of results on page change for a clean reading position
-      if (explicitPage && explicitPage > 1) {
-        window.scrollTo({ top: 0, behavior: "smooth" })
-      }
+      // Paging used to scroll to the top of the page HERE, and it was in the
+      // wrong instance: the navigation this function has already started tears
+      // this component down, and the unmount aborts the very fetch whose
+      // completion the scroll was waiting on. So on a cold page it never ran at
+      // all — the reader met page 4 from wherever they had been standing in
+      // page 3 — and on a warm one it animated a column that was being
+      // replaced underneath it. It happens at the click now: see goToPage.
 
       // Auto-deepen: a casual searcher just wants fics. If this query returned
       // very few results, AO3 is a selected site, and we haven't already deepened
@@ -1863,7 +1987,10 @@ function SearchPageInner() {
       // Classified rather than printed. "Failed to fetch" is what the browser
       // says when it cannot open a socket, and it told a reader nothing about
       // whether the fault was theirs, ours, or worth retrying.
-      if (seq === searchSeqRef.current) setError(describeError(e, e?.status))
+      // The dimmed rows have to go with it. Leaving the previous page up under
+      // an error alert reads as "here are your results, and also a problem",
+      // when the results are the ones the reader has already seen.
+      if (seq === searchSeqRef.current) { setError(describeError(e, e?.status)); setStale(null) }
     } finally {
       if (seq === searchSeqRef.current) setLoading(false)
     }
@@ -1901,6 +2028,22 @@ function SearchPageInner() {
       })
       .catch(() => { prefetched.delete(key) })
   }, [buildParams])
+
+  // Turning the page: scroll first, then search.
+  //
+  // Deterministic, unlike the old scroll inside doSearch's success path, which
+  // depended on a fetch that the navigation itself frequently cancelled. The
+  // rows below stay where they are while this runs — that is the whole point of
+  // `stale` — so a smooth scroll has something stable to travel over instead of
+  // racing a column that is being rebuilt. Honours a stated preference not to
+  // animate, since this is a jump the reader did not ask to watch.
+  const goToPage = useCallback((target: number) => {
+    if (target < 1) return
+    const still = typeof window !== "undefined"
+      && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    window.scrollTo({ top: 0, behavior: still ? "auto" : "smooth" })
+    doSearch(false, target)
+  }, [doSearch])
 
   // Editing the bar edits the filters.
   //
@@ -2032,7 +2175,7 @@ function SearchPageInner() {
     }
   }, [incFandoms, explicit])
 
-  const totalPages = results ? Math.ceil(results.total / results.per_page) : 0
+  const totalPages = shown ? Math.ceil(shown.total / shown.per_page) : 0
 
   // Count active filters for the mobile drawer badge
   const sortNote = useMemo(() => sortCoverageNote(sort, sites), [sort, sites])
@@ -2062,7 +2205,7 @@ function SearchPageInner() {
 
         {/* ── Sidebar (slide-out drawer on mobile) ── */}
         <aside className={`sidebar ${filtersOpen ? "sidebar--open" : ""}`
-          + (!results && !loading && !filtersPinned ? " sidebar--stowed" : "")}
+          + (!shown && !loading && !filtersPinned ? " sidebar--stowed" : "")}
           style={sidebarWidth ? ({ ["--sidebar-w" as any]: `${sidebarWidth}px` }) : undefined}>
 
           <div className="sidebar__mobile-head">
@@ -2439,7 +2582,7 @@ function SearchPageInner() {
             always there. Desktop only; hidden by CSS on touch. */}
         <div
           className={"sidebar__resizer"
-            + (!results && !loading && !filtersPinned ? " sidebar__resizer--stowed" : "")}
+            + (!shown && !loading && !filtersPinned ? " sidebar__resizer--stowed" : "")}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize filter panel"
@@ -2555,7 +2698,7 @@ function SearchPageInner() {
               same job at both sizes, which is why it is not a second control. */}
           <button
             className={"filters-trigger"
-              + (!results && !loading && !filtersPinned ? " filters-trigger--stowed" : "")}
+              + (!shown && !loading && !filtersPinned ? " filters-trigger--stowed" : "")}
             onClick={() => { setFiltersOpen(true); setFiltersPinned(true) }}>
             <span className="filters-trigger__icon">⚙</span> Filters &amp; sort
             {activeFilterCount > 0 && <span className="filters-trigger__badge">{activeFilterCount}</span>}
@@ -2572,7 +2715,9 @@ function SearchPageInner() {
             </div>
           )}
 
-          {loading && !results && (
+          {/* Skeletons are for a search with nothing behind it. A page change
+              has the previous page behind it and keeps it — see `stale`. */}
+          {loading && !shown && (
             <div className="story-list" aria-busy="true" aria-label="Loading results">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="card-skeleton">
@@ -2615,8 +2760,21 @@ function SearchPageInner() {
             </div>
           )}
 
-          {results && (
-            <>
+          {/* The results column, and whether it is still the live one.
+
+              `shown` is `results` when this instance has its own, and the page
+              being left while the next one loads. Wrapping the three parts —
+              count bar, rows, pager — in one element is what lets a page change
+              dim ALL of it at once: dimming only the rows left a sharp "showing
+              41–60 of 1,204" sitting above a list that no longer said that. */}
+          {shown && (
+            <div className={"results" + (pending ? " results--pending" : "")}
+                 aria-busy={pending || undefined}>
+              {/* The only thing that moves while a page loads. A collapsing
+                  column and six shimmering skeletons were how this used to say
+                  "working"; a 2px bar over rows that stay put says the same
+                  thing without moving the reader's place on the screen. */}
+              {pending && <div className="results__progress" aria-hidden="true" />}
               <div className="results-bar">
                 {/* Visible in the results bar rather than buried in the sidebar:
                     the person who needs it arrived from a link that applied
@@ -2634,17 +2792,17 @@ function SearchPageInner() {
                       "5,001+" leaked the implementation and read as a precise
                       figure; it means "more than 5,000". */}
                   <strong>
-                    {results.count_is_capped
+                    {shown.count_is_capped
                       ? `${(5000).toLocaleString()}+`
-                      : results.total.toLocaleString()}
+                      : shown.total.toLocaleString()}
                   </strong>{" "}
-                  {results.total === 1 && !results.count_is_capped ? "story" : "stories"}
+                  {shown.total === 1 && !shown.count_is_capped ? "story" : "stories"}
                   {/* Which slice of them you are actually looking at. */}
-                  {results.total > results.per_page && (
+                  {shown.total > shown.per_page && (
                     <span className="results-bar__range">
-                      {" "}· showing {((results.page - 1) * results.per_page + 1).toLocaleString()}–
-                      {Math.min(results.page * results.per_page,
-                                results.count_is_capped ? 5000 : results.total).toLocaleString()}
+                      {" "}· showing {((shown.page - 1) * shown.per_page + 1).toLocaleString()}–
+                      {Math.min(shown.page * shown.per_page,
+                                shown.count_is_capped ? 5000 : shown.total).toLocaleString()}
                     </span>
                   )}
                   {/* The archive split, which is the whole point of this site.
@@ -2660,8 +2818,8 @@ function SearchPageInner() {
                       just the total, or a capped count, where the numbers would
                       not add up to the headline. See api/search.py. */}
                   {(() => {
-                    const counts = results.site_counts ?? {}
-                    const named = results.sites_searched
+                    const counts = shown.site_counts ?? {}
+                    const named = shown.sites_searched
                       .filter(s => counts[s] > 0)
                       .sort((a, b) => counts[b] - counts[a])
                     if (named.length > 1) {
@@ -2677,8 +2835,8 @@ function SearchPageInner() {
                         </span>
                       )
                     }
-                    return results.sites_searched.length > 0
-                      ? ` · ${results.sites_searched.map(s => SITE_LABELS[s] ?? s).join(" + ")}`
+                    return shown.sites_searched.length > 0
+                      ? ` · ${shown.sites_searched.map(s => SITE_LABELS[s] ?? s).join(" + ")}`
                       : null
                   })()}
 
@@ -2706,7 +2864,7 @@ function SearchPageInner() {
                       {refreshing ? "Refreshing…" : "↻ Refresh from AO3"}
                     </button>
                   )}
-                  <span className="results-bar__page">Page {results.page} of {totalPages}</span>
+                  <span className="results-bar__page">Page {shown.page} of {totalPages}</span>
                 </span>
               </div>
               {refreshMsg && <div className="alert alert--success" style={{marginBottom:10}}>{refreshMsg}</div>}
@@ -2721,27 +2879,27 @@ function SearchPageInner() {
                   rating filter, so an explicit work sits at the top of a ship
                   page, and clicking its author returned 1 of MesserMoon's 10
                   works with nothing to say the other 9 existed. */}
-              {!explicit && (results.hidden_explicit ?? 0) > 0 && (
+              {!explicit && (shown.hidden_explicit ?? 0) > 0 && (
                 <div className="hidden-note">
                   <span className="hidden-note__text">
                     <strong>
-                      {results.hidden_explicit! > 999
+                      {shown.hidden_explicit! > 999
                         ? "999+ more works"
-                        : `${results.hidden_explicit!.toLocaleString()} more work${results.hidden_explicit === 1 ? "" : "s"}`}
+                        : `${shown.hidden_explicit!.toLocaleString()} more work${shown.hidden_explicit === 1 ? "" : "s"}`}
                     </strong>{" "}
-                    {results.hidden_explicit === 1 ? "matches" : "match"} this search
-                    but {results.hidden_explicit === 1 ? "is" : "are"} hidden, because{" "}
-                    {results.hidden_explicit === 1 ? "it is" : "they are"} rated explicit.
+                    {shown.hidden_explicit === 1 ? "matches" : "match"} this search
+                    but {shown.hidden_explicit === 1 ? "is" : "are"} hidden, because{" "}
+                    {shown.hidden_explicit === 1 ? "it is" : "they are"} rated explicit.
                   </span>
                   <Link href={showExplicitHref} prefetch={false}
                     className="btn btn--primary hidden-note__btn">
-                    Show {results.hidden_explicit === 1 ? "it" : "them"}
+                    Show {shown.hidden_explicit === 1 ? "it" : "them"}
                   </Link>
                 </div>
               )}
 
               <div className="story-list">
-                {results.results.length === 0 ? (
+                {shown.results.length === 0 ? (
                   <div className="no-results">
                     <p className="no-results__title">No stories matched</p>
                     {/* Ship/character/tag data is missing for most bulk-imported
@@ -2781,16 +2939,16 @@ function SearchPageInner() {
                         Worded as a fact about the filter, not a claim about the
                         cause — we cannot know whether an excluded work exists
                         without running the search again without the filter. */}
-                    {!explicit && (results.hidden_explicit ?? 0) > 0 && (
+                    {!explicit && (shown.hidden_explicit ?? 0) > 0 && (
                       <>
                         <p className="no-results__sub no-results__sub--muted">
                           <strong>
-                            {results.hidden_explicit! > 999
+                            {shown.hidden_explicit! > 999
                               ? "999+ works match"
-                              : `${results.hidden_explicit!.toLocaleString()} work${results.hidden_explicit === 1 ? "" : "s"} match${results.hidden_explicit === 1 ? "es" : ""}`}
+                              : `${shown.hidden_explicit!.toLocaleString()} work${shown.hidden_explicit === 1 ? "" : "s"} match${shown.hidden_explicit === 1 ? "es" : ""}`}
                           </strong>{" "}
-                          but {results.hidden_explicit === 1 ? "is" : "are"} hidden
-                          because {results.hidden_explicit === 1 ? "it is" : "they are"}{" "}
+                          but {shown.hidden_explicit === 1 ? "is" : "are"} hidden
+                          because {shown.hidden_explicit === 1 ? "it is" : "they are"}{" "}
                           rated explicit.
                         </p>
                         {/* A link, not a toggle — see showExplicitHref. This
@@ -2799,8 +2957,8 @@ function SearchPageInner() {
                             follows it. */}
                         <Link href={showExplicitHref} prefetch={false}
                           className="btn btn--primary no-results__fetch">
-                          Show {results.hidden_explicit! > 999 ? "them"
-                            : results.hidden_explicit === 1 ? "it" : `all ${results.hidden_explicit!.toLocaleString()}`}
+                          Show {shown.hidden_explicit! > 999 ? "them"
+                            : shown.hidden_explicit === 1 ? "it" : `all ${shown.hidden_explicit!.toLocaleString()}`}
                         </Link>
                       </>
                     )}
@@ -2816,29 +2974,33 @@ function SearchPageInner() {
                     </p>
                   </div>
                 ) : (
-                  results.results.map(s => <StoryCard key={s.id} story={s} />)
+                  shown.results.map(s => <StoryCard key={s.id} story={s} />)
                 )}
               </div>
 
               {totalPages > 1 && (
                 <div className="pagination">
-                  <button disabled={page <= 1}
-                    onClick={() => doSearch(false, Math.max(1, page - 1))}
+                  {/* Disabled while a page is in flight: the click navigates,
+                      which remounts the component, so a second click during the
+                      wait started a second search from a component that was
+                      already being replaced. */}
+                  <button disabled={pending || page <= 1}
+                    onClick={() => goToPage(page - 1)}
                     onMouseEnter={() => prefetchPage(page - 1)}
                     onFocus={() => prefetchPage(page - 1)}
                     className="page-btn">← Previous</button>
                   <span className="pagination__info">Page {page} of {totalPages}</span>
-                  <button disabled={page >= totalPages}
-                    onClick={() => doSearch(false, page + 1)}
+                  <button disabled={pending || page >= totalPages}
+                    onClick={() => goToPage(page + 1)}
                     onMouseEnter={() => prefetchPage(page + 1)}
                     onFocus={() => prefetchPage(page + 1)}
                     className="page-btn">Next →</button>
                 </div>
               )}
-            </>
+            </div>
           )}
 
-          {!results && !loading && (
+          {!shown && !loading && (
             <EmptyState
               onSurprise={surpriseMe}
               // Same shape as the recent-search picker above, and for the same
@@ -2869,6 +3031,13 @@ function SearchPageInner() {
 // The correct fix is to stop navigate-and-remount being the mechanism that
 // triggers a search at all, which is a restructure rather than a guard. Until
 // then a duplicate query is much cheaper than an empty results page.
+//
+// What HAS been fixed is the remount being visible. The new instance seeds
+// `results`, `loading` and `stale` from module scope, so it comes up in the
+// state its predecessor was in rather than in the landing state — and a page
+// change that has to go to the server keeps the previous page's rows on screen
+// while it does. The reader now sees one transition per click instead of three.
+// The duplicate query is still a duplicate query; it is just no longer visible.
 
 function SearchPageKeyed() {
   // Remount the search page whenever the URL's search params change.

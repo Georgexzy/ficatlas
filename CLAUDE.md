@@ -651,7 +651,58 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   the shape. `popularity` is now `percent_rank()` of the blend, partitioned by
   site, so every archive is uniform on 0..1 and contributes in proportion to how
   much of it is scored: simulated top 1,000 becomes 836 / 151 / 13 against
-  populations of 84% / 15% / 1.2%. **Needs a popularity rebuild to take effect.**
+  populations of 84% / 15% / 1.2%.
+  - **Rebuilt 2026-09-06 22:02 and it landed within a percent of the
+    simulation.** 2,487,976 works scored against 2,487,978 eligible, on the
+    first attempt with no deadlock, in 3h51m. The measured top 1,000 is now
+    **842 AO3 / 146 FF.net / 12 FictionAlley** against the simulated
+    836 / 151 / 13 — a sort that had been 1,000 / 0 / 0 for as long as it had
+    existed. The unfiltered "Most popular" browse opens on a FictionAlley work,
+    which is the whole point of the change and is also the cheapest way to check
+    it is still in force: `?sort=popularity_desc` with a single-archive top ten
+    means the percentiles have been rebuilt without the partition.
+- **The search page's keyed remount was VISIBLE, and it showed the reader the
+  landing page.** `SearchPageKeyed` keys the component on the query string, so a
+  search or a page change destroys the instance holding the results — and the
+  replacement came up with `results=null, loading=false`, which is exactly the
+  combination that renders the front door. Measured in a browser across one
+  click of "Next" on a cold page: results → **landing page** at 92ms → six
+  skeletons for 1.5s → results, and the reader left 365px down page 2 because
+  the scroll-to-top lived in `doSearch`'s success path and the navigation's own
+  unmount had aborted that fetch. The fix is to seed `results`, `loading` and
+  `stale` from module scope at mount, so the new instance comes up in the state
+  its predecessor was in; a page change keeps the previous rows on screen dimmed
+  (`.results--pending`) rather than collapsing the column. Three states, no
+  flash, and the reader lands at the top. The duplicate query above is still a
+  duplicate query — it is just no longer something anyone can see.
+  - `stale` is only ever the SAME search on another page (`sameSearchOtherPage`).
+    A different search shows skeletons, because its predecessor's rows are not
+    an approximation of the answer, they are a different answer.
+- **Scroll memory had three separate bugs, and each one hid the next.** "Back
+  from a story returns you to your place in the results" did not work at all;
+  every one of these was found by driving a real browser, and none of them
+  raised an error anywhere.
+  - `restoreScroll` asked `scrollHeight > y` when the question is whether the
+    document can REACH y — `scrollHeight - innerHeight >= y`. On a back-
+    navigation it runs while the page being LEFT is still laid out, so a 1,882px
+    story page passed the test for y=1,400, the scroll was clamped to 982, and
+    the entry was then cleared as though it had worked. It now verifies
+    `window.scrollY` landed before doing anything irreversible.
+  - It cleared the entry on success, which lost the position whenever the reader
+    was ALREADY at that height: scrolling to where you already are fires no
+    scroll event, so the page's capture never wrote it back. The entry is now
+    the last known position for that URL and is only removed deliberately.
+  - The capture recorded `y=0` from the ROUTER's scroll-to-top on navigation.
+    The guard for that tests `location.pathname === "/"`, and measured, the
+    router's scroll can arrive while the pathname is still `/` — so the reader's
+    position was overwritten with 0 one frame before the unmount flush read it,
+    and clicking a story within 150ms of scrolling lost it every time. Only a
+    `y > 0` is remembered for the flush; a deliberate return to the top is
+    distinguished by surviving the 150ms debounce.
+  - The unmount cleanup now writes the pending position, which the comment above
+    it had claimed since it was written — `scrollMemoRef` was read by nothing at
+    all. `lib/scrollMemory.test.ts` covers the reachability rule, the
+    keep-on-success rule and the save suppression; the rest needs a browser.
 - The search cache is two-tier: in-process L1 plus a shared UNLOGGED
   `search_cache_entries` table, because the per-worker cache meant four uvicorn
   workers each paid a ~10s miss for the same popular query. Bump
