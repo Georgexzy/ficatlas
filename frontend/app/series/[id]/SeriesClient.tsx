@@ -77,7 +77,7 @@ export default function SeriesClient({ params }: { params: Promise<{ id: string 
       <h1 className="settings-title">{data.name}</h1>
       <p className="series-page__by">
         {data.author && (
-          <>by <Link href={`/?author=${encodeURIComponent(data.author)}`}>{data.author}</Link> · </>
+          <>by <Link rel="nofollow" href={`/?author=${encodeURIComponent(data.author)}`}>{data.author}</Link> · </>
         )}
         {data.main_count} in the main sequence
         {data.work_count > data.main_count &&
@@ -190,7 +190,7 @@ export default function SeriesClient({ params }: { params: Promise<{ id: string 
       )}
 
       <p className="series-page__foot">
-        <Link href={`/?author=${encodeURIComponent(data.author ?? "")}`}>
+        <Link rel="nofollow" href={`/?author=${encodeURIComponent(data.author ?? "")}`}>
           Everything else by this author →
         </Link>
       </p>

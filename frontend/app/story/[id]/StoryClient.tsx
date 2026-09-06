@@ -403,7 +403,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
           ))}
 
           <p className="story-detail__byline">
-            by <Link href={`/?author=${encodeURIComponent(story.author)}`}
+            by <Link rel="nofollow" href={`/?author=${encodeURIComponent(story.author)}`}
                  className="story-detail__author-link"
                  title={`All works by ${story.author}, across every archive`}>
               {story.author}
@@ -419,7 +419,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
               {story.fandoms.map((f, i) => (
                 <span key={f}>
                   {i > 0 && " · "}
-                  <Link href={`/?fandoms=${encodeURIComponent(f)}`}
+                  <Link rel="nofollow" href={`/?fandoms=${encodeURIComponent(f)}`}
                     className="story-detail__fandom-link">{f}</Link>
                 </span>
               ))}
@@ -632,7 +632,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
           <section className="story-detail__taggroup">
             <h4>Fandoms</h4>
             <div className="tag-list">{story.fandoms.map(f =>
-              <Link key={f} href={`/?fandoms=${encodeURIComponent(f)}`} className="tag tag--fandom tag--clickable">{f}</Link>
+              <Link key={f} rel="nofollow" href={`/?fandoms=${encodeURIComponent(f)}`} className="tag tag--fandom tag--clickable">{f}</Link>
             )}</div>
           </section>
         )}
@@ -640,7 +640,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
           <section className="story-detail__taggroup">
             <h4>Relationships</h4>
             <div className="tag-list">{story.relationships.map(r =>
-              <Link key={r} href={`/?relationships=${encodeURIComponent(r)}`} className="tag tag--ship tag--clickable">{r}</Link>
+              <Link key={r} rel="nofollow" href={`/?relationships=${encodeURIComponent(r)}`} className="tag tag--ship tag--clickable">{r}</Link>
             )}</div>
           </section>
         )}
@@ -648,7 +648,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
           <section className="story-detail__taggroup">
             <h4>Characters</h4>
             <div className="tag-list">{story.characters.map(c =>
-              <Link key={c} href={`/?characters=${encodeURIComponent(c)}`} className="tag tag--clickable">{c}</Link>
+              <Link key={c} rel="nofollow" href={`/?characters=${encodeURIComponent(c)}`} className="tag tag--clickable">{c}</Link>
             )}</div>
           </section>
         )}
@@ -656,7 +656,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
           <section className="story-detail__taggroup">
             <h4>Tags</h4>
             <div className="tag-list">{story.tags.map(t =>
-              <Link key={t} href={`/?tags=${encodeURIComponent(t)}`} className="tag tag--clickable">{t}</Link>
+              <Link key={t} rel="nofollow" href={`/?tags=${encodeURIComponent(t)}`} className="tag tag--clickable">{t}</Link>
             )}</div>
           </section>
         )}
@@ -677,7 +677,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
           <section className="story-detail__taggroup">
             <h4>Warnings</h4>
             <div className="tag-list">{story.warnings.filter(w => w !== "No Archive Warnings Apply").map(w =>
-              <Link key={w} href={`/?tags=${encodeURIComponent(w)}`} className="tag tag--warn tag--clickable">{w}</Link>
+              <Link key={w} rel="nofollow" href={`/?tags=${encodeURIComponent(w)}`} className="tag tag--warn tag--clickable">{w}</Link>
             )}</div>
           </section>
         )}

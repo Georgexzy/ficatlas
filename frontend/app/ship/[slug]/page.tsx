@@ -196,7 +196,7 @@ export default async function ShipHub(
       <p className="hub__lede">
         {hub.work_count.toLocaleString()} works tagged with this pairing across
         Archive of Our Own, FanFiction.net and FictionAlley. {" "}
-        <Link href={searchHref(hub.name)}>
+        <Link rel="nofollow" href={searchHref(hub.name)}>
           Search all {hub.work_count.toLocaleString()} with filters →
         </Link>
       </p>
@@ -208,7 +208,7 @@ export default async function ShipHub(
       ) : sections.map(section => (
         <section key={section.site}>
           <h2 className="hub__heading hub__heading--link">
-            <Link href={searchHref(hub.name, section.site || undefined)}>
+            <Link rel="nofollow" href={searchHref(hub.name, section.site || undefined)}>
               {section.site
                 ? `Most popular on ${SITE_LABELS[section.site] ?? section.site}`
                 /* The pre-rebuild fallback has no archive to name. */
@@ -225,7 +225,7 @@ export default async function ShipHub(
                 <p className="hub__meta">
                   {w.author && (
                     <>
-                      by <Link href={`/?author=${encodeURIComponent(w.author)}`}>{w.author}</Link>
+                      by <Link rel="nofollow" href={`/?author=${encodeURIComponent(w.author)}`}>{w.author}</Link>
                     </>
                   )}
                   {fmt(w.word_count) && <span>{fmt(w.word_count)} words</span>}
@@ -238,7 +238,7 @@ export default async function ShipHub(
           </ol>
           {section.site && (
             <p className="hub__section-more">
-              <Link href={searchHref(hub.name, section.site)}>
+              <Link rel="nofollow" href={searchHref(hub.name, section.site)}>
                 Search every {hub.name} work on {SITE_LABELS[section.site] ?? section.site} →
               </Link>
             </p>
