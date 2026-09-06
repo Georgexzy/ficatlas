@@ -622,6 +622,36 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     dudes`). The score-spread metric that diagnosed the problem did NOT improve
     with the fix that worked — it identified the right subsystem and was the
     wrong thing to optimise.
+- **Paging cost a whole search per page, and one computation now fills five.**
+  The work is not in returning twenty rows — it is materialising up to 5,001
+  candidates and ranking every one. OFFSET does not avoid that; it does the work
+  and throws it away. Measured cold: `coffee shop au` page 1 3.15s, page 2
+  2.10s, page 8 2.10s. The set is already sorted by the time rows come back, so
+  `SEARCH_PREFETCH_PAGES` fetches `per_page * 5`, returns the first page and
+  caches the other four under the keys their own requests will use. After:
+  page 2 is 0.018s (`coffee shop au`) and 0.005s (`naruto`). Verified
+  byte-identical to a freshly computed page on three query shapes, pages 2 and
+  4, including `total` and `count_is_capped`.
+  - **The cache key is canonicalised (parameters sorted) and that is what makes
+    the prefetch possible** — `key_for_page` has to produce exactly the key the
+    next request looks under, not an approximation. It also fixes a plain miss:
+    `?q=x&page=2` and `?page=2&q=x` used to be two entries for one search.
+  - Prefetched pages are skipped when live cards are present, and never carry
+    `live_count` or `hidden_explicit` — those belong to the page actually asked
+    for.
+- **"Most popular" was AO3 and nothing else, and the per-site percentiles were
+  not the fault.** Measured over 2,402,138 scored works: the top 1,000 held
+  1,000 AO3 works, 0 FF.net, 0 FictionAlley — while AO3 is only 84% of what is
+  scored. The per-metric percentiles were already per-site; it is the BLEND that
+  compresses each archive differently (confidence shrinkage, the rate term, each
+  site's own `w_max`), and it compresses the small archives hardest — 99.9th
+  percentile 0.9973 AO3, 0.9426 FF.net, 0.7999 FictionAlley. No FF.net work
+  could reach the band two million AO3 works already occupied. Rescaling the
+  endpoints does NOT fix it (simulated: 997/2/1) because the difference is in
+  the shape. `popularity` is now `percent_rank()` of the blend, partitioned by
+  site, so every archive is uniform on 0..1 and contributes in proportion to how
+  much of it is scored: simulated top 1,000 becomes 836 / 151 / 13 against
+  populations of 84% / 15% / 1.2%. **Needs a popularity rebuild to take effect.**
 - The search cache is two-tier: in-process L1 plus a shared UNLOGGED
   `search_cache_entries` table, because the per-worker cache meant four uvicorn
   workers each paid a ~10s miss for the same popular query. Bump

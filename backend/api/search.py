@@ -16,7 +16,7 @@ from db.session import get_db
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 from models.user import User, ROLE_ADMIN
 from api.auth import get_current_user
-from search_cache import (CACHE, cache_key, shared_get,
+from search_cache import (CACHE, cache_key, key_for_page, shared_get,
                           shared_get_with_ttl, shared_put)
 
 # Shorter than the 60s session default — see the note in search() on why a long
@@ -103,6 +103,27 @@ SEARCH_WORK_MEM = os.getenv("SEARCH_WORK_MEM", "64MB")
 # It compounds at the edge: the Cloudflare rule for /api/search respects the
 # origin's Cache-Control, so a longer max-age here means Cloudflare answers the
 # repeat without touching this server at all.
+# How many pages one computation fills.
+#
+# Paging was costing very nearly a whole search per page, because the work is
+# not in returning twenty rows — it is in materialising up to 5,001 candidates
+# and ranking every one of them. OFFSET does not avoid that work; it does the
+# work and throws it away. Measured before this, same query, cold:
+#
+#     q=coffee shop au   page 1  3.15s   page 2  2.10s   page 8  2.10s
+#     q=naruto           page 1  1.62s   page 2  1.09s   page 8  1.03s
+#
+# The candidate set is already sorted by the time twenty rows come back, so
+# asking for a hundred costs one more round of output and nothing else. The
+# other four pages are built in memory and cached under the keys their own
+# requests would use — which is what `key_for_page` exists for, and why the key
+# had to be canonicalised first.
+#
+# Five rather than more because the tail is long and cheap to be wrong about:
+# most readers never leave page 1, and every page cached beyond the last one
+# read is a row in an UNLOGGED table that gets swept anyway.
+SEARCH_PREFETCH_PAGES = int(os.getenv("SEARCH_PREFETCH_PAGES", "5"))
+
 SEARCH_CACHE_MAX_SECONDS = int(os.getenv("SEARCH_CACHE_MAX_SECONDS", "1800"))
 SEARCH_CACHE_COST_FACTOR = float(os.getenv("SEARCH_CACHE_COST_FACTOR", "0.15"))
 
@@ -2455,6 +2476,7 @@ def search(          # NOT async — see below
     # over the unordered capped set (~0.17s) rather than riding along on the
     # rows via count(*) OVER ().
     _ceiling = COUNT_CEILING
+    _prefetched: list = []
     _fast_rows = None
     if (not q) and _narrowed and sort in _FAST_SORTS and offset + per_page <= COUNT_CEILING:
         try:
@@ -2519,7 +2541,11 @@ def search(          # NOT async — see below
         # work and discard it.
         rows = []
     else:
-        rows = ordered.offset(offset).limit(per_page).all()
+        # One page asked for, several fetched. See SEARCH_PREFETCH_PAGES — the
+        # ranking is already paid for by the time any row comes back.
+        _fetched = (ordered.offset(offset)
+                           .limit(per_page * SEARCH_PREFETCH_PAGES).all())
+        rows, _prefetched = _fetched[:per_page], _fetched[per_page:]
     # count(*) OVER () repeats the same total on every row; it is only absent
     # when the page is empty, which also means there was nothing to count.
     if _fast_rows is not None:
@@ -2679,7 +2705,11 @@ def search(          # NOT async — see below
                 o._series_id, o._series_name, o._series_position = hit
 
     try:
-        _attach_series(indexed)
+        # The prefetched pages get their series badges from the same pass —
+        # they are about to be cached as finished responses, and a cached page
+        # that is missing what a computed one has is a bug that only shows up
+        # on page 2.
+        _attach_series(indexed + [r[0] for r in _prefetched])
     except Exception as e:
         log.debug(f"series attach failed: {type(e).__name__}")
 
@@ -2746,6 +2776,34 @@ def search(          # NOT async — see below
         # point is that it is live.
         if not live_cards:
             shared_put(db, _ck, _response.model_dump_json(), _earned_ttl)
+
+        # The pages nobody has asked for yet, off the rows already in hand. A
+        # reader who pages forward now pays a cache lookup instead of another
+        # full materialise-and-rank — see SEARCH_PREFETCH_PAGES.
+        #
+        # Keys are built with `key_for_page`, which canonicalises exactly as
+        # `cache_key` does, so these are the keys those requests will look
+        # under rather than approximations of them. Skipped entirely when live
+        # cards are present, for the same reason the shared write above is:
+        # page 1 is then holding something no other reader should be handed.
+        if _prefetched and request is not None and not live_cards:
+            _qs = str(request.url.query)
+            for _i in range(1, SEARCH_PREFETCH_PAGES):
+                _chunk = _prefetched[(_i - 1) * per_page:_i * per_page]
+                if not _chunk:
+                    break
+                _sib = _response.model_copy(update={
+                    "page": page + _i,
+                    "results": [_to_card(r[0], _verified) for r in _chunk],
+                    # Live results and the hidden-explicit hint are properties
+                    # of the page that was actually asked for, never of a page
+                    # guessed ahead.
+                    "live_count": 0,
+                    "hidden_explicit": 0,
+                })
+                _sk = key_for_page(_qs, is_operator, page + _i)
+                CACHE.put(_sk, _sib)
+                shared_put(db, _sk, _sib.model_dump_json(), _earned_ttl)
 
     # Let a shared cache in front of us do the work the per-worker cache can
     # only do four times over.

@@ -221,21 +221,51 @@ ANALYZE pr_blended
 # reason a reader would agree with. Dividing by the site's own best rate
 # weight restores the same full-trust ceiling for whichever archive records
 # the dates.
+# The stored score is the work's STANDING IN ITS OWN ARCHIVE, not the blended
+# value. One more percent_rank(), partitioned by site, over the blend.
+#
+# Without it "Most popular" was AO3 and nothing else. Measured 2026-09-06 over
+# 2,402,138 scored works: the top 1,000 held 1,000 AO3 works, 0 FanFiction.net
+# and 0 FictionAlley — while AO3 is only 84% of what is scored.
+#
+# The per-metric percentiles were already per-site, so that was not the fault.
+# The BLEND compresses each site differently — confidence shrinkage toward the
+# prior, the rate term, and each site's own w_max — and it compresses the small
+# archives harder. The 99.9th percentile came out at 0.9973 for AO3, 0.9426 for
+# FF.net and 0.7999 for FictionAlley, so no FF.net work could reach the band
+# where two million AO3 works were already sitting. A linear rescale of the
+# endpoints does not fix it (simulated: 997/2/1) because the difference is in
+# the SHAPE of each distribution, not its ends.
+#
+# Ranking the blend within each site removes the shape entirely: every archive
+# is then uniform on 0..1 and contributes to any top-N in proportion to how much
+# of it has been scored. Simulated on the same data, top 1,000: 836 AO3, 151
+# FF.net, 13 FictionAlley — against populations of 84% / 15% / 1.2%.
+#
+# This also makes the column mean what this file's docstring has always said it
+# means: "Top 1% of AO3 by kudos" and "top 1% of FF.net by favs" being the same
+# number is the entire point of the percentile approach.
 UPDATE_SQL = f"""
 CREATE TEMP TABLE pr_final ON COMMIT PRESERVE ROWS AS
-    SELECT b.id,
-           round((0.75 * ({PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR}) * LEAST(w_have / c.w_max, 1.0))
-                + 0.25 * CASE WHEN w_rate > 0
-                              THEN {PRIOR} + (s_rate / w_rate - {PRIOR})
-                                             * LEAST(w_rate / r.r_max, 1.0)
-                              ELSE {PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR})
-                                             * LEAST(w_have / c.w_max, 1.0)
-                          END)::numeric, 6) AS popularity
-      FROM pr_blended b
-      JOIN (SELECT site, GREATEST(MAX(w_have), 0.0001) AS w_max
-              FROM pr_blended GROUP BY site) c ON c.site = b.site
-      JOIN (SELECT site, GREATEST(MAX(w_rate), 0.0001) AS r_max
-              FROM pr_blended GROUP BY site) r ON r.site = b.site
+    WITH scored AS (
+        SELECT b.id, b.site,
+               (0.75 * ({PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR}) * LEAST(w_have / c.w_max, 1.0))
+              + 0.25 * CASE WHEN w_rate > 0
+                            THEN {PRIOR} + (s_rate / w_rate - {PRIOR})
+                                           * LEAST(w_rate / r.r_max, 1.0)
+                            ELSE {PRIOR} + (s_abs / NULLIF(w_have, 0) - {PRIOR})
+                                           * LEAST(w_have / c.w_max, 1.0)
+                        END) AS blend
+          FROM pr_blended b
+          JOIN (SELECT site, GREATEST(MAX(w_have), 0.0001) AS w_max
+                  FROM pr_blended GROUP BY site) c ON c.site = b.site
+          JOIN (SELECT site, GREATEST(MAX(w_rate), 0.0001) AS r_max
+                  FROM pr_blended GROUP BY site) r ON r.site = b.site
+    )
+    SELECT id,
+           round((percent_rank() OVER (PARTITION BY site ORDER BY blend))::numeric, 6)
+             AS popularity
+      FROM scored
 ;
 ALTER TABLE pr_final ADD PRIMARY KEY (id);
 ANALYZE pr_final;
