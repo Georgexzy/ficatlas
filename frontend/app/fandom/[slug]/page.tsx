@@ -169,7 +169,7 @@ export default async function FandomHub(
         {/* The search box is the real tool; this page is a doorway to it. The
             link carries the fandom through as a filter so it lands on results
             rather than an empty box. */}
-        <Link href={`/?fandoms=${encodeURIComponent(hub.name)}`}>
+        <Link rel="nofollow" href={`/?fandoms=${encodeURIComponent(hub.name)}`}>
           Search all {hub.work_count.toLocaleString()} with filters →
         </Link>
       </p>
@@ -191,7 +191,7 @@ export default async function FandomHub(
               already looking at, and it lands on this fandom filtered to that
               archive, in the real search UI with all the filters. */}
           <h2 className="hub__heading hub__heading--link">
-            <Link href={section.site
+            <Link rel="nofollow" href={section.site
               ? `/?fandoms=${encodeURIComponent(hub.name)}&sites=${section.site}`
               : `/?fandoms=${encodeURIComponent(hub.name)}`}>
               {section.site
@@ -210,7 +210,7 @@ export default async function FandomHub(
                 <p className="hub__meta">
                   {w.author && (
                     <>
-                      by <Link href={`/?author=${encodeURIComponent(w.author)}`}>{w.author}</Link>
+                      by <Link rel="nofollow" href={`/?author=${encodeURIComponent(w.author)}`}>{w.author}</Link>
                     </>
                   )}
                   {fmt(w.word_count) && <span>{fmt(w.word_count)} words</span>}
@@ -223,7 +223,7 @@ export default async function FandomHub(
           </ol>
           {section.site && (
             <p className="hub__section-more">
-              <Link href={`/?fandoms=${encodeURIComponent(hub.name)}&sites=${section.site}`}>
+              <Link rel="nofollow" href={`/?fandoms=${encodeURIComponent(hub.name)}&sites=${section.site}`}>
                 Search every {hub.name} work on {SITE_LABELS[section.site] ?? section.site} →
               </Link>
             </p>

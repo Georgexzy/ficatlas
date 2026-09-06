@@ -174,7 +174,7 @@ function TagList({ tags, className, kind = "tags", tagClass = "", limit = 5 }: {
   return (
     <div className={`tag-list ${className ?? ""}`}>
       {shown.map(t => (
-        <Link key={t} href={`/?${kind}=${encodeURIComponent(t)}`}
+        <Link key={t} rel="nofollow" href={`/?${kind}=${encodeURIComponent(t)}`}
           className={`tag tag--clickable ${tagClass}`}>{t}</Link>
       ))}
       {!expanded && extra > 0 && <button onClick={() => setExpanded(true)} className="tag tag--more">+{extra}</button>}
@@ -499,7 +499,7 @@ function StoryCard({ story }: { story: StoryCard }) {
                 navigated by them, so the section is as identifying as the
                 site name. Clickable, like every other facet on a card. */}
             {story.archive_section && (
-              <Link href={`/?sections=${encodeURIComponent(story.archive_section)}&sites=fictionalley`}
+              <Link rel="nofollow" href={`/?sections=${encodeURIComponent(story.archive_section)}&sites=fictionalley`}
                 className="badge badge--section"
                 title={`Browse the ${story.archive_section} section of FictionAlley`}>
                 {story.archive_section}
@@ -530,7 +530,7 @@ function StoryCard({ story }: { story: StoryCard }) {
         <p className="card__byline">
           {/* Clicking the author browses everything they wrote, ACROSS archives —
               an AO3 or FF.net user page only ever shows what they posted there. */}
-          <Link href={`/?author=${encodeURIComponent(story.author)}`}
+          <Link rel="nofollow" href={`/?author=${encodeURIComponent(story.author)}`}
             className="card__author-link" title={`All works by ${story.author}`}>
             {story.author}
           </Link>
@@ -555,7 +555,7 @@ function StoryCard({ story }: { story: StoryCard }) {
               {story.fandoms.slice(0, 2).map((f, i) => (
                 <span key={f}>
                   {i > 0 && ", "}
-                  <Link href={`/?fandoms=${encodeURIComponent(f)}`} className="card__fandom-link">{f}</Link>
+                  <Link rel="nofollow" href={`/?fandoms=${encodeURIComponent(f)}`} className="card__fandom-link">{f}</Link>
                 </span>
               ))}
               {story.fandoms.length > 2 ? ` +${story.fandoms.length - 2}` : ""}
@@ -649,7 +649,7 @@ function StoryCard({ story }: { story: StoryCard }) {
               FOR as often as one you avoid, and the exclude form is a click away
               in the sidebar. */}
           {story.warnings.filter(w => w !== "No Archive Warnings Apply").map(w =>
-            <Link key={w} href={`/?warnings=${encodeURIComponent(w)}`}
+            <Link key={w} rel="nofollow" href={`/?warnings=${encodeURIComponent(w)}`}
               className="tag tag--warn tag--clickable"
               title={`Find works tagged "${w}"`}>{w}</Link>)}
         </div>
