@@ -703,6 +703,46 @@ def _resolve_or_split(db, col_name: str, csv_val):
     return (",".join(k for k in kept if k) or None), leftover
 
 
+# How much a row with nothing to show for itself is pushed down the relevance
+# score.
+#
+# 57% of the index has no summary, and it is not a crawl failure: 12.9M AO3 rows
+# came from a bulk metadata dump whose schema has no summary field at all. Those
+# rows also carry no engagement figure, so `pop` is 0 for almost all of them and
+# `text_rank` separates them barely — which means the order AMONG them was
+# essentially arbitrary, and a reader paging through results met works they
+# could not judge, interleaved with ones they could, for no reason.
+#
+# This is a DEMOTION, never a filter. A thin row that is genuinely the best
+# answer still wins: `exact_bonus` alone is 4.0 for an exact title match, so a
+# work whose title is exactly what was typed outranks this penalty six times
+# over. What the penalty decides is ties, and at this end of the index almost
+# everything is a tie.
+#
+# 0.6 against a `w_pop` of 1.0 (title query) or 3.5 (category query): enough to
+# order the flat tail, small enough that it never overturns readership. Measured
+# choices for it are in the commit; the failure it must not cause is a work
+# being unfindable, which is why it is subtracted from a score rather than added
+# to a WHERE.
+THIN_PENALTY = float(os.getenv("SEARCH_THIN_PENALTY", "0.6"))
+
+
+def _thin(entity=Story):
+    """1.0 for a row with no summary, 0.0 otherwise.
+
+    Summary only. A truncated TITLE is already excluded from search by
+    `_BROKEN_TITLE_TAIL` rather than demoted, and re-testing the same rule here
+    would match nothing that got this far. The titles that rule deliberately
+    does not catch ("Sobrevivientes Tercera") are indistinguishable from real
+    ones by any rule that does not also hide real ones, so nothing here guesses
+    at them.
+    """
+    return case(
+        (func.coalesce(func.length(func.trim(entity.summary)), 0) > 0, 0.0),
+        else_=1.0,
+    )
+
+
 def _arr_text(col):
     """IMMUTABLE array->text used by the trigram indexes on the facet columns.
     Backed by ix_stories_{fandoms,characters,relationships,tags}_trgm."""
@@ -2312,7 +2352,7 @@ def search(          # NOT async — see below
 
         relevance = (w_title * title_sim + exact_bonus
                      + w_text * text_rank + w_pop * pop
-                     + ship_bonus + trope_bonus)
+                     + ship_bonus + trope_bonus - THIN_PENALTY * _thin(S))
 
         ordered = ordered.order_by(
             relevance.desc(),
@@ -2320,8 +2360,13 @@ def search(          # NOT async — see below
         )
     else:
         # Nothing to rank against. word_count is the only signal populated for
-        # essentially every row (99.9%), so it beats an all-ties kudos sort.
-        ordered = ordered.order_by(S.word_count.desc().nullslast())
+        # essentially every row (99.9%), so it beats an all-ties kudos sort —
+        # but a row we can show the reader something about beats a longer one we
+        # cannot, so completeness leads. This ordering answers to nobody: there
+        # is no query and no chosen sort, so unlike `updated_desc` there is no
+        # contract here to break.
+        ordered = ordered.order_by(_thin(S).asc(),
+                                   S.word_count.desc().nullslast())
 
     offset  = (page - 1) * per_page
 
