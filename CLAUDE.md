@@ -519,6 +519,20 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
       DESIGN conclusion it supports still holds — the result-count gap between
       `Bts taejin jealousy` and `Bts jin and taehyung jealousy` is a property of
       the index, not of the traffic — but do not re-quote the figure.
+    - **A search made from the filter panel was not recorded at all**, until
+      2026-09-07. The middleware wrote a row `if q`, so every fandom hub, every
+      ship hub and every fandom, character or tag clicked on a result card was
+      invisible — measured on 24h of origin logs, 22 of 38 searches carried no
+      `q`. The report was blindest to the commonest way the site is used, which
+      also means any "searches" figure quoted from before that date counts TYPED
+      searches only. `serialise_filters()` in `query_parser.py` now renders the
+      filters in the SEARCH BAR's syntax (`fandom:Naruto complete`), so the row
+      is the text the reader had in front of them and pastes back in to re-run
+      the search. It is mirrored by hand against `serializeFiltersToQuery` in
+      the frontend, like the two parsers, and
+      `tests/test_query_parser.py` asserts every case ROUND TRIPS through
+      `parse_query` — which is the property that makes a recorded row usable
+      rather than merely readable.
   Pageviews come from the browser (`NavRecorder`), searches from a middleware in
   `main.py`, and the result count is stashed on `request.state.search_total` by
   `_note_total` next to each of search()'s three exits. No IP, user agent or

@@ -478,3 +478,140 @@ def parsed_to_search_params(pq: ParsedQuery) -> dict:
         "crossovers":          pq.crossovers,
         "in_series":           pq.in_series,
     }
+
+
+# ── The inverse: filters back into the bar's own syntax ───────────────────────
+#
+# Written for the traffic log, and the gap it closes is large. The search
+# middleware recorded a search only `if q`, so a search made entirely from the
+# filter panel — every fandom hub, every ship hub, every fandom, character or
+# tag clicked on a result card — was never recorded at all. Measured over 24h of
+# origin logs: 38 searches reached /api/search, 16 carried `q`, and the other 22
+# were invisible. The most common way people use this site was the way the
+# report could not see.
+#
+# The serialisation is the SEARCH BAR's, not an invention, and that is the whole
+# point: the bar mirrors the filter panel (serializeFiltersToQuery in
+# frontend/app/page.tsx), so `fandom:Naruto complete` is literally the text the
+# reader had in front of them. It also round-trips — paste a recorded row back
+# into the bar and the same search runs — which a bespoke "fandoms=Naruto"
+# rendering would not.
+#
+# Mirrored by hand against the TypeScript, like the two parsers above, and for
+# the same reason: there is no shared source and drifting is the failure mode.
+# If you add an operator to one, add it here.
+_ARRAY_FIELDS = (
+    ("fandoms", "fandom"), ("relationships", "ship"), ("characters", "char"),
+    ("tags", "tag"), ("sections", "subsite"), ("warnings", "warn"),
+    ("categories", "cat"),
+)
+_EXCLUDE_FIELDS = (
+    ("exclude_fandoms", "-fandom"), ("exclude_relationships", "-ship"),
+    ("exclude_characters", "-char"), ("exclude_tags", "-tag"),
+)
+_ALL_SITES = {"ao3", "ffnet", "fictionalley"}
+
+
+def _quote(value: str) -> str:
+    """Quote only where the value would not survive the trip back through the
+    parser. Same three rules as needsQuoting() in the TypeScript: an embedded
+    quote, a trailing shorthand word, or something that reads as `key:`."""
+    v = (value or "").strip()
+    if not v:
+        return v
+    if '"' in v:
+        return '"%s"' % v.replace('"', "")
+    words = v.split()
+    if len(words) > 1 and _SHORTHAND_RE.match(words[-1]):
+        return '"%s"' % v
+    for m in re.finditer(r"(?:^|\s)-?(\w+)\s*:", v):
+        if FIELD_ALIASES.get(m.group(1).lower()):
+            return '"%s"' % v
+    return v
+
+
+def _words(n: int) -> str:
+    """100000 -> 100k, 1000000 -> 1m. The parser understands k/m suffixes and
+    not raw digits, so this is what round-trips."""
+    return f"{n // 1_000_000}m" if n % 1_000_000 == 0 else f"{round(n / 1000)}k"
+
+
+def serialise_filters(params) -> str:
+    """Render the filter half of a search as the search bar would show it.
+
+    `params` is anything with .getlist()/.get() — a Starlette QueryParams.
+    Returns "" when nothing narrows the search, which is the signal not to
+    record it: a browse of the whole index with no filter and no text is not a
+    query anybody could act on in a report, and an empty string in the `q`
+    column would group every one of them into a single meaningless row.
+    """
+    def many(key):
+        try:
+            return [v for v in params.getlist(key) if (v or "").strip()]
+        except AttributeError:
+            v = params.get(key)
+            return [v] if v else []
+
+    def one(key):
+        return (params.get(key) or "").strip()
+
+    # A parameter may arrive either repeated (?tags=a&tags=b) or comma-joined
+    # (?tags=a,b) — the frontend sends the second, links in the wild send both.
+    def values(key):
+        out = []
+        for raw in many(key):
+            out.extend(p.strip() for p in raw.split(",") if p.strip())
+        return out
+
+    parts: list[str] = []
+    for key, op in _ARRAY_FIELDS:
+        for v in values(key):
+            parts.append(f"{op}:{_quote(v)}")
+    for key, op in _EXCLUDE_FIELDS:
+        for v in values(key):
+            parts.append(f"{op}:{_quote(v)}")
+
+    # Ratings only when they are a real narrowing: every rating selected IS the
+    # default, and spelling it out would put four operators in front of every
+    # search. `explicit=true` widens the default set to five.
+    ratings = values("ratings")
+    full = 5 if one("explicit") == "true" else 4
+    if ratings and len(ratings) < full:
+        parts.extend(f"rating:{r}" for r in ratings)
+
+    status = values("status")
+    if len(status) == 1:
+        parts.append("complete" if status[0] == "complete" else "wip")
+
+    lo, hi = one("word_count_min"), one("word_count_max")
+    try:
+        if lo and hi:
+            parts.append(f"words:{_words(int(lo))}-{_words(int(hi))}")
+        elif lo:
+            parts.append(f"words:>{_words(int(lo))}")
+        elif hi:
+            parts.append(f"words:<{_words(int(hi))}")
+    except ValueError:
+        pass
+
+    if one("language"):
+        parts.append(f"lang:{_quote(one('language'))}")
+    if one("author"):
+        parts.append(f"author:{_quote(one('author'))}")
+    if one("updated_after"):
+        parts.append(f"updated:{one('updated_after')}")
+    if one("in_series") == "true":
+        parts.append("series:true")
+    elif one("in_series") == "false":
+        parts.append("series:false")
+
+    # Sites only when fewer than all three, for the same reason as ratings.
+    sites = [s for s in values("sites") if s in _ALL_SITES]
+    if sites and len(sites) < len(_ALL_SITES):
+        parts.extend(f"site:{s}" for s in sites)
+
+    xover = one("crossovers")
+    if xover in ("only", "exclude"):
+        parts.append(f"xover:{xover}")
+
+    return " ".join(parts)

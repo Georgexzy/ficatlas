@@ -131,3 +131,87 @@ def test_site_combines_with_other_operators():
     assert pq.fandoms == ["Naruto"]
     assert pq.status == "complete"
     assert pq.word_count_min == 100000
+
+
+# ── serialise_filters: the inverse, used by the traffic log ───────────────────
+#
+# The property that matters is the ROUND TRIP. What gets written into the search
+# log is what the search bar shows, so a recorded row can be pasted back in and
+# run again — and the only way that stays true is if parse_query() reads back
+# what serialise_filters() writes. Every test here checks both directions.
+
+from starlette.datastructures import QueryParams  # noqa: E402
+from query_parser import serialise_filters  # noqa: E402
+
+
+def _round(qs: str):
+    """Serialise these params, then parse the result back."""
+    text = serialise_filters(QueryParams(qs))
+    return text, parse_query(text)
+
+
+def test_filter_only_search_serialises_to_the_bars_syntax():
+    """The case the traffic log was blind to: no free text at all."""
+    text, pq = _round("fandoms=Naruto")
+    assert text == "fandom:Naruto"
+    assert pq.fandoms == ["Naruto"]
+
+
+def test_a_browse_with_nothing_narrowing_it_serialises_to_nothing():
+    """Empty is the signal not to record. An unfiltered browse is not a query
+    anybody can act on, and "" would collapse every one into a single row."""
+    assert serialise_filters(QueryParams("sort=popularity_desc&page=2")) == ""
+    assert serialise_filters(QueryParams("")) == ""
+    assert serialise_filters(QueryParams("q=drarry")) == ""   # the text half is not ours
+
+
+def test_several_filters_round_trip_together():
+    text, pq = _round("tags=Fluff&sites=ffnet&word_count_min=100000&status=complete")
+    assert pq.tags == ["Fluff"]
+    assert pq.sites == ["ffnet"]
+    assert pq.word_count_min == 100000
+    assert pq.status == "complete"
+
+
+def test_comma_joined_and_repeated_values_both_work():
+    """The frontend sends ?tags=a,b; links in the wild send ?tags=a&tags=b."""
+    assert _round("fandoms=Harry Potter,Naruto")[1].fandoms == ["Harry Potter", "Naruto"]
+    assert _round("fandoms=Harry Potter&fandoms=Naruto")[1].fandoms == ["Harry Potter", "Naruto"]
+
+
+def test_a_full_rating_set_is_not_a_narrowing():
+    """Every rating selected IS the default. Spelling it out would put four
+    operators in front of every recorded search."""
+    assert serialise_filters(QueryParams("ratings=G,T,M,NR")) == ""
+    assert serialise_filters(QueryParams("ratings=M")) == "rating:M"
+
+
+def test_all_three_sites_is_not_a_narrowing():
+    assert serialise_filters(QueryParams("sites=ao3,ffnet,fictionalley")) == ""
+    assert serialise_filters(QueryParams("sites=ao3,ffnet")) == "site:ao3 site:ffnet"
+
+
+def test_a_value_that_would_break_the_parser_is_quoted():
+    """A fandom ending in a shorthand word would lose it on the way back."""
+    text, pq = _round("fandoms=Everything Is Complete")
+    assert text == 'fandom:"Everything Is Complete"'
+    assert pq.fandoms == ["Everything Is Complete"]
+
+
+def test_a_ship_with_a_slash_survives():
+    """Pairings are the commonest filter and carry a slash; nothing may eat it."""
+    text, pq = _round("relationships=Draco Malfoy/Harry Potter")
+    assert pq.relationships == ["Draco Malfoy/Harry Potter"]
+
+
+def test_exclusions_keep_their_minus():
+    text, pq = _round("exclude_tags=Angst")
+    assert text == "-tag:Angst"
+    assert pq.exc_tags == ["Angst"]
+
+
+def test_word_counts_use_the_suffixes_the_parser_understands():
+    """Raw digits do not round-trip: the parser reads k/m only."""
+    assert serialise_filters(QueryParams("word_count_min=50000")) == "words:>50k"
+    assert serialise_filters(QueryParams("word_count_max=1000000")) == "words:<1m"
+    assert _round("word_count_min=100000&word_count_max=200000")[1].word_count_min == 100000
