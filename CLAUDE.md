@@ -140,6 +140,41 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     effective. The residual gap is that hub pages carry ~157 un-nofollowed links
     into `/?…`; it is theoretical today (over a full day, every request to `/?…`
     came from a browser or this project's own scanner, none from any crawler).
+- **Half the origin's traffic was one crawler and one number, and both are now
+  gone.** Measured over 24h of nginx logs, 85,435 requests: `meta-webindexer`
+  22,287 (26%) and `/api/stats/totals` 20,494 (24%). After the two fixes below,
+  both read ZERO at the origin.
+  - **meta-webindexer is blocked at the EDGE, not in robots.txt, because it has
+    never fetched robots.txt** — zero times in the 24h window, while Yandex,
+    Semrush and Googlebot all did. You cannot decline a request that is never
+    made. 14,187 of its 22,287 requests were into `/?…`, the search space every
+    other agent is asked to stay out of because each URL is a query over 20.5M
+    rows. `deploy/cloudflare_bot_rule.py` owns the rule; it read-modify-writes
+    the phase entrypoint so a rule added by hand survives, and `--remove`
+    reverses it.
+    - nginx would also work and would still carry all 22,287 down a domestic
+      connection through the tunnel before dropping them. The edge is the only
+      layer that saves the bandwidth as well as the query.
+    - **`facebookexternalhit` is deliberately NOT blocked** (~125/day). It is
+      the link-preview fetcher, and it runs when a reader shares a ficatlas link
+      on Facebook, Instagram or WhatsApp — blocking it turns those shares into a
+      grey box, which is the opposite of what this rule is for. The expression
+      matches the product token `meta-webindexer` only, which Meta sends inside
+      five different browser-shaped user agents.
+    - Verified after deploy: meta-webindexer 403, and facebookexternalhit,
+      Applebot, Amzn-SearchBot, Googlebot and an ordinary iPhone all 200.
+  - **`/api/stats/totals` is edge-cached**, which needed both halves: a
+    `max-age=300` from `total_stats()` and a cache rule to let Cloudflare honour
+    it (`respect_origin`, so the header is the setting). 300s because that is
+    already both the server's recompute cycle and the client TTL in
+    `lib/api.ts` — three layers that were each caching for five minutes while
+    the one in the middle was not allowed to.
+  - **The audit that found these was of the nginx log, not the traffic table.**
+    `visit_events` cannot see any of it: bots are filtered by a user-agent
+    substring match, `/api/*` is not recorded at all, and the request that
+    matters most here — a crawler walking `/?…` — is exactly the shape the
+    beacon never fires for. When the question is "what is this box actually
+    doing", the access log is the only source that knows.
 - **SEO-audit crawlers were 18% of story-page load and sent nobody.** SemrushBot
   made 7,287 requests in one day, 7,024 of them story pages, against Googlebot's
   52 requests in the same day. It reads robots.txt (70 fetches that day) and is
