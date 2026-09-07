@@ -221,8 +221,10 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     `api/search.py` is raw `ln(1 + kudos + hits/20)`, which is 0 for the rest.
     `popularity` — the percentile that exists precisely to make the archives
     comparable — is a SORT option and is not a term in the relevance score.
-    Wiring it in as a fallback where raw engagement is null is a real change and
-    has not been measured.
+    Wiring it in as a fallback where raw engagement is null was measured on
+    2026-09-07 and is a bad idea: see the browse-ordering note below for why a
+    percentile saturates where a relevance score needs to discriminate. It IS
+    now what orders a browse with no query text.
 - **A client-rendered route has NO metadata of its own, and here that meant no
   canonical either.** A client component cannot export `metadata`, and the root
   layout deliberately sets no canonical (see the note in `layout.tsx` — a
@@ -738,6 +740,45 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     it had claimed since it was written — `scrollMemoRef` was read by nothing at
     all. `lib/scrollMemory.test.ts` covers the reachability rule, the
     keep-on-success rule and the save suppression; the rest needs a browser.
+- **A browse with no query text was ordered by LENGTH, and that is the page most
+  readers actually see.** Every fandom hub, every ship hub and every fandom,
+  character or tag clicked on a result card lands on a filtered search with no
+  `q`, which fell to `_thin ASC, word_count DESC`. Measured on `fandoms=Naruto`:
+  the page opened with a 1,066,440-word one-shot collection carrying 125 kudos,
+  followed by the four next-longest works, none of them anything a reader would
+  name. Length is uncorrelated with anything anybody is choosing between, so
+  from the outside it reads exactly as "the results seem random".
+  - It is now `_thin ASC, popularity DESC NULLS LAST, word_count DESC`.
+    `popularity` only became the right answer recently: it is a per-site
+    percentile, so it compares archives rather than ranking by which archive a
+    work came from, and the 2026-09-06 rebuild took it from 2.7% of the index to
+    12.1% with that partition in force. Nulls last because an unmeasured work is
+    not an unpopular one, and length still breaks the tie among those.
+  - **Ordering was only half of it: the candidate set was an arbitrary sample.**
+    A browse ranks the first 5,001 matches the planner happens to return, which
+    on `fandoms=Harry Potter` is 0.4% of the match set — the works everyone
+    means were simply not in the room. There is now a best-read arm beside it
+    (`BROWSE_POPULAR_CANDIDATES`, `BROWSE_POP_FLOOR`), exactly mirroring the
+    kudos arm the text path has had: additive, so it can never remove a match,
+    and bounded by a percentile floor rather than gated on breadth because a
+    browse has no cheap breadth measure. `fandoms=Harry Potter` now opens on
+    *All the Young Dudes* (322,055 kudos) with an FF.net and a FictionAlley work
+    in the top three; before, the first result was whatever the sample's longest
+    work happened to be.
+  - The floor makes the arm cheap where it matters and free where it does not:
+    a filter whose whole match set fits under the ceiling already has every row
+    as a candidate, and UNION dedups. Measured — Harry Potter 21.7ms, Naruto
+    435ms cold, a tag matching nothing popular 3.7ms (the planner BitmapAnds
+    instead of walking).
+  - **`popularity` is the wrong shape for the TEXT relevance score, and the note
+    that used to sit here suggesting it should be wired in as a fallback was
+    wrong.** It is a percentile, so it saturates exactly where ranking happens:
+    measured on `time travel harry potter`, all fifteen top results score
+    between 0.997 and 1.000, and substituting it for the raw `ln(1 + kudos +
+    hits/20)` term would flatten every distinction among the well-read works
+    into a tie broken by text noise. Percentiles are right for ORDERING a browse
+    and wrong for WEIGHTING a score. The text path was measured and deliberately
+    left alone; its top results are already sound.
 - The search cache is two-tier: in-process L1 plus a shared UNLOGGED
   `search_cache_entries` table, because the per-worker cache meant four uvicorn
   workers each paid a ~10s miss for the same popular query. Bump
