@@ -818,6 +818,19 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   - It lists the chapters the reader HAS, which offline is the ones that
     downloaded — the same rule `prevNum`/`nextNum` follow, and for the same
     reason.
+  - **The reader's own error screen asked for a sign-in and offered no way to
+    do it.** `REQUIRE_LOGIN_TO_READ` is on for the public tier, so on
+    ficatlas.com every hosted chapter 401s for a logged-out visitor — correct,
+    and the reader says so clearly ("You are not signed in, or that is not yours
+    to see") — but the actions beside that message were "← Chapter 4" and "Back
+    to story". There is now a "Sign in to read" carrying `?next=` back to the
+    chapter, shown only when nobody is signed in: a 403 for somebody who IS
+    signed in means the work is not theirs, and offering them a login is telling
+    them to try the same key again.
+  - Anonymous verification of the reader is therefore impossible against
+    production, and the dev tier is not a control for it — dev serves hosted
+    chapters to anyone (tailnet-only, single user). Drive the reader against dev
+    and check the AUTH path with a routed 401.
 - **"Clear N filters" queued instead of clearing, and its own tooltip said
   otherwise.** Sidebar filters deliberately sit behind an Apply bar so that
   building a filter set out of three clicks does not run three searches. Clearing

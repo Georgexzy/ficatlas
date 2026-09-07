@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { describeError, type Failure } from "@/lib/errors"
+import { useAuth } from "@/lib/auth"
 import { navigateTo } from "@/lib/navigation"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
@@ -77,6 +78,9 @@ export default function ChapterPage() {
   const router = useRouter()
   const storyId = params?.id as string
   const num = Number(params?.num)
+  // Only for the error screen: whether to offer a sign-in when a chapter is
+  // refused. Nothing else here depends on who is reading.
+  const { user } = useAuth()
   const [chapter, setChapter] = useState<ChapterFull | null>(null)
   const [story, setStory] = useState<StoryMin | null>(null)
   const [loadError, setLoadError] = useState<Failure | null>(null)
@@ -773,6 +777,23 @@ export default function ChapterPage() {
             </div>
           )}
           <div className="reader-error__actions">
+            {/* The door the message is already pointing at.
+                Reading hosted text needs an account on the public site
+                (REQUIRE_LOGIN_TO_READ — see api/stories.py for why), so a
+                logged-out reader clicking "Read Chapter 1" lands here and is
+                told "you are not signed in… signing in again may fix it" — with
+                nothing to sign in WITH. The message asked for an action and
+                withheld the control for it, which is the one thing an error
+                screen must not do.
+                Only when there is nobody signed in: a 403 for somebody who IS
+                signed in means the work is not theirs to read, and offering
+                them a login would be telling them to try the same key again. */}
+            {loadError.kind === "denied" && !user && (
+              <a className="btn btn--primary"
+                href={`/login?next=${encodeURIComponent(`/story/${storyId}/chapter/${num}`)}`}>
+                Sign in to read
+              </a>
+            )}
             {loadError.retryable && (
               <button className="btn btn--primary" onClick={() => setReloadKey(k => k + 1)}>
                 Try again
