@@ -26,7 +26,8 @@ interface AuthContextType {
   syncing: boolean
   lastSyncAt: number | null
   login: (username: string, password: string, remember?: boolean) => Promise<void>
-  signup: (username: string, password: string, invite?: string, remember?: boolean) => Promise<void>
+  signup: (username: string, password: string, invite?: string, remember?: boolean,
+           email?: string) => Promise<void>
   logout: () => Promise<void>
   syncNow: () => Promise<void>
   changePassword: (current: string, next: string) => Promise<void>
@@ -334,7 +335,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await doMerge(undefined, true)   // merge this device's local data with the account's server data
   }, [doMerge])
 
-  const signup = useCallback(async (username: string, password: string, invite?: string, remember = true) => {
+  const signup = useCallback(async (username: string, password: string, invite?: string, remember = true,
+                                    email?: string) => {
     const fd = new FormData()
     fd.append("username", username); fd.append("password", password)
     // Sent only when the server says it wants one (see /api/auth/signup-policy).
@@ -343,6 +345,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // code, and every account creation on the public site failed 403 while the
     // "Create account" tab went on offering it.
     if (invite) fd.append("invite", invite)
+    // Only when given. The field is optional at the form and optional at the
+    // API, and sending an empty one would be the same thing said twice.
+    if (email && email.trim()) fd.append("email", email.trim())
     fd.append("remember", String(remember))
     const r = await fetch("/api/auth/signup", { method: "POST", body: fd, credentials: "include" })
     if (!r.ok) {

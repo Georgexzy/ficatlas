@@ -511,6 +511,22 @@ def signup(
     response: Response, request: Request,
     username: str = Form(...), password: str = Form(...),
     invite: str = Form(""),
+    # Optional, and it has to stay optional.
+    #
+    # Signup never asked for one, so every account this site has ever made
+    # started with no way to prove who its owner is — and `shany12`, the only
+    # account that is not the operator's, cannot recover its password at all.
+    # There is nothing to send a reset to and nothing to check a claim against.
+    #
+    # Not required, because requiring an address to search a public index is a
+    # worse trade than the recovery is worth, and because a required field
+    # collects addresses people do not mean to give. Asked for, explained, and
+    # skippable. The same rule governs the prompt shown to existing accounts:
+    # offered once, dismissible, never a wall.
+    #
+    # A default of "" keeps every existing caller working unchanged — the login
+    # page posts username/password/invite and always has.
+    email: str = Form(""),
     remember: bool = Form(True),
     db: Session = Depends(get_db),
 ):
@@ -531,7 +547,18 @@ def signup(
         raise HTTPException(400, "Password must be at least 6 characters")
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(400, "Username already taken")
+    # Validated exactly as set_email() validates it, deliberately: an address
+    # accepted here and refused there would be a trap, and one accepted here
+    # that collides with an existing account would break the assumption every
+    # recovery path makes — that an address identifies at most one account.
+    email = email.strip().lower()
+    if email:
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+            raise HTTPException(400, "That does not look like an email address")
+        if db.query(User).filter(func.lower(User.email) == email).first():
+            raise HTTPException(400, "Another account already uses that address")
     user = User(username=username, password_hash=hash_password(password),
+                email=email or None,
                 last_login=datetime.utcnow())
     db.add(user); db.commit(); db.refresh(user)
     token = _create_session(db, user, request.headers.get("user-agent"), remember)

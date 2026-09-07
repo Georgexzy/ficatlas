@@ -43,8 +43,26 @@ router = APIRouter()
 # ── write ───────────────────────────────────────────────────────────────────
 
 @router.post("/hit", status_code=204)
-def hit(request: Request, path: str = Form(...), ref: str = Form("")):
-    """Record one pageview. Public, unauthenticated, and answers nothing.
+def hit(request: Request, path: str = Form(...), ref: str = Form(""),
+        kind: str = Form("page")):
+    """Record one pageview, or one click through to the archive.
+
+    `kind="out"` is the only other value accepted, and it is the answer to the
+    question this whole site exists to be judged on: did the reader FIND
+    something and go and read it. Everything else recorded here stops one step
+    short — a search that returned 5,000 results and a story page that was
+    opened both look like success and are indistinguishable from a reader who
+    took one look and left.
+
+    It reuses this endpoint, and `ref_host` for the destination, rather than
+    adding either a route or a column: the shape is identical (a visitor, a
+    path, a host) and the guards are the ones already argued for below. For a
+    pageview `ref_host` is where they came FROM; for an outbound click it is
+    where they went TO. `path` is the story page in both cases, so the two join.
+
+    The kind is constrained to a fixed pair. A free-text kind from a public
+    endpoint is a way to fill the table with invented categories that every
+    later report has to learn to ignore.
 
     204 with no body on every outcome, including a path this refuses to store.
     A beacon that reports its own success gives an abuser a way to tune their
@@ -61,6 +79,16 @@ def hit(request: Request, path: str = Form(...), ref: str = Form("")):
     if not path.startswith("/") or path.startswith("//"):
         return Response(status_code=204)
 
+    # Normalised, not rejected. Anything that is not exactly "out" is a
+    # pageview, which keeps the guarantee that matters — only two kinds are ever
+    # written, so no caller can invent a category every later report has to
+    # learn to ignore — without the failure mode of DROPPING an event because
+    # its kind was unexpected. That failure was real: the existing tests call
+    # this function directly rather than over HTTP, so `kind` arrives as
+    # FastAPI's Form() sentinel rather than a string, and a strict check
+    # silently recorded nothing at all.
+    kind = "out" if kind == "out" else "page"
+
     ua = request.headers.get("user-agent", "")
     # `ref` and not this request's own Referer header: the beacon is a POST made
     # BY the page, so its Referer is always the page itself. Falling back to it
@@ -69,7 +97,7 @@ def hit(request: Request, path: str = Form(...), ref: str = Form("")):
     # external — see NavRecorder.
     try:
         tracking.record(
-            "page", path,
+            kind, path,
             tracking.visitor_hash(client_ip(request), ua),
             ref=tracking.ref_host(ref),
             bot=tracking.is_bot(ua),

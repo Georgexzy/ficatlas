@@ -1958,6 +1958,12 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 .auth-submit:hover:not(:disabled) { filter: brightness(1.1); }
 .auth-submit:disabled { opacity: 0.6; cursor: not-allowed; }
 .auth-hint { font-size: 12px; color: var(--text-faint); line-height: 1.5; margin: 0; }
+/* "optional" beside a field label, in the label's own small-caps but quieter,
+   so the answer to "must I?" is in the label rather than three lines below it. */
+.auth-optional {
+  color: var(--text-faint); font-weight: 400; opacity: 0.75;
+  margin-left: 6px;
+}
 
 /* ── User menu in header ─────────────────────────────────────────────────── */
 .user-menu { position: relative; }
@@ -5401,4 +5407,27 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   .results .results-bar,
   .results .story-list { transition: none; }
   .results__progress::after { animation: none; width: 100%; opacity: 0.55; }
+}
+
+/* ── "This account has no email" ─────────────────────────────────────────────
+   A line, not a wall. The account it addresses cannot be recovered at all, so
+   it needs to be seen — but the reader has already declined to give an address
+   once by signing up without one, and the answer to that is to ask nicely and
+   take no for an answer. Quiet colours, an X that means never again, and
+   nothing about it blocks the page. */
+.email-prompt {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px;
+  background: var(--surface2); border-bottom: 1px solid var(--border);
+  font-size: 13px; color: var(--text-dim); line-height: 1.5;
+}
+.email-prompt__text { flex: 1; min-width: 0; }
+.email-prompt__link { color: var(--accent); text-decoration: underline; }
+.email-prompt__x {
+  background: none; border: 0; cursor: pointer; flex-shrink: 0;
+  color: var(--text-faint); font-size: 14px; padding: 4px 6px; line-height: 1;
+}
+.email-prompt__x:hover { color: var(--text); }
+@media (max-width: 560px) {
+  .email-prompt { font-size: 12px; padding: 8px 12px; }
 }

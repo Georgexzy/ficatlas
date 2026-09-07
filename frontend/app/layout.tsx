@@ -5,6 +5,7 @@ import { Suspense } from "react"
 import NavRecorder from "./NavRecorder"
 import SiteFooter from "./SiteFooter"
 import PreviewBanner from "./PreviewBanner"
+import EmailPrompt from "./EmailPrompt"
 import HealthBanner from "./HealthBanner"
 import { escapeJsonLd } from "@/lib/jsonLd"
 import "./globals.css"
@@ -157,6 +158,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AuthProvider>
           <HealthBanner />
           <PreviewBanner />
+          <EmailPrompt />
           {children}
           <SiteFooter />
         </AuthProvider>
