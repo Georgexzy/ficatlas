@@ -54,6 +54,10 @@ SEARCH_BROWSE_COUNT_CEILING = int(os.getenv("SEARCH_BROWSE_COUNT_CEILING", "2000
 # entirely whenever the other filter is selective.
 BROWSE_POPULAR_CANDIDATES = int(os.getenv("SEARCH_BROWSE_POPULAR_CANDIDATES", "300"))
 BROWSE_POP_FLOOR = float(os.getenv("SEARCH_BROWSE_POP_FLOOR", "0.95"))
+# How long the arm may spend before it is abandoned. Generous next to the 40ms a
+# warm browse costs and small next to the 20s search timeout it exists to keep
+# clear of: the point is a deadline, not a tight budget.
+BROWSE_ARM_BUDGET_MS = int(os.getenv("SEARCH_BROWSE_ARM_BUDGET_MS", "900"))
 
 # How long a filtered browse's total is reused for. Longer than the response
 # cache's 120s because the number is capped and therefore coarse — "2,000+" does
@@ -2190,15 +2194,68 @@ def search(          # NOT async — see below
         # — it is useful exactly where the sample is lossy.
         _browse_arm = None
         if _narrowed and sort == "relevance" and BROWSE_POPULAR_CANDIDATES > 0:
+            # Run on its own budget, and drop it if it runs over.
+            #
+            # The arm's cost is "walk ix_stories_popularity until 300 rows pass
+            # the filter", and that is fast only while the filter is dense among
+            # well-read works. It is not always: `status=complete&sites=ffnet`
+            # walked 54,431 entries for its 300 and took 8.2 SECONDS, because
+            # FF.net completion data is itself sparse — the arm was slowest for
+            # exactly the filter combination it was needed for, and turned a
+            # working browse into a 20s timeout and a 503.
+            #
+            # Bounding the walk was the wrong fix on both sides: a cap low
+            # enough to be safe returns almost nothing for a site-filtered
+            # browse, and no cap can be right for every filter a reader can
+            # build. So the arm keeps its full reach and gets a deadline
+            # instead. It is ADDITIVE — dropping it degrades to the ordering
+            # alone, which is what everyone had until today — so a miss costs
+            # accuracy on one page and nothing else.
+            #
+            # SAVEPOINT, because a statement timeout aborts the transaction: the
+            # outer search has to survive the arm failing, and rolling back to
+            # the savepoint is what lets it.
             # order_by(None) first, defensively and for the same reason the
-            # text path does it: this arm's whole cost model is "walk
-            # ix_stories_popularity and stop", and any inherited ordering in
-            # front of popularity would silently turn that into a sort.
-            _browse_arm = (db_query
-                           .order_by(None)
-                           .filter(Story.popularity >= BROWSE_POP_FLOOR)
-                           .order_by(Story.popularity.desc())
-                           .limit(BROWSE_POPULAR_CANDIDATES))
+            # text path does it: any inherited ordering in front of popularity
+            # would silently turn the walk into a sort.
+            _arm_ids: list = []
+            try:
+                with db.begin_nested():
+                    db.execute(sql_text("SET LOCAL statement_timeout = :ms"),
+                               {"ms": BROWSE_ARM_BUDGET_MS})
+                    _arm_ids = [r[0] for r in db.execute(
+                        db_query.order_by(None)
+                                .filter(Story.popularity >= BROWSE_POP_FLOOR)
+                                .order_by(Story.popularity.desc())
+                                .limit(BROWSE_POPULAR_CANDIDATES)
+                                .with_entities(Story.id).statement)]
+            except Exception:
+                # Over budget, or anything else. The page is still correct
+                # without it; log at debug because on a busy box this is a
+                # normal outcome, not a fault.
+                log.debug("browse popularity arm skipped", exc_info=True)
+                _arm_ids = []
+            finally:
+                # Put the search's own deadline back, on BOTH paths.
+                #
+                # SET LOCAL is scoped to the TRANSACTION, not to the savepoint.
+                # Rolling back to the savepoint undoes it, so the failure path
+                # was fine — but on the SUCCESS path the arm's 900ms budget
+                # stayed in force for the rest of the request and the main query
+                # inherited it. Every browse that took longer than the arm's
+                # budget then 503'd: `fandoms=Harry Potter` and `tags=Fluff`
+                # both did, having been fine a minute earlier. A guard that
+                # breaks what it was protecting is worse than no guard.
+                try:
+                    db.execute(sql_text("SET LOCAL statement_timeout = :ms"),
+                               {"ms": SEARCH_TIMEOUT_MS})
+                except Exception:
+                    log.debug("could not restore the search timeout", exc_info=True)
+            if _arm_ids:
+                # A primary-key lookup of at most 300 ids, so the arm's cost is
+                # now entirely in the query above and none of it lands in the
+                # plan the page is served from.
+                _browse_arm = db_query.order_by(None).filter(Story.id.in_(_arm_ids))
         if sort == "popularity_desc":
             # `popularity IS NOT NULL` is a FILTER, and it was applied to every
             # search — so "Most popular" silently deleted every match without a
