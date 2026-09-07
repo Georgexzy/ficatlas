@@ -467,6 +467,18 @@ export default function TrafficPanel() {
       )}
 
       <h2 className="admin-site__name">Searches people ran</h2>
+      {/* "Searches" means BOTH kinds now, and the distinction matters when
+          reading the numbers below.
+          Until 2026-09-07 this counted only searches carrying typed text,
+          because the middleware recorded a row `if q`. Every fandom hub, every
+          ship hub and every fandom, character or tag clicked on a result card
+          made a search with no text in it, and none of them were here —
+          measured on 24h of origin logs, 22 of 38 searches. So the report was
+          blindest to the way people actually use the site, and any figure taken
+          from before that date is a count of TYPED searches only, not of
+          searches. A filter-only row is shown in the search bar's own syntax
+          (`fandom:Naruto complete`), which is what the reader had in front of
+          them and pastes back in to run it again. */}
       {searches?.top?.length ? (
         <>
           {/* Totals over the whole window, not over the rows below — the list is

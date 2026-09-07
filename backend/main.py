@@ -116,6 +116,33 @@ async def track_search_middleware(request: Request, call_next):
                 and response.status_code < 400
                 and not is_internal_render(request)):
             q = (request.query_params.get("q") or "").strip()
+            # A search made entirely from the filter panel is still a search.
+            #
+            # This used to be `if q:` alone, so every fandom hub, every ship
+            # hub, and every fandom, character or tag clicked on a result card
+            # went unrecorded — the most common way people use this site was the
+            # one way the traffic report could not see. Measured over 24h of
+            # origin logs: 38 searches reached this endpoint, 16 carried `q`,
+            # and the other 22 were invisible.
+            #
+            # What gets stored is the SEARCH BAR's own rendering of those
+            # filters (serialise_filters, mirroring serializeFiltersToQuery in
+            # the frontend), so the row reads `fandom:Naruto complete` — which
+            # is literally the text the reader had in front of them, and pastes
+            # back into the bar to re-run the same search. A free-text query
+            # keeps precedence and is recorded exactly as typed; the filters are
+            # appended to it, so "time travel fandom:Naruto" records as one
+            # query rather than two half-searches.
+            #
+            # Still nothing when there is neither: an unfiltered browse is not a
+            # query anybody can act on in a report, and recording it as "" would
+            # collapse every one of them into a single meaningless row.
+            from query_parser import serialise_filters
+            filters = serialise_filters(request.query_params)
+            if q and filters:
+                q = f"{q} {filters}"
+            elif filters:
+                q = filters
             if q:
                 ua = request.headers.get("user-agent", "")
                 # The RESULTS PAGE, in the path, because paging is a second
