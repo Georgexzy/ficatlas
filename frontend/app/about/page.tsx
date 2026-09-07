@@ -78,9 +78,9 @@ export default function About() {
       </p>
       <p className="page-prose__muted">
         If you want the listing removed as well, there is a box on the form for
-        that. There is no contact address yet — this runs on a home machine and
-        has no domain of its own — so the form is the way to reach whoever
-        maintains it.
+        that. The form is the surest way to reach whoever maintains this: it
+        arrives in the same queue the takedowns do, so nothing depends on an
+        inbox being watched.
       </p>
 
       {/* Placed immediately after the takedown section on purpose. An author
