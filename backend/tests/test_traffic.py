@@ -382,3 +382,37 @@ def test_a_visitor_that_never_loaded_a_page_is_counted_apart(db):
     totals = traffic.searches(days=7, limit=10, db=db, _owner=None)["totals"]
     assert totals["runs"] == 2
     assert totals["search_only"] == 1
+
+
+def test_a_click_through_to_the_archive_is_recorded_with_where_it_went(db):
+    """The one measurement that says whether this site did its job.
+
+    A search returning 5,000 results and a story page being opened both look
+    like success and neither can be told from a reader who took one look and
+    left. `kind="out"` is the step after that, and it stores the DESTINATION in
+    ref_host — where a pageview stores where the reader came from — so the two
+    join on the story path.
+    """
+    traffic.hit(_FakeRequest(ip="203.0.113.7", ua="Mozilla/5.0 (Macintosh)"),
+                path="/story/abc", ref="https://archiveofourown.org/works/123",
+                kind="out")
+    tracking.flush()
+    row = db.execute(text(
+        "SELECT kind, path, ref_host FROM visit_events WHERE kind = 'out'")).first()
+    assert row is not None
+    assert row[0] == "out"
+    assert row[1] == "/story/abc"
+    assert row[2] == "archiveofourown.org"
+
+
+def test_an_unknown_kind_is_recorded_as_a_pageview_not_dropped(db):
+    """Normalised rather than rejected. Only two kinds are ever written, so
+    nobody can invent a category the reports must learn to ignore — but an
+    unexpected value must not cost the event, which is what a strict check did:
+    called directly rather than over HTTP, `kind` arrives as FastAPI's Form()
+    sentinel and every pageview silently vanished."""
+    traffic.hit(_FakeRequest(ip="203.0.113.8"), path="/x", ref="", kind="nonsense")
+    tracking.flush()
+    kinds = [r[0] for r in db.execute(text(
+        "SELECT kind FROM visit_events WHERE path = '/x'")).fetchall()]
+    assert kinds == ["page"]

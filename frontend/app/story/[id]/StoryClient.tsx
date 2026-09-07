@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth"
 import { describeError, type Failure } from "@/lib/errors"
 import OfflineLink from "@/app/OfflineLink"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
+import ArchiveLink from "./ArchiveLink"
 import SiteHeader from "@/app/SiteHeader"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
@@ -478,9 +479,9 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
                 // wrong emphasis and the wrong default: kudos, comments and
                 // subscriptions only work at the source.
                 <div className="btn-row">
-                  <a href={href} target="_blank" rel="noopener noreferrer" className="btn btn--primary">
+                  <ArchiveLink href={href} className="btn btn--primary">
                     {label}
-                  </a>
+                  </ArchiveLink>
                   <button className="btn btn--ghost" onClick={importAndRead} disabled={importing}>
                     {importing ? "Importing…" : "Import & read here"}
                   </button>
@@ -495,9 +496,9 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
             && (story.site === "ao3" || story.site === "ffnet") && (() => {
               const { href, label } = storyLink(story, SITE_LABELS)
               return (
-                <a href={href} target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
+                <ArchiveLink href={href} className="btn btn--ghost">
                   {label}
-                </a>
+                </ArchiveLink>
               )
             })()}
           {/* Metadata-only seed rows have no page of their own, so they need this
@@ -507,9 +508,9 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
             && (() => {
               const { href, label } = storyLink(story, SITE_LABELS)
               return (
-                <a href={href} target="_blank" rel="noopener noreferrer" className="btn btn--primary">
+                <ArchiveLink href={href} className="btn btn--primary">
                   {label}
-                </a>
+                </ArchiveLink>
               )
             })()}
           <button className={`btn ${bookmarked ? "btn--on" : ""}`} onClick={toggleBookmark}>

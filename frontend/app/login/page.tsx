@@ -15,6 +15,7 @@ function LoginPageInner() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [invite, setInvite] = useState("")
+  const [email, setEmail] = useState("")
   // Default on, which is what the site already did for everyone — the box exists
   // so a shared or borrowed device can opt OUT, not to make people opt in to
   // something that already worked.
@@ -53,7 +54,7 @@ function LoginPageInner() {
     setError(null); setBusy(true)
     try {
       if (mode === "login") await login(username, password, remember)
-      else                  await signup(username, password, invite, remember)
+      else                  await signup(username, password, invite, remember, email)
       router.replace(next)
     } catch (e: any) {
       setError(e.message || `${mode} failed`)
@@ -90,6 +91,30 @@ function LoginPageInner() {
             value={password} onChange={e => setPassword(e.target.value)} />
         </label>
 
+        {/* Optional, and said so in the label rather than only in the copy.
+            Signup never asked for an address, so every account on this site
+            began with no way to prove who owns it — and the one account that is
+            not the operator's cannot recover its password at all, because there
+            is nothing to send a reset to and nothing to check a claim against.
+            Not required: an address is a fair thing to ask for and a poor thing
+            to demand from someone who came here to search a public index, and a
+            required field collects addresses people did not mean to give.
+            Honest about delivery, too. Mail from a home connection is routinely
+            binned by the big providers, so this does not promise an automatic
+            email — it promises that recovery becomes possible at all, which
+            without an address it is not. See backend/api/password_reset.py. */}
+        {mode === "signup" && (
+          <label className="auth-field">
+            <span>Email <span className="auth-optional">optional</span></span>
+            <input type="email" autoComplete="email" autoCapitalize="off"
+              autoCorrect="off" spellCheck={false} placeholder="you@example.com"
+              value={email} onChange={e => setEmail(e.target.value)} />
+            <p className="auth-hint">
+              The only way to get back in if you forget your password. Nothing
+              else is ever sent here, and you can add or change it later.
+            </p>
+          </label>
+        )}
         {mode === "signup" && policy?.needs_code && (
           <label className="auth-field">
             <span>Invite code</span>
