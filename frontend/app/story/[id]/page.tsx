@@ -106,7 +106,22 @@ export async function generateMetadata(
 ): Promise<Metadata> {
   const { id } = await params
   const story = await fetchStory(id)
-  if (!story?.title) return {}          // falls back to the layout's defaults
+  // A lookup that failed still names its own URL, and asks not to be indexed.
+  //
+  // This used to return {} outright, which means the layout's generic title and
+  // description AND no canonical — so a crawl that arrived while the API was
+  // slow (8s timeout, on a box that also serves the searches) produced a page
+  // indistinguishable from every other failed lookup, with nothing to say which
+  // URL it was. That is a "duplicate without user-selected canonical" made out
+  // of an intermittent timeout, and it would be reported long after the request
+  // that caused it had recovered. noindex is the honest answer for a shell with
+  // no work in it; `follow` keeps the hub links on the page worth something.
+  if (!story?.title) {
+    return {
+      alternates: { canonical: `/story/${id}` },
+      robots: { index: false, follow: true },
+    }
+  }
 
   // A work its author has locked to registered users, or one that has been
   // delisted, is never handed to a search engine — whatever robots.txt permits
