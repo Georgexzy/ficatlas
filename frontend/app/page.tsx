@@ -1646,6 +1646,11 @@ function SearchPageInner() {
   // and the same mounted component, so a router push does not re-run the
   // useState initialisers and the filters would survive their own removal.
   //
+  // Still true, and still why this exists — but it is no longer the whole of
+  // what the button does. See clearedHref: the filters that live in the URL are
+  // cleared by navigating, because that is the only way to clear them in one
+  // click, and this handles the ones that live only in state.
+  //
   // Deliberately does NOT clear the query text. "Clear filters" means the
   // narrowing, not the search — someone who typed "time travel" and wants the
   // archive restriction gone should not lose their words with it.
@@ -1657,9 +1662,47 @@ function SearchPageInner() {
     setExcFandoms([]); setExcChars([]); setExcShips([]); setExcTags([])
     setAuthorFilter(""); setLanguage(""); setUpdatedAfter("")
     setWordMin(undefined); setWordMax(undefined); setDlpMinRating(undefined)
-    setCrossovers("include"); setIncludeUnknown(false); setInSeries("any")
+    // "" is the no-preference state, not "any" — the three the pills and
+    // buildParams read are "", "yes" and "no", and "any" is truthy, so it read
+    // as a set filter to everything that tests this value.
+    setCrossovers("include"); setIncludeUnknown(false); setInSeries("")
     setPage(1)
   }, [])
+
+  // The same search with every filter dropped, as a URL.
+  //
+  // A LINK, not a state change, for the reason showExplicitHref is one: this
+  // component is keyed on the query string, so setting state here would be
+  // thrown away by the remount that any later search causes — and calling
+  // doSearch() straight after clearFilters() would search on the state as it
+  // was BEFORE the clear, because buildParams is captured at render.
+  //
+  // It also has to happen on ONE click. Sidebar filters deliberately queue
+  // behind an Apply bar, because building a filter set out of three clicks
+  // should not run three searches. Clearing is not building: the person who
+  // needs this arrived from a link that applied filters they never chose, the
+  // button sits above the results saying "Clear 2 filters", and its own tooltip
+  // promised to "remove every filter and search the whole index" — which it did
+  // not do. It queued, and the reader had to find a second control to finish an
+  // action they had already asked for.
+  //
+  // Built from rawParams so it carries precisely the search that produced these
+  // results and changes only the filters. The keys dropped are exactly the ones
+  // clearFilters resets; q, sort, explicit and per_page are not filters and stay.
+  const clearedHref = useMemo(() => {
+    const qs = new URLSearchParams(rawParams.toString())
+    for (const k of ["fandoms", "characters", "relationships", "tags", "ratings",
+                     "warnings", "categories", "status", "language", "sites",
+                     "word_count_min", "word_count_max", "updated_after",
+                     "exclude_fandoms", "exclude_characters",
+                     "exclude_relationships", "exclude_tags", "sections",
+                     "in_series", "author", "dlp_min_rating", "crossovers",
+                     "include_unknown", "page"]) {
+      qs.delete(k)
+    }
+    const rest = qs.toString()
+    return rest ? `${pathname}?${rest}` : pathname
+  }, [rawParams, pathname])
 
   const exitSearch = useCallback(() => {
     // Same target as the wordmark, so the two cannot disagree about what home
@@ -2780,11 +2823,20 @@ function SearchPageInner() {
                     the person who needs it arrived from a link that applied
                     filters they never chose, so it has to be where they are
                     already looking. */}
+                {/* A link AND a handler, and both are load-bearing. The href
+                    clears the filters that are in the URL, in one click, by
+                    navigating to the same search without them. The onClick
+                    clears the ones that are only in STATE — ticked in the
+                    sidebar and not yet applied — which the href cannot see:
+                    with no filter keys in the address, clearedHref is the URL
+                    we are already on, and a link to where you already are does
+                    nothing at all. */}
                 {activeFilters > 0 && (
-                  <button className="results-bar__clear" onClick={clearFilters}
+                  <Link href={clearedHref} prefetch={false} onClick={clearFilters}
+                    className="results-bar__clear"
                     title="Remove every filter and search the whole index">
                     ✕ Clear {activeFilters} filter{activeFilters === 1 ? "" : "s"}
-                  </button>
+                  </Link>
                 )}
                 <span className="results-bar__count">
                   {/* The backend counts to a ceiling of 5000 and stops, so a

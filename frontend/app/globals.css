@@ -786,6 +786,15 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   font-family: var(--font-serif); font-size: 18px; font-weight: 600;
   margin-bottom: 10px;
 }
+/* "Chapters" and the jump to the newest one, on one line. */
+.chapter-list__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+}
+.chapter-list__latest {
+  font-size: 12px; font-family: var(--font-mono); font-weight: 400;
+  color: var(--accent); text-transform: none; letter-spacing: 0;
+}
+.chapter-list__latest:hover { text-decoration: underline; }
 .chapter-list ol { list-style: none; padding: 0; }
 .chapter-list li { border-bottom: 1px solid var(--border); }
 .chapter-list li:last-child { border-bottom: none; }
@@ -897,6 +906,26 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .reader-nav__btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .reader-nav__index { font-size: 12px; color: var(--text-faint); font-family: var(--font-mono); }
 .reader-nav__index:hover { color: var(--accent); }
+/* The middle of the reader nav: a chapter picker and the way out. Column on a
+   phone, where three controls in a row would each be too narrow to hit. */
+.reader-nav__mid {
+  display: flex; align-items: center; gap: 10px;
+  min-width: 0; justify-content: center;
+}
+.reader-nav__jump {
+  max-width: 260px; min-width: 0;
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 6px 8px;
+  color: var(--text-dim); font-size: 12px; font-family: var(--font-mono);
+  /* A long chapter title must not stretch the nav and push Next off the edge —
+     the select truncates instead, and the full text is in the open list. */
+  text-overflow: ellipsis;
+}
+.reader-nav__jump:hover { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 560px) {
+  .reader-nav__mid { flex-direction: column; gap: 4px; }
+  .reader-nav__jump { max-width: 150px; }
+}
 .reader-hint {
   text-align: center; font-size: 11px; color: var(--text-faint);
   font-family: var(--font-mono); margin-top: 20px;
