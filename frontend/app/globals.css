@@ -707,7 +707,7 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 
 /* ── Reader / story detail ────────────────────────────────────────────────── */
 .reader-shell {
-  max-width: 760px; margin: 0 auto; padding: 24px 24px 80px;
+  width: 100%; max-width: 760px; margin: 0 auto; padding: 24px 24px 80px;
   /* The colour the reader's chrome is painted, per theme.
      The toolbar background and the fade beneath it must match exactly or the
      fade shows as a band; naming it once removes the chance of them drifting.
@@ -1361,8 +1361,18 @@ kbd {
 /* ════════════════════════════════════════════════════════════════════════════
    Settings page
    ════════════════════════════════════════════════════════════════════════════ */
+/* width:100% on every centred shell, and it is not redundant.
+   `body` is a flex COLUMN (see the page-frame rule below), and `margin: 0 auto`
+   on a flex item sets auto margins on the CROSS axis — which switches off
+   `align-items: stretch` and leaves the item sized to its own content, capped
+   only by max-width. So a shell whose content happens to be wide stops being
+   720px WIDE AT MOST and becomes 720px wide FULL STOP, on a 390px phone, with
+   `html, body { overflow-x: clip }` hiding the 330px that fell off the right.
+   Measured on /admin?tab=traffic: the shell reported 720px inside a 390px body
+   and a third of every table was unreachable — not scrolled off, gone.
+   With an explicit width the max-width caps as intended in both layouts. */
 .settings-shell {
-  max-width: 720px; margin: 0 auto; padding: 32px 24px 80px;
+  width: 100%; max-width: 720px; margin: 0 auto; padding: 32px 24px 80px;
 }
 /* Room for the fixed save bar so the last setting is never trapped under it. */
 .settings-shell:has(.settings-actions--live) { padding-bottom: 132px; }
@@ -3897,7 +3907,16 @@ body.is-resizing * { cursor: col-resize !important; }
 
 .traffic-table {
   width: 100%; border-collapse: collapse; margin: 0 0 22px;
-  font-size: 12.5px; display: block; overflow-x: auto;
+  font-size: 12.5px;
+  /* `display: block; overflow-x: auto` used to be here to let a wide table
+     scroll. It was the wrong tool twice over. It made the table its OWN scroll
+     container, so the sticky headings below stuck to a box that never scrolls
+     vertically and slid away with the rows (measured at top:-951 on a phone) —
+     the same trap the `overflow: clip` note further up describes. And it was
+     only needed because the query column could not wrap, which was a
+     specificity bug, not a width problem: with that fixed the table measures
+     362px inside a 362px column and has nothing to scroll. Every remaining
+     nowrap column is a count or a short date. */
 }
 .traffic-table th {
   text-align: left; font-size: 10.5px; text-transform: uppercase;
@@ -3911,7 +3930,13 @@ body.is-resizing * { cursor: col-resize !important; }
 }
 /* The query or path, which is the one column allowed to be long. Readers type
    whole sentences into search, so it wraps rather than stretching the table. */
-.traffic-table__q {
+/* `.traffic-table td` is (0,1,1) and this was (0,1,0), so the td's
+   `white-space: nowrap` won and the ONE column documented as "allowed to be
+   long" was the one column that could not wrap. Measured: a query cell 1,412px
+   wide, which is what dragged the whole admin shell past the width of the
+   screen. Matching the td's specificity is the fix; the intent above was always
+   right. */
+.traffic-table td.traffic-table__q {
   width: 99%; white-space: normal; word-break: break-word;
   font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px;
 }
@@ -3926,6 +3951,81 @@ body.is-resizing * { cursor: col-resize !important; }
 .traffic-table__path {
   display: block; color: var(--text-faint); font-size: 10.5px;
   margin-top: 1px; word-break: break-all;
+}
+
+/* ── Sorting and filtering the traffic tables ───────────────────────────────
+   The heading is a real <button> inside the <th>, not a click handler on the
+   th: it is a control, so it should be tabbable, pressable with Enter and
+   announced as a button. `aria-sort` on the th is the half a screen reader
+   reads out. */
+.traffic-table th { padding: 0 12px 0 0; }
+.traffic-sort {
+  display: inline-flex; align-items: baseline; gap: 4px;
+  background: none; border: 0; padding: 6px 0;
+  font: inherit; color: inherit; letter-spacing: inherit;
+  text-transform: inherit; cursor: pointer;
+}
+.traffic-sort:hover { color: var(--accent); }
+.traffic-sort--on { color: var(--text); }
+/* Always rendered, at a third of its weight when the column is not the one
+   sorted: an arrow that appears only on hover is invisible on a phone, where
+   there is no hover, and these tables are read on phones. */
+.traffic-sort__caret { font-size: 9px; opacity: 0.35; }
+.traffic-sort--on .traffic-sort__caret { opacity: 1; color: var(--accent); }
+.traffic-th--r, .traffic-th--r .traffic-sort { text-align: right; }
+
+/* The headings stay put while the rows scroll under them. Thirty rows of five
+   unlabelled numbers is what these tables were on a phone once the header had
+   gone past. `.traffic-table` is `display: block` for its own horizontal
+   scroll, so the sticky reference is the page, which is what we want. */
+.traffic-table thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--bg);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.traffic-tools {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 8px; flex-wrap: wrap;
+}
+.traffic-filter {
+  flex: 1 1 140px; min-width: 0;
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 6px 10px;
+  color: var(--text); font-size: 12.5px;
+}
+.traffic-filter:focus { outline: none; border-color: var(--accent); }
+.traffic-tools__count {
+  font-size: 11px; color: var(--text-faint); font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.traffic-tools__copy {
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 6px 12px;
+  color: var(--text-dim); font-size: 11.5px; font-family: var(--font-mono);
+  cursor: pointer; transition: all 0.12s;
+}
+.traffic-tools__copy:hover { border-color: var(--accent); color: var(--accent); }
+
+/* On a phone the timestamp column was winning an argument it should lose.
+   "Sep 1, 07:05 PM" is nowrap and ~120px, and with five columns in 362px that
+   left the query column about 100px — enough to break "taehyung" across two
+   lines as "taehyun / g", which is unreadable and was the whole point of the
+   column. Letting every cell wrap gives the date two short lines instead of one
+   long one and hands the width back to the text nobody can guess from context.
+   The numbers are two or three digits and wrap to nothing either way. */
+@media (max-width: 560px) {
+  .traffic-table td { white-space: normal; }
+  .traffic-table th, .traffic-table td { padding-right: 8px; }
+  .traffic-table__q { min-width: 34%; }
+  /* Letting the date wrap freed the query column and then spent the width
+     again, three lines deep: "Sep 1, / 07:05 / PM". The relative line under it
+     is the one anybody reads — "6 days ago" answers "is this still happening",
+     which is the question these tables are open for — and the exact stamp is
+     still in the cell's title for a pointer and still there at any width above
+     this one. */
+  .traffic-table__abs { display: none; }
+  .traffic-table__ago { font-size: 11px; }
 }
 
 @media (max-width: 700px) {
@@ -4141,7 +4241,7 @@ body.is-resizing * { cursor: col-resize !important; }
    places someone reads sentences about the site rather than about a story, so
    they get a measure and a rhythm rather than the app's grid. */
 .page-prose {
-  max-width: 660px; margin: 0 auto; padding: 48px 24px 96px;
+  width: 100%; max-width: 660px; margin: 0 auto; padding: 48px 24px 96px;
   font-size: 15px; line-height: 1.7; color: var(--text-dim);
 }
 .page-prose h1 {

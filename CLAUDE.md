@@ -854,6 +854,51 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     the sidebar and not yet applied exist only in state, and with no filter keys
     in the address the cleared URL is the one we are already on — a link to
     where you already are does nothing at all.
+- **A third of the admin page was off the side of the phone, and nothing could
+  scroll to it.** `body` is a flex COLUMN (the page-frame rule that pins the
+  footer), and `margin: 0 auto` on a flex item sets auto margins on the CROSS
+  axis — which switches off `align-items: stretch` and leaves the item sized to
+  its own content, capped only by `max-width`. So `.settings-shell` stopped
+  being "720px at most" and became "720px", on a 390px screen, with
+  `html, body { overflow-x: clip }` hiding the 330px that fell off. Measured on
+  /admin?tab=traffic: shell 720 inside a body of 390, `body.scrollWidth` 720
+  and no scrollbar, because clip is explicitly not a scroll container.
+  - Every centred shell now carries `width: 100%` so max-width caps rather than
+    sets. `.settings-shell`, `.reader-shell`, `.page-prose`.
+  - **It only bit when content was wide enough to push**, which is why every
+    audit of an empty or narrow page said the layout was fine. The trigger was
+    `.traffic-table td { white-space: nowrap }` (0,1,1) beating
+    `.traffic-table__q { white-space: normal }` (0,1,0) — so the one column the
+    comment calls "allowed to be long" was the only one that could not wrap, and
+    a query cell measured 1,412px. Test a page at a phone width with REAL data
+    in it; empty tables cannot overflow.
+  - `overflow-x: clip` on body is doing its job and is not the bug. It is what
+    keeps a stray wide element from making the whole site scroll sideways. It
+    also means a layout fault is silent, so an audit that only asks "does the
+    document scroll horizontally" will always say no. Ask instead whether any
+    child of body is wider than body.
+- **The traffic tables sort, filter and copy now, client-side.** The rows are
+  already fetched — a couple of hundred at most — so "which searches found
+  nothing", "which page has the worst visitors-per-view" and "when did that
+  referrer last send anybody" are a comparator, not a round trip. Sorting on the
+  server would need a parameter per column per endpoint, a re-fetch per click,
+  and would still be capped by the same limit.
+  - Nulls sort last in BOTH directions. `results: null` means no exit recorded a
+    count, not "found zero", so ascending must not open with rows that have no
+    value at all — the same rule as `nullslast()` in api/search.py.
+  - Copy writes TSV and has TWO implementations, because the admin page is
+    opened over both http and https: `navigator.clipboard` does not exist
+    outside a secure context, and the dev host is plain http over the tailnet,
+    so on the machine this site is actually administered from the modern API is
+    undefined and the button did nothing, silently. The textarea +
+    `execCommand` fallback is deprecated and works everywhere. The button says
+    which happened rather than claiming a success it did not have.
+  - **Sticky `thead` and `display: block; overflow-x: auto` on the same table
+    are mutually exclusive.** The block+overflow makes the table its own scroll
+    container, so the heading sticks to a box that never scrolls vertically and
+    slides away with the rows (measured at top:-951). Once the query column
+    could wrap the table had nothing to scroll, so the scroll container went and
+    the headings stayed. Same trap as the reader-toolbar note above.
 - The search cache is two-tier: in-process L1 plus a shared UNLOGGED
   `search_cache_entries` table, because the per-worker cache meant four uvicorn
   workers each paid a ~10s miss for the same popular query. Bump

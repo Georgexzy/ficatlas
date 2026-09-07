@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 
 // What the site is being used for. Owner-only on the server (see
 // backend/api/traffic.py) — this component only decides what to draw.
@@ -10,6 +10,167 @@ import { useCallback, useEffect, useState } from "react"
 // cannot be followed across weeks. That makes the daily figure real and a
 // summed one meaningless, so nothing here adds them up: the header shows the
 // busiest single day, names the date, and says so.
+
+// ── Sorting, filtering and lifting rows out ─────────────────────────────────
+//
+// These tables answer a different question every time you open them. Server
+// order is "most X first" for whichever X the endpoint chose, and that is the
+// right default and the wrong answer to "which of the searches people ran found
+// NOTHING", "which page has the worst visitors-per-view", or "when did that
+// referrer last send anybody". The rows are already here — at most a couple of
+// hundred, fetched in one go — so answering those is a comparator and not a
+// round trip.
+//
+// Client-side deliberately. A server sort would need a parameter per column per
+// endpoint, a re-fetch per click, and would still be capped by the same limit;
+// this is instant, works offline once loaded, and cannot disagree with what is
+// on screen.
+
+type Dir = "asc" | "desc"
+
+/** Compare two cell values of unknown type, nulls always last.
+ *
+ *  Nulls last in BOTH directions, which is not what a naive comparator does:
+ *  `results: null` means no exit recorded a count, not "found zero", so a
+ *  column sorted ascending must not open with a screenful of rows that have no
+ *  value at all. Same rule the search sorts use — see nullslast() in
+ *  api/search.py.
+ */
+function cmp(a: unknown, b: unknown, dir: Dir): number {
+  const an = a == null || a === "", bn = b == null || b === ""
+  if (an && bn) return 0
+  if (an) return 1
+  if (bn) return -1
+  const s = typeof a === "number" && typeof b === "number"
+    ? a - b
+    // Dates arrive as ISO strings, which sort correctly as strings; everything
+    // else is a query or a hostname, where a human ordering beats a byte one.
+    : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" })
+  return dir === "asc" ? s : -s
+}
+
+/** Sort + filter for one table's rows.
+ *
+ *  `text` searches the fields named in `search`, because filtering on a column
+ *  you cannot see is a puzzle: for a page row that is the path AND the resolved
+ *  title, since either is what somebody would type.
+ */
+function useTable<T extends Record<string, any>>(
+  rows: T[] | null | undefined, initial: keyof T & string,
+  search: (keyof T & string)[], initialDir: Dir = "desc",
+) {
+  const [key, setKey] = useState<string>(initial)
+  const [dir, setDir] = useState<Dir>(initialDir)
+  const [text, setText] = useState("")
+  const view = useMemo(() => {
+    const all = rows ?? []
+    const q = text.trim().toLowerCase()
+    const kept = q
+      ? all.filter(r => search.some(f => String(r[f] ?? "").toLowerCase().includes(q)))
+      : all
+    // Copy before sorting: the array belongs to the caller's state, and sorting
+    // it in place mutates what React is holding.
+    return [...kept].sort((a, b) => cmp(a[key], b[key], dir))
+  }, [rows, key, dir, text, search])
+  // Clicking the column you are already on reverses it; a new column starts
+  // descending, because every column here is a count or a date and "most" or
+  // "latest" first is what anybody means the first time they click.
+  const sort = (k: string) => {
+    if (k === key) setDir(d => (d === "asc" ? "desc" : "asc"))
+    else { setKey(k); setDir("desc") }
+  }
+  return { view, key, dir, sort, text, setText, total: (rows ?? []).length }
+}
+
+/** A sortable column heading. A real button, so it is reachable by keyboard and
+ *  announced as one; `aria-sort` on the th is what a screen reader reads. */
+function Th({ id, label, table, align }:
+  { id: string; label: string; table: ReturnType<typeof useTable<any>>; align?: "r" }) {
+  const on = table.key === id
+  return (
+    <th aria-sort={on ? (table.dir === "asc" ? "ascending" : "descending") : "none"}
+      className={align === "r" ? "traffic-th--r" : undefined}>
+      <button type="button" className={"traffic-sort" + (on ? " traffic-sort--on" : "")}
+        onClick={() => table.sort(id)}>
+        {label}<span className="traffic-sort__caret" aria-hidden="true">
+          {on ? (table.dir === "asc" ? "\u2191" : "\u2193") : "\u2195"}</span>
+      </button>
+    </th>
+  )
+}
+
+/** The row above a table: filter, how many rows are showing, and a way to take
+ *  the numbers somewhere else.
+ *
+ *  Copying as TSV rather than offering a CSV download: the destination for
+ *  these is a spreadsheet or a message to somebody, both of which take a paste,
+ *  and a clipboard write needs no file, no filename and no cleanup. It copies
+ *  exactly what is on screen — current filter, current sort — because a copy
+ *  that quietly differs from the table above it is worse than no copy.
+ */
+function TableTools({ table, columns, rows }: {
+  table: ReturnType<typeof useTable<any>>
+  columns: { id: string; label: string }[]
+  rows: Record<string, any>[]
+}) {
+  const [copied, setCopied] = useState<"" | "yes" | "no">("")
+  const copy = async () => {
+    const head = columns.map(c => c.label).join("\t")
+    const body = rows.map(r => columns.map(c => {
+      const v = r[c.id]
+      return v == null ? "" : String(v).replace(/[\t\n]+/g, " ")
+    }).join("\t")).join("\n")
+    const text = `${head}\n${body}`
+    // Two paths, because the admin page is opened over BOTH.
+    //
+    // navigator.clipboard does not exist outside a secure context, and the dev
+    // host is plain http over the tailnet — so on the machine this site is
+    // actually administered from, the modern API is simply undefined and the
+    // button did nothing at all, silently. The textarea + execCommand fallback
+    // is deprecated and works everywhere, which between them is the whole
+    // argument for keeping it.
+    let done = false
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        done = true
+      }
+    } catch { /* fall through to the old way */ }
+    if (!done) {
+      try {
+        const ta = document.createElement("textarea")
+        ta.value = text
+        // Off-screen rather than hidden: a display:none textarea cannot be
+        // selected, and an unselected one copies nothing.
+        ta.style.cssText = "position:fixed;top:-1000px;left:-1000px;opacity:0"
+        document.body.appendChild(ta)
+        ta.select()
+        done = document.execCommand("copy")
+        document.body.removeChild(ta)
+      } catch { done = false }
+    }
+    // And SAY which happened. A copy button that reports success it did not
+    // have is worse than one that admits it failed, because the failure is
+    // discovered at the paste.
+    setCopied(done ? "yes" : "no")
+    setTimeout(() => setCopied(""), 1800)
+  }
+  const filtered = table.text.trim().length > 0
+  return (
+    <div className="traffic-tools">
+      <input className="traffic-filter" type="search" value={table.text}
+        onChange={e => table.setText(e.target.value)}
+        placeholder="Filter rows…" aria-label="Filter rows" />
+      <span className="traffic-tools__count">
+        {filtered ? `${rows.length} of ${table.total}` : `${table.total} row${table.total === 1 ? "" : "s"}`}
+      </span>
+      <button type="button" className="traffic-tools__copy" onClick={copy}
+        title="Copy these rows, as they are sorted and filtered, as tab-separated text">
+        {copied === "yes" ? "Copied" : copied === "no" ? "Cannot copy" : "Copy"}
+      </button>
+    </div>
+  )
+}
 
 interface Day { day: string; views: number; searches: number; visitors: number }
 interface Summary {
@@ -195,6 +356,13 @@ export default function TrafficPanel() {
 
   useEffect(() => { load(days) }, [days, load])
 
+  // One per table. The initial column is the one the endpoint already ordered
+  // by, so the first render is exactly what it was before any of this existed.
+  const tTop   = useTable<SearchRow>(searches?.top, "runs", ["query"])
+  const tEmpty = useTable<EmptyRow>(searches?.empty, "runs", ["query"])
+  const tPages = useTable<PageRow>(pages, "views", ["path", "label"])
+  const tRefs  = useTable<RefRow>(refs, "hits", ["host"])
+
   if (error) return <p className="settings-save-error" role="alert">{error}</p>
   if (!summary) return <p className="loading">Reading traffic…</p>
 
@@ -325,12 +493,20 @@ export default function TrafficPanel() {
               and not caught by the user-agent check.
             </p>
           )}
+          <TableTools table={tTop} rows={tTop.view}
+            columns={[{ id: "query", label: "Query" }, { id: "runs", label: "Runs" },
+                      { id: "visitors", label: "People" }, { id: "results", label: "Found" },
+                      { id: "last_seen", label: "Last run" }]} />
           <table className="traffic-table">
             <thead><tr>
-              <th>Query</th><th>Runs</th><th>People</th><th>Found</th><th>Last run</th>
+              <Th id="query" label="Query" table={tTop} />
+              <Th id="runs" label="Runs" table={tTop} align="r" />
+              <Th id="visitors" label="People" table={tTop} align="r" />
+              <Th id="results" label="Found" table={tTop} align="r" />
+              <Th id="last_seen" label="Last run" table={tTop} />
             </tr></thead>
             <tbody>
-              {searches.top.map(s => (
+              {tTop.view.map(s => (
                 <tr key={s.query}>
                   <td className="traffic-table__q">{s.query}</td>
                   <td>{s.runs}</td>
@@ -339,7 +515,7 @@ export default function TrafficPanel() {
                       as a search that found nothing — see _note_total. */}
                   <td>{s.results == null ? "—" : s.results.toLocaleString()}</td>
                   <td title={`first run ${longStamp(s.first_seen)}\nlast run ${longStamp(s.last_seen)}`}>
-                    {stamp(s.last_seen)}
+                    <span className="traffic-table__abs">{stamp(s.last_seen)}</span>
                     <span className="traffic-table__ago">{ago(s.last_seen)}</span>
                   </td>
                 </tr>
@@ -357,15 +533,22 @@ export default function TrafficPanel() {
             each of these is a reader who left with nothing, and it names the gap
             exactly. The date says whether it is still being asked.
           </p>
+          <TableTools table={tEmpty} rows={tEmpty.view}
+            columns={[{ id: "query", label: "Query" }, { id: "runs", label: "Runs" },
+                      { id: "last_seen", label: "Last run" }]} />
           <table className="traffic-table">
-            <thead><tr><th>Query</th><th>Runs</th><th>Last run</th></tr></thead>
+            <thead><tr>
+              <Th id="query" label="Query" table={tEmpty} />
+              <Th id="runs" label="Runs" table={tEmpty} align="r" />
+              <Th id="last_seen" label="Last run" table={tEmpty} />
+            </tr></thead>
             <tbody>
-              {searches.empty.map(s => (
+              {tEmpty.view.map(s => (
                 <tr key={s.query}>
                   <td className="traffic-table__q">{s.query}</td>
                   <td>{s.runs}</td>
                   <td title={`last run ${longStamp(s.last_seen)}`}>
-                    {stamp(s.last_seen)}
+                    <span className="traffic-table__abs">{stamp(s.last_seen)}</span>
                     <span className="traffic-table__ago">{ago(s.last_seen)}</span>
                   </td>
                 </tr>
@@ -377,12 +560,20 @@ export default function TrafficPanel() {
 
       <h2 className="admin-site__name">Most-viewed pages</h2>
       {pages?.length ? (
+        <><TableTools table={tPages} rows={tPages.view}
+            columns={[{ id: "label", label: "Page" }, { id: "path", label: "Path" },
+                      { id: "views", label: "Views" }, { id: "visitors", label: "People" },
+                      { id: "first_seen", label: "First seen" }, { id: "last_seen", label: "Last seen" }]} />
         <table className="traffic-table">
           <thead><tr>
-            <th>Page</th><th>Views</th><th>People</th><th>First seen</th><th>Last seen</th>
+            <Th id="label" label="Page" table={tPages} />
+            <Th id="views" label="Views" table={tPages} align="r" />
+            <Th id="visitors" label="People" table={tPages} align="r" />
+            <Th id="first_seen" label="First seen" table={tPages} />
+            <Th id="last_seen" label="Last seen" table={tPages} />
           </tr></thead>
           <tbody>
-            {pages.map(p => (
+            {tPages.view.map(p => (
               <tr key={p.path}>
                 {/* Title first, path underneath. A row reading
                     /story/4b15fe7e-…/chapter/58 told you nothing about what was
@@ -396,34 +587,42 @@ export default function TrafficPanel() {
                 </td>
                 <td>{p.views}</td><td>{p.visitors}</td>
                 <td>{shortDate(p.first_seen)}</td>
-                <td>{shortDate(p.last_seen)}
+                <td><span className="traffic-table__abs">{shortDate(p.last_seen)}</span>
                   <span className="traffic-table__ago">{ago(p.last_seen)}</span>
                 </td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></>
       ) : <p className="admin-note">No pageviews recorded in this window.</p>}
 
       <h2 className="admin-site__name">Where readers came from</h2>
       {refs?.length ? (
+        <><TableTools table={tRefs} rows={tRefs.view}
+            columns={[{ id: "host", label: "Site" }, { id: "hits", label: "Arrivals" },
+                      { id: "visitors", label: "People" }, { id: "first_seen", label: "First seen" },
+                      { id: "last_seen", label: "Last seen" }]} />
         <table className="traffic-table">
           <thead><tr>
-            <th>Site</th><th>Arrivals</th><th>People</th><th>First seen</th><th>Last seen</th>
+            <Th id="host" label="Site" table={tRefs} />
+            <Th id="hits" label="Arrivals" table={tRefs} align="r" />
+            <Th id="visitors" label="People" table={tRefs} align="r" />
+            <Th id="first_seen" label="First seen" table={tRefs} />
+            <Th id="last_seen" label="Last seen" table={tRefs} />
           </tr></thead>
           <tbody>
-            {refs.map(r => (
+            {tRefs.view.map(r => (
               <tr key={r.host}>
                 <td className="traffic-table__q">{r.host}</td>
                 <td>{r.hits}</td><td>{r.visitors}</td>
                 <td>{shortDate(r.first_seen)}</td>
-                <td>{shortDate(r.last_seen)}
+                <td><span className="traffic-table__abs">{shortDate(r.last_seen)}</span>
                   <span className="traffic-table__ago">{ago(r.last_seen)}</span>
                 </td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></>
       ) : (
         <p className="admin-note">
           No external referrers yet. Only the host is ever stored, never the page
