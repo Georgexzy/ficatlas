@@ -14,15 +14,26 @@ export async function generateMetadata(
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Metadata> {
   const { id } = await params
+  // Its own URL, on every path out of this function.
+  //
+  // Without it a series page had no canonical at all, and Google Search Console
+  // reported exactly that: "duplicate without user-selected canonical". There
+  // are 329,063 of these pages and most are two or three works under a title,
+  // so a crawler comparing them has very little to tell them apart and no
+  // statement from us about which URL is the real one. The three early returns
+  // below matter as much as the success case — a lookup that 404s, comes back
+  // wrong or times out under crawl load is precisely when a page goes out with
+  // the layout's generic title and nothing to anchor it.
+  const alternates = { canonical: `/series/${id}` }
   try {
     const r = await fetch(`${INTERNAL_API}/api/stories/series/${id}`, {
       next: { revalidate },
       headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
       signal: AbortSignal.timeout(8000),
     })
-    if (!r.ok) return {}
+    if (!r.ok) return { alternates }
     const s = await r.json()
-    if (!s?.name) return {}
+    if (!s?.name) return { alternates }
 
     // The series endpoint returns work_count/total_works and a `works` array —
     // there is no description field, so the counts are the whole description.
@@ -37,12 +48,13 @@ export async function generateMetadata(
     return {
       title,
       description,
+      alternates,
       openGraph: { title, description, type: "article", siteName: "FicAtlas", images: "/og.png" },
       twitter: { card: "summary_large_image", title, description, images: "/og.png" },
     }
   } catch {
     // Never let a preview lookup break the page; the client fetches its own data.
-    return {}
+    return { alternates }
   }
 }
 

@@ -6,6 +6,10 @@ export const metadata = {
   title: "About & contact",   // layout.tsx appends " · FicAtlas"
   description:
     "What FicAtlas is, how it treats fanworks and AI, where its data comes from, and how to ask for a story to be taken down.",
+  // The root layout deliberately sets no canonical (see the note there), so a
+  // page without one has none at all — which is what Search Console means by
+  // "duplicate without user-selected canonical".
+  alternates: { canonical: "/about" },
 }
 
 // A public site needs a page that says what it is and how to reach a human.

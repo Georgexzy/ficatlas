@@ -223,6 +223,41 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     comparable — is a SORT option and is not a term in the relevance score.
     Wiring it in as a fallback where raw engagement is null is a real change and
     has not been measured.
+- **A client-rendered route has NO metadata of its own, and here that meant no
+  canonical either.** A client component cannot export `metadata`, and the root
+  layout deliberately sets no canonical (see the note in `layout.tsx` — a
+  canonical there applied to every page that did not override it and made every
+  story page a duplicate of the home page). The two decisions compose into a
+  hole: `/permissions`, `/takedown`, `/takedowns`, `/permissions/manage`,
+  `/follows` and `/forgot` all went out carrying the HOME PAGE's title and
+  description with no canonical at all, which is exactly what Search Console
+  reports as "duplicate without user-selected canonical" — and none of them
+  were indexed. `/series/<uuid>` had the same hole with its own title, across
+  329,063 pages.
+  - The fix per route depends on what the route is FOR. A page worth finding
+    gets a server wrapper that exports metadata and renders the client
+    component (`permissions/page.tsx` → `PermissionsClient.tsx`, the same shape
+    the story and series pages already used). A page nobody should arrive at
+    from a search engine gets a `layout.tsx` with `robots: { index: false }`.
+    A route that only redirects should not be a client component at all —
+    `/takedowns` and `/permissions/manage` rendered "Taking you to…" and called
+    `router.replace` in an effect, so each answered 200 with a real page's worth
+    of nothing; both are now server `permanentRedirect`s.
+  - **noindex, not a robots.txt Disallow, for anything already in the index.**
+    Blocking the crawl stops the page being fetched, which stops anyone reading
+    the noindex — a URL Google already knows can sit there indefinitely on the
+    strength of its links. Disallow is for spaces that must never be walked (the
+    search URL space); noindex is for pages that must come OUT.
+  - **A layout's metadata is inherited by every route beneath it**, which is why
+    the canonical for `/permissions` is on its page and not on a layout it
+    shares with `/permissions/manage`. Same trap as the root layout, one level
+    down.
+  - `generateMetadata` returning `{}` on a failed lookup has the same effect as
+    a client route: generic title, no canonical. `story/[id]` and `series/[id]`
+    now name their own URL on every path out, including the timeout path — an
+    8s API timeout under crawl load was otherwise enough to manufacture a
+    canonical-less duplicate that would be reported long after the request
+    recovered.
 - **Do not re-add `ix_stories_tags_trgm` / `ix_stories_relationships_trgm`.** They
   were 4.4GB with zero scans (tag and relationship filtering uses facet
   resolution + array containment `&&`, served by the plain GIN indexes).
