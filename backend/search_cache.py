@@ -204,7 +204,12 @@ def key_for_page(query_string: str, is_operator: bool, page: int) -> str:
 # URL, same shape, different order.
 # v9: the key is canonicalised (parameters sorted), so entries written under a
 # raw query string would never be found again anyway.
-SCHEMA_VERSION = "v9"
+# v10: a browse with no query text ranks by readership instead of by length, and
+# pulls in the best-read works of what was filtered on rather than ranking an
+# arbitrary slice. Same URL, same shape, different order — and a very different
+# one: on `fandoms=Harry Potter` the first result changes from a work nobody
+# would name to the most-read work on the site.
+SCHEMA_VERSION = "v10"
 
 # Expired rows are swept probabilistically on write rather than by a scheduled
 # job: 1 write in 200 pays for the cleanup, which at any real request rate keeps

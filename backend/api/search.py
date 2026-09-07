@@ -47,6 +47,14 @@ SEARCH_COUNT_CEILING = int(os.getenv("SEARCH_COUNT_CEILING", "5000"))
 # and both mean "more than you will page through".
 SEARCH_BROWSE_COUNT_CEILING = int(os.getenv("SEARCH_BROWSE_COUNT_CEILING", "2000"))
 
+# The best-read arm on a browse with no query text. See where it is built for
+# what it is for; these are here so a bad day can turn it off without a deploy.
+# The floor is a percentile, so 0.95 means "the top 5% of everything scored" and
+# costs at most a walk of ~124k index entries — which the planner avoids
+# entirely whenever the other filter is selective.
+BROWSE_POPULAR_CANDIDATES = int(os.getenv("SEARCH_BROWSE_POPULAR_CANDIDATES", "300"))
+BROWSE_POP_FLOOR = float(os.getenv("SEARCH_BROWSE_POP_FLOOR", "0.95"))
+
 # How long a filtered browse's total is reused for. Longer than the response
 # cache's 120s because the number is capped and therefore coarse — "2,000+" does
 # not become wrong in ten minutes — and because it is the expensive half of the
@@ -2152,6 +2160,45 @@ def search(          # NOT async — see below
         # index's predicate and what nullslast() does anyway: a work with no
         # recorded engagement has no score and belongs after every scored one.
         base = db_query
+        # The best-read works of whatever was filtered on, fetched explicitly.
+        #
+        # Same argument as the kudos arm on the text path, and the same fix: the
+        # 5,001 candidates a browse ranks are an ARBITRARY slice of the match
+        # set, so for anything bigger than the ceiling the works everyone means
+        # are almost certainly not among them. It is worse here than on the text
+        # path, because a browse is where most readers arrive — every fandom
+        # hub, every ship hub and every tag, character or fandom clicked on a
+        # result card lands on exactly this query. Measured on `fandoms=Naruto`
+        # before this arm: page one led with a 1,066,440-word one-shot
+        # collection carrying 125 kudos, and Dreaming of Sunshine — the most
+        # read Naruto work on the site at 23,995 — was eleventh, present only by
+        # luck of the sample. On `fandoms=Harry Potter` the slice is 0.4% of the
+        # match set and luck does not stretch that far.
+        #
+        # ADDITIVE, so it can only add rows a reader would want; it can never
+        # remove a match. And it is bounded by a floor rather than gated on
+        # breadth, because breadth here has no cheap measure the way a text
+        # query's does — the floor does the same job from the other end. Top 5%
+        # of the scored population, which is ~124k index entries, and the
+        # planner will not walk even those: with a selective filter it
+        # BitmapAnds the two indexes instead. Measured — Harry Potter 21.7ms,
+        # Naruto 435ms cold, a tag matching nothing popular 3.7ms.
+        #
+        # A filter whose whole match set fits under the ceiling gains nothing
+        # from this and pays nothing for it: every row is already a candidate
+        # and UNION dedups. That is the same property that makes the floor safe
+        # — it is useful exactly where the sample is lossy.
+        _browse_arm = None
+        if _narrowed and sort == "relevance" and BROWSE_POPULAR_CANDIDATES > 0:
+            # order_by(None) first, defensively and for the same reason the
+            # text path does it: this arm's whole cost model is "walk
+            # ix_stories_popularity and stop", and any inherited ordering in
+            # front of popularity would silently turn that into a sort.
+            _browse_arm = (db_query
+                           .order_by(None)
+                           .filter(Story.popularity >= BROWSE_POP_FLOOR)
+                           .order_by(Story.popularity.desc())
+                           .limit(BROWSE_POPULAR_CANDIDATES))
         if sort == "popularity_desc":
             # `popularity IS NOT NULL` is a FILTER, and it was applied to every
             # search — so "Most popular" silently deleted every match without a
@@ -2212,7 +2259,9 @@ def search(          # NOT async — see below
                 base = base.filter(pred(Story)).order_by(order_by(Story))
             elif sort in _BROWSE_ORDER_DIRECT:
                 base = base.order_by(_sort_expr(Story, sort))
-        candidates = base.limit(COUNT_CEILING + 1).subquery()
+        candidates = (base.limit(COUNT_CEILING + 1).union(_browse_arm).subquery()
+                      if _browse_arm is not None
+                      else base.limit(COUNT_CEILING + 1).subquery())
     S = aliased(Story, candidates)
     total_over = func.count().over().label("total_matches")
     ordered = db.query(S, total_over)
@@ -2434,13 +2483,33 @@ def search(          # NOT async — see below
             S.word_count.desc().nullslast(),
         )
     else:
-        # Nothing to rank against. word_count is the only signal populated for
-        # essentially every row (99.9%), so it beats an all-ties kudos sort —
-        # but a row we can show the reader something about beats a longer one we
-        # cannot, so completeness leads. This ordering answers to nobody: there
-        # is no query and no chosen sort, so unlike `updated_desc` there is no
-        # contract here to break.
+        # Nothing to rank against, so rank by what readers did.
+        #
+        # This used to be completeness then LENGTH, on the reasoning that
+        # word_count is the only signal populated for essentially every row —
+        # true, and it made the default browse an ordering by length. On
+        # `fandoms=Naruto` that put a 1,066,440-word one-shot collection with
+        # 125 kudos first and the four next-longest works after it, none of them
+        # works anybody would name. It is the single most common page on the
+        # site — every hub and every facet click lands here — and "the fics seem
+        # a bit random" is exactly what an ordering by length looks like from
+        # the outside, because length is uncorrelated with anything a reader is
+        # choosing between.
+        #
+        # `popularity` is the right signal and only became so recently: it is a
+        # per-site percentile, so it compares archives fairly rather than
+        # ranking by which site a work came from, and the rebuild on 2026-09-06
+        # took it from 2.7% of the index to 12.1% with the per-site partition in
+        # force. Nulls last, because a work with no recorded engagement is not
+        # unpopular, it is unmeasured — and length still breaks the tie among
+        # those, where it remains the only thing populated.
+        #
+        # Completeness still leads: a row we can show the reader something about
+        # beats one we cannot, and that was measured when it went in. This
+        # ordering still answers to nobody — there is no query and no chosen
+        # sort, so unlike `updated_desc` there is no contract here to break.
         ordered = ordered.order_by(_thin(S).asc(),
+                                   S.popularity.desc().nullslast(),
                                    S.word_count.desc().nullslast())
 
     offset  = (page - 1) * per_page

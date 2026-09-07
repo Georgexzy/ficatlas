@@ -169,7 +169,7 @@ export const RATING_LABELS: Record<string, string> = {
 // single blob of text cannot say that at the moment it is relevant.
 export const SORT_OPTIONS = [
   { value: "relevance", label: "Relevance",
-    help: "Ranks by how well a story matches the words you typed — title, summary, author and tags all count. With no search text this falls back to the most recently updated." },
+    help: "Ranks by how well a story matches the words you typed — title, summary, author and tags all count. With no search text — browsing a fandom, a ship or a tag — it ranks by readership instead, on the same cross-archive scale as \"Most popular\", so the works people actually read come first rather than simply the longest." },
   { value: "updated_desc", label: "Recently updated",
     help: "Newest changes first. Where a work has no recorded update date — common in the bulk imports — its published date is used instead, so it is not pushed to the bottom." },
   { value: "published_desc", label: "Newest",
