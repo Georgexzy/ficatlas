@@ -281,11 +281,19 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     `metadata-full.sqlite`, and point `FFN_SQLITE` at it — the default path
     (`/data/ffnmeta.sqlite`) is from an older layout and does not exist in the
     container.
-  - Roughly 19% of source rows produce a fill (measured over the first 50,000),
-    so expect the FF.net `complete` population to roughly double. Run it
-    detached: 8.5M source rows at ~1,000/s is a couple of hours, and it is a
-    long chain of small batched UPDATEs rather than one enormous one, so unlike
-    `popularity_rank.py` it does not hold locks the worker needs.
+  - **Run 2026-09-07: 8,548,123 source rows read, 5,943,742 of ours updated, and
+    FF.net `complete` went 1,346,276 -> 3,646,083.** Completion coverage for the
+    archive went from 19.7% to 55.5%; `unknown` fell from 5,222,665 to
+    2,922,858. Nearly three hours, and it is a long chain of small batched
+    UPDATEs rather than one enormous one, so unlike `popularity_rank.py` it does
+    not hold locks the worker needs — the site stayed at 45ms throughout.
+  - Run it DETACHED, and then do not restart the backend. `docker exec -d`
+    survives the shell that launched it but not `docker compose restart
+    backend`, which killed the first attempt at 175,000 rows. `--skip N` resumes
+    (the source scan order is stable), which is what it is for.
+  - The frontend quotes these figures in two places — `FIELD_COVERAGE.status`
+    and the table in `statusNote`'s docstring — and both were written from a
+    measurement. Re-measure them after any run of this.
 - **Do not re-add `ix_stories_tags_trgm` / `ix_stories_relationships_trgm`.** They
   were 4.4GB with zero scans (tag and relationship filtering uses facet
   resolution + array containment `&&`, served by the plain GIN indexes).
