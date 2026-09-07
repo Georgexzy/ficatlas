@@ -75,6 +75,20 @@ RULES = [
         "description": "Cache anonymous index totals; respect origin TTL",
         "expression": _anon(("/api/stats/totals",)),
     },
+    {
+        # Google Search Console lost this file on 2 Sep 2026, and the file was
+        # never the problem: 19,489 × 530 between 31 Aug and 3 Sep, the tunnel
+        # down, the edge unable to reach the origin. Google backs off hard after
+        # a failed sitemap fetch, so two bad days cost weeks of crawling.
+        #
+        # Cached here so the next tunnel wobble cannot repeat it: the origin
+        # half sets a week of stale-while-revalidate, which means the edge keeps
+        # handing crawlers the last good sitemap while the origin is away.
+        #
+        # Origin half: the /sitemap.xml rule in frontend/next.config.ts.
+        "description": "Cache the sitemap; respect origin TTL",
+        "expression": _anon(("/sitemap.xml",)),
+    },
 ]
 
 # Kept for the message printed at the end.
