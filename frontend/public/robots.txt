@@ -128,6 +128,22 @@ Disallow: /
 User-agent: Meta-ExternalFetcher
 Disallow: /
 
+# meta-webindexer is Meta's SEARCH index crawler, and it is here for the record
+# rather than in hope. Measured over 24h: 22,287 requests, 26% of everything
+# this origin was asked for, 14,187 of them into /?… — the search space every
+# other agent is asked to stay out of because each URL is a query over 20.5M
+# rows. It fetched robots.txt zero times in that window, so this line will not
+# reach it; the block that does is a Cloudflare WAF rule
+# (deploy/cloudflare_bot_rule.py). Naming it anyway means the policy is written
+# where policy is written, and it costs nothing if Meta ever starts reading.
+#
+# facebookexternalhit is deliberately NOT blocked, here or at the edge: it is
+# the link-preview fetcher, ~125 requests a day, and it runs when a reader
+# shares a ficatlas link on Facebook, Instagram or WhatsApp. Blocking it turns
+# those shares into a grey box.
+User-agent: meta-webindexer
+Disallow: /
+
 User-agent: PerplexityBot
 Disallow: /
 

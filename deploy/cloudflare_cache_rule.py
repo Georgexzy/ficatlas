@@ -43,11 +43,42 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 API = "https://api.cloudflare.com/client/v4"
 
-DESCRIPTION = "Cache anonymous story/series/hub pages; respect origin TTL"
-PATHS = ("/story/", "/series/", "/fandom/", "/ship/", "/s/")
-EXPRESSION = ("(" + " or ".join(
-    f'starts_with(http.request.uri.path, "{p}")' for p in PATHS
-) + ') and not http.cookie contains "sat="')
+def _anon(paths) -> str:
+    """Match any of these path prefixes, for a reader with no session."""
+    return ("(" + " or ".join(
+        f'starts_with(http.request.uri.path, "{p}")' for p in paths
+    ) + ') and not http.cookie contains "sat="')
+
+
+# Every cache rule this repo owns, in one list, because the failure this file
+# exists to prevent is a rule and its origin header drifting apart — and that
+# gets likelier, not less likely, as rules accumulate in a dashboard nobody
+# reads. Adding one here and running the script is the whole procedure.
+RULES = [
+    {
+        "description": "Cache anonymous story/series/hub pages; respect origin TTL",
+        "expression": _anon(("/story/", "/series/", "/fandom/", "/ship/", "/s/")),
+        # Origin half: the headers() block in frontend/next.config.ts.
+    },
+    {
+        # The header widget and the landing page ask for this on every page
+        # load, and it is four counters that are already in memory. Measured
+        # over 24h of origin logs: 20,372 requests, 24% of everything the
+        # origin was asked for, from a single client — every one of them down
+        # the tunnel to a home server. Nothing about the answer varies by
+        # reader, so the edge can hold it.
+        #
+        # Origin half: total_stats() in backend/api/stats.py, which sends
+        # max-age=300 to match both the server's own recompute cycle and the
+        # client-side TTL in lib/api.ts. respect_origin below means that header
+        # is the setting and this rule only grants permission.
+        "description": "Cache anonymous index totals; respect origin TTL",
+        "expression": _anon(("/api/stats/totals",)),
+    },
+]
+
+# Kept for the message printed at the end.
+DESCRIPTION = RULES[0]["description"]
 
 
 def env() -> dict:
@@ -93,40 +124,46 @@ def main() -> int:
     rs_id = cache_sets[0]["id"]
 
     existing = call(tok, f"/zones/{zone}/rulesets/{rs_id}")
-    rules = (existing.get("result") or {}).get("rules") or []
-    for r in rules:
-        if r.get("description") == DESCRIPTION:
-            print("already present — nothing to do")
-            return 0
+    have = {r.get("description") for r in
+            ((existing.get("result") or {}).get("rules") or [])}
 
     print("ruleset :", rs_id)
-    print("rule    :", DESCRIPTION)
-    print("matches :", EXPRESSION)
+    todo = [r for r in RULES if r["description"] not in have]
+    for r in RULES:
+        print(f"  [{'present' if r['description'] in have else ' add   '}] {r['description']}")
+        if r["description"] not in have:
+            print("            ", r["expression"])
+    if not todo:
+        print("nothing to do")
+        return 0
     if args.dry_run:
         print("\n--dry-run, nothing sent")
         return 0
 
-    r = call(tok, f"/zones/{zone}/rulesets/{rs_id}/rules", "POST", {
-        "description": DESCRIPTION,
-        "expression": EXPRESSION,
-        "action": "set_cache_settings",
-        "action_parameters": {
-            "cache": True,
-            "edge_ttl": {"mode": "respect_origin"},
-            "browser_ttl": {"mode": "respect_origin"},
-        },
-        "enabled": True,
-    })
-    if not r.get("success"):
-        print("failed:", r.get("errors"))
-        print("\nIf this is an authentication error the token is read-only, which is\n"
-              "how it is meant to be. Add Zone > Cache Rules > Edit, or create the\n"
-              "rule in the dashboard with the expression printed above.")
-        return 1
+    for rule in todo:
+        r = call(tok, f"/zones/{zone}/rulesets/{rs_id}/rules", "POST", {
+            "description": rule["description"],
+            "expression": rule["expression"],
+            "action": "set_cache_settings",
+            "action_parameters": {
+                "cache": True,
+                "edge_ttl": {"mode": "respect_origin"},
+                "browser_ttl": {"mode": "respect_origin"},
+            },
+            "enabled": True,
+        })
+        if not r.get("success"):
+            print("failed:", rule["description"], r.get("errors"))
+            print("\nIf this is an authentication error the token is read-only, which is\n"
+                  "how it is meant to be. Add Zone > Cache Rules > Edit, or create the\n"
+                  "rule in the dashboard with the expression printed above.")
+            return 1
+        print("created:", rule["description"])
 
-    print("\ncreated. Verify with two requests to the same story page:")
-    print("  curl -sI https://ficatlas.com/story/<id> | grep -i cf-cache-status")
-    print("the second should say HIT. With a `sat` cookie it must NOT.")
+    print("\nVerify with two requests to the same URL:")
+    print("  curl -sI https://ficatlas.com/story/<id>   | grep -i cf-cache-status")
+    print("  curl -sI https://ficatlas.com/api/stats/totals | grep -i cf-cache-status")
+    print("the second of each should say HIT. With a `sat` cookie it must NOT.")
     return 0
 
 

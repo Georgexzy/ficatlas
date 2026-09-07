@@ -2,7 +2,7 @@
 import logging
 import os
 import threading
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import bindparam, func, text
 from db.session import get_db
@@ -472,6 +472,7 @@ _TOTALS_SQL = text("""
 
 @router.get("/totals")
 def total_stats(
+    response: Response,
     background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
     refresh: bool = Query(False),
     db: Session = Depends(get_db),
@@ -479,6 +480,35 @@ def total_stats(
     global _totals_cache, _totals_cached_at
     import time
     now = time.monotonic()
+
+    # Let the edge answer this one.
+    #
+    # It is the cheapest response on the site — four counters, already in memory
+    # — and it is requested by the header widget and the landing page on every
+    # single page load. Measured over 24h of nginx logs: 20,372 requests to this
+    # path from ONE client, 24% of everything the origin was asked for, every
+    # one of them travelling the tunnel to a home server to be told a number
+    # that changes a few thousand times a day out of twenty million.
+    #
+    # The client already caches for 5 minutes (TOTALS_TTL_MS in lib/api.ts) and
+    # the server recomputes on the same 300s cycle, so those are the numbers to
+    # match — a shorter edge TTL would just move the misses, and a longer one
+    # would show a figure the page itself considers stale. The
+    # stale-while-revalidate window is deliberately much longer: nobody is
+    # harmed by a work count four minutes out of date, and it means a slow or
+    # unreachable origin never turns into a slow page.
+    #
+    # `public` is safe here in a way it is not for search: there is no viewer
+    # and no per-account variation — it is a count of the whole index. The
+    # Cloudflare rule additionally refuses to cache anything carrying a `sat`
+    # cookie, so a signed-in reader is served from the origin regardless.
+    #
+    # respect_origin on the rule means THIS header is the setting. Changing the
+    # TTL is a deploy, not a dashboard visit — see deploy/cloudflare_cache_rule.py.
+    if response is not None and not refresh:
+        response.headers["Cache-Control"] = (
+            f"public, max-age={_TOTALS_TTL_SECONDS}, "
+            f"stale-while-revalidate={_TOTALS_TTL_SECONDS * 12}")
 
     # Cold process: adopt the numbers from before the restart so this request
     # can be answered now, and let the recompute happen behind it.
