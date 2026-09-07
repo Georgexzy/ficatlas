@@ -684,7 +684,23 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
 
         {story.is_hosted && story.chapters.length > 0 && (
           <section className="chapter-list">
-            <h3>Chapters</h3>
+            {/* The newest chapter, one click from the top of the list.
+                A work still being written is re-visited for exactly one reason,
+                and the list is in publication order — so on a long WIP the
+                thing the returning reader wants was the very last row of two
+                hundred. "Continue Chapter N" above covers someone who has read
+                here before; this covers everyone else, and the two are
+                different questions. Only for works long enough for the scroll
+                to be the problem. */}
+            <h3 className="chapter-list__head">
+              Chapters
+              {story.chapters.length > 4 && (
+                <OfflineLink className="chapter-list__latest"
+                  href={`/story/${story.id}/chapter/${story.chapters[story.chapters.length - 1].number}`}>
+                  Latest chapter →
+                </OfflineLink>
+              )}
+            </h3>
             <ol>
               {story.chapters.map(ch => (
                 <li key={ch.id}>

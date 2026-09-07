@@ -805,6 +805,34 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     into a tie broken by text noise. Percentiles are right for ORDERING a browse
     and wrong for WEIGHTING a score. The text path was measured and deliberately
     left alone; its top results are already sound.
+- **The reader had three controls, and a 199-chapter work needs four.** Previous,
+  All chapters, Next — so reaching chapter 140 meant 139 clicks, and reaching the
+  LATEST chapter of a work still being written (the one thing a returning reader
+  wants) meant going back to the story page and scrolling a list of two hundred
+  links to the bottom. `story.chapters` was already in hand; nothing needed
+  fetching. The reader now carries a chapter `<select>` and the story page a
+  "Latest chapter →" beside the Chapters heading.
+  - A NATIVE select, not a custom menu: the browser brings keyboard typeahead, a
+    list that knows how tall the screen is, and a real picker on a phone, all of
+    which would otherwise be rebuilt worse by hand.
+  - It lists the chapters the reader HAS, which offline is the ones that
+    downloaded — the same rule `prevNum`/`nextNum` follow, and for the same
+    reason.
+- **"Clear N filters" queued instead of clearing, and its own tooltip said
+  otherwise.** Sidebar filters deliberately sit behind an Apply bar so that
+  building a filter set out of three clicks does not run three searches. Clearing
+  is not building: the person who needs that button arrived from a link that
+  applied filters they never chose, and the button promised to "remove every
+  filter and search the whole index". It set state and waited for a second click
+  on a bar elsewhere on the screen.
+  - It is now a LINK to the same search with the filter parameters dropped —
+    one click, and it cannot go stale the way `doSearch()` after
+    `clearFilters()` would (buildParams is captured at render, so that reads the
+    filters as they were BEFORE the clear).
+  - The onClick stays alongside the href and is load-bearing: filters ticked in
+    the sidebar and not yet applied exist only in state, and with no filter keys
+    in the address the cleared URL is the one we are already on — a link to
+    where you already are does nothing at all.
 - The search cache is two-tier: in-process L1 plus a shared UNLOGGED
   `search_cache_entries` table, because the per-worker cache meant four uvicorn
   workers each paid a ~10s miss for the same popular query. Bump

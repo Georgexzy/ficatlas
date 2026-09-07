@@ -824,8 +824,36 @@ export default function ChapterPage() {
           <nav className="reader-nav">
             <button className="reader-nav__btn" disabled={prevNum == null}
               onClick={() => prevNum != null && goChapter(prevNum)}>← Previous</button>
-            <a href={`/story/${storyId}`} className="reader-nav__index"
-              onClick={exitReader}>All chapters</a>
+            <div className="reader-nav__mid">
+              {/* Somewhere to go that is not one chapter away.
+                  Until this existed the reader had three controls — Previous,
+                  All chapters, Next — and on a 199-chapter work that is the
+                  only way through: 198 clicks, or back to the story page to
+                  scroll a list of 200 links and find your place in it. Neither
+                  is a way to reach chapter 140, and neither is a way to reach
+                  the LATEST chapter of something still being written, which is
+                  what a reader coming back to a WIP wants.
+                  A native <select> rather than a custom menu: the browser
+                  gives keyboard typeahead, a scrollable list that knows how
+                  tall the screen is, and a real picker on a phone — all of
+                  which would have to be rebuilt, worse, by hand. It lists the
+                  chapters the reader actually HAS, which offline is the ones
+                  that downloaded, for the same reason prevNum and nextNum are
+                  computed from stored numbers rather than from num ± 1. */}
+              {numbers.length > 1 && (
+                <select className="reader-nav__jump" value={num}
+                  aria-label="Jump to a chapter"
+                  onChange={e => goChapter(Number(e.target.value))}>
+                  {(story?.chapters ?? []).map(c => (
+                    <option key={c.number} value={c.number}>
+                      {c.title ? `${c.number}. ${c.title}` : `Chapter ${c.number}`}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <a href={`/story/${storyId}`} className="reader-nav__index"
+                onClick={exitReader}>All chapters</a>
+            </div>
             <button className="reader-nav__btn" disabled={nextNum == null}
               onClick={() => nextNum != null && goChapter(nextNum)}>Next →</button>
           </nav>
