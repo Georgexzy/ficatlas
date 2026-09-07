@@ -99,6 +99,42 @@ def parse_date(raw: str | None) -> datetime | None:
     return None
 
 
+# FanFiction.net writes completion into its own metadata line as "Status:
+# Complete", and leaves it out entirely for a work still being written. That one
+# word is the indicator this archive was missing: of 6.57M FF.net rows, 5.22M
+# carry status `unknown` — not because the crawler failed but because the
+# HuggingFace dump they came from has eight columns and completion is not one of
+# them. A reader filtering for finished works was getting an all-but-AO3 result
+# set as a result, and nothing on the page said why.
+#
+# The dump has had the column all along; this importer simply never read it.
+#
+# Only ever UP to complete, never the other way, and only over `unknown`:
+#
+#   * "Complete" is monotonic. A work finished before 2019 is still finished
+#     today, so a six-year-old yes is as good as a fresh one.
+#   * "In progress" is not. Most of this dump's unfinished works have either been
+#     finished or abandoned in the years since, and writing in_progress from it
+#     would be stating as fact something the source cannot support any more.
+#     Nothing else in this codebase writes in_progress from evidence either —
+#     live_fetch/persist.py only ever upgrades TO complete, and the HuggingFace
+#     importer records what it cannot know as `unknown` rather than guessing.
+#   * Never over a value we already hold: an AO3 crosspost or a Wayback capture
+#     knows better than a 2019 snapshot.
+_DONE_VALUES = frozenset({"complete", "completed", "yes", "true", "1"})
+
+
+def _parse_status(value) -> bool:
+    """Does the dump say, in FanFiction.net's own words, that this is finished?
+
+    False for everything else including the empty string, which is what an
+    unfinished work carries — the absence of a claim, not a claim of absence.
+    """
+    if value is None:
+        return False
+    return str(value).strip().lower() in _DONE_VALUES
+
+
 def run(dry_run: bool, batch: int = 5000, limit: int | None = None,
         skip: int = 0) -> int:
     if not os.path.exists(DB_PATH):
@@ -108,10 +144,10 @@ def run(dry_run: bool, batch: int = 5000, limit: int | None = None,
 
     con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
-    cur = con.execute('SELECT "Story URL" AS url, Genre, Published, Updated '
-                      'FROM metadata_full')
+    cur = con.execute('SELECT "Story URL" AS url, Genre, Published, Updated, '
+                      'Status FROM metadata_full')
 
-    seen = matched = filled_genres = filled_dates = written = 0
+    seen = matched = filled_genres = filled_dates = filled_status = written = 0
     pending: list[tuple] = []
 
     def flush(rows: list[tuple]) -> int:
@@ -126,7 +162,12 @@ def run(dry_run: bool, batch: int = 5000, limit: int | None = None,
                     genres = CASE WHEN (s.genres IS NULL OR s.genres = '{}')
                                   THEN COALESCE(v.genres, s.genres) ELSE s.genres END,
                     published_at = COALESCE(s.published_at, v.pub),
-                    updated_at   = COALESCE(s.updated_at, v.upd)
+                    updated_at   = COALESCE(s.updated_at, v.upd),
+                    -- Completion, which is the field this archive could not
+                    -- answer at all. Upgrades to `complete` and never away from
+                    -- it, and only over `unknown` — see _parse_status.
+                    status = CASE WHEN v.done AND (s.status IS NULL OR s.status = 'unknown')
+                                  THEN 'complete' ELSE s.status END
                 FROM (
                     -- Every column cast explicitly. Postgres cannot infer the
                     -- type of an empty array, and most source rows have no
@@ -141,16 +182,19 @@ def run(dry_run: bool, batch: int = 5000, limit: int | None = None,
                            string_to_array(
                              nullif(unnest(CAST(:genres AS text[])), ''), '|') AS genres,
                            unnest(CAST(:pubs AS timestamptz[])) AS pub,
-                           unnest(CAST(:upds AS timestamptz[])) AS upd
+                           unnest(CAST(:upds AS timestamptz[])) AS upd,
+                           unnest(CAST(:dones AS boolean[])) AS done
                 ) AS v
                 WHERE s.site = 'ffnet' AND s.site_id = v.site_id
                   AND (s.genres IS NULL OR s.genres = '{}'
-                       OR s.published_at IS NULL OR s.updated_at IS NULL)
+                       OR s.published_at IS NULL OR s.updated_at IS NULL
+                       OR ((s.status IS NULL OR s.status = 'unknown') AND v.done))
             """), {
                 "ids":       [r[0] for r in rows],
                 "genres":    ["|".join(r[1]) for r in rows],
                 "pubs":      [r[2] for r in rows],
                 "upds":      [r[3] for r in rows],
+                "dones":     [r[4] for r in rows],
             })
             db.commit()
             return res.rowcount or 0
@@ -169,14 +213,17 @@ def run(dry_run: bool, batch: int = 5000, limit: int | None = None,
         genres = parse_genres(row["Genre"])
         pub = parse_date(row["Published"])
         upd = parse_date(row["Updated"])
-        if not genres and not pub and not upd:
+        done = _parse_status(row["Status"])
+        if not genres and not pub and not upd and not done:
             continue
         matched += 1
-        pending.append((m.group(1), genres, pub, upd))
+        pending.append((m.group(1), genres, pub, upd, done))
         if genres:
             filled_genres += 1
         if pub or upd:
             filled_dates += 1
+        if done:
+            filled_status += 1
 
         if len(pending) >= batch:
             written += flush(pending)
@@ -204,7 +251,9 @@ def run(dry_run: bool, batch: int = 5000, limit: int | None = None,
         with db_session() as db:
             for label, cond in (("no genres", "genres IS NULL OR genres='{}'"),
                                 ("no published date", "published_at IS NULL"),
-                                ("no updated date", "updated_at IS NULL")):
+                                ("no updated date", "updated_at IS NULL"),
+                                ("no completion status",
+                                 "status IS NULL OR status='unknown'")):
                 n = db.execute(sql_text(
                     f"SELECT count(*) FROM stories WHERE site='ffnet' AND ({cond})")).scalar()
                 log.info(f"  remaining {label}: {n:,}")

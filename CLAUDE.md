@@ -260,6 +260,32 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     8s API timeout under crawl load was otherwise enough to manufacture a
     canonical-less duplicate that would be reported long after the request
     recovered.
+- **"Complete" was an AO3-only filter for two years because an importer read
+  four columns out of nineteen.** 5,222,665 of 6.57M FF.net rows carried status
+  `unknown` — honestly, since the HuggingFace dump they came from has eight
+  columns and completion is not among them — so a reader filtering for finished
+  works got an all-but-AO3 result set. The archive.org SQLite dump has had the
+  answer since 2019: its `Status` column is fully populated, 4,191,239
+  `Completed` against 4,356,805 `In-Progress` and 79 blanks.
+  `ffnet_meta_sqlite_importer.py` was written to fill genres and dates and
+  selected exactly those columns; the docstring listed `Status` among the
+  nineteen the whole time.
+  - **Only ever UP to complete.** "Complete" is monotonic — a work finished
+    before 2019 is still finished — while "in progress" is not, and writing it
+    from a six-year-old snapshot would state as fact something the source can no
+    longer support. That is the same rule `live_fetch/persist.py` follows and
+    the same reason the HuggingFace importer records `unknown` rather than
+    guessing.
+  - The file is 7.2GB and is NOT kept on disk (`backend/data/` is gitignored and
+    was cleared). Re-fetch from archive.org/details/fanfic-meta-sqlite as
+    `metadata-full.sqlite`, and point `FFN_SQLITE` at it — the default path
+    (`/data/ffnmeta.sqlite`) is from an older layout and does not exist in the
+    container.
+  - Roughly 19% of source rows produce a fill (measured over the first 50,000),
+    so expect the FF.net `complete` population to roughly double. Run it
+    detached: 8.5M source rows at ~1,000/s is a couple of hours, and it is a
+    long chain of small batched UPDATEs rather than one enormous one, so unlike
+    `popularity_rank.py` it does not hold locks the worker needs.
 - **Do not re-add `ix_stories_tags_trgm` / `ix_stories_relationships_trgm`.** They
   were 4.4GB with zero scans (tag and relationship filtering uses facet
   resolution + array containment `&&`, served by the plain GIN indexes).
