@@ -155,8 +155,36 @@ const nextConfig: NextConfig = {
           value: "public, max-age=0, must-revalidate, s-maxage=900, stale-while-revalidate=86400",
         }],
       },
+      // The sitemap must survive the origin being unreachable.
+      //
+      // On 2 September Google Search Console stopped being able to read this
+      // file, and the cause was not the file: Cloudflare logged 19,489 × 530
+      // between 31 Aug and 3 Sep — the tunnel dropping, so the edge could not
+      // reach the origin at all — and Googlebot's fetch was one of them. Google
+      // backs off hard after that and does not retry for a long time, so a
+      // couple of bad days cost weeks of not being crawled.
+      //
+      // The tunnel fault is fixed (`--protocol http2`, and 530s are 0 over the
+      // last three days). This makes the sitemap resilient to the NEXT one:
+      // with a week of stale-while-revalidate the edge keeps serving the last
+      // good sitemap while the origin is away, and a crawler is never handed an
+      // error for a file that had not actually changed.
+      //
+      // It was previously caught by the no-cache catch-all below, which is why
+      // it answered `cf-cache-status: DYNAMIC` — every fetch went the whole way
+      // to a home server for a document rebuilt from 11,196 rows.
+      //
+      // s-maxage=3600 against a hub rebuild that runs nightly: an hour is far
+      // inside the window in which the answer cannot have changed.
       {
-        source: "/((?!_next/static|_next/image|icon-|manifest.json|story/|series/|fandom/|ship/|s/).*)",
+        source: "/sitemap.xml",
+        headers: [{
+          key: "Cache-Control",
+          value: "public, max-age=0, must-revalidate, s-maxage=3600, stale-while-revalidate=604800",
+        }],
+      },
+      {
+        source: "/((?!_next/static|_next/image|icon-|manifest.json|sitemap.xml|story/|series/|fandom/|ship/|s/).*)",
         headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }],
       },
     ]
