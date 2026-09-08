@@ -206,11 +206,20 @@ _JOB_EVIDENCE = [
      "The last time a hub's listing actually changed, as opposed to being "
      "rebuilt identically. Feeds the sitemap's lastmod.", 72,
      "SELECT max(content_at) FROM ship_hubs"),
-    ("indexnow", "IndexNow submission",
-     "Tells Bing, Yandex and Seznam which hub pages changed. The only push "
-     "channel there is — everything else waits to be crawled.", 36,
-     "SELECT CAST(value AS timestamptz) FROM app_settings "
-     "WHERE key = 'indexnow_watermark'"),
+        ("indexnow", "IndexNow submission",
+     "Tells Bing, Yandex and Seznam that hub pages changed, rather than waiting "
+     "to be crawled. Google does not participate. When this stops, the only "
+     "thing telling those engines the site moved is their own crawl schedule.",
+     36,
+     # `indexnow_ran_at`, NOT `indexnow_watermark`. The watermark is a cursor
+     # into hub content_at and always lags; reading it as a run time reported
+     # 45.2h against a 36h budget while the loop had run 23 hours earlier and
+     # submitted 5,534 URLs successfully. Falls back to the watermark so an
+     # instance that has not run since this changed still shows something.
+     "SELECT CAST(coalesce("
+     "  (SELECT value FROM app_settings WHERE key = 'indexnow_ran_at'),"
+     "  (SELECT value FROM app_settings WHERE key = 'indexnow_watermark')"
+     ") AS timestamptz)"),
     ("ship_aliases", "Ship nickname mining",
      "Maps 'dramione' and 'drarry' onto their canonical pairings. A search "
      "for a nickname finds almost nothing without it.", 200,
@@ -241,6 +250,40 @@ _JOB_EVIDENCE = [
      "The buffered writer behind pageview and search stats. It drops events "
      "rather than blocking a page, so it can fail without anything breaking.",
      24, "SELECT max(at) FROM visit_events"),
+    # The crawler itself, which is thirteen of the worker's twenty loops and had
+    # no row at all — enrichment, recent works, archive walks, listing harvest,
+    # title repair, the two Wayback pairs. The panel exists because "a loop that
+    # dies is silent", and it was silent about most of them.
+    #
+    # One row rather than thirteen, because they share one piece of evidence and
+    # it is the honest one: every loop that fetches a work stamps `crawled_at`,
+    # so a recent stamp means the fetching side is alive. It cannot say WHICH
+    # loop is doing the work — for that, the queue depths below and the worker
+    # log are the tools — but "nothing has been fetched for six hours" is the
+    # alarm that matters, and nothing was raising it here.
+    #
+    # NOT `max(crawled_at)`. That is a sequential scan of 20.5M rows and it took
+    # 15.7 SECONDS; the watchdog ran it every five minutes and it was the cause
+    # of the site's intermittent slowness (see CLAUDE.md). The probe below stops
+    # at the first matching row — 19 buffers while the crawler is healthy — and
+    # a bounded window is all a staleness check ever needed.
+    ("crawler", "Crawler fetching",
+     "Thirteen loops fetch works: AO3 stubs and recent works, the archive walks, "
+     "the fandom listing harvest, title repair and both Wayback passes. They all "
+     "stamp crawled_at, so this is the one signal that says the fetching side is "
+     "alive at all.", 6,
+     "SELECT max(crawled_at) FROM (SELECT crawled_at FROM stories "
+     " WHERE crawled_at > now() - interval '48 hours' LIMIT 200) s"),
+    # Cheap, exact, and the reason several things on this page are trustworthy:
+    # the planner's row estimates come from here, and CLAUDE.md records a
+    # measurement taken while ANALYZE had never run that was wrong by 200x.
+    ("analyze", "Table statistics",
+     "ANALYZE keeps the query planner's estimates honest. When it has not run, "
+     "the planner believes whatever it last saw — a measurement taken in that "
+     "state once put `stories` at 84,799 rows instead of 20.5M and sent every "
+     "conclusion drawn from it the wrong way.", 48,
+     "SELECT greatest(last_analyze, last_autoanalyze) FROM pg_stat_user_tables "
+     " WHERE relname = 'stories'"),
     ("series_fill", "Series detection",
      "Groups works into series. Stalled indefinitely once before, on a SQL "
      "error nothing surfaced.", 48,
@@ -262,6 +305,9 @@ _JOB_QUEUES = [
      "  COALESCE((SELECT value FROM app_settings WHERE key='popularity_eligible'), '0')::bigint"
      "  - COALESCE((SELECT value FROM app_settings WHERE key='popularity_scored'), '0')::bigint)"),
     ("ao3_refresh", "AO3 stale-WIP queue", "SELECT count(*) FROM ao3_refresh_queue"),
+    # The AO3 Wayback queue was missing while its FF.net twin was listed, which
+    # made the larger of the two invisible: 506,635 against 108,509.
+    ("wayback", "AO3 Wayback queue", "SELECT count(*) FROM wayback_queue"),
     ("ffnet_wayback", "FF.net Wayback queue", "SELECT count(*) FROM ffnet_wayback_queue"),
     ("search_cache", "Shared search cache", "SELECT count(*) FROM search_cache_entries"),
 ]

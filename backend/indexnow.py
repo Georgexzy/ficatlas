@@ -39,6 +39,18 @@ ENDPOINT = "https://api.indexnow.org/indexnow"
 SITE = os.getenv("PUBLIC_SITE_URL", "https://ficatlas.com").rstrip("/")
 MAX_URLS = 10_000
 WATERMARK_KEY = "indexnow_watermark"
+# When a submission last SUCCEEDED, which is a different fact from the watermark
+# and the one the admin panel needs.
+#
+# The watermark is a cursor into hub `content_at`: it advances to the newest
+# page in the batch just submitted, so it always sits in the past by however
+# long ago those pages last changed. Read as "when did this last run" it says
+# the job is stale while the job is fine — measured, it reported 45.2h against a
+# 36h budget on a day the loop had run 23 hours earlier and submitted 5,534
+# URLs to a 200. That is the failure CLAUDE.md names about the AO3 refresh
+# queue, in a second place: the obvious column is not the one that means what
+# you want.
+RAN_KEY = "indexnow_ran_at"
 
 
 def _changed_urls(db, since: str | None, limit: int) -> tuple[list[str], str | None]:
@@ -107,6 +119,12 @@ def run(limit: int = MAX_URLS, dry_run: bool = False) -> int:
 
         if newest:
             put_setting(db, WATERMARK_KEY, newest)
+        # Written whenever the submission was ACCEPTED, including the case above
+        # where there was nothing new to send: a run that correctly submits
+        # nothing is still a run, and a panel that calls it a failure teaches
+        # people to ignore the panel.
+        from datetime import datetime, timezone
+        put_setting(db, RAN_KEY, datetime.now(timezone.utc).isoformat())
         log.info("indexnow: submitted %d URLs (%s), watermark -> %s",
                  len(urls), r.status_code, newest)
         return len(urls)
