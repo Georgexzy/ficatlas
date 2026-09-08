@@ -73,7 +73,10 @@ Allow: /fandom/
 # that no single archive's tag page can. See backend/ship_hubs.py.
 Allow: /ships
 Allow: /ship/
+# The sitemap is an index now; its children live under /sitemaps/ and a crawler
+# that can read the index but not what it points at is worse off than before.
 Allow: /sitemap.xml
+Allow: /sitemaps/
 # Politeness. Google ignores this; most other crawlers honour it, and those are
 # the ones most likely to crawl without restraint.
 #
@@ -103,6 +106,81 @@ Crawl-delay: 10
 #     reliably. Nothing here enforces anything; it is a request. If that matters,
 #     it has to be an edge rule — Cloudflare has a one-click AI-scraper block,
 #     and the tunnel in docker-compose.prod.yml is where that would apply.
+
+# ── The two search crawlers that get the hubs but not the 20.5M works ────────
+#
+# Applebot and Amzn-SearchBot are NOT in the blocklists below and are not being
+# turned away. They are being pointed at the bounded half of this site, because
+# the measurement that the note above calls "a bet" finally came in and the bet
+# is not paying.
+#
+# Over 9.7h of origin logs (102,195 requests):
+#
+#   Applebot         25,394 reqs   24.8% of the whole origin   ~62,759/day
+#     of which        25,043 to /story/*  — 98.6% of everything it asks for
+#   Amzn-SearchBot    3,496 reqs    3.4%                        ~8,640/day
+#     of which         3,348 to /story/*  — 95.8%
+#   Googlebot             1 req                                      ~2/day
+#
+# Nearly everything either of them does is walk /story/*, and /story/* is 20.5M
+# pages. Applebot is fetching ~62,000 unique story URLs a day, which means the
+# edge cache cannot help — every one is a first fetch down the tunnel to a home
+# server — and at that rate the space takes over 300 YEARS to finish. It is not
+# a crawl that ends with the site indexed. It is a permanent load with no
+# terminating condition, and neither archive has yet sent this site a reader.
+#
+# So the hubs stay open to both, all 11,196 of them, and they are the surface
+# that was designed to be crawled: a bounded set of real pages, each one a
+# summary of a corner of the index. What is withdrawn is the unbounded tail.
+# That is the same distinction this file already draws for `/*?` — bounded space
+# yes, infinite space no — applied to the other unbounded space on the site.
+#
+# Written as full groups rather than one added line, and this is the trap worth
+# naming. A crawler obeys the MOST SPECIFIC group that matches it and only that
+# one: the moment `User-agent: Applebot` exists, Applebot stops reading the `*`
+# group entirely. An Applebot group containing just `Disallow: /story/` would
+# therefore have re-opened /account, /admin, /api/ and the whole `/*?` search
+# space to it — a rule meant to reduce load that quadruples it. Every line from
+# the `*` group is repeated here on purpose. If you edit that group, edit these.
+#
+# Reversible, and worth revisiting rather than treating as settled: if either
+# archive ever sends readers, delete the group and they get the tail back.
+User-agent: Applebot
+Disallow: /account
+Disallow: /library
+Disallow: /login
+Disallow: /settings
+Disallow: /api/
+Disallow: /admin
+# The whole works tree, not just the chapters — see above.
+Disallow: /story/
+Disallow: /*?
+Allow: /$
+Allow: /fandoms
+Allow: /fandom/
+Allow: /ships
+Allow: /ship/
+Allow: /sitemap.xml
+Allow: /sitemaps/
+Crawl-delay: 10
+
+User-agent: Amzn-SearchBot
+Disallow: /account
+Disallow: /library
+Disallow: /login
+Disallow: /settings
+Disallow: /api/
+Disallow: /admin
+Disallow: /story/
+Disallow: /*?
+Allow: /$
+Allow: /fandoms
+Allow: /fandom/
+Allow: /ships
+Allow: /ship/
+Allow: /sitemap.xml
+Allow: /sitemaps/
+Crawl-delay: 10
 
 User-agent: GPTBot
 Disallow: /
