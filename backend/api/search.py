@@ -2450,11 +2450,42 @@ def search(          # NOT async — see below
                            (title_l.like(q_norm + "%"), w_exact * 0.4),
                            else_=0.0)
 
-        # Log-damped and normalised to 0..1. Raw kudos would swamp everything:
-        # 318,436 against 1,000 is not a 318x better answer, and ln makes it 2x.
-        pop = func.least(
+        # The site-normalised standing first, and the raw figure only where there
+        # is no standing yet. This is the same argument popularity_rank.py makes
+        # at length, applied to the one place that was still ignoring it.
+        #
+        # `popularity` is percent_rank() PARTITIONED BY site: "top 1% of AO3 by
+        # kudos" and "top 1% of FF.net by favs" come out equal, which is the
+        # only way three archives that count different things on different
+        # scales can be ranked together. The browse path has used it since it
+        # existed. Relevance did not — it used raw kudos+hits, cross-site, and
+        # the effect is not subtle. Measured over the whole index:
+        #
+        #                       p50      p90      p99      max
+        #     fictionalley   0.2692   0.3930   0.5473   0.8117
+        #     ao3            0.0000   0.2883   0.5080   1.0000
+        #     ffnet          0.0000   0.0000   0.3898   0.7958
+        #
+        # NINE IN TEN FanFiction.net works score exactly zero on that term while
+        # the AO3 ninetieth percentile scores 0.288, and the ceilings differ too
+        # (1.000 against 0.796). That is not a statement about the works; it is
+        # a statement about which archive records engagement and on what scale,
+        # and w_pop was multiplying it by up to 3.5. `harry potter` returned 20
+        # AO3 works and nothing else on page one, with FF.net starting to appear
+        # only around result 30 — while the same query at 100 results is 69%
+        # FF.net. The archive was being ranked, not the story.
+        #
+        # coalesce rather than a swap. 114,768 AO3 rows have engagement figures
+        # but no percentile yet, because popularity_rank.py runs offline and the
+        # crawler has moved on since; scoring those 0 would demote exactly the
+        # freshest works. Falling back to the old expression leaves them ranked
+        # as they are today and lets the next run promote them to the fair
+        # scale. Every row with NO engagement at all scores 0 either way, which
+        # is 18M of the 20.5M and unchanged.
+        raw_pop = func.least(
             func.ln(1 + func.coalesce(S.kudos, 0) + func.coalesce(S.hits, 0) / 20.0)
             / 13.8, 1.0)
+        pop = func.coalesce(S.popularity, raw_pop)
         title_sim = func.similarity(func.coalesce(S.title, ""), q_norm)
         # Normalisation flag 0 — NO length normalisation — over the FIELD-WEIGHTED
         # vector. Both halves of that are deliberate and neither works alone.

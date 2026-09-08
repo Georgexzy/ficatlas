@@ -5528,3 +5528,192 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   }
   .admin-people .traffic-table__q { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
 }
+
+/* ── Landing hero ─────────────────────────────────────────────────────────────
+ *
+ * The front door had a toolbar-sized search input at the top and the sentence
+ * explaining what it searches underneath it. That is the wrong way round twice:
+ * the control arrived before its own explanation, and the single thing this
+ * site does had the same visual weight as the filter button beside it.
+ *
+ * Only on the landing state (`.main--landing`, set from the same boolean that
+ * renders EmptyState). The moment there are results the bar shrinks back to a
+ * toolbar, because then it is one — a way to change a search, not the reason
+ * you are on the page.
+ */
+.landing-hero {
+  max-width: 46rem;
+  margin: clamp(1.5rem, 6vw, 4rem) auto clamp(1rem, 3vw, 1.75rem);
+  text-align: center;
+}
+
+/* The heading carries the page. It was inheriting the same size as a section
+   title, which is what let a 20-million-work index read like a settings pane. */
+.landing-hero .empty__title {
+  font-size: clamp(1.75rem, 5.5vw, 2.75rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.6rem;
+  text-wrap: balance;
+}
+
+.landing-hero .empty__sub {
+  font-size: clamp(0.95rem, 2.2vw, 1.075rem);
+  line-height: 1.5;
+  margin: 0 auto 0.5rem;
+  max-width: 38rem;
+  text-wrap: pretty;
+}
+
+/* The honesty line is support, not headline — it should read as a footnote to
+   the claim above it rather than competing with it. */
+.landing-hero .empty__sub--secondary {
+  font-size: 0.9rem;
+  opacity: 0.78;
+}
+
+/* The hero input.
+ *
+ * `--hero` only widens and enlarges; every behaviour (the clear button, the
+ * syntax popover, the recent-search dropdown) is the same element as in the
+ * toolbar state, so there is one search bar on this site and not two. */
+.search-wrap--hero {
+  max-width: 46rem;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+
+.search-wrap--hero .search-input {
+  font-size: clamp(1rem, 2.6vw, 1.15rem);
+  padding-top: 0.95rem;
+  padding-bottom: 0.95rem;
+}
+
+.search-wrap--hero .search-btn {
+  font-size: 1rem;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+
+/* A little lift, so the primary control reads as raised rather than inset.
+   Kept to a shadow and a border: the input's colours are theme tokens and must
+   not be restated here, or the dark theme gets a light box. */
+.search-wrap--hero .search-input-wrap {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px rgb(0 0 0 / 0.07);
+  border-radius: 0.7rem;
+}
+
+:root[data-theme="dark"] .search-wrap--hero .search-input-wrap,
+:root:not([data-theme="light"]) .search-wrap--hero .search-input-wrap {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
+}
+
+/* The nudge belongs to the input above it, not to the browse list below. */
+.main--landing .empty__nudge {
+  margin-top: 0.85rem;
+  text-align: center;
+}
+
+.main--landing .empty {
+  text-align: center;
+}
+
+/* The promises and the hub list are lists and stay left-aligned inside a
+   centred column — centred body text is hard to read at any length. */
+.main--landing .empty__promises,
+.main--landing .empty__hubs {
+  text-align: left;
+}
+
+/* ── Archive badges ───────────────────────────────────────────────────────────
+ *
+ * Three archives, each with its mark and its share of the index, directly under
+ * the sentence that names them. The claim the whole site rests on is "more than
+ * one archive"; this is that claim shown rather than asserted.
+ */
+.archives__label {
+  /* Present for a screen reader, absent for everyone else — the marks and
+     counts are self-evident visually and a heading above them would be a third
+     line of chrome on the most important screen. */
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.archives__list {
+  list-style: none;
+  margin: 1.1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem 0.6rem;
+}
+
+.archives__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.85rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* The site's own colour paints the mark, exactly as it does on a result card —
+   SiteIcon inherits currentColor, so setting the colour here is enough. The
+   NAME and COUNT stay in the body colour so the badge does not become a block
+   of coloured text at small sizes, where hue is the least reliable channel.
+
+   These are the SAME values the result badges use (.badge--site-* above and the
+   light-theme overrides further down), not new ones. The comment on the light
+   block records that those were measured to >= 4.5:1 against --surface, and a
+   second, nearly-identical set of archive colours would be both a contrast
+   regression waiting to happen and a thing to forget when one of them changes.
+   FictionAlley has no dark-theme colour of its own in the badge rules — it
+   inherits the badge text colour there — so it does the same here. */
+.archives__item .site-icon { color: var(--site-colour, inherit); flex: none; }
+.archives__item--ao3          { --site-colour: #d4908f; }
+.archives__item--ffnet        { --site-colour: #90a8d4; }
+.archives__item--fictionalley { --site-colour: #c890d4; }
+
+:root[data-theme="light"] .archives__item--ao3          { --site-colour: var(--badge-ao3); }
+:root[data-theme="light"] .archives__item--ffnet        { --site-colour: var(--badge-ffnet); }
+:root[data-theme="light"] .archives__item--fictionalley { --site-colour: var(--badge-falley); }
+
+.archives__name { font-weight: 600; }
+
+.archives__count {
+  opacity: 0.72;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 380px) {
+  /* Two per row rather than a scrollbar or a squeeze. */
+  .archives__item { font-size: 0.8rem; padding: 0.3rem 0.55rem; }
+}
+
+/* .empty's top padding existed to separate the heading it used to contain from
+   the search bar above. The heading moved into .landing-hero, which supplies
+   that spacing itself, so on the landing state the padding is 72px of nothing
+   between the input and the first thing under it. Measured at 1280x900 before
+   this rule: a 163px gap. */
+.main--landing .empty { padding-top: clamp(12px, 2vw, 20px); }
+
+/* The stowed filters button sat hard against the left edge while everything
+   else on the landing page is a centred column, which read as a stray control
+   rather than the secondary action it is. Centred only here — once there are
+   results it belongs at the left with the result list it filters. */
+.main--landing .filters-trigger--stowed {
+  display: flex;
+  margin-left: auto;
+  margin-right: auto;
+}

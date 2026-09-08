@@ -499,6 +499,30 @@ _TOTALS_SQL = text("""
 """)
 
 
+def _with_sites(payload: dict | None) -> dict | None:
+    """The totals, plus rows-per-archive when those are already known.
+
+    Decorates the response rather than joining `_totals_cache`, because the two
+    figures are computed and persisted on separate cycles and merging them would
+    make each one's staleness the other's problem. `site_counts_without_scanning`
+    returns None rather than starting a scan of a 20.5M-row table — see its
+    docstring — so a caller that arrives before the first sites refresh gets the
+    totals without `sites`, which is exactly what the landing page renders around
+    anyway.
+
+    Here so the landing page can show what the index is MADE of next to how big
+    it is. That needs one number per archive, and asking /api/stats/sites for it
+    would be a second uncached request on the busiest path on the site, to learn
+    three integers this process already has.
+    """
+    if not payload:
+        return payload
+    counts = site_counts_without_scanning()
+    if not counts:
+        return payload
+    return {**payload, "sites": counts}
+
+
 @router.get("/totals")
 def total_stats(
     response: Response,
@@ -557,14 +581,14 @@ def total_stats(
 
     fresh = _totals_cache is not None and (now - _totals_cached_at) < _TOTALS_TTL_SECONDS
     if not refresh and fresh:
-        return _totals_cache
+        return _with_sites(_totals_cache)
 
     # Stale-while-revalidate. The scan is ~10s at 18M rows and grows with the
     # index, so once we have any numbers at all we serve them immediately and
     # recompute behind the response rather than making someone wait for a widget.
     if not refresh and _totals_cache is not None and background_tasks is not None:
         background_tasks.add_task(_recompute_totals)
-        return _totals_cache
+        return _with_sites(_totals_cache)
 
     # The synchronous path is reachable by anyone: `refresh` is a plain query
     # parameter on a public endpoint with no auth behind it, so
@@ -593,12 +617,12 @@ def total_stats(
         # concurrent `?refresh=1` gave ten concurrent scans on an endpoint with
         # no authentication in front of it.
         if _totals_cache is not None:
-            return _totals_cache
+            return _with_sites(_totals_cache)
         stored = _load_persisted_totals()
         if stored:
             _totals_cache = stored
             _totals_cached_at = now - _TOTALS_TTL_SECONDS - 1
-            return _totals_cache
+            return _with_sites(_totals_cache)
         # Genuinely nothing to serve — a fresh install with no persisted totals.
         # Fall through and compute; there is no alternative and it happens once.
     row = db.execute(_TOTALS_SQL).mappings().first()
@@ -611,7 +635,7 @@ def total_stats(
     }
     _totals_cached_at = now
     _persist_totals(_totals_cache)
-    return _totals_cache
+    return _with_sites(_totals_cache)
 
 
 @router.get("/suggest")

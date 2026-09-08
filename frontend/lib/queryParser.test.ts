@@ -206,3 +206,47 @@ describe("filters the bar writes must parse back", () => {
     expect(pq.updatedAfter).toBe("2026-01-31")
   })
 })
+
+// ── The exclude round-trip ───────────────────────────────────────────────────
+//
+// Mirrors what page.tsx does on every search: the sidebar chips and the parsed
+// search bar are BOTH sources for the same filter, and buildParams combines
+// them. It used to combine them with a raw spread, so a value reachable from
+// both sides was sent twice — and since the result goes back into the URL,
+// which seeds the chips on the next load, it grew by one copy per reload.
+// merge() is what stops that; these lock the property rather than the call.
+describe("exclude filters survive a reload without multiplying", () => {
+  const merge = (sidebar: string[], parsed: string[]) =>
+    [...new Set([...sidebar, ...parsed.filter(v => !sidebar.includes(v))])]
+
+  it("does not duplicate a value present on both sides", () => {
+    expect(merge(["Major Character Death"], ["Major Character Death"]))
+      .toEqual(["Major Character Death"])
+  })
+
+  it("keeps a value that only one side has", () => {
+    expect(merge(["Underage"], ["Major Character Death"]))
+      .toEqual(["Underage", "Major Character Death"])
+    expect(merge([], ["Major Character Death"])).toEqual(["Major Character Death"])
+    expect(merge(["Underage"], [])).toEqual(["Underage"])
+  })
+
+  // The actual reported symptom: reload the same search repeatedly and watch
+  // the exclusion accumulate. Each pass feeds the previous pass's output back
+  // in, exactly as the URL does.
+  it("is stable across repeated reloads", () => {
+    let chips = ["Major Character Death"]
+    for (let i = 0; i < 10; i++) {
+      const parsed = parseQuery(
+        `harry potter ${chips.map(v => `-tag:"${v}"`).join(" ")}`)
+      chips = merge(chips, parsed.excTags)
+    }
+    expect(chips).toEqual(["Major Character Death"])
+  })
+
+  it("round-trips an excluded tag through the bar unchanged", () => {
+    const p = parseQuery('harry potter -tag:"Major Character Death"')
+    expect(p.excTags).toEqual(["Major Character Death"])
+    expect(p.cleanText.trim()).toBe("harry potter")
+  })
+})

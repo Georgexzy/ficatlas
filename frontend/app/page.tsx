@@ -914,6 +914,9 @@ function LandingIntro() {
         Every result links straight to the archive that hosts it, so authors keep
         their readers, their kudos and their comments.
       </p>
+      {/* The three archives as marks and counts, immediately under the sentence
+          that names them. See ArchiveBadges. */}
+      <ArchiveBadges />
     </>
   )
 }
@@ -928,6 +931,58 @@ function IndexTotal() {
     getIndexTotals().then(d => { if (typeof d?.stories === "number") setTotal(d.stories) })
   }, [])
   return total ? fmtCount(total) : <>Millions of works</>
+}
+
+// What the index is MADE of, next to how big it is.
+//
+// The landing page named the three archives in a sentence and showed one
+// number for all of them, which asks a reader to take on trust the claim the
+// page is built on — that this searches somewhere other than AO3. Fanfiction
+// readers know these three by sight and have strong priors about them; a reader
+// who came looking for FanFiction.net wants to see FanFiction.net, and 6.5M is
+// a more convincing answer than the word "and".
+//
+// The marks are SiteIcon's, which is the component the result cards already use
+// for the same job — so an archive looks the same here as it does on every row
+// of every search, and there is one place to change it. They are silhouettes
+// rather than the archives' real logos: reproducing AO3's or FanFiction.net's
+// branding on a third-party index would be passing off someone else's mark, and
+// the note at the top of SiteIcon.tsx says so at more length.
+//
+// Renders NOTHING until the counts arrive rather than a placeholder row. The
+// figures come from /api/stats/totals, which the landing page already fetches
+// and the edge already caches, so this costs no extra request — but it can
+// legitimately be absent (see _with_sites in backend/api/stats.py), and three
+// empty badges would be a worse answer than none.
+const ARCHIVE_ORDER = ["ao3", "ffnet", "fictionalley"] as const
+
+function ArchiveBadges() {
+  const [sites, setSites] = useState<Record<string, number> | null>(null)
+  useEffect(() => {
+    getIndexTotals()
+      .then(d => { if (d && typeof d === "object" && (d as any).sites) setSites((d as any).sites) })
+      .catch(() => {})
+  }, [])
+  if (!sites) return null
+  const rows = ARCHIVE_ORDER.filter(s => (sites[s] ?? 0) > 0)
+  if (rows.length === 0) return null
+  return (
+    // A list, because it is one: three archives with a count each. The heading
+    // is visually hidden rather than absent so a screen reader arrives at
+    // "Archives indexed" instead of an unexplained run of numbers.
+    <div className="archives">
+      <h2 className="archives__label">Archives indexed</h2>
+      <ul className="archives__list">
+        {rows.map(site => (
+          <li key={site} className={`archives__item archives__item--${site}`}>
+            <SiteIcon site={site} />
+            <span className="archives__name">{SITE_LABELS[site] ?? site}</span>
+            <span className="archives__count">{fmtCount(sites[site])}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
 }
 
 // The reopenable promises list, below the fold on the landing state. Kept out
@@ -967,7 +1022,10 @@ function LandingPromises() {
 function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q: string) => void }) {
   return (
     <div className="empty">
-      <LandingIntro />
+      {/* LandingIntro is NOT rendered here any more — it moved above the search
+          bar so the page states what it does before offering the control that
+          does it. Emitting it in both places would put two <h1>s on the page,
+          which is the accessibility bug the heading was added to fix. */}
       <p className="empty__nudge">
         Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
       </p>
@@ -1291,6 +1349,10 @@ function SearchPageInner() {
   // and "they are the ones you just asked for" stay separate questions.
   const shown = results ?? stale
   const pending = loading && !results && stale !== null
+  // The front door: nothing searched yet and nothing on the way. Named once so
+  // the hero above the search bar and the browse list below it cannot disagree
+  // about which state the page is in — they render on the same boolean.
+  const landing = !shown && !loading
 
   // Hand the rows to the instance that replaces this one. Written on render
   // rather than at the fetch, because a page restored from cache is just as
@@ -1883,10 +1945,24 @@ function SearchPageInner() {
       warnings:              joinCsv(merge(incWarnings, pq.warnings)),
       categories:            joinCsv(incCats),
       crossovers:            pq.crossovers ?? (crossovers !== "include" ? crossovers : undefined) as any,
-      exclude_fandoms:       joinCsv([...excFandoms, ...pq.excFandoms]),
-      exclude_characters:    joinCsv([...excChars, ...pq.excCharacters]),
-      exclude_relationships: joinCsv([...excShips, ...pq.excRelationships]),
-      exclude_tags:          joinCsv([...excTags, ...pq.excTags]),
+      // merge(), not a raw spread, and the four of these are the reason the
+      // helper exists at all.
+      //
+      // These were `[...excTags, ...pq.excTags]`, which does not deduplicate —
+      // and every one of these values is reachable from BOTH sides at once.
+      // Exclude a tag and the loop ran: the URL carried
+      // `exclude_tags=Major Character Death`, mount seeded the sidebar chip
+      // from it, serializeFiltersToQuery wrote `-tag:Major Character Death`
+      // into the bar, and this line then sent the chip AND the parsed operator
+      // as two values. That went back into the URL, so the next load seeded two
+      // chips and sent three. Measured: one extra copy per reload, for ever.
+      //
+      // The include fields never had it because they were written with merge()
+      // from the start. Same fix, same reason.
+      exclude_fandoms:       joinCsv(merge(excFandoms, pq.excFandoms)),
+      exclude_characters:    joinCsv(merge(excChars, pq.excCharacters)),
+      exclude_relationships: joinCsv(merge(excShips, pq.excRelationships)),
+      exclude_tags:          joinCsv(merge(excTags, pq.excTags)),
       status:                status.length ? joinCsv(status) : (pq.status ?? undefined),
       language:              language || pq.language || undefined,
       dlp_min_rating:        dlpMinRating ?? undefined,
@@ -2640,13 +2716,16 @@ function SearchPageInner() {
         />
 
         {/* ── Main ── */}
-        <main id="main" className="main">
+        <main id="main" className={"main" + (landing ? " main--landing" : "")}>
           {/* Waiting-filters bar.
           Filters used to search on their own after 350ms, so picking three of
           them ran three searches and the results moved while you were still
           choosing. Now they queue and this says so. Sticky, because the sidebar
           is long and the control has to be reachable from wherever you are in
           it. */}
+      {/* One name for "the front door": nothing searched yet, nothing loading.
+          The same condition EmptyState renders on, so the hero above and the
+          browse list below cannot disagree about which state the page is in. */}
       {filtersDirty && (
         <div className="apply-bar" role="status">
           <span>Filters changed.</span>
@@ -2657,8 +2736,26 @@ function SearchPageInner() {
         </div>
       )}
 
+      {/* The landing hero.
+          The heading used to sit BELOW the search bar, inside EmptyState, which
+          made the first thing on the site's front door a toolbar-sized input
+          with no statement of what it searches — and put the sentence that
+          answers "what is this" underneath the control it was meant to
+          introduce. Reading order and visual weight now agree: say what this
+          does, then give the one control that does it.
+
+          Rendered here rather than moved inside .search-wrap because the
+          Suspense fallback in SearchPage renders LandingIntro on its own for
+          crawlers and no-JS clients, and both paths must produce the same
+          heading exactly once. EmptyState no longer emits it. */}
+          {landing && (
+            <div className="landing-hero">
+              <LandingIntro />
+            </div>
+          )}
+
       {/* Search bar */}
-          <div className="search-wrap">
+          <div className={"search-wrap" + (landing ? " search-wrap--hero" : "")}>
             {/* Import needs admin (see StoryCard), and this banner promises to
                 fetch and add the story — a promise we cannot keep for a visitor
                 whose click would 401. They can still paste the URL and search. */}
@@ -3126,8 +3223,11 @@ export default function SearchPage() {
         <div className="shell">
           <SiteHeader current="search" />
           <div className="layout">
-            <main id="main" className="main">
-              <div className="empty">
+            <main id="main" className="main main--landing">
+              {/* Same wrapper the hydrated hero uses, so the fallback and the
+                  interactive page lay the heading out identically and there is
+                  no jump when the client component takes over. */}
+              <div className="landing-hero">
                 <LandingIntro />
               </div>
             </main>
