@@ -563,7 +563,24 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   says "I ran" and evidence says "I achieved something", and the second catches
   a loop running happily over a broken query. `popularity_rank.py` sitting
   frozen for months is the failure this exists to make visible.
-  - **Pick the column carefully; the obvious one is often wrong.** The AO3
+  - **Thirteen of the worker's twenty loops had no row at all**, which is the
+    exact failure this section exists to prevent, for most of the work the site
+    does: enrichment, recent works, the archive walks, the listing harvest,
+    title repair and both Wayback pairs. They now share ONE row, because they
+    share one piece of evidence — every loop that fetches a work stamps
+    `crawled_at`. It cannot say which loop is working; "nothing has been fetched
+    for six hours" is the alarm that was missing. The probe is bounded
+    (`LIMIT 200` inside a 48h window), never `max(crawled_at)`, which is the
+    15.7-second sequential scan that made the whole site slow.
+  - The AO3 Wayback queue was missing while its FF.net twin was listed, so the
+    larger of the two was invisible: 506,635 against 108,509.
+  - **Pick the column carefully; the obvious one is often wrong.** It has now
+    happened twice. IndexNow's row read `indexnow_watermark`, which is a CURSOR
+    into hub `content_at` and therefore always lags — it reported 45.2h against
+    a 36h budget on a day the loop had run 23 hours earlier and submitted 5,534
+    URLs to a 200. `indexnow.run()` now records `indexnow_ran_at` on every
+    accepted submission, including one that correctly had nothing to send, and
+    the row reads that with the watermark only as a fallback. The AO3
     stale-WIP refresh was added with `max(queued_at)` on `ao3_refresh_queue`
     and flagged STALE on the very first render — while the loop was running
     every 40 minutes and had logged a pass four minutes earlier. The queue is
