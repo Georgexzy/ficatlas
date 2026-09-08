@@ -22,6 +22,7 @@ through to a plain match so a language nobody has tagged still behaves sanely.
 LANGUAGE_ALIASES: dict[str, list[str]] = {
     "English":    ["English"],
     "Chinese":    ["Chinese", "中文-普通话 國語", "中文-广东话 粵語", "中文-客家话",
+                   "中文-吴语", "中文-闽南话 臺語",
                    "Mandarin", "Cantonese"],
     "Spanish":    ["Spanish", "Español", "Castellano"],
     "Russian":    ["Russian", "Русский"],
@@ -34,6 +35,26 @@ LANGUAGE_ALIASES: dict[str, list[str]] = {
     "Ukrainian":  ["Ukrainian", "Українська"],
     "Polish":     ["Polish", "Polski"],
     "Filipino":   ["Filipino", "Tagalog"],
+    # Added 2026-09-08 after counting what is actually stored against what this
+    # table knows: 63 languages have more than 200 works, and these were the
+    # seven the table could not name, plus Welsh from the long tail. 2,815 works
+    # were reachable only by typing the endonym exactly — "Cymraeg" found 93
+    # works and "Welsh" found none, which reads as an index with no Welsh in it.
+    #
+    # Chinese gains two more of AO3's own spellings for the same reason the
+    # first four are there: the archive files topolects separately and a reader
+    # searching "Chinese" means all of them.
+    "Welsh":      ["Welsh", "Cymraeg"],
+    "Icelandic":  ["Icelandic", "Íslenska"],
+    "Zulu":       ["Zulu", "isiZulu"],
+    "Somali":     ["Somali", "af Soomaali"],
+    # Not a spoken language and not a written one either, which is exactly why
+    # it is worth naming: 361 works are tagged with it and none of them are
+    # findable by anybody who does not already know the archive's exact string.
+    "American Sign Language": ["American Sign Language", "ASL"],
+    # An extinct language written in hieroglyphs. 671 works, and nobody is
+    # typing 𓂋𓏺𓈖 𓆎𓅓𓏏𓊖 into a search box.
+    "Egyptian":   ["Egyptian", "𓂋𓏺𓈖 𓆎𓅓𓏏𓊖", "Ancient Egyptian"],
     "Vietnamese": ["Vietnamese", "Tiếng Việt"],
     "Czech":      ["Czech", "Čeština"],
     "Turkish":    ["Turkish", "Türkçe"],

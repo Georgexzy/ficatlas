@@ -70,6 +70,30 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **The language filter seq-scanned 20.5M rows past an index that could have
+  answered it in a millisecond.** `ix_stories_language` is a plain btree and the
+  predicate was `ILIKE`, which cannot use one. Measured, same row, same box:
+
+      WHERE language ILIKE 'Welsh'   18,510 ms   parallel seq scan
+      WHERE language  =    'Welsh'        1 ms   index scan
+
+  The index had been sitting at ZERO scans and 258MB — not the wrong index, just
+  never asked a question it could answer. Equality is safe because
+  `language_variants()` returns the spellings AS STORED (`中文-普通话 國語`, not a
+  pattern), which is the entire point of the alias table; the no-variant
+  fallback tries the obvious casings instead of reaching for a pattern.
+  - It was wrong as well as slow. `language=Welsh` returned NOTHING while
+    `language=Cymraeg` returned 93, because the endonym is what is stored and
+    Welsh was not in the table. Counted against the data: 63 languages have over
+    200 works and seven were unnameable, 2,815 works reachable only by typing an
+    endonym exactly. Added, with Welsh and two more of AO3's Chinese topolects.
+  - **The zero-scan column in `pg_stat_user_indexes` is a lead, not a verdict.**
+    The same list shows `ix_stories_characters_trgm` (2.1GB) and
+    `ix_stories_fandoms_trgm` (1.5GB) at zero scans, and dropping their two
+    siblings on that reasoning once cost 83 seconds a query — they are the
+    last-resort fallback and their being unused is the design working. One entry
+    on that list was a bug and two are load-bearing; the column tells you where
+    to look and nothing more.
 - **The site was slow every five minutes, and it was the watchdog.** `watchdog.sh`
   runs from cron every 5 minutes and checked the worker's liveness with
   `SELECT max(crawled_at) FROM stories`. There is no index on that column, so it
