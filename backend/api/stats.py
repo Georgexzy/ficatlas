@@ -100,6 +100,35 @@ def _compute_sites(db: Session) -> list:
 # Its own lock key: two different scans should be able to run at once, they just
 # must not each run N times.
 _SITES_LOCK_KEY = 8_314_207_002
+
+
+def site_counts_without_scanning() -> dict[str, int] | None:
+    """Rows per site from what has already been computed, or None.
+
+    Exists so that the OTHER caller of this figure — the admin panel's coverage
+    section — can stop running its own copy of the scan. There were two
+    implementations of `SELECT site, count(*) FROM stories GROUP BY site` in
+    this codebase: this module's, wrapped in a threading lock, an advisory lock,
+    a cache and a persisted fallback because "under write load the underlying
+    queries are slow enough to time out at the proxy" — and admin.py's, with
+    none of those and a docstring claiming it came "from the planner rather than
+    a scan", which it did not.
+
+    Caught in the act: two identical nine-second aggregates over 20.5M rows
+    running concurrently while autovacuum ANALYZEd the same table, and a cold
+    `tags=Fluff` browse 503ing at 21.5s because it was starved of the disk. The
+    search was never the slow thing.
+
+    Returns None rather than computing, deliberately. A caller that cannot get
+    the numbers for free should say so or do without; the one thing it must not
+    do is start a second scan of the biggest table on the box.
+    """
+    if _sites_cache:
+        return {r["site"]: int(r["count"]) for r in _sites_cache if r.get("site")}
+    stored = _load_persisted_sites()
+    if stored:
+        return {r["site"]: int(r["count"]) for r in stored if r.get("site")}
+    return None
 _sites_refreshing = False
 _sites_refresh_lock = threading.Lock()
 

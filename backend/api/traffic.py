@@ -234,8 +234,65 @@ def summary(days: int = Query(30, ge=1, le=365),
             "searches": (prev[1] if prev else 0) or 0,
             "visitors": (prev[2] if prev else 0) or 0,
         },
+        # Did the site do its job?
+        #
+        # Everything above this counts activity. None of it answers the only
+        # question worth asking of a search engine: did somebody come looking
+        # for a story, find one, and go and read it. A search returning 5,000
+        # results and a story page being opened both look like success and
+        # neither can be told from a reader who took one look and left.
+        #
+        # Three counts over the same window, by VISITOR-DAY rather than by
+        # event, because the question is about people and not clicks: a reader
+        # who searched nine times and opened one work is one of each.
+        #
+        # `read_it` only began collecting on 2026-09-07 — see the ArchiveLink
+        # component — so a window reaching back further will show a conversion
+        # that looks catastrophic and is really just a field that did not exist
+        # yet. `since` says so rather than leaving it to be discovered.
+        "funnel": _funnel(db, first, last),
         "retention_days": tracking.RETENTION_DAYS,
         "enabled": tracking.ENABLED,
+    }
+
+
+# When outbound clicks started being recorded. Before this there is no data
+# rather than no clicks, and a funnel that does not say so is a lie told with
+# real numbers.
+_OUT_SINCE = "2026-09-07"
+
+
+def _funnel(db: Session, first, last) -> dict:
+    """searched -> opened a story -> went and read it, counted in people.
+
+    Bots excluded, and so are the sessions that never loaded a page at all:
+    measured over the data so far, nine "visitors" searched 186 times without
+    ever fetching a single page, which is a script and not an audience, and
+    leaving them in halves the apparent conversion.
+    """
+    row = db.execute(text("""
+        WITH per AS (
+            SELECT visitor,
+                   count(*) FILTER (WHERE kind = 'search')                        AS searches,
+                   count(*) FILTER (WHERE kind = 'page')                          AS pages,
+                   count(*) FILTER (WHERE kind = 'page' AND path LIKE '/story/%') AS stories,
+                   count(*) FILTER (WHERE kind = 'out')                           AS outs
+              FROM visit_events
+             WHERE NOT bot AND at >= :first AND at < :end
+             GROUP BY visitor
+        )
+        SELECT count(*) FILTER (WHERE searches > 0 AND pages > 0)                AS searched,
+               count(*) FILTER (WHERE searches > 0 AND stories > 0)              AS opened,
+               count(*) FILTER (WHERE outs > 0)                                  AS read_it,
+               count(*) FILTER (WHERE searches > 0 AND pages = 0)                AS not_a_browser
+          FROM per
+    """), {"first": first, "end": last + timedelta(days=1)}).first()
+    return {
+        "searched": int(row[0] or 0),
+        "opened_a_story": int(row[1] or 0),
+        "read_it": int(row[2] or 0),
+        "not_a_browser": int(row[3] or 0),
+        "read_it_since": _OUT_SINCE,
     }
 
 

@@ -78,7 +78,34 @@ EXACT_BELOW = 400_000
 
 
 def _site_totals(db: Session) -> dict[str, int]:
-    """Rows per site, from the planner rather than a scan."""
+    """Rows per site — from what /api/stats/sites has already computed.
+
+    The docstring here used to say "from the planner rather than a scan". It was
+    not: `SELECT site, count(*) FROM stories GROUP BY site` reads all 20.5M rows,
+    it took nine seconds, and it ran with none of the protection the identical
+    query in api/stats.py carries — no cache, no single-flight, no advisory
+    lock, on a page an operator refreshes when they are already worried about
+    something.
+
+    Caught in the act: two of these aggregates running at once while autovacuum
+    ANALYZEd the same table, and a cold `tags=Fluff` browse 503ing at 21.5s
+    because it was starved of the disk behind them.
+
+    So it asks for the figures rather than computing them. Falling back to the
+    scan when nothing is cached is deliberate — a fresh install has to get the
+    numbers from somewhere, and by the time anyone opens this panel on a running
+    instance the widget in the header has long since filled that cache — but it
+    takes the SAME advisory lock, so the two paths can no longer scan at once.
+    """
+    from api.stats import _SITES_LOCK_KEY, site_counts_without_scanning
+    cached = site_counts_without_scanning()
+    if cached:
+        return cached
+    # Nothing cached. Scan, but only if no one else is already scanning.
+    if not db.execute(sql_text("SELECT pg_try_advisory_xact_lock(:k)"),
+                      {"k": _SITES_LOCK_KEY}).scalar():
+        log.info("site totals: another scan holds the lock; reporting none")
+        return {}
     rows = db.execute(sql_text("""
         SELECT site, count(*) FROM stories
         GROUP BY site

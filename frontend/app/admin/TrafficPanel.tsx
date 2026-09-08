@@ -184,6 +184,10 @@ interface Summary {
   previous?: { from: string; to: string; views: number; searches: number; visitors: number }
   retention_days: number
   enabled: boolean
+  funnel?: {
+    searched: number; opened_a_story: number; read_it: number
+    not_a_browser: number; read_it_since: string
+  }
 }
 // `label` is the story, series or hub name the path resolves to, and is absent
 // for paths that are already readable (/library) or whose id no longer resolves.
@@ -462,6 +466,45 @@ export default function TrafficPanel() {
                 )}
               </div>
             ))}
+          </div>
+        </>
+      )}
+
+      {/* The only question worth asking of a search engine. */}
+      {summary?.funnel && (
+        <>
+          <h2 className="admin-site__name">Did it work?</h2>
+          <p className="admin-note">
+            Counted in people, not clicks: somebody who searched nine times and
+            opened one work is one of each. Bots are excluded, and so are the
+            sessions that searched without ever loading a page — there were{" "}
+            {summary.funnel.not_a_browser.toLocaleString()} of those in this
+            window, and they are scripts rather than readers. Leaving them in
+            halves the number below and flatters nobody.
+          </p>
+          <div className="admin-tiles">
+            <div className="admin-tile">
+              <span className="admin-tile__value">{summary.funnel.searched.toLocaleString()}</span>
+              <span className="admin-tile__label">Searched</span>
+            </div>
+            <div className="admin-tile">
+              <span className="admin-tile__value">{summary.funnel.opened_a_story.toLocaleString()}</span>
+              <span className="admin-tile__label">Opened a story</span>
+              {summary.funnel.searched > 0 && (
+                <span className="admin-tile__sub">
+                  {Math.round(100 * summary.funnel.opened_a_story / summary.funnel.searched)}% of searchers
+                </span>
+              )}
+            </div>
+            <div className="admin-tile">
+              <span className="admin-tile__value">{summary.funnel.read_it.toLocaleString()}</span>
+              <span className="admin-tile__label">Went and read it</span>
+              <span className="admin-tile__sub">
+                {/* Said plainly, because the alternative is reading a young
+                    field as a collapse in conversion. */}
+                only counted since {summary.funnel.read_it_since}
+              </span>
+            </div>
           </div>
         </>
       )}
