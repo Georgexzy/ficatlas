@@ -275,14 +275,28 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     `/api/`, `/account` and the whole `/*?` search space to it. Every line of
     the `*` group is repeated in both new groups deliberately. Edit one, edit
     all three.
-  - **Not fixable by UA or IP: a residential-proxy botnet.** 20,221 story
-    requests from **19,705 unique IPs** — one request per IP, 22 rotating
-    generic Chrome UA strings, 20,032 distinct story URLs. Blocking by address
-    or agent is what it is built to defeat. Left alone for now, because the
-    instruments that would catch it (Bot Fight Mode, a challenge on `/story/*`)
-    also catch Googlebot, and Googlebot is at 2 requests a day already — the
-    cure would cost more than the disease. Revisit only with per-rule verified-
-    bot exemptions.
+  - **The residential-proxy botnet gets a managed challenge, not a block.**
+    20,221 story requests from **19,705 unique IPs** — one request per address —
+    cycling 14 browser UA strings in near-perfect round robin (1,353–1,465 each)
+    over 20,032 distinct URLs. Address and agent are both what a network of that
+    shape exists to defeat. What it cannot fake cheaply is a browser: 20,221
+    story pages against 138 static assets, 0.7%, so it reads the server-rendered
+    HTML and never executes the page. A managed challenge is that exact test.
+    - Scope is narrow because the measurement allows it: this botnet made ZERO
+      requests outside `/story/`. Carve-outs are `not cf.client.bot` (so
+      Googlebot and bingbot are exempt — getting that wrong would take 2
+      requests a day to zero), the `sat=` cookie, and `/story/offline-shell`,
+      which is the service worker's precache target and cannot answer a
+      challenge.
+    - **`_rsc` is deliberately NOT exempted.** Next's client-side navigation
+      fetches `/story/<id>?_rsc=…` and a fetch() cannot solve a challenge, so
+      exempting it looks like the kind thing to do. It is a bypass costing one
+      query parameter, and the botnet already sends it (223 requests). The
+      degradation is acceptable instead: the RSC fetch gets challenge HTML, Next
+      falls back to a full navigation, the reader answers once, and Cloudflare
+      honours cf_clearance on everything after.
+    - The cost is real and worth restating whenever this is revisited: an
+      anonymous reader arriving from a search engine answers a challenge first.
   - **`urllib.robotparser` cannot verify any of this.** It implements neither
     `*` nor `$`, so it reports `/?q=` as ALLOWED for every agent including the
     long-standing `*` group. It is still worth running for group structure and

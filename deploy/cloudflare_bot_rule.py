@@ -92,6 +92,60 @@ RULES = [
                       'http.user_agent contains "Amzn-SearchBot") and '
                       'starts_with(http.request.uri.path, "/story/")',
     },
+    {
+        # The residential-proxy botnet. This one is a CHALLENGE and not a block,
+        # and it is the only rule here aimed at something that cannot be named.
+        #
+        # Measured 2026-09-08 over 9.7h: 20,221 requests to /story/* from 19,705
+        # UNIQUE IPs — one request per address — cycling 14 browser user-agent
+        # strings in near-perfect round robin (1,353 to 1,465 requests each) for
+        # 20,032 distinct story URLs. Blocking by IP is what a proxy network of
+        # that shape exists to defeat, and blocking by user agent means blocking
+        # ordinary Chrome strings that real readers also send.
+        #
+        # What it cannot fake cheaply is a browser. It fetched 20,221 story
+        # pages and 138 static assets — 0.7% — so it is reading the server-
+        # rendered HTML and never executing the page. A managed challenge is
+        # exactly that test, which is why it is the instrument here.
+        #
+        # The scope is narrow because the measurement allows it to be: this
+        # botnet made ZERO requests to any path outside /story/. Three carve-
+        # outs keep it off everyone it is not aimed at.
+        #
+        #   * `not cf.client.bot` exempts Cloudflare-VERIFIED crawlers, which is
+        #     Googlebot and bingbot. Getting this wrong would be the worst
+        #     outcome available — Googlebot is at 2 requests a day and a
+        #     challenge it cannot solve would take that to zero.
+        #   * `sat=` exempts anyone signed in.
+        #   * /story/offline-shell is the service worker's precache target (100
+        #     requests in the window). A service worker fetch cannot solve a
+        #     challenge, so covering it would break offline mode for real
+        #     readers.
+        #
+        # Next's client-side navigation is covered on purpose, and this is the
+        # one decision here worth arguing with. Clicking a search result fetches
+        # `/story/<id>?_rsc=<hash>`, and a fetch() cannot solve a challenge — so
+        # the obvious kindness is to exempt `_rsc`. Do not: the botnet ALREADY
+        # sends it, 223 of its 20,221 requests, and an exemption is a bypass
+        # that costs one query parameter to use. What happens instead is
+        # tolerable: the RSC fetch gets challenge HTML rather than a flight
+        # payload, Next falls back to a full navigation, and the reader answers
+        # one challenge as a document. Cloudflare then honours the cf_clearance
+        # cookie on everything after it, RSC fetches included, without this rule
+        # having to say so.
+        #
+        # The cost, stated plainly: an anonymous reader arriving on a story page
+        # from a search engine passes a managed challenge first. For a real
+        # browser that is usually invisible and under a second. It is a genuine
+        # cost against ~50,000 scraped pages a day, and it is reversible with
+        # `--remove` the moment it stops being worth it.
+        "description": "Challenge the /story/ scraper botnet (19,705 IPs, 1 req each)",
+        "action": "managed_challenge",
+        "expression": 'starts_with(http.request.uri.path, "/story/") '
+                      'and not starts_with(http.request.uri.path, "/story/offline-shell") '
+                      'and not cf.client.bot '
+                      'and not http.cookie contains "sat="',
+    },
 ]
 
 
@@ -178,12 +232,14 @@ def main() -> int:
         cur = live.get(r["description"])
         if cur is None:
             state = " add   "; changed = True
-        elif (cur.get("expression") or "").strip() != r["expression"].strip():
+        elif ((cur.get("expression") or "").strip() != r["expression"].strip()
+              or cur.get("action") != r.get("action", "block")):
             state = " update"; changed = True
         else:
             state = "present"
         print(f"  [{state}] {r['description']}")
         if state != "present":
+            print("             action:", r.get("action", "block"))
             print("            ", r["expression"])
             if cur:
                 print("             was:", (cur.get("expression") or "").strip())
@@ -200,7 +256,7 @@ def main() -> int:
     # this API offers, so the order has to be reconstructed deliberately rather
     # than inherited from whatever came back.
     payload = [_wire(r) for r in foreign] + [{
-        "action": "block",
+        "action": r.get("action", "block"),
         "expression": r["expression"],
         "description": r["description"],
         "enabled": True,
