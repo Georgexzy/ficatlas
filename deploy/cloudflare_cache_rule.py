@@ -85,9 +85,14 @@ RULES = [
         # half sets a week of stale-while-revalidate, which means the edge keeps
         # handing crawlers the last good sitemap while the origin is away.
         #
-        # Origin half: the /sitemap.xml rule in frontend/next.config.ts.
+        # /sitemaps/ as well as /sitemap.xml: the flat file became a sitemap
+        # index whose children live under /sitemaps/, and a crawler that can
+        # reach the index but not its children is in a worse position than one
+        # that could read the flat file.
+        #
+        # Origin half: the sitemap rules in frontend/next.config.ts.
         "description": "Cache the sitemap; respect origin TTL",
-        "expression": _anon(("/sitemap.xml",)),
+        "expression": _anon(("/sitemap.xml", "/sitemaps/")),
     },
 ]
 
@@ -138,15 +143,33 @@ def main() -> int:
     rs_id = cache_sets[0]["id"]
 
     existing = call(tok, f"/zones/{zone}/rulesets/{rs_id}")
-    have = {r.get("description") for r in
-            ((existing.get("result") or {}).get("rules") or [])}
+    live = {r.get("description"): r
+            for r in ((existing.get("result") or {}).get("rules") or [])}
 
+    # Matched on the EXPRESSION, not only on whether the name is present.
+    #
+    # This used to skip any rule whose description already existed, which meant
+    # widening one silently did nothing: the sitemap rule was edited here to
+    # cover the new /sitemaps/ children, the script printed "present", and the
+    # children would have gone uncached with nobody the wiser. That is precisely
+    # the drift the comment on RULES says this file exists to prevent, so it
+    # cannot be the one thing the reconciler ignores.
     print("ruleset :", rs_id)
-    todo = [r for r in RULES if r["description"] not in have]
+    todo = []
     for r in RULES:
-        print(f"  [{'present' if r['description'] in have else ' add   '}] {r['description']}")
-        if r["description"] not in have:
+        cur = live.get(r["description"])
+        if cur is None:
+            state, act = " add   ", "add"
+        elif (cur.get("expression") or "").strip() != r["expression"].strip():
+            state, act = " update", "update"
+        else:
+            state, act = "present", None
+        print(f"  [{state}] {r['description']}")
+        if act:
             print("            ", r["expression"])
+            if act == "update":
+                print("             was:", (cur.get("expression") or "").strip())
+            todo.append((act, cur, r))
     if not todo:
         print("nothing to do")
         return 0
@@ -154,8 +177,11 @@ def main() -> int:
         print("\n--dry-run, nothing sent")
         return 0
 
-    for rule in todo:
-        r = call(tok, f"/zones/{zone}/rulesets/{rs_id}/rules", "POST", {
+    for act, cur, rule in todo:
+        path = (f"/zones/{zone}/rulesets/{rs_id}/rules"
+                if act == "add" else
+                f"/zones/{zone}/rulesets/{rs_id}/rules/{cur['id']}")
+        r = call(tok, path, "POST" if act == "add" else "PATCH", {
             "description": rule["description"],
             "expression": rule["expression"],
             "action": "set_cache_settings",
@@ -172,7 +198,7 @@ def main() -> int:
                   "how it is meant to be. Add Zone > Cache Rules > Edit, or create the\n"
                   "rule in the dashboard with the expression printed above.")
             return 1
-        print("created:", rule["description"])
+        print(f"{'created' if act == 'add' else 'updated'}:", rule["description"])
 
     print("\nVerify with two requests to the same URL:")
     print("  curl -sI https://ficatlas.com/story/<id>   | grep -i cf-cache-status")
