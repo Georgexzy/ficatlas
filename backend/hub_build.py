@@ -138,12 +138,36 @@ def build_groups(
                 -- every nightly rebuild would claim all 7,584 hubs changed
                 -- daily, which is both untrue and self-defeating.
                 --
+                -- That was the intent and it was not achieved. Measured
+                -- 2026-09-08: 3,185 of 6,165 ship hubs had content_at set that
+                -- day, and 963 the day before — 52% of the sitemap claiming to
+                -- have changed today, every day, which is precisely the pattern
+                -- the comment above set out to avoid. Two of the three tests
+                -- were too sensitive:
+                --
+                --   * work_count moves for almost every popular ship every day,
+                --     because the crawler indexes ~15,000 works a day. Going
+                --     from 52,120 to 52,121 is not a reason to re-fetch a page.
+                --     It has to move MATERIALLY — 1%, or 10 works on a small
+                --     hub, whichever is larger. The floor is what keeps small
+                --     hubs honest: 1% of 90 works is one work, and a hub that
+                --     gains ten has visibly changed.
+                --   * top_ids is the whole list, so a swap at position 140
+                --     counted as a change. Only the leading entries are what a
+                --     reader or a crawler sees the page as being about, so only
+                --     those are compared.
+                --
+                -- The name still counts on its own: that is the page's identity
+                -- and the thing it ranks for.
+                --
                 -- `IS DISTINCT FROM` rather than `<>` so a NULL on either side
                 -- compares as a change rather than as unknown.
                 content_at = CASE
-                    WHEN {table}.top_ids     IS DISTINCT FROM EXCLUDED.top_ids
-                      OR {table}.work_count  IS DISTINCT FROM EXCLUDED.work_count
-                      OR {table}.name        IS DISTINCT FROM EXCLUDED.name
+                    WHEN {table}.name IS DISTINCT FROM EXCLUDED.name
+                      OR {table}.top_ids[1:20]
+                           IS DISTINCT FROM EXCLUDED.top_ids[1:20]
+                      OR abs({table}.work_count - EXCLUDED.work_count)
+                           > greatest(10, {table}.work_count / 100)
                     THEN now()
                     ELSE {table}.content_at
                 END
