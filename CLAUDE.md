@@ -538,6 +538,25 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     claims its window and returns in ~20ms, doing the poll in a background task.
     Distinguish the two by whether the endpoint does outbound network I/O: if it
     does, suspect the timeout before touching nginx.
+- **`users.last_login` is not "last seen", and reading it as one is off by
+  weeks.** It is written when somebody types a password. A remembered session
+  then rolls its cookie forward for ninety days without ever touching it again —
+  that is the whole point of "stay signed in" — so the column answers "when did
+  they last prove they know the password", not "when were they last here".
+  Measured: the owner read 2026-08-15 while using the site that minute, because
+  the last actual login was twenty-four days earlier. The real signal is
+  `max(user_sessions.last_used)`, stamped by every authenticated request (at
+  most every 15 minutes; see the reissue note in api/auth.py). Expired sessions
+  count too — a lapsed session is still evidence of when its owner was last
+  here. The admin People list shows the later of the two, and keeps the login
+  date beside it because it answers the other question.
+- **A collapsed section on a phone is a section that does not exist.** The
+  account list was added to /admin and reported as missing twice, because on a
+  narrow screen it was a heading you had to know to tap. The fix was not more
+  explaining: the count went into the TILE ROW at the top, where the eye already
+  is ("2 Accounts · 1 with no email"), and the section itself now stays open —
+  it is four lines, not the three thousand pixels of coverage bars the
+  collapsing was built for. Collapse what is long, not what is important.
 - **The admin panel's Background jobs section shows EVIDENCE, not heartbeats.**
   Every row is something a loop left behind — a build timestamp, a watermark, a
   log row — rather than something it reported about itself, because a heartbeat

@@ -569,14 +569,39 @@ def list_users(db: Session = Depends(get_db),
                                 AND expires_at > now())                AS sessions,
               (SELECT count(*) FROM follows      WHERE user_id = :id)  AS follows,
               (SELECT count(*) FROM user_data    WHERE user_id = :id)  AS saved,
-              (SELECT count(*) FROM user_hosted  WHERE user_id = :id)  AS imported
+              (SELECT count(*) FROM user_hosted  WHERE user_id = :id)  AS imported,
+              -- When they were last HERE, which is not when they last logged in.
+              --
+              -- `users.last_login` is written when somebody types a password,
+              -- and a remembered session then rolls its cookie forward for
+              -- ninety days without ever touching it again. So the column reads
+              -- as "last seen" and is not: measured on this instance, the owner
+              -- showed 2026-08-15 while using the site that minute, because the
+              -- last time they typed a password was twenty-four days earlier.
+              --
+              -- `user_sessions.last_used` is the real signal — every
+              -- authenticated request stamps it (at most every 15 minutes; see
+              -- the reissue note in api/auth.py). Expired sessions count too:
+              -- a session that has since lapsed is still evidence of when its
+              -- owner was last here.
+              (SELECT max(last_used) FROM user_sessions WHERE user_id = :id)
+                                                                       AS seen
         """), {"id": str(u.id)}).first()
+        # The later of the two, so an account that logged in and never came back
+        # still reports the login, and one that never logs out reports today.
+        seen = counts[4]
+        if u.last_login and (seen is None or u.last_login > seen):
+            seen = u.last_login
         out.append({
             "username": u.username,
             "role": getattr(u.role, "value", str(u.role)),
             "email": u.email,
             "created_at": u.created_at.isoformat() if u.created_at else None,
+            # Kept, and it answers a different question: when did this person
+            # last prove they know the password. Useful when somebody says they
+            # are locked out.
             "last_login": u.last_login.isoformat() if u.last_login else None,
+            "last_seen": seen.isoformat() if seen else None,
             # The one that matters, said as a fact rather than left to be
             # inferred from a blank cell.
             "recoverable": bool(u.email),
