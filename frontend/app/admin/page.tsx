@@ -150,6 +150,49 @@ const CAUSE: Record<string, string> = {
     "FanFiction.net has no kudos of its own; its favourites are stored in this column as the nearest equivalent. The 6.6M-row bulk dump carries no engagement figures at all, so only the works the crawler has since enriched have one.",
 }
 
+// A section of this page that a phone should not have to scroll past.
+//
+// The admin page is 5,924px tall on a 390x664 screen — nine screens — and the
+// bulk of it is field-coverage bars, three sites by seven fields, each one a
+// label, a bar, a percentage and a caption. On a desktop that is a scannable
+// wall; on a phone it is nine screens of numbers you cannot act on, with the
+// things you CAN act on (jobs, queues, run buttons) buried underneath them.
+//
+// So on a narrow screen these open on their heading and nothing else. Desktop
+// is unchanged — the width is there, the density is the point, and collapsing
+// it would be solving a problem that only exists on the phone.
+//
+// `open` starts TRUE and is narrowed on mount rather than the other way round:
+// the first paint should never hide content, in case the effect is slow or
+// JavaScript never arrives. And <details> rather than a hand-rolled toggle,
+// because the browser gives keyboard operation, the disclosure triangle and
+// find-in-page-opens-the-section for free.
+function Group({ title, alwaysOpen = false, children }: {
+  title: string; alwaysOpen?: boolean; children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(true)
+  useEffect(() => {
+    if (alwaysOpen) return
+    try { setOpen(window.matchMedia("(min-width: 700px)").matches) } catch {}
+  }, [alwaysOpen])
+  return (
+    <details className="settings-group admin-group" open={open}
+      onToggle={e => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary className="settings-group__title admin-group__summary">{title}</summary>
+      {children}
+    </details>
+  )
+}
+
+// Who has an account, and — the column that actually matters — whether they
+// could ever get back into it. See /api/admin/users.
+interface Person {
+  username: string; role: string; email: string | null
+  created_at: string | null; last_login: string | null
+  recoverable: boolean
+  sessions: number; follows: number; saved: number; imported: number
+}
+
 export default function AdminPage() {
   const [tab, setTab] = useState<"health" | "takedowns" | "traffic">("health")
   useEffect(() => {
@@ -159,6 +202,7 @@ export default function AdminPage() {
   const { user, loading: authLoading } = useAuth()
   const isAdmin = !!user?.can_manage
   const [data, setData] = useState<Overview | null>(null)
+  const [people, setPeople] = useState<Person[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
@@ -166,6 +210,14 @@ export default function AdminPage() {
   const load = useCallback(async (fresh = false) => {
     setError(null)
     try {
+      // Alongside the overview rather than inside it: this is a handful of rows
+      // from tables with tens of entries, and folding it into the cached
+      // overview would tie a cheap, always-current answer to a 180-second cache
+      // built for queries that scan millions of rows.
+      fetch("/api/admin/users", { credentials: "include" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => setPeople(d?.users ?? null))
+        .catch(() => {})
       const r = await fetch(`/api/admin/overview${fresh ? "?refresh=true" : ""}`,
                             { credentials: "include" })
       if (!r.ok) throw new Error(`Could not load (${r.status}).`)
@@ -251,8 +303,7 @@ export default function AdminPage() {
             </p>
           )}
 
-          <section className="settings-group">
-            <h2 className="settings-group__title">Field coverage</h2>
+          <Group title="Field coverage">
             <p className="settings-group__hint">
               How much of each archive actually carries each field.{" "}
               <strong>A longer bar is better</strong> — it is the share of works
@@ -345,11 +396,69 @@ export default function AdminPage() {
                 )}
               </div>
             ))}
-          </section>
+          </Group>
+
+            {/* People, above the machinery. The panel could tell you the
+                exact share of FanFiction.net rows carrying a genre and could
+                not tell you how many accounts existed, who they were, or
+                whether any of them could recover a password — which is the one
+                question with a person on the other end of it. */}
+            <Group title="People">
+              <p className="settings-group__hint">
+                Every account on this instance. <strong>Recovery</strong> is the
+                column to read: an account with no email address cannot be
+                recovered at all — there is nothing to send a reset to and
+                nothing to check a claim against — and signup did not ask for
+                one until 2026-09-08. Existing accounts are prompted and never
+                forced, so this list is how you know who is still exposed.
+              </p>
+              {people === null ? (
+                <p className="admin-note">Loading…</p>
+              ) : people.length === 0 ? (
+                <p className="admin-note">No accounts yet.</p>
+              ) : (
+                <table className="traffic-table admin-people">
+                  <thead><tr>
+                    <th>Account</th><th>Recovery</th><th>Last seen</th><th>Has</th>
+                  </tr></thead>
+                  <tbody>
+                    {people.map(u => (
+                      <tr key={u.username}>
+                        <td className="traffic-table__q">
+                          {u.username}
+                          <span className="traffic-table__ago">
+                            {u.role}
+                            {u.created_at && <> · joined {u.created_at.slice(0, 10)}</>}
+                          </span>
+                        </td>
+                        <td>
+                          {u.recoverable
+                            ? <span className="admin-people__ok">{u.email}</span>
+                            : <span className="admin-people__risk">no email</span>}
+                        </td>
+                        <td>
+                          {u.last_login ? u.last_login.slice(0, 10) : "never"}
+                          <span className="traffic-table__ago">
+                            {u.sessions} session{u.sessions === 1 ? "" : "s"}
+                          </span>
+                        </td>
+                        <td>
+                          {/* Only what they have, because a row of four zeroes
+                              says nothing and takes as much room as this. */}
+                          {[u.saved && `${u.saved} saved`,
+                            u.follows && `${u.follows} followed`,
+                            u.imported && `${u.imported} imported`]
+                            .filter(Boolean).join(" · ") || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </Group>
 
           {data.jobs && (
-            <section className="settings-group">
-              <h2 className="settings-group__title">Background jobs</h2>
+            <Group title="Background jobs" alwaysOpen>
               <p className="settings-group__hint">
                 A loop that dies is silent — it stops doing its work and nothing
                 anywhere says so. <code>popularity_rank</code> once had no loop
@@ -398,12 +507,11 @@ export default function AdminPage() {
                   </div>
                 </>
               )}
-            </section>
+            </Group>
           )}
 
           {data.storage && (
-            <section className="settings-group">
-              <h2 className="settings-group__title">Storage</h2>
+            <Group title="Storage">
               <p className="settings-group__hint">
                 The database is <strong>{bytes(data.storage.db_bytes)}</strong> on
                 a home box. Which object is biggest is the question worth being
@@ -436,11 +544,10 @@ export default function AdminPage() {
                   )
                 })}
               </div>
-            </section>
+            </Group>
           )}
 
-          <section className="settings-group">
-            <h2 className="settings-group__title">What the crawler does next</h2>
+          <Group title="What the crawler does next">
             <dl className="admin-facts">
               <dt>Mode</dt>
               <dd>
@@ -473,11 +580,10 @@ export default function AdminPage() {
             <p className="settings-group__hint">
               Change any of this in <Link href="/settings">Settings</Link>.
             </p>
-          </section>
+          </Group>
 
           {data.budget.length > 0 && (
-            <section className="settings-group">
-              <h2 className="settings-group__title">Rate limits</h2>
+            <Group title="Rate limits">
               <p className="settings-group__hint">
                 Shared across every process, so a maintenance script and the
                 background worker queue behind each other rather than each
@@ -498,11 +604,10 @@ export default function AdminPage() {
                   </span>
                 </div>
               ))}
-            </section>
+            </Group>
           )}
 
-          <section className="settings-group">
-            <h2 className="settings-group__title">Run a pass now</h2>
+          <Group title="Run a pass now">
             <p className="settings-group__hint">
               Each of these is already on a timer. These buttons are for when you
               have just fixed whatever was blocking one and do not want to wait
@@ -536,7 +641,7 @@ export default function AdminPage() {
                 {busy === "ffnet_meta" ? "Starting…" : "Run"}
               </button>
             </div>
-          </section>
+          </Group>
 
           <div className="settings-actions">
             <button className="btn btn--ghost" onClick={() => load(true)}>Refresh</button>

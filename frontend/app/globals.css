@@ -5431,3 +5431,58 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 @media (max-width: 560px) {
   .email-prompt { font-size: 12px; padding: 8px 12px; }
 }
+
+/* ── The admin page, on a phone ──────────────────────────────────────────────
+   It was 5,924px tall on a 390x664 screen — nine screens — and 3,000px of that
+   was field-coverage bars: three archives by seven fields, each a label, a bar,
+   a percentage and a caption line. Nothing there is wrong on a desktop, where
+   the width makes it scannable and the density is the point. On a phone it is
+   a wall you scroll past to reach the things you can actually act on.
+
+   So the sections collapse (see Group in admin/page.tsx) and the rows that
+   remain are tightened. Desktop keeps every pixel it had. */
+.admin-group__summary {
+  cursor: pointer; list-style: none;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.admin-group__summary::-webkit-details-marker { display: none; }
+/* A disclosure arrow that says which way it goes, on the right where a thumb
+   is, rather than the browser's own triangle on the left. */
+.admin-group__summary::after {
+  content: "▾"; font-size: 12px; color: var(--text-faint);
+  transition: transform 0.15s;
+}
+.admin-group[open] > .admin-group__summary::after { transform: rotate(180deg); }
+.admin-group__summary:hover { color: var(--accent); }
+
+@media (max-width: 700px) {
+  /* A closed section is a heading and nothing else, so it needs to read as a
+     row you can press rather than a title with a gap under it. */
+  .admin-group:not([open]) { padding-bottom: 14px; }
+  .admin-group__summary { padding: 2px 0; }
+
+  /* The coverage rows: same information, two thirds of the height. The caption
+     was a separate block at full size under every bar; at 11px and tighter
+     margins seven fields fit in the space four used to take. */
+  .admin-bar-row { margin: 0 0 4px; }
+  .admin-bar__detail { font-size: 11px; line-height: 1.35; margin-top: 1px; }
+  .admin-site { margin-bottom: 14px; }
+}
+
+@media (max-width: 700px) {
+  /* Every background job carries three lines explaining why it matters. That
+     reasoning is worth having and worth reading once; it is not worth a third
+     of the Background jobs section on every visit from a phone, where the
+     question is "is anything red" and the answer is the row above it. The name,
+     the age and the stale flag stay. */
+  .admin-job__why { display: none; }
+}
+
+/* The People table. Reuses .traffic-table for its type scale, sticky heading
+   and phone wrapping, since it is the same kind of object and there is no
+   reason for two. */
+.admin-people { margin-top: 10px; }
+.admin-people__ok { color: var(--text-dim); word-break: break-all; }
+/* An account nobody can recover is the one fact on this page with a person on
+   the other end of it, so it is the one thing here that is coloured. */
+.admin-people__risk { color: var(--red, #c0522f); font-weight: 500; }

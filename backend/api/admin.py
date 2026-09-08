@@ -536,3 +536,53 @@ def run_job(job: str, limit: int = Form(200),
     from live_fetch.jobs import run_in_background
     run_in_background(lambda: asyncio.to_thread(_go))
     return {"started": job, "limit": min(limit, 2000)}
+
+
+@router.get("/users")
+def list_users(db: Session = Depends(get_db),
+               _admin: User = Depends(require_admin)):
+    """Who has an account here, and whether they could get back into it.
+
+    The operator could always read this with psql, and did — which is the
+    argument for putting it on the page rather than against it. The question it
+    answers is not "who are my users" on a site with two of them; it is "can
+    this person recover their password", and the answer lives in a column
+    (`email`) that nothing in the UI ever showed for anybody but yourself.
+
+    The address is shown, not merely its presence. Without SMTP configured the
+    reset flow works by an operator reading a code out of the pending list and
+    passing it on (see api/password_reset.py), and you cannot pass it on to an
+    address you cannot see. Withholding it from the one person who already has
+    database access would be theatre.
+
+    Counted per account rather than joined in one query: there are two accounts
+    on this instance and the largest of these tables has 29 rows, so the clarity
+    is free. If this ever lists thousands, make it one query with LEFT JOINs
+    before it makes anything else slower.
+    """
+    users = db.query(User).order_by(User.created_at.asc()).all()
+    out = []
+    for u in users:
+        counts = db.execute(sql_text("""
+            SELECT
+              (SELECT count(*) FROM user_sessions WHERE user_id = :id
+                                AND expires_at > now())                AS sessions,
+              (SELECT count(*) FROM follows      WHERE user_id = :id)  AS follows,
+              (SELECT count(*) FROM user_data    WHERE user_id = :id)  AS saved,
+              (SELECT count(*) FROM user_hosted  WHERE user_id = :id)  AS imported
+        """), {"id": str(u.id)}).first()
+        out.append({
+            "username": u.username,
+            "role": getattr(u.role, "value", str(u.role)),
+            "email": u.email,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "last_login": u.last_login.isoformat() if u.last_login else None,
+            # The one that matters, said as a fact rather than left to be
+            # inferred from a blank cell.
+            "recoverable": bool(u.email),
+            "sessions": int(counts[0] or 0),
+            "follows": int(counts[1] or 0),
+            "saved": int(counts[2] or 0),
+            "imported": int(counts[3] or 0),
+        })
+    return {"users": out}

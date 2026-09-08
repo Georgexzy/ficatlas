@@ -62,6 +62,16 @@ function useTable<T extends Record<string, any>>(
   const [key, setKey] = useState<string>(initial)
   const [dir, setDir] = useState<Dir>(initialDir)
   const [text, setText] = useState("")
+  // How many rows to draw. Thirty is right on a desktop, where the table is a
+  // block you scan; on a phone four of these tables at thirty rows each made
+  // the Traffic tab 8,130px — twelve screens — and the last table was somewhere
+  // nobody has ever been. Eight is enough to see the shape and answer "what is
+  // at the top", which is what these are open for; the rest is one tap away and
+  // the count above says how many that is.
+  const [cap, setCap] = useState<number | null>(null)
+  useEffect(() => {
+    try { setCap(window.matchMedia("(min-width: 700px)").matches ? null : 8) } catch {}
+  }, [])
   const view = useMemo(() => {
     const all = rows ?? []
     const q = text.trim().toLowerCase()
@@ -79,7 +89,17 @@ function useTable<T extends Record<string, any>>(
     if (k === key) setDir(d => (d === "asc" ? "desc" : "asc"))
     else { setKey(k); setDir("desc") }
   }
-  return { view, key, dir, sort, text, setText, total: (rows ?? []).length }
+  const capped = cap == null ? view : view.slice(0, cap)
+  return {
+    view: capped, key, dir, sort, text, setText,
+    total: (rows ?? []).length,
+    // What the tools row needs to say "showing 8 of 30" honestly: `matched` is
+    // after the filter and before the cap, so the two numbers describe the same
+    // set the reader is looking at.
+    matched: view.length,
+    hiddenByCap: Math.max(0, view.length - capped.length),
+    showAll: () => setCap(null),
+  }
 }
 
 /** A sortable column heading. A real button, so it is reachable by keyboard and
@@ -162,8 +182,16 @@ function TableTools({ table, columns, rows }: {
         onChange={e => table.setText(e.target.value)}
         placeholder="Filter rows…" aria-label="Filter rows" />
       <span className="traffic-tools__count">
-        {filtered ? `${rows.length} of ${table.total}` : `${table.total} row${table.total === 1 ? "" : "s"}`}
+        {table.hiddenByCap > 0
+          ? `${rows.length} of ${table.matched}`
+          : filtered ? `${rows.length} of ${table.total}`
+          : `${table.total} row${table.total === 1 ? "" : "s"}`}
       </span>
+      {table.hiddenByCap > 0 && (
+        <button type="button" className="traffic-tools__copy" onClick={table.showAll}>
+          Show all {table.matched}
+        </button>
+      )}
       <button type="button" className="traffic-tools__copy" onClick={copy}
         title="Copy these rows, as they are sorted and filtered, as tab-separated text">
         {copied === "yes" ? "Copied" : copied === "no" ? "Cannot copy" : "Copy"}
