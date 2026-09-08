@@ -246,6 +246,60 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     would merge a ship and a friendship onto one URL.
   - `--limit N` on either builder SKIPS the stale sweep. It used to prune
     regardless, so a `--limit 10` trial run deleted the other 5,015 hubs.
+- **Relevance was ranking the ARCHIVE, not the story.** The formula's popularity
+  term was `ln(1 + kudos + hits/20)/13.8` — raw, cross-site — while the browse
+  path had used the site-normalised `popularity` column since it existed. The
+  three archives do not count the same things on the same scale, which is the
+  whole argument `popularity_rank.py` opens with, and the effect measured over
+  the index is:
+
+  | site | p50 | p90 | p99 | max |
+  |---|---:|---:|---:|---:|
+  | fictionalley | 0.2692 | 0.3930 | 0.5473 | 0.8117 |
+  | ao3 | 0.0000 | 0.2883 | 0.5080 | 1.0000 |
+  | ffnet | 0.0000 | **0.0000** | 0.3898 | 0.7958 |
+
+  Nine in ten FF.net works scored exactly zero on a term multiplied by up to
+  3.5. `harry potter` returned 20 AO3 works and nothing else on page one while
+  the same query at 100 results was 69% FF.net.
+  - Now `coalesce(popularity, <old expression>)`. Not a swap: 114,768 AO3 rows
+    have engagement but no percentile yet (popularity_rank runs offline and the
+    crawler has moved on), and scoring those 0 would demote the freshest works.
+    The 18M rows with no engagement at all score 0 either way.
+  - Measured after: `harry potter` ao3=6/ffnet=14, `hogwarts` 11/9, `naruto`
+    15/5. Every canary in the file still passes — `all the young dudes` returns
+    the 322,055-kudos work, `the arithmancer` the 4,461-kudos one, and
+    `harry potter and the methods of rationality` now returns the FF.net
+    original first, which is the right answer and was not what it did before.
+  - `coffee shop au` and `enemies to lovers` stay AO3-only and that is correct:
+    in category mode tags carry weight 1.0 and those are AO3 tag-vocabulary
+    concepts. Which leads to the real remaining gap —
+- **The cross-archive gap is DATA, not ranking, and it is worth not
+  misdiagnosing again.** Coverage by site, measured 2026-09-09:
+
+  | site | rows | tags | summary | relationships | characters |
+  |---|---:|---:|---:|---:|---:|
+  | ao3 | 13.96M | 99.9% | **15.9%** | 62% | 68% |
+  | ffnet | 6.57M | 100% | 100% | **1.3%** | **1.7%** |
+  | fictionalley | 30k | 100% | 99.7% | 18% | 81% |
+
+  - `fic_doc` already includes `summary` for every site, so summaries ARE
+    searched — they simply sit in band D (0.1) where tags sit at 1.0.
+  - A ship query can barely reach FF.net because FF.net files pairings as
+    CHARACTERS and only 1.7% of its rows have any. Bridging ship → "both
+    characters present" was measured and rejected: on `drarry` it adds 442
+    FF.net works unguarded but 25,071 AO3 works that merely contain both
+    characters, and guarding it to rows with no relationship data at all adds
+    just 130. The lever is `ffnet_enrich.py`'s Wayback backfill, one request
+    per story, not a query change.
+- **Exclude filters multiplied on every reload.** `buildParams` combined the
+  sidebar chips and the parsed search bar with a raw spread for the four
+  exclude fields (`[...excTags, ...pq.excTags]`) while every include field used
+  `merge()`. Both sides hold the same value: the URL seeds the chip, the chip
+  is serialised into the bar, the bar is parsed back — so `exclude_tags` grew by
+  one copy per load, for ever. Now merge() for all of them, with a reload loop
+  in `queryParser.test.ts` that fails if it ever regrows.
+
 - **Nearly every request this origin serves is a robot, and the bet on Apple and
   Amazon did not pay.** Measured 2026-09-08 over 9.7h and 102,195 requests:
 
