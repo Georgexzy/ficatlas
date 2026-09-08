@@ -1852,11 +1852,35 @@ def search(          # NOT async — see below
         # English name, so an exact match found a fraction of what exists —
         # "Chinese" returned 740 works of roughly 546,000, because the rest are
         # tagged 中文-普通话 國語.
+        # Equality, not ILIKE, and the difference is four orders of magnitude.
+        #
+        # There is a btree index on `language` and ILIKE cannot use it, so this
+        # filter was a parallel sequential scan of 20.5M rows every time.
+        # Measured on the same row, same box:
+        #
+        #     WHERE language ILIKE 'Welsh'   18,510 ms   (seq scan)
+        #     WHERE language  =    'Welsh'        1 ms   (index scan)
+        #
+        # The index had been sitting at ZERO scans and 258MB — not because it
+        # was the wrong index, but because nothing ever asked it a question it
+        # could answer.
+        #
+        # Equality is safe here because language_variants returns the spellings
+        # AS STORED — 'Chinese', '中文-普通话 國語', '中文-广东话 粵語' — which is
+        # the whole point of the alias table. It is a list of what is in the
+        # column, not a list of things that look like it.
+        #
+        # The fallback, for a language the table does not know, keeps the same
+        # property by trying the obvious casings rather than reaching for a
+        # pattern match: still an index lookup, still bounded, and still finds
+        # the row whether it is stored as "welsh" or "Welsh".
         variants = language_variants(language)
         if variants:
-            lang_match = or_(*[Story.language.ilike(v) for v in variants])
+            lang_match = Story.language.in_(variants)
         else:
-            lang_match = Story.language.ilike(language)
+            v = language.strip()
+            lang_match = Story.language.in_(
+                list({v, v.lower(), v.upper(), v.title(), v.capitalize()}))
         filters.append(_or_unknown(lang_match, Story.language.is_(None)))
     if word_count_min:
         # NULL is unknown metadata, but a literal 0-word story is art/placeholder
