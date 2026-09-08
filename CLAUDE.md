@@ -246,6 +246,48 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     would merge a ship and a friendship onto one URL.
   - `--limit N` on either builder SKIPS the stale sweep. It used to prune
     regardless, so a `--limit 10` trial run deleted the other 5,015 hubs.
+- **Nearly every request this origin serves is a robot, and the bet on Apple and
+  Amazon did not pay.** Measured 2026-09-08 over 9.7h and 102,195 requests:
+
+  | agent | reqs | % origin | into /story/* | per day |
+  |---|---:|---:|---:|---:|
+  | Applebot | 25,394 | 24.8% | 98.6% | ~62,759 |
+  | rotating-UA botnet | 20,221 | 19.8% | 100% | ~50,000 |
+  | Amzn-SearchBot | 3,496 | 3.4% | 95.8% | ~8,640 |
+  | YandexBot | 473 | 0.5% | 1.9% | ~1,169 |
+  | bingbot | 6 | — | 0% | ~15 |
+  | **Googlebot** | **1** | — | 0% | **~2** |
+
+  48,673 of those requests were `/story/*` and 48,612 of them were one of the
+  three crawlers above. There is essentially no human traffic to story pages.
+  - **Applebot and Amzn-SearchBot now get the hubs and not the tail.** Full
+    groups in robots.txt, plus a path-scoped edge rule for Applebot, which has
+    ignored `Crawl-delay: 10` throughout (1.38s between requests, against
+    Amzn-SearchBot's 10.00s to the tenth of a second). This is not a block: the
+    home page, both index pages and all 11,196 hubs stay open. What is refused
+    is a 20.5M-page space that at ~62,000 unique URLs a day takes 300+ years to
+    finish, cannot be edge-cached because every URL is fetched once, and has
+    never returned a reader from either archive.
+  - **The robots.txt trap this walked into and out of:** a crawler obeys the
+    most specific matching group and ONLY that one. The moment
+    `User-agent: Applebot` exists, Applebot stops reading the `*` group — so a
+    group containing just `Disallow: /story/` would have re-opened `/admin`,
+    `/api/`, `/account` and the whole `/*?` search space to it. Every line of
+    the `*` group is repeated in both new groups deliberately. Edit one, edit
+    all three.
+  - **Not fixable by UA or IP: a residential-proxy botnet.** 20,221 story
+    requests from **19,705 unique IPs** — one request per IP, 22 rotating
+    generic Chrome UA strings, 20,032 distinct story URLs. Blocking by address
+    or agent is what it is built to defeat. Left alone for now, because the
+    instruments that would catch it (Bot Fight Mode, a challenge on `/story/*`)
+    also catch Googlebot, and Googlebot is at 2 requests a day already — the
+    cure would cost more than the disease. Revisit only with per-rule verified-
+    bot exemptions.
+  - **`urllib.robotparser` cannot verify any of this.** It implements neither
+    `*` nor `$`, so it reports `/?q=` as ALLOWED for every agent including the
+    long-standing `*` group. It is still worth running for group structure and
+    blank-line discipline; it is not evidence about a wildcard rule.
+
 - **A sitemap index, because honest per-URL timestamps do not fix a file-level
   lie.** Fixing `content_at` (below) stops individual entries claiming a change
   that did not happen. It does not change the fact that ONE hub moving means the
