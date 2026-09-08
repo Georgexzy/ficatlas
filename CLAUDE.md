@@ -246,6 +246,26 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     would merge a ship and a friendship onto one URL.
   - `--limit N` on either builder SKIPS the stale sweep. It used to prune
     regardless, so a `--limit 10` trial run deleted the other 5,015 hubs.
+- **The sitemap told Google half the site changed every day, and the intent to
+  avoid exactly that was already written down.** `content_at` is the sitemap's
+  `<lastmod>` and moved when `top_ids`, `work_count` or `name` changed. The
+  crawler indexes ~15,000 works a day, so `work_count` moves for almost every
+  popular hub daily — measured 2026-09-08, **3,185 of 6,165 ship hubs stamped
+  that day and 963 the day before**. Google is explicit that it uses lastmod
+  only when it is consistently accurate; a file claiming 52% daily churn is the
+  same signal as stamping now() on everything, which the comment there set out
+  to avoid.
+  - Now: the name on its own, the FIRST 20 `top_ids` rather than all of them, or
+    a work_count move of more than 1% (floor 10, so small hubs stay honest).
+    Going from 52,120 works to 52,121 is not a reason to re-fetch a page.
+  - Measured after: a full rebuild of all 6,165 ship hubs bumped 23.
+  - Context for why this matters more than it looks: Googlebot fetched ~40 URLs
+    a day against 11,196 in the sitemap, and the biggest ship hub on the site —
+    `draco-malfoy-harry-potter`, 52,121 works, sitemap position 3, correct
+    title, canonical and description, "drarry" 21 times on the page — was not in
+    the index at all while two hubs at positions 854 and 2,281 were. Nothing is
+    wrong with the page; it has never been fetched. When crawl budget is that
+    scarce, every misleading signal costs pages.
 - **Story pages must keep a server-rendered link back to their hubs.** The client
   body links fandoms and ships to `/?fandoms=…`, which robots.txt blocks, so
   before `_hub_links` in `api/stories.py` every story page was a crawl dead end:
