@@ -5504,3 +5504,27 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 /* An account nobody can recover is the one fact on this page with a person on
    the other end of it, so it is the one thing here that is coloured. */
 .admin-people__risk { color: var(--red, #c0522f); font-weight: 500; }
+
+/* The People table stops being a table on a phone.
+   Four columns in 390px gave every cell a column of its own about forty pixels
+   wide, so "6 min ago · 21 sessions · logged in 2026-08-15" came out as a tower
+   of eleven lines. Below this width each account is a block instead, with the
+   column headings moved inline as labels — same information, read top to bottom
+   the way a phone is held. */
+@media (max-width: 560px) {
+  .admin-people thead { display: none; }
+  .admin-people, .admin-people tbody, .admin-people tr, .admin-people td { display: block; }
+  .admin-people tr {
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+  }
+  .admin-people tr:last-child { border-bottom: none; }
+  .admin-people td { border: none; padding: 2px 0; }
+  /* The label a phone lost when the heading row went. Not on the first cell:
+     the account name is its own heading and "Account: georgexzy" is noise. */
+  .admin-people td[data-label]:not(.traffic-table__q)::before {
+    content: attr(data-label) ": ";
+    color: var(--text-faint); font-size: 11px;
+    font-family: var(--font-mono);
+  }
+  .admin-people .traffic-table__q { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+}

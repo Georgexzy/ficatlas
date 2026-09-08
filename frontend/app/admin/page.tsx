@@ -113,6 +113,30 @@ function ago(hours: number | null): string {
   return `${(hours / 24).toFixed(1)} days ago`
 }
 
+/** The same idea as ago() above, for a timestamp rather than an age in hours.
+ *
+ *  Separate rather than overloaded because the two are read differently: a job's
+ *  age wants one decimal place ("13.4h ago" — is it late), and a person's wants
+ *  the coarsest true answer ("today", "3 days ago"). Precision about when
+ *  somebody last opened the site is not information, it is surveillance.
+ *
+ *  Naive UTC in, local out: `last_used` is a `timestamp without time zone`
+ *  written from utcnow(), so it carries no offset and the Z has to be added or
+ *  a browser west of UTC reads every timestamp as hours in the future.
+ */
+function agoStamp(iso: string | null): string {
+  if (!iso) return "never"
+  const t = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + "Z").getTime()
+  if (!Number.isFinite(t)) return "never"
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000))
+  if (mins < 5) return "just now"
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.round(hrs / 24)
+  return days === 1 ? "yesterday" : `${days} days ago`
+}
+
 function pct(missing: number, total: number): number {
   return total > 0 ? Math.round((missing / total) * 100) : 0
 }
@@ -188,7 +212,7 @@ function Group({ title, alwaysOpen = false, children }: {
 // could ever get back into it. See /api/admin/users.
 interface Person {
   username: string; role: string; email: string | null
-  created_at: string | null; last_login: string | null
+  created_at: string | null; last_login: string | null; last_seen: string | null
   recoverable: boolean
   sessions: number; follows: number; saved: number; imported: number
 }
@@ -292,6 +316,19 @@ export default function AdminPage() {
             <Tile label="Delisted" value={data.delisted} />
             <Tile label="Takedowns waiting" value={data.takedowns_pending}
                   onClick={data.takedowns_pending > 0 ? () => setTab("takedowns") : undefined} />
+            {/* Accounts, in the row you actually look at.
+                This existed only as a collapsed section further down, which on a
+                phone is the same as not existing: you have to already know it is
+                there to go and open it. The sub-line is the part worth seeing
+                without opening anything — an account with no email address
+                cannot be recovered at all. */}
+            {people && (
+              <Tile label={people.length === 1 ? "Account" : "Accounts"}
+                    value={people.length}
+                    sub={people.some(u => !u.recoverable)
+                      ? `${people.filter(u => !u.recoverable).length} with no email`
+                      : "all recoverable"} />
+            )}
           </div>
 
           {data.cached && (data.age_s ?? 0) > 0 && (
@@ -403,7 +440,7 @@ export default function AdminPage() {
                 not tell you how many accounts existed, who they were, or
                 whether any of them could recover a password — which is the one
                 question with a person on the other end of it. */}
-            <Group title="People">
+            <Group title="People" alwaysOpen>
               <p className="settings-group__hint">
                 Every account on this instance. <strong>Recovery</strong> is the
                 column to read: an account with no email address cannot be
@@ -424,25 +461,32 @@ export default function AdminPage() {
                   <tbody>
                     {people.map(u => (
                       <tr key={u.username}>
-                        <td className="traffic-table__q">
+                        <td className="traffic-table__q" data-label="Account">
                           {u.username}
                           <span className="traffic-table__ago">
                             {u.role}
                             {u.created_at && <> · joined {u.created_at.slice(0, 10)}</>}
                           </span>
                         </td>
-                        <td>
+                        <td data-label="Recovery">
                           {u.recoverable
                             ? <span className="admin-people__ok">{u.email}</span>
                             : <span className="admin-people__risk">no email</span>}
                         </td>
-                        <td>
-                          {u.last_login ? u.last_login.slice(0, 10) : "never"}
+                        <td data-label="Last seen">
+                          {/* last_seen, not last_login. The login column is only
+                              written when somebody types a password, and a
+                              remembered session then rolls forward for ninety
+                              days without touching it — so it read as "last
+                              seen" and was not: the owner showed 24 days idle
+                              while using the site that minute. */}
+                          {agoStamp(u.last_seen)}
                           <span className="traffic-table__ago">
                             {u.sessions} session{u.sessions === 1 ? "" : "s"}
+                            {u.last_login && <> · logged in {u.last_login.slice(0, 10)}</>}
                           </span>
                         </td>
-                        <td>
+                        <td data-label="Has">
                           {/* Only what they have, because a row of four zeroes
                               says nothing and takes as much room as this. */}
                           {[u.saved && `${u.saved} saved`,
