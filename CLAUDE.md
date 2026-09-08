@@ -246,6 +246,41 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     would merge a ship and a friendship onto one URL.
   - `--limit N` on either builder SKIPS the stale sweep. It used to prune
     regardless, so a `--limit 10` trial run deleted the other 5,015 hubs.
+- **A sitemap index, because honest per-URL timestamps do not fix a file-level
+  lie.** Fixing `content_at` (below) stops individual entries claiming a change
+  that did not happen. It does not change the fact that ONE hub moving means the
+  single file this site publishes has moved, and a crawler learning that had to
+  re-read all 11,196 URLs to find out which. `/sitemap.xml` is now a
+  `<sitemapindex>` over seven children — `core` (6 static pages + the top 500
+  ships + the top 500 fandoms) and `ships-1..3` / `fandoms-1..3` at 2,000 each.
+  Each child carries its own `<lastmod>`, so churn is contained in one 2,000-URL
+  file instead of touching everything.
+  - **No URL appears in two files** (verified: 11,196 emitted, 11,196 unique).
+    Overlap is legal and crawlers dedupe, but it would make Search Console's
+    per-file coverage double-count the top 500 — and being able to read those
+    numbers per tier is most of the reason to segment at all. Against one file
+    of 11,196 the coverage report was a single number that said nothing.
+  - **The bulk chunks are ordered by SLUG, not by work_count.** This is the
+    subtle one and `lib/sitemapData.test.ts` locks it. work_count moves for most
+    hubs daily, so ordering the chunks by it means a hub near a 2,000 boundary
+    changes rank, crosses it, and changes the contents of TWO files on a day
+    when no page changed — segmenting to isolate churn and then ordering the
+    segments by the churning value gets the daily-rewrite problem straight back,
+    one level up. Core stays in work_count order; that set moves slowly.
+  - Two places had to learn about the children, and both were silent failures:
+    the catch-all `headers()` rule in `next.config.ts` excludes `sitemap.xml` by
+    name, so `/sitemaps/*` would have been served `no-cache` despite having a
+    rule of its own; and `deploy/cloudflare_cache_rule.py` reconciled by
+    DESCRIPTION only, so widening a rule's expression printed "present" and sent
+    nothing. It now compares expressions and PATCHes — the file's own comment
+    says it exists to stop a rule and its origin header drifting apart, so that
+    could not be the one kind of drift it ignored.
+  - What this does NOT do: make Google crawl more. Googlebot is not blocked —
+    its one request in the 9.7h window was a verified 66.249.74.39 taking a 304
+    on robots.txt. Two URLs a day is crawl DEMAND on a young domain, which no
+    file on this server sets. The index makes sure the budget that does arrive
+    is not spent re-reading unchanged URLs.
+
 - **The sitemap told Google half the site changed every day, and the intent to
   avoid exactly that was already written down.** `content_at` is the sitemap's
   `<lastmod>` and moved when `top_ids`, `work_count` or `name` changed. The

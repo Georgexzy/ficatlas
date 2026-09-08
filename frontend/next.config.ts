@@ -176,6 +176,11 @@ const nextConfig: NextConfig = {
       //
       // s-maxage=3600 against a hub rebuild that runs nightly: an hour is far
       // inside the window in which the answer cannot have changed.
+      //
+      // Two sources, because the flat file is now a sitemap INDEX and its
+      // children live under /sitemaps/. Both need this: a crawler that can
+      // reach the index and then gets an uncached, origin-bound fetch for each
+      // of its seven children is worse off than it was with one flat file.
       {
         source: "/sitemap.xml",
         headers: [{
@@ -184,7 +189,19 @@ const nextConfig: NextConfig = {
         }],
       },
       {
-        source: "/((?!_next/static|_next/image|icon-|manifest.json|sitemap.xml|story/|series/|fandom/|ship/|s/).*)",
+        source: "/sitemaps/:file",
+        headers: [{
+          key: "Cache-Control",
+          value: "public, max-age=0, must-revalidate, s-maxage=3600, stale-while-revalidate=604800",
+        }],
+      },
+      // NOTE: `sitemaps/` belongs in the exclusion list below as well as having
+      // a rule above. The negative lookahead is what stops this catch-all from
+      // winning, and a path that is only granted a rule above still gets
+      // no-cache from here — which is how /sitemap.xml behaved before it was
+      // named in both places.
+      {
+        source: "/((?!_next/static|_next/image|icon-|manifest.json|sitemap.xml|sitemaps/|story/|series/|fandom/|ship/|s/).*)",
         headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }],
       },
     ]
