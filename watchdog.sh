@@ -89,17 +89,44 @@ done
 # make the throttling worse. Six is comfortably longer than any legitimate pause
 # and far shorter than the six days this went unnoticed for.
 WORKER_STALE_H="${WATCHDOG_WORKER_STALE_H:-6}"
-worker_age=$(docker compose exec -T db psql -U ficatlas -d ficatlas -tAc \
-  "SELECT coalesce(round(extract(epoch from (now()-max(crawled_at)))/3600)::int, 9999) FROM stories" 2>/dev/null | tr -d ' \r')
-case "$worker_age" in
-  ''|*[!0-9]*) : ;;                      # query failed; the db check below owns that
-  *)
-    if [ "$worker_age" -ge "$WORKER_STALE_H" ]; then
-      problems+=("worker has indexed nothing for ${worker_age}h")
-      restart worker "nothing indexed for ${worker_age}h"
-    fi
-    ;;
-esac
+
+# Ask the cheap question first, and the expensive one only when the answer is
+# bad. This check used to be a bare `max(crawled_at)` over `stories`, and there
+# is no index on that column, so it was a parallel sequential scan of 20.5M rows
+# — measured at 15.7 SECONDS — running every five minutes from cron, for ever.
+# Three minutes out of every fifteen spent scanning the largest table on the
+# box, saturating the disk of a home server that is also trying to answer
+# searches: a cold `tags=Fluff` browse landing in that window took 16s and at
+# one point 503'd at the 20s statement timeout.
+#
+# The watchdog never needed the maximum. It needed to know whether ANYTHING has
+# been crawled recently, and that question stops at the first matching row: 19
+# buffers and instant while the worker is healthy, because a working worker
+# leaves recent rows everywhere. Measured, same database, same moment:
+#
+#     SELECT max(crawled_at) FROM stories                    15,660 ms
+#     SELECT 1 FROM stories WHERE crawled_at > … LIMIT 1          0 ms
+#
+# The full scan is still here, and still exact, for the case where the cheap
+# check comes back empty — which is when the worker really is stale, when the
+# message wants a number in it, and when nothing else is competing for the disk
+# anyway because the worker has stopped.
+fresh=$(docker compose exec -T db psql -U ficatlas -d ficatlas -tAc \
+  "SELECT 1 FROM stories WHERE crawled_at > now() - interval '${WORKER_STALE_H} hours' LIMIT 1" \
+  2>/dev/null | tr -d ' \r')
+if [ -z "$fresh" ]; then
+  worker_age=$(docker compose exec -T db psql -U ficatlas -d ficatlas -tAc \
+    "SELECT coalesce(round(extract(epoch from (now()-max(crawled_at)))/3600)::int, 9999) FROM stories" 2>/dev/null | tr -d ' \r')
+  case "$worker_age" in
+    ''|*[!0-9]*) : ;;                    # query failed; the db check below owns that
+    *)
+      if [ "$worker_age" -ge "$WORKER_STALE_H" ]; then
+        problems+=("worker has indexed nothing for ${worker_age}h")
+        restart worker "nothing indexed for ${worker_age}h"
+      fi
+      ;;
+  esac
+fi
 
 # ── database accepting connections ──────────────────────────────────────────
 if ! docker compose exec -T db pg_isready -U ficatlas -d ficatlas >/dev/null 2>&1; then

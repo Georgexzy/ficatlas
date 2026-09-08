@@ -70,6 +70,29 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **The site was slow every five minutes, and it was the watchdog.** `watchdog.sh`
+  runs from cron every 5 minutes and checked the worker's liveness with
+  `SELECT max(crawled_at) FROM stories`. There is no index on that column, so it
+  was a parallel sequential scan of 20.5M rows — measured at **15.7 seconds** —
+  three minutes out of every fifteen spent scanning the biggest table on a home
+  server that is also trying to answer searches. A cold `tags=Fluff` browse
+  landing in that window took 16s, and one 503'd at the 20s statement timeout.
+  - The watchdog never needed the maximum. It needed to know whether ANYTHING
+    had been crawled recently, and that question stops at the first matching
+    row: 19 buffers and instant while the worker is healthy, because a working
+    worker leaves recent rows everywhere. The exact `max()` is still there for
+    when the cheap check comes back empty — which is when the worker really is
+    stale, when the message wants a number, and when nothing else is competing
+    for the disk anyway.
+  - Measured after: `tags=Fluff` 16.4s -> 2.5s, `tags=Angst` 15.5s -> 1.7s.
+  - **The lesson generalises and this file already had two instances of it.**
+    `api/stats.py` guards its `GROUP BY site` scan with a cache, a threading
+    lock and an advisory lock; `api/admin.py` had a second copy of the same
+    query with none of them and a docstring claiming it came "from the planner
+    rather than a scan" — nine seconds, twice concurrently, caught in
+    `pg_stat_activity` during the same investigation. When a search is
+    inexplicably slow, look for what ELSE is touching `stories`: the answer has
+    twice now been a periodic full scan that nobody thought of as a query.
 - **SQLAlchemy's pool is per PROCESS, so every pool size multiplies by
   `WEB_CONCURRENCY`.** Against a server-wide `max_connections = 100`, the
   configured maxima were: dev backend 4x(16+8)=96, worker 12+6=18, public api
