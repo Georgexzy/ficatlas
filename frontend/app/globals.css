@@ -134,6 +134,11 @@ input, select { font-family: inherit; }
    into a horizontal scrollbar. */
 .page-prose > .header,
 .hub-page > .header,
+/* The library was the one shell left out, so its header sat inside the page's
+   14px gutter with the background showing down both sides while every other
+   page ran edge to edge. Nothing was broken; it just did not match, which on a
+   phone reads as the header having come loose. */
+.library-shell > .header,
 .settings-shell > .header {
   width: auto;
   margin-left: calc(50% - 50vw + var(--sbw, 0px) / 2);
@@ -2917,7 +2922,20 @@ body:has(.reader-shell[data-theme="default"]) {
        go when they genuinely cannot. */
     flex-wrap: wrap;
     row-gap: 8px;
-    max-width: 100%;
+    /* The VIEWPORT, not the container, and the difference is a broken header.
+       This was `max-width: 100%`, which resolves against the containing block —
+       and inside a shell that is exactly what the full-bleed rule above is
+       fighting: it pulls the header out with negative margins so its background
+       reaches the screen edges, and a max-width of 100% capped it back at the
+       shell's content box. Measured on /about and /admin at 390px: the header
+       ran [0..342], stopping 48px short of the right edge with the page
+       background showing through beside it.
+       The guard was never about the container. It was added because the
+       header's contents forced it to 458px inside a 390px viewport and clipped
+       the index button — so express it against the viewport, which is what it
+       always meant, and the full-bleed still reaches the edges. `--sbw` matches
+       the margins above so the two cannot disagree about where the edge is. */
+    max-width: calc(100vw - var(--sbw, 0px));
   }
   .header > *, .header__right, .header__left { min-width: 0; }
   .header__right { gap: 10px; flex-shrink: 1; }

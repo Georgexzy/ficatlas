@@ -449,6 +449,28 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   request per work it will not catch up. Only closed-class words are matched —
   "Sobrevivientes Tercera" is also truncated and deliberately NOT caught, because
   a rule that catches it would hide real titles.
+- **The header's full-bleed and the header's clipping guard are the same
+  argument from opposite ends, and they have now broken each other twice.** The
+  full-bleed rule pulls the header out of its shell with negative margins so its
+  background reaches the screen edges; the mobile guard caps its width so its
+  contents cannot force it past the viewport. The guard was written as
+  `max-width: 100%`, which resolves against the CONTAINING BLOCK — the shell's
+  content box — so on a phone it capped the full-bleed back to the shell and the
+  header ran [0..342] in a 390px viewport, stopping 48px short with the page
+  background showing beside it.
+  - It is `calc(100vw - var(--sbw, 0px))` now, which is what the guard always
+    meant: never wider than the SCREEN. Same `--sbw` as the margins above, so
+    the two cannot disagree about where the edge is.
+  - The guard is not redundant, and do not delete it as the "cause": it was
+    added because the header's contents forced it to 458px inside a 390px
+    viewport and the index button was clipped and unreachable. Verified after
+    this change at 320, 360 and 390px across /library, /, /settings and /about —
+    nothing clipped, because `min-width: 0` and `flex-wrap` are what actually
+    let the row shrink.
+  - `.library-shell` was missing from the full-bleed list, so that one page's
+    header sat inside a 14px gutter while every other ran edge to edge. Added.
+    Any new shell needs adding there too, and the symptom is subtle: nothing
+    breaks, it just stops matching.
 - **One hostname, or sessions break.** The session cookie is host-only by design
   (no `Domain`), so every hostname that serves the app has its own cookie jar.
   `www.ficatlas.com` used to answer 200 with the whole site, which from the
