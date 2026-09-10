@@ -70,9 +70,21 @@ export interface SearchResponse {
    *  as "999+" rather than exact. */
   hidden_explicit?: number
   parsed_tokens?: any[]
+  /** Spelling rescues, sent only when the search matched nothing at all. */
+  suggestions?: Suggestion[]
+}
+
+/** Something the reader might have meant, when they matched nothing. */
+export interface Suggestion {
+  kind: string      // fandom | character | relationship | tag
+  value: string     // the canonical spelling, as the archives write it
+  count: number     // how many works carry it
+  query: string     // a ready-made search that runs it
 }
 
 export interface SearchParams {
+  /** Only works on a community recommendation list. See _ANY_RECS_MARKER. */
+  recs_only?: boolean
   q?: string
   sites?: string             // "ao3,ffnet"
   /** FictionAlley sections, comma-separated. */

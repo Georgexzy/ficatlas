@@ -5717,3 +5717,131 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   margin-left: auto;
   margin-right: auto;
 }
+
+/* ── Did you mean ─────────────────────────────────────────────────────────────
+ *
+ * Sits at the top of the empty-results block, above every other explanation of
+ * why nothing matched, because a misspelling is both the likeliest cause and
+ * the only one the reader can fix in one click.
+ */
+.dym { margin: 0 0 18px; }
+
+.dym__lead {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0 0 8px;
+}
+
+.dym__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+/* A button, not a link: it re-runs the search in place rather than navigating,
+   which is what every other result-changing control on this page does. */
+.dym__pick {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 13px;
+  border: 1px solid var(--border2);
+  border-radius: 999px;
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dym__pick:hover { border-color: var(--accent); background: var(--surface); }
+.dym__pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.dym__value { font-weight: 600; }
+
+/* The kind and the count are the evidence for trusting the suggestion, so they
+   are present but quiet — the name is what the reader is scanning for. */
+.dym__kind {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.dym__count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Why an account ───────────────────────────────────────────────────────────
+ *
+ * Sits under the sign-in form, not beside it: on a phone there is no beside,
+ * and on a desktop a reader who has already decided scrolls past it in one
+ * flick while a reader who has not gets the whole case in reading order.
+ */
+.why-account {
+  max-width: 420px;
+  margin: 26px auto 0;
+  text-align: left;
+}
+
+.why-account__h {
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 14px;
+  text-align: center;
+}
+
+.why-account__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+/* Title and body as a stacked pair rather than a bullet and a run-on sentence:
+   the titles alone are a readable summary for anyone skimming. */
+.why-account__item { display: flex; flex-direction: column; gap: 2px; }
+
+.why-account__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.why-account__body {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+/* The limits, set apart from the promises so it reads as the caveat it is
+   rather than a sixth selling point. */
+.why-account__catch {
+  margin: 16px 0 0;
+  padding-top: 13px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-faint);
+}
+.why-account__catch a { color: var(--text-dim); }
+.why-account__catch a:hover { color: var(--accent); }
+
+/* The signed-out note when there is genuinely something at stake — a real
+   shelf, not an empty one. Warmer than the neutral variant because it is
+   reporting a risk to the reader's own data rather than describing a feature. */
+.library-signin-note--stakes {
+  border-left: 3px solid var(--accent);
+  padding-left: 12px;
+}
+.library-signin-note--stakes strong { color: var(--text); font-weight: 600; }

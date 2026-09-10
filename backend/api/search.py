@@ -762,6 +762,11 @@ THIN_PENALTY = float(os.getenv("SEARCH_THIN_PENALTY", "0.6"))
 # The tag `reddit_recs_import.py` writes on a work the community recommends,
 # and the prefix of the tag carrying how many times. Same shape as
 # `dlp_library` / `dlp_stars:` and read the same way.
+# Any community recommendation list, whatever its source. Written by BOTH
+# reddit_recs_import.py and tropedia_recs_import.py, and it exists because the
+# reddit import covers exactly one fandom: filtering on `reddit_recs` meant
+# "reader-recommended" quietly resolved to "Harry Potter only".
+_ANY_RECS_MARKER = "community_recs"
 _RECS_MARKER = "reddit_recs"
 _RECS_PREFIX = "reddit_refs:"
 
@@ -854,6 +859,103 @@ class ParsedToken(BaseModel):
     raw: str
 
 
+class Suggestion(BaseModel):
+    """One thing the reader might have meant, when they matched nothing."""
+    kind: str            # fandom | character | relationship | tag
+    value: str           # the canonical spelling, as the archives write it
+    count: int           # how many works carry it — the reason to trust it
+    query: str           # a ready-made search that runs it
+
+
+# How alike a facet has to be before it is worth offering. Trigram similarity,
+# so 1.0 is identical. Below about 0.35 the matches stop being spellings of the
+# same thing and start being coincidences of letters.
+_DYM_MIN_SIM = 0.35
+# And how many works must carry it. This is the guard that stops the feature
+# recommending a TYPO: `hermoine granger` trigram-matches the misspelled facet
+# `Hermoine Granger` at 1.000, and 55 works really do spell it that way, so
+# similarity alone confidently suggests the mistake back to the reader. Ranking
+# by similarity * ln(count) with a floor of 200 returns `Hermione Granger`
+# (102,007 works) instead. Same fix rescued `steve rogets`, which matched a
+# 15-work `Steve Roger` before the floor and `Steve Rogers` (144,593) after.
+_DYM_MIN_COUNT = 200
+_DYM_LIMIT = 3
+
+# The operator each kind of facet is searched with, so a suggestion is a working
+# query and not just a word to retype.
+_DYM_OPERATOR = {
+    "fandom": "fandom", "character": "char",
+    "relationship": "ship", "tag": "tag",
+}
+
+
+def _did_you_mean(db, q: str) -> list[Suggestion]:
+    """What the reader might have meant, for a search that found nothing.
+
+    Only ever called on an empty result set, which is 1.1% of searches — so this
+    is allowed to cost ~200ms, and does. It is a trigram lookup against
+    `facets`, served by ix_facets_kind_value_trgm.
+
+    Matched against the WHOLE query rather than word by word. The facet table
+    holds values ("Harry Potter", "Enemies to Lovers"), not words, so correcting
+    "wandcrafter" on its own against it returns noise — measured, the best match
+    was the tag `After wano`. Against the whole string the same query resolves
+    to `Harry Potter`, because trigrams do not care that one word of three is
+    unrecognisable.
+
+    Suggests rather than rewrites. The correction is a FACET, not a restatement
+    of the query: "hsrry potter wandcrafter" corrects to `Harry Potter`, and
+    silently searching that would drop the word the reader cared most about.
+    Offering it as a choice keeps the reader's intent theirs.
+
+    A single `%` for the trigram operator, not `%%`. SQLAlchemy escapes it when
+    it compiles `:q` down to psycopg2's paramstyle, so doubling it here sends a
+    literal `%%` to Postgres and raises `operator does not exist: text %% unknown`
+    — which the except below then swallows, leaving a feature that returns no
+    suggestions and reports no error.
+    """
+    q = (q or "").strip()
+    if len(q) < 4:
+        return []
+    try:
+        rows = db.execute(sql_text("""
+            SELECT kind, value, count, similarity(value, :q) AS sim
+              FROM facets
+             WHERE value % :q
+               AND count >= :floor
+               AND similarity(value, :q) >= :minsim
+             ORDER BY similarity(value, :q) * ln(count) DESC
+             LIMIT :lim
+        """), {"q": q, "floor": _DYM_MIN_COUNT,
+               "minsim": _DYM_MIN_SIM, "lim": _DYM_LIMIT * 3}).fetchall()
+    except Exception:
+        # A suggestion is a nicety on a page that already says "no results".
+        # It must never be the reason the response fails.
+        log.debug("did-you-mean lookup failed", exc_info=True)
+        return []
+
+    # One row per NAME. The same string is very often both a fandom and a
+    # character — "Harry Potter" is 686,558 works of one and 152,287 of the
+    # other — and offering the reader the identical word twice, differing only
+    # by a label they did not ask about, spends two of three slots saying one
+    # thing. The rows arrive best-first, so the first spelling of a name wins
+    # and keeps its kind; three times the limit is fetched to leave room for the
+    # ones collapsed away.
+    out: list[Suggestion] = []
+    seen: set[str] = set()
+    for kind, value, count, _sim in rows:
+        op = _DYM_OPERATOR.get(kind)
+        key = value.casefold()
+        if not op or key in seen:
+            continue
+        seen.add(key)
+        out.append(Suggestion(kind=kind, value=value, count=count,
+                              query=f'{op}:"{value}"'))
+        if len(out) >= _DYM_LIMIT:
+            break
+    return out
+
+
 class SearchResponse(BaseModel):
     total: int
     count_is_capped: bool = False  # True when total hit the count ceiling (show "5000+")
@@ -879,6 +981,9 @@ class SearchResponse(BaseModel):
     # rather than quoting a number this never measured.
     hidden_explicit: int = 0
     parsed_tokens: List[ParsedToken] = []  # for UI filter highlighting
+    # Spelling rescues, populated only when the search found nothing at all.
+    # See _did_you_mean.
+    suggestions: List[Suggestion] = []
 
 
 # (column name, descending). Stored as names rather than bound expressions so the
@@ -1220,6 +1325,15 @@ def search(          # NOT async — see below
                     "(2012-2023). A recommendation count, which is a different "
                     "measurement from kudos: it counts people pressing a work "
                     "on other people rather than clicking a button on it.",
+    ),
+    recs_only:             bool          = Query(
+        False,
+        description="Only works that appear on a community recommendation "
+                    "list — r/HPFanfiction's most-linked sheet, or a fandom's "
+                    "Fanfic Recs page. A recommendation is a different "
+                    "measurement from kudos: it counts a person pressing a work "
+                    "on another person. Use min_recs instead when the NUMBER of "
+                    "mentions matters; only the reddit source has one.",
     ),
     search_within:         Optional[str] = Query(None),
     include_broken_titles: bool          = Query(
@@ -1584,6 +1698,14 @@ def search(          # NOT async — see below
                     func.websearch_to_tsquery(_REGCONFIG, trope_leftover)))
             branches.append(trope_pred)
         filters.append(or_(*branches) if len(branches) > 1 else text_pred)
+
+    if recs_only:
+        # Containment against the GIN index on tags, NOT an ILIKE over
+        # fic_arr(tags). The tag-filter path is a trigram substring match, and
+        # for a marker carried by ~1,000 rows out of 20.5M it times out — the
+        # reader is told the index is busy rather than shown a thousand of the
+        # best-regarded works in it. Measured: 503 against 0.2s.
+        filters.append(Story.tags.op("@>")(cast([_ANY_RECS_MARKER], PG_ARRAY(Text))))
 
     if min_recs is not None:
         # Same shape as dlp_min_rating below, and the same reason it is safe:
@@ -2932,6 +3054,14 @@ def search(          # NOT async — see below
     # page 1 only; pagination through `total` is driven purely by the indexed count.
     merged = live_cards + indexed_cards
 
+    # Only on a genuinely empty result set, and only when the reader typed
+    # something. A search narrowed to nothing by FILTERS is not a spelling
+    # problem, and suggesting a fandom to someone who ticked six checkboxes
+    # would be answering a question they did not ask.
+    _suggestions: list[Suggestion] = []
+    if total == 0 and not merged and (q or "").strip():
+        _suggestions = _did_you_mean(db, q)
+
     _response = SearchResponse(
         total=total,                          # stable across pages — indexed count only
         count_is_capped=count_is_capped,
@@ -2943,6 +3073,7 @@ def search(          # NOT async — see below
         live_count=len(live_cards),
         hidden_explicit=hidden_explicit,
         parsed_tokens=[ParsedToken(**t) for t in parsed_tokens],
+        suggestions=_suggestions,
     )
     # What it cost, and therefore what it has earned. Computed before the cache
     # writes below so the in-process copy, the shared row and the edge all agree.

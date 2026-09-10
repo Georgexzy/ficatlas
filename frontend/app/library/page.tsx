@@ -884,13 +884,42 @@ export default function LibraryPage() {
           are different situations and the same sentence cannot serve both.
           Telling a reader to sign in when they already are is the sort of copy
           that makes an app feel broken. */}
-      {!authLoading && !user && (
+      {/* Counted, not generalised.
+          This said "sign in to keep bookmarks and reading progress across
+          devices", which is true, abstract, and easy to read past. A reader who
+          has built a shelf of forty works has something specific to lose, and
+          the honest version of the pitch is to say what and how much: the data
+          really is in localStorage only until there is an account, so clearing
+          site data or opening a different browser really does end it.
+
+          Only shown once there IS something at stake. Telling somebody with an
+          empty shelf that their nothing is at risk is nagging, and it spends
+          the one prompt this page gets on the moment it means least. */}
+      {!authLoading && !user && (bookmarks.length > 0 || Object.keys(progress).length > 0) ? (
+        <p className="library-signin-note library-signin-note--stakes">
+          Your{" "}
+          {bookmarks.length > 0 && (
+            <strong>{bookmarks.length} bookmark{bookmarks.length === 1 ? "" : "s"}</strong>
+          )}
+          {bookmarks.length > 0 && Object.keys(progress).length > 0 && " and "}
+          {Object.keys(progress).length > 0 && (
+            <strong>
+              {Object.keys(progress).length} story{Object.keys(progress).length === 1 ? "" : " stories"} in progress
+            </strong>
+          )}
+          {" "}live only in this browser.{" "}
+          <Link href="/login" className="library-signin-note__link">Make an account</Link>{" "}
+          to keep them if you clear your history or read on another device. It
+          takes a username and a password — no email needed.
+        </p>
+      ) : !authLoading && !user ? (
         <p className="library-signin-note">
           Browsing and offline reading work as normal.{" "}
           <Link href="/login" className="library-signin-note__link">Sign in</Link>{" "}
-          to keep bookmarks and reading progress across devices.
+          to keep bookmarks and reading progress across devices, and to follow
+          unfinished stories for updates.
         </p>
-      )}
+      ) : null}
       {!authLoading && user && !user.can_import && (
         <p className="library-signin-note">
           Your bookmarks, reading progress and offline copies are yours and sync

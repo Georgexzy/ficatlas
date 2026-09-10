@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { useAuth } from "@/lib/auth"
+import WhyAccount from "../WhyAccount"
 
 function LoginPageInner() {
   const router = useRouter()
@@ -158,10 +159,16 @@ function LoginPageInner() {
                 ? "Stays signed in for 90 days on this device."
                 : "You will be signed out when this browser closes.")
             : "Your username can be anything 3–30 chars. No email needed."}
-          {" "}Your bookmarks, reading progress, recent searches and reader
-          settings sync automatically and merge across devices.
         </p>
       </form>
+
+      {/* The case for bothering, on the screen where it is being weighed.
+          This used to be one clause at the foot of the form — "your bookmarks,
+          reading progress, recent searches and reader settings sync" — which
+          is true, is the smallest of the reasons, and was easy to read past.
+          Following WIPs across three archives is the one thing here that no
+          archive can do for a reader, and it was not mentioned at all. */}
+      <WhyAccount />
     </div>
   )
 }
