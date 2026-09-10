@@ -1047,6 +1047,16 @@ function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q
   )
 }
 
+// What each kind of suggestion IS, in the reader's words rather than the
+// column's. "relationship" is what the database calls it; "pairing" is what the
+// person searching for one calls it.
+const DYM_KIND_LABEL: Record<string, string> = {
+  fandom: "fandom",
+  character: "character",
+  relationship: "pairing",
+  tag: "tag",
+}
+
 // The browse-able list of the biggest hubs in the index, which gives the
 // landing page somewhere to go beyond the search box.
 function TopHubs({ onPick }: { onPick: (q: string) => void }) {
@@ -1296,6 +1306,13 @@ function SearchPageInner() {
   const [excChars,   setExcChars]   = useState(csv(get("exclude_characters")))
   const [excShips,   setExcShips]   = useState(csv(get("exclude_relationships")))
   const [excTags,    setExcTags]    = useState(csv(get("exclude_tags")))
+  // Reader-recommended only. Sends `recs_only`, NOT `tags=community_recs`, and
+  // the difference is the whole reason this is its own state rather than
+  // another curated-tag checkbox: a tag filter goes through the trigram ILIKE
+  // over fic_arr(tags) and, for a marker carried by ~1,000 rows out of 20.5M,
+  // that times out and the reader is told the index is busy. `recs_only`
+  // narrows through GIN containment first. Measured: 503 against 0.2s.
+  const [recsOnly,   setRecsOnly]   = useState(get("recs_only") === "true")
 
   // More options
   const [status,       setStatus]       = useState<string[]>(csv(get("status")))
@@ -1966,6 +1983,11 @@ function SearchPageInner() {
       status:                status.length ? joinCsv(status) : (pq.status ?? undefined),
       language:              language || pq.language || undefined,
       dlp_min_rating:        dlpMinRating ?? undefined,
+      // recs_only, not min_recs. min_recs is reddit-specific and needs a
+      // numeric count, which only that one source has; this asks the question
+      // the checkbox actually asks — "has any community recommended this" —
+      // across every source. See _ANY_RECS_MARKER in backend/api/search.py.
+      recs_only:             recsOnly || undefined,
       word_count_min:        wordMin ?? pq.wordCountMin ?? undefined,
       word_count_max:        wordMax ?? pq.wordCountMax ?? undefined,
       updated_after:         updatedAfter || pq.updatedAfter || undefined,
@@ -1989,7 +2011,7 @@ function SearchPageInner() {
       // was created with: clicking a section updated the state, re-rendered the
       // pill as selected, and sent a search that still said nothing about it.
       // The control looked like it worked and changed no results.
-      dlpMinRating, sections])
+      dlpMinRating, sections, recsOnly])
 
   // Everything a search depends on, in one string. Cheap to compare and it
   // cannot drift from the real dependency list the way a hand-maintained
@@ -1998,7 +2020,7 @@ function SearchPageInner() {
     sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
     incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
     language, wordMin, wordMax, updatedAfter, explicit, includeUnknown,
-    authorFilter, matchMode, sort, dlpMinRating, sections, inSeries,
+    authorFilter, matchMode, sort, dlpMinRating, sections, inSeries, recsOnly,
   ])
   const filtersDirty = appliedSig !== null && appliedSig !== filterSig
 
@@ -2460,7 +2482,8 @@ function SearchPageInner() {
 
           <FilterSection label="Curation" count={
             (incTags.includes("dlp_library") ? 1 : 0) +
-            (incTags.includes("hpffa_archive") ? 1 : 0)
+            (incTags.includes("hpffa_archive") ? 1 : 0) +
+            (recsOnly ? 1 : 0)
           }>
             <label className="curated-check">
               <input type="checkbox"
@@ -2477,6 +2500,23 @@ function SearchPageInner() {
                   ? [...t, "hpffa_archive"]
                   : t.filter(x => x !== "hpffa_archive"))} />
               <span>HPFFA archive only</span>
+            </label>
+            {/* Works readers actually pressed on each other.
+                `reddit_recs` marks the 958 works linked in r/HPFanfiction
+                recommendation threads between 2012 and 2023 — 655 of them on
+                FanFiction.net, which is exactly where engagement data is
+                thinnest and where "most popular" could never surface them.
+                Being RECOMMENDED and being READ are different measurements and
+                this index could only ever make the second one.
+
+                The backend has accepted `min_recs` since the import landed and
+                nothing in the UI ever sent it, so the whole filter was
+                unreachable. See _RECS_MARKER in backend/api/search.py. */}
+            <label className="curated-check">
+              <input type="checkbox"
+                checked={recsOnly}
+                onChange={e => setRecsOnly(e.target.checked)} />
+              <span>Reader-recommended only</span>
             </label>
           </FilterSection>
 
@@ -3051,6 +3091,35 @@ function SearchPageInner() {
                 {shown.results.length === 0 ? (
                   <div className="no-results">
                     <p className="no-results__title">No stories matched</p>
+                    {/* Spelling first, before any of the explanations below.
+                        The archives are full of names nobody spells right the
+                        first time, and a reader hunting a half-remembered work
+                        is exactly the person typing them from memory: a real
+                        visitor searched "hsrry potter wandcrafter" and this
+                        page told them nothing, when `Harry Potter` was one
+                        transposed letter away and holds 686,558 works.
+
+                        Offered, not applied. The correction is a FACET rather
+                        than a rewrite of the sentence they typed, so searching
+                        it for them would quietly drop the part they cared most
+                        about — the wandcrafter, not the Potter. */}
+                    {shown.suggestions && shown.suggestions.length > 0 && (
+                      <div className="dym">
+                        <p className="dym__lead">Did you mean:</p>
+                        <ul className="dym__list">
+                          {shown.suggestions.map(sg => (
+                            <li key={sg.kind + sg.value}>
+                              <button className="dym__pick"
+                                onClick={() => { setQuery(sg.query); doSearch(true, undefined, sg.query) }}>
+                                <span className="dym__value">{sg.value}</span>
+                                <span className="dym__kind">{DYM_KIND_LABEL[sg.kind] ?? sg.kind}</span>
+                                <span className="dym__count">{fmtCount(sg.count)}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                     {/* Ship/character/tag data is missing for most bulk-imported
                         stories, so a strict filter on those is the likeliest reason
                         for an empty page. Say so, and offer the fix directly. */}

@@ -246,6 +246,62 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     would merge a ship and a friendship onto one URL.
   - `--limit N` on either builder SKIPS the stale sweep. It used to prune
     regardless, so a `--limit 10` trial run deleted the other 5,015 hubs.
+- **"Reader-recommended" quietly meant "Harry Potter".** `reddit_recs_import.py`
+  is right that recommendation is a measurement kudos cannot make, and it
+  covered exactly one fandom — 958 works, all HP, out of 20.5M.
+  `tropedia_recs_import.py` adds ~900 fandoms from Tropedia's `Fanfic Recs`
+  category (a Fandom-hosted fork of TVTropes' content, CC-BY-SA, with a
+  documented MediaWiki API). Measured: 907 pages, ~9.4 archive links each, 89%
+  of them matching a work already indexed.
+  - **tvtropes.org itself is unusable from a server**: even `/robots.txt`
+    returns a Cloudflare "Just a moment…" interstitial. Tropedia carries the
+    same content and offers an API, which is the difference between reading a
+    site as it offers to be read and going round its front door.
+  - Only the LINKS are taken, never the prose saying why a work is recommended.
+    That a fanfic appears on a list is a fact; the write-up is the wiki's
+    copyrighted contribution.
+  - **New generic marker `community_recs`**, written by both importers and
+    backfilled onto the existing 958, because that is what the UI filters on.
+    `reddit_recs` / `reddit_refs:N` stay — the numeric count is real there and a
+    wiki rec list is a yes, not a tally.
+  - **The importer commits in BATCHES of 25 pages, and this was learned the hard
+    way**: the first full run read 50 of 907 pages, was interrupted, and wrote
+    nothing at all, because the single commit came after the loop. A ~900-page
+    network read will be interrupted; it should cost the pages not yet read.
+- **The recs filter must use `recs_only`, never `tags=community_recs`.** A tag
+  filter goes through the trigram ILIKE over `fic_arr(tags)`; for a marker
+  carried by ~1,000 rows out of 20.5M that times out and the reader is told the
+  index is busy. `recs_only` narrows through GIN containment first. Measured:
+  **503 against 0.2s.** The same trap sits behind `min_recs`, which is why that
+  one already required the marker via `@>` before its per-row unnest.
+- **Zero-result searches now suggest a spelling.** A real visitor searched
+  `hsrry potter wandcrafter` and got nothing, with `Harry Potter` — 686,558
+  works — one transposed letter away. `_did_you_mean` trigram-matches the WHOLE
+  query against `facets` (word-by-word returns noise: "wandcrafter" alone best-
+  matched the tag `After wano`).
+  - **Ranked by `similarity * ln(count)` with a floor of 200, and the floor is
+    the feature.** Similarity alone suggests the reader's own mistake back at
+    them: `hermoine granger` matches the misspelled facet `Hermoine Granger` at
+    1.000 and 55 works really do spell it that way. With the floor it returns
+    `Hermione Granger` (102,007). Same rescue for `steve rogets`, which matched
+    a 15-work `Steve Roger` before and `Steve Rogers` (144,593) after.
+  - Suggests, never rewrites: the correction is a FACET, so searching it for the
+    reader would drop the word they cared most about.
+  - **Write `%`, not `%%`.** SQLAlchemy escapes it when compiling `:q` to
+    psycopg2's paramstyle, so `%%` reaches Postgres literally and raises
+    `operator does not exist: text %% unknown` — which the except swallows,
+    leaving a feature that silently returns nothing and reports no error.
+- **Two accounts existed, and the reasons to make one were stated only behind
+  the decision.** `WhyAccount.tsx` is the case, on the login page: following
+  WIPs across three archives (the one thing no archive can do), a shelf that
+  survives a cleared browser, progress that moves between devices. Every line is
+  a thing the code does — if a feature goes, the line goes, because this is the
+  screen where a reader decides whether the site is honest. The library's
+  signed-out note now COUNTS what is at stake ("your 12 bookmarks and 3 stories
+  in progress live only in this browser") and appears only when there is
+  something to lose; telling someone with an empty shelf that their nothing is
+  at risk is nagging.
+
 - **The offline story shell was the one precache entry that could never
   succeed.** `gen-sw-precache.js` asks for `/story/offline-shell` and
   `/story/offline-shell/chapter/1`. The chapter route never blocks on a lookup
