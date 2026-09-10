@@ -68,7 +68,27 @@ type StoryLookup =
   | { kind: "missing" }
   | { kind: "unavailable" }
 
+// The id the service worker precaches as a story-page shell.
+//
+// gen-sw-precache.js asks for `/story/offline-shell` and
+// `/story/offline-shell/chapter/1` so that an offline reader gets a real page
+// frame rather than the browser's error. The chapter route never blocks on a
+// lookup, so it answered 200 and was cached; THIS route asks the API, gets a
+// confirmed 404 for an id that is not a work, and called notFound() — so the
+// story shell was the one precache entry that could never succeed. Measured
+// over 24h of origin logs: 176 requests, every one a 404.
+//
+// It was not fatal, which is why it went unnoticed: `offline-shell` is not in
+// the worker's ESSENTIAL list, so install counted the miss and carried on. The
+// cost was narrower and quieter than a broken install — offline CHAPTER reading
+// worked and offline STORY pages did not, which is the half a reader hits first
+// when they open the app on a train.
+const OFFLINE_SHELL_ID = "offline-shell"
+
 async function lookupStory(id: string): Promise<StoryLookup> {
+  // Reserved, and answered without a round trip: there is no work behind it and
+  // asking the API can only ever produce the 404 this exists to avoid.
+  if (id === OFFLINE_SHELL_ID) return { kind: "unavailable" }
   try {
     const r = await fetch(`${INTERNAL_API}/api/stories/${id}`, {
       next: { revalidate },
@@ -118,7 +138,12 @@ export async function generateMetadata(
   // no work in it; `follow` keeps the hub links on the page worth something.
   if (!story?.title) {
     return {
-      alternates: { canonical: `/story/${id}` },
+      // The offline shell is not a URL anyone should land on, so it gets no
+      // canonical of its own — unlike a transient lookup failure, which is a
+      // real work whose page happened to fail and must still name itself.
+      ...(id === OFFLINE_SHELL_ID
+        ? { title: "Offline" }
+        : { alternates: { canonical: `/story/${id}` } }),
       robots: { index: false, follow: true },
     }
   }

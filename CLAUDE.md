@@ -246,6 +246,33 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     would merge a ship and a friendship onto one URL.
   - `--limit N` on either builder SKIPS the stale sweep. It used to prune
     regardless, so a `--limit 10` trial run deleted the other 5,015 hubs.
+- **The offline story shell was the one precache entry that could never
+  succeed.** `gen-sw-precache.js` asks for `/story/offline-shell` and
+  `/story/offline-shell/chapter/1`. The chapter route never blocks on a lookup
+  so it answered 200 and cached; the story route asked the API, got a confirmed
+  404 for an id that is not a work, and called `notFound()`. Measured over 24h
+  of origin logs: **176 requests, every one a 404.**
+  - Not fatal, which is why it survived: `offline-shell` is not in the worker's
+    ESSENTIAL list, so install counted the miss and carried on. The cost was
+    quieter than a broken install — offline CHAPTER reading worked and offline
+    STORY pages did not, which is the half a reader hits first.
+  - `OFFLINE_SHELL_ID` is now answered inside `lookupStory` without a round
+    trip, and carries `noindex` with no canonical of its own. A genuinely
+    missing uuid still 404s — verified, because the fix is one `if` away from
+    turning every dead story link into a soft 404.
+- **A managed challenge cannot be verified with headless automation, and trying
+  to is how you talk yourself into reverting a working rule.** After the
+  `/story/` botnet challenge went live, Playwright sat on "Just a moment…" for
+  8s on both a direct arrival and an in-site navigation. That looked like every
+  story page being dark for every reader. It was not: managed challenges are
+  *designed* not to pass headless Chromium, so that test cannot distinguish
+  "botnet blocked" from "everyone blocked". The origin log could, and did —
+  within the hour, **53 × 200 to story pages from Chrome 139/152 and Firefox
+  130, across 44 distinct IPs with several making 2-7 requests each**. That is
+  session-shaped human traffic; the botnet's signature was one request per IP
+  across 14 rotating Chrome 99-136 strings, and it is gone. Story-page load at
+  the origin fell ~91%. Check the origin, not the automation.
+
 - **Relevance was ranking the ARCHIVE, not the story.** The formula's popularity
   term was `ln(1 + kudos + hits/20)/13.8` — raw, cross-site — while the browse
   path had used the site-normalised `popularity` column since it existed. The
