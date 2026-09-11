@@ -455,6 +455,73 @@ def _labels(db, paths: list[str]) -> dict[str, str]:
     return out
 
 
+@router.get("/routes")
+def routes(days: int = Query(30, ge=1, le=365),
+           db: Session = Depends(get_db),
+           _owner=Depends(require_owner)):
+    """How readers actually reach a story page: by searching, or through a hub.
+
+    The site has two front doors and they are built for different people. The
+    search box is the product; the 11,196 hub pages are the SEO surface, and
+    every page Google currently sends a reader to is one of them. Which of the
+    two is doing the work is the question the rest of this panel could not
+    answer — it could say a hub was viewed and that a story was viewed, and
+    nothing about one leading to the other.
+
+    Answered by the IMMEDIATELY PRECEDING event per visitor, not by what a
+    session contains. Session-level counting cannot distinguish "searched, then
+    browsed a hub, then opened a story" from the reverse, and on this data most
+    people who open a story have done both.
+
+    Thirty minutes is the cutoff between one visit and the next. A story page
+    opened an hour after a hub view is a new arrival, not a click, and treating
+    it as one would credit the hub with traffic it did not send.
+    """
+    cut = _window(days)
+    rows = db.execute(text("""
+        WITH ev AS (
+            SELECT visitor, at, kind, path,
+                   lag(path) OVER (PARTITION BY visitor ORDER BY at) AS prev_path,
+                   lag(kind) OVER (PARTITION BY visitor ORDER BY at) AS prev_kind,
+                   lag(at)   OVER (PARTITION BY visitor ORDER BY at) AS prev_at
+              FROM visit_events
+             WHERE NOT bot AND at >= :cut AND kind IN ('page', 'search')
+        )
+        SELECT CASE
+                 WHEN prev_kind = 'search'                  THEN 'search'
+                 WHEN prev_path LIKE '/ship/%'
+                   OR prev_path LIKE '/fandom/%'            THEN 'hub'
+                 WHEN prev_path IN ('/ships', '/fandoms')   THEN 'hub_index'
+                 WHEN prev_path LIKE '/story/%'
+                   OR prev_path LIKE '/series/%'            THEN 'another_story'
+                 WHEN prev_path = '/'                       THEN 'home'
+                 WHEN prev_path IS NULL                     THEN 'entry'
+                 ELSE 'other' END                           AS source,
+               count(*)                  AS opens,
+               count(DISTINCT visitor)   AS people
+          FROM ev
+         WHERE kind = 'page' AND path LIKE '/story/%'
+           AND (prev_at IS NULL OR at - prev_at < interval '30 minutes')
+         GROUP BY 1 ORDER BY 2 DESC
+    """), {"cut": cut}).fetchall()
+
+    # Story opens are the numerator; this is the denominator each route deserves
+    # to be judged against. A hub that was viewed 123 times and sent 33 readers
+    # into a story is doing better than a bare count can show.
+    seen = db.execute(text("""
+        SELECT count(*) FILTER (WHERE kind='page'
+                                 AND (path LIKE '/ship/%' OR path LIKE '/fandom/%')),
+               count(*) FILTER (WHERE kind='search')
+          FROM visit_events WHERE NOT bot AND at >= :cut
+    """), {"cut": cut}).first()
+
+    return {
+        "sources": [{"source": r[0], "opens": r[1], "people": r[2]} for r in rows],
+        "hub_views": seen[0] or 0,
+        "searches": seen[1] or 0,
+    }
+
+
 @router.get("/pages")
 def pages(days: int = Query(30, ge=1, le=365),
           limit: int = Query(30, ge=1, le=200),

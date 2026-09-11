@@ -511,3 +511,49 @@ def test_the_exclusion_reverses_itself_once_a_page_is_loaded(db):
     d = summary(days=2, include_bots=False, db=db, _owner=None)
     assert d["totals"]["searches"] == 1
     assert d["totals"]["script_searches"] == 0
+
+
+def test_routes_credits_the_page_a_story_view_actually_followed(db):
+    """Hub vs search, decided by the immediately preceding event.
+
+    Session-level counting cannot tell "searched, then browsed a hub, then
+    opened a story" from the reverse, and most people who open a story here
+    have done both — so the attribution has to be per view.
+    """
+    from sqlalchemy import text as t
+    from api.traffic import routes
+    db.execute(t("DELETE FROM visit_events"))
+    # One reader arrives via a hub, another via a search. Ordered inserts with
+    # increasing timestamps so lag() has something to order by.
+    seq = [
+        ("hubby", "page",   "/ship/draco-malfoy-harry-potter"),
+        ("hubby", "page",   "/story/a"),
+        ("seeky", "search", "/api/search"),
+        ("seeky", "page",   "/story/b"),
+    ]
+    for i, (v, k, path) in enumerate(seq):
+        db.execute(t("""
+            INSERT INTO visit_events (at, visitor, kind, path, bot)
+            VALUES (now() - make_interval(secs => :off), :v, :k, :p, false)
+        """), {"off": 100 - i, "v": v.ljust(16)[:16], "k": k, "p": path})
+    db.commit()
+
+    got = {r["source"]: r["opens"] for r in routes(days=2, db=db, _owner=None)["sources"]}
+    assert got.get("hub") == 1
+    assert got.get("search") == 1
+
+
+def test_a_story_opened_much_later_is_a_new_visit_not_a_click(db):
+    """Thirty minutes. Crediting a hub for a story opened an hour later would
+    hand it traffic it did not send."""
+    from sqlalchemy import text as t
+    from api.traffic import routes
+    db.execute(t("DELETE FROM visit_events"))
+    for off, k, path in [(7200, "page", "/ship/x"), (100, "page", "/story/a")]:
+        db.execute(t("""
+            INSERT INTO visit_events (at, visitor, kind, path, bot)
+            VALUES (now() - make_interval(secs => :off), 'slow            ', :k, :p, false)
+        """), {"off": off, "k": k, "p": path})
+    db.commit()
+    got = {r["source"]: r["opens"] for r in routes(days=2, db=db, _owner=None)["sources"]}
+    assert got.get("hub") is None, "an hour later is not a click-through"
