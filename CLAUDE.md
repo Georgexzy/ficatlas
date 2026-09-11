@@ -294,6 +294,33 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     by a test, not by review.
   - `fandom: potter` is NOT this case: the value runs to the next key, so
     "potter" is the fandom. Locked by its own test so the drop cannot widen.
+- **A UA regex alone cannot keep test traffic out, and the first cleanup of it
+  was too narrow.** Flagging by "five or more DISTINCT searches inside ten
+  seconds" caught three visitors and missed four more, because those runs were
+  spaced a minute apart. Nine synthetic queries were still being counted as
+  readers afterwards.
+  - The reliable signal is **searched and never rendered a page**. The search
+    page is what fires the pageview beacon, so searches with no pageviews mean
+    the page was never open — something called `/api/search` directly. The
+    funnel had excluded these since it was written ("a script and not an
+    audience"); the headline counts did not, so the same sessions were scripts
+    in one tile and an audience two along. Measured: 65 searches across 12
+    visitors, all of it testing from this repo.
+  - `_NOT_A_BROWSER` applies it at READ time, so it self-corrects — a visitor
+    who searches and then loads a page stops matching on the next query instead
+    of staying mislabelled for ever. `script_searches` / `script_visitors` are
+    returned and rendered, because a number quietly removed from a total is
+    indistinguishable from one that was never there.
+  - Honest caveat: a reader whose privacy blocker eats the beacon POST looks
+    identical to a script here. They contribute no pageviews either way, so the
+    only figure this can understate is searches.
+  - **One synthetic query was deliberately left in the human numbers.**
+    `hsrry potter wandcrafter` from a session that did render pages — almost
+    certainly me in a browser, but indistinguishable from a real typo. Flagging
+    on query text would catch genuine typos too, and typos are exactly what
+    did-you-mean exists to serve; blinding the data to them would cost more than
+    one stray row in 733.
+
 - **The "Did it work?" funnel was not a funnel.** Three tiles read as
   searched → opened a story → went and read it, but the last step counted
   EVERYONE with an outbound click regardless of whether they had searched.

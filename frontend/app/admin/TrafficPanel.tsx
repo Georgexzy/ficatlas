@@ -208,6 +208,7 @@ interface Summary {
     views: number; searches: number
     busiest_day_visitors: number; busiest_day: string | null
     active_days: number; bot_views: number; bot_searches: number
+    script_searches: number; script_visitors: number
   }
   previous?: { from: string; to: string; views: number; searches: number; visitor_days: number }
   retention_days: number
@@ -439,6 +440,28 @@ export default function TrafficPanel() {
         <p className="admin-note admin-warn">
           Recording is switched off (TRACKING=false), so nothing new is arriving.
           Anything below is history.
+        </p>
+      )}
+
+      {/* What was held back, said out loud.
+          A number quietly removed from a total is indistinguishable from one
+          that was never there, and the person reading this page should see the
+          size of the correction rather than take it on trust. These are
+          sessions that ran a search and never rendered a page — the search page
+          is what fires the pageview beacon, so they were scripts calling the
+          API, not readers. The funnel has always excluded them; until now the
+          headline counts did not, so the same sessions were scripts in one tile
+          and an audience two along. */}
+      {t.script_searches > 0 && (
+        <p className="admin-note">
+          {t.script_searches.toLocaleString()} search
+          {t.script_searches === 1 ? "" : "es"} from{" "}
+          {t.script_visitors.toLocaleString()}{" "}
+          {t.script_visitors === 1 ? "session" : "sessions"} are excluded below:
+          they never loaded a page, so they are something calling the API rather
+          than somebody using the site. A reader whose privacy blocker eats the
+          beacon would look the same here — every population measured so far has
+          been testing from this repo.
         </p>
       )}
 
