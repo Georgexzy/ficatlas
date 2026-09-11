@@ -294,6 +294,32 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     by a test, not by review.
   - `fandom: potter` is NOT this case: the value runs to the next key, so
     "potter" is the fandom. Locked by its own test so the drop cannot widen.
+- **The traffic panel was measuring the developer.** `_BOT_RE` named
+  `python-requests` and not `python-urllib`, and a test script in this repo used
+  urllib's default `Python-urllib/3.12` — so every query it ran counted as a
+  human search. Worse, the visitor hash is derived per day from IP and user
+  agent, so each RUN of the script also read as a new visitor. Measured: of 971
+  non-bot search events, **173 across 3 visitors were automation** — my own
+  canary list (`the arithmancer`, `fake dating stucky`, `wolfstar`) and probe
+  queries (`aaaaaa…`, `a and b`, `a very narrow specific phrase xyz`) sitting in
+  the audience figures.
+  - The regex now names the client libraries generally (`python`, `urllib`,
+    `aiohttp`, `okhttp`, `go-http-client`, `java/`, `node-fetch`, `axios`,
+    `postman`, …) and the automation drivers (`playwright`, `puppeteer`,
+    `selenium`, `webdriver`, `cypress`). curl and Playwright were already
+    caught — Playwright's default UA says HeadlessChrome.
+  - **An absent user agent now counts as automation.** It returned False
+    before, which made the laziest possible client the one most likely to be
+    counted as a reader.
+  - Historical rows were reclassified by BURST SIGNATURE, not by guessing at
+    query strings: a visitor issuing five or more DISTINCT searches inside ten
+    seconds is a script, and `harry potter` is a query a real person types. 971
+    → 798 search events, 77 → 74 visitors. Earlier untagged testing may still
+    remain; going forward it is caught at write time.
+  - `tests/test_bot_detection.py` asserts six real browser agents stay human.
+    That direction fails silently too — an over-eager regex under-reports and
+    nothing about the smaller number looks wrong.
+
 - **Nobody can see anybody else's recent searches, and it is worth being able to
   say so.** `RecentSearches` reads `localStorage["ficatlas:recent-searches"]`
   and nothing else; there is no endpoint that serves them. With an account they

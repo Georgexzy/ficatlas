@@ -77,9 +77,26 @@ MAX_BUFFER = int(os.getenv("TRACKING_MAX_BUFFER", "5000"))
 # the obvious automated traffic out of the human numbers. The user agent itself
 # is used here and then thrown away; only this boolean is stored.
 _BOT_RE = re.compile(
-    r"bot|crawl|spider|slurp|scrape|curl|wget|python-requests|httpx|"
+    r"bot|crawl|spider|slurp|scrape|curl|wget|httpx|"
     r"headless|lighthouse|monitor|preview|facebookexternalhit|"
-    r"embedly|pingdom|uptime",
+    r"embedly|pingdom|uptime|"
+    # HTTP CLIENT LIBRARIES. `python-requests` used to be the only one named
+    # here, and the omission had a measurable cost: a test script in this repo
+    # used urllib's default `Python-urllib/3.12`, which matched nothing, so
+    # every query it ran was counted as a human search. Over two days that was
+    # most of the "57 searches by 8 visitors" the traffic panel reported — and
+    # because the visitor hash is derived per day from IP and user agent, each
+    # run of the script also read as a NEW visitor. The audience figures were
+    # measuring the developer.
+    #
+    # `python` unqualified rather than `python-urllib`, because the next script
+    # will reach for whichever client is nearest; no browser sends it.
+    r"python|urllib|aiohttp|okhttp|go-http-client|java/|node-fetch|axios|"
+    r"guzzle|restsharp|apache-httpclient|libwww|lwp::|postman|insomnia|"
+    # BROWSER AUTOMATION. Playwright's default UA says HeadlessChrome and is
+    # already caught by `headless` above, but a run configured with a real
+    # browser's user agent is not, and these tokens cost nothing to name.
+    r"playwright|puppeteer|selenium|webdriver|phantomjs|cypress",
     re.I,
 )
 
@@ -137,7 +154,17 @@ def visitor_hash(ip: str, ua: str, when: Optional[datetime] = None) -> str:
 
 
 def is_bot(ua: str) -> bool:
-    return bool(ua and _BOT_RE.search(ua))
+    """Whether this user agent is automation rather than a reader.
+
+    An ABSENT user agent counts as automation. Every real browser sends one —
+    it is not optional in practice — so a request without it is a script that
+    did not bother, and treating "unknown" as human is how the audience figures
+    drift upwards. This used to return False for an empty string, which meant
+    the laziest possible client was the one most likely to be counted.
+    """
+    if not ua or not ua.strip():
+        return True
+    return bool(_BOT_RE.search(ua))
 
 
 def ref_host(referer: str) -> Optional[str]:
