@@ -232,7 +232,15 @@ def summary(days: int = Query(30, ge=1, le=365),
             "from": prev_first.isoformat(), "to": prev_last.isoformat(),
             "views": (prev[0] if prev else 0) or 0,
             "searches": (prev[1] if prev else 0) or 0,
-            "visitors": (prev[2] if prev else 0) or 0,
+            # visitor-DAYS, not people, and named for what it is.
+            #
+            # The hash is per day by design (see tracking.py), so counting it
+            # distinct across a 30-day window counts a daily regular thirty
+            # times. The comment above the return already says summing the
+            # column would be wrong; this was the same mistake spelled with
+            # count(DISTINCT) instead of sum(). Nothing renders it today, which
+            # is exactly why it was free to be wrong.
+            "visitor_days": (prev[2] if prev else 0) or 0,
         },
         # Did the site do its job?
         #
@@ -283,7 +291,23 @@ def _funnel(db: Session, first, last) -> dict:
         )
         SELECT count(*) FILTER (WHERE searches > 0 AND pages > 0)                AS searched,
                count(*) FILTER (WHERE searches > 0 AND stories > 0)              AS opened,
-               count(*) FILTER (WHERE outs > 0)                                  AS read_it,
+               -- NESTED. This counted everyone with an outbound click, which is
+               -- not the same set as "people who got here through the funnel" —
+               -- measured, 6 people clicked out and only 4 of them had searched
+               -- and opened a story. The other 2 landed on a hub from a search
+               -- engine and went straight to the archive, so a three-tile
+               -- funnel was quoting a last step that was not a subset of its
+               -- second, and could in principle exceed it.
+               count(*) FILTER (WHERE outs > 0
+                                  AND searches > 0 AND stories > 0)              AS read_it,
+               -- Those 2 are not noise to be dropped; they are the OTHER route
+               -- through the site and the one the SEO work is building. Every
+               -- page Google sends a reader to is a hub, so arriving on one,
+               -- opening a work and going to read it never touches the search
+               -- box. Counted separately rather than folded in, because mixing
+               -- them is what made the funnel wrong in the first place.
+               count(*) FILTER (WHERE outs > 0
+                                  AND NOT (searches > 0 AND stories > 0))        AS out_no_search,
                count(*) FILTER (WHERE searches > 0 AND pages = 0)                AS not_a_browser
           FROM per
     """), {"first": first, "end": last + timedelta(days=1)}).first()
@@ -291,8 +315,14 @@ def _funnel(db: Session, first, last) -> dict:
         "searched": int(row[0] or 0),
         "opened_a_story": int(row[1] or 0),
         "read_it": int(row[2] or 0),
-        "not_a_browser": int(row[3] or 0),
+        "read_without_searching": int(row[3] or 0),
+        "not_a_browser": int(row[4] or 0),
         "read_it_since": _OUT_SINCE,
+        # Whether the caveat even applies to the window being shown. A window
+        # starting after collection began needs no apology for the number, and
+        # printing one anyway trains the reader to discount a figure that is
+        # perfectly good.
+        "read_it_partial": first.isoformat() < _OUT_SINCE,
     }
 
 

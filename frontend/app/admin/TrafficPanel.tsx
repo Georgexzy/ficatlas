@@ -209,12 +209,13 @@ interface Summary {
     busiest_day_visitors: number; busiest_day: string | null
     active_days: number; bot_views: number; bot_searches: number
   }
-  previous?: { from: string; to: string; views: number; searches: number; visitors: number }
+  previous?: { from: string; to: string; views: number; searches: number; visitor_days: number }
   retention_days: number
   enabled: boolean
   funnel?: {
     searched: number; opened_a_story: number; read_it: number
-    not_a_browser: number; read_it_since: string
+    read_without_searching: number
+    not_a_browser: number; read_it_since: string; read_it_partial: boolean
   }
 }
 // `label` is the story, series or hub name the path resolves to, and is absent
@@ -404,7 +405,7 @@ export default function TrafficPanel() {
   const peak = Math.max(1, ...summary.days.map(d => Math.max(d.views, d.searches)))
   const nothing = summary.totals.views === 0 && summary.totals.searches === 0
   const t = summary.totals
-  const prev = summary.previous ?? { views: 0, searches: 0, visitors: 0, from: "", to: "" }
+  const prev = summary.previous ?? { views: 0, searches: 0, visitor_days: 0, from: "", to: "" }
 
   // Every day is drawn, so at 90 days there are 90 labels and they collide.
   // Label roughly eight of them, always including the last, so the axis stays
@@ -527,13 +528,43 @@ export default function TrafficPanel() {
             <div className="admin-tile">
               <span className="admin-tile__value">{summary.funnel.read_it.toLocaleString()}</span>
               <span className="admin-tile__label">Went and read it</span>
-              <span className="admin-tile__sub">
-                {/* Said plainly, because the alternative is reading a young
-                    field as a collapse in conversion. */}
-                only counted since {summary.funnel.read_it_since}
-              </span>
+              {summary.funnel.opened_a_story > 0 && (
+                <span className="admin-tile__sub">
+                  {Math.round(100 * summary.funnel.read_it / summary.funnel.opened_a_story)}% of those
+                </span>
+              )}
+              {/* Only when it actually applies to the window on screen.
+                  Printing the caveat unconditionally teaches the reader to
+                  discount a figure that is, for most windows, complete. */}
+              {summary.funnel.read_it_partial && (
+                <span className="admin-tile__sub">
+                  only counted since {summary.funnel.read_it_since}
+                </span>
+              )}
             </div>
           </div>
+
+          {/* The other way in, and on this site the one that is growing.
+              These three tiles are now genuinely nested — each step is a subset
+              of the one before it — which they were not: "went and read it"
+              used to count everybody with an outbound click, including readers
+              who never touched the search box. Those people are real and they
+              are the SEO route: every page Google sends a reader to is a hub,
+              so arriving there, opening a work and leaving for the archive is
+              a complete success that the funnel above cannot see. */}
+          {summary.funnel.read_without_searching > 0 && (
+            <p className="admin-note">
+              A further{" "}
+              <strong>{summary.funnel.read_without_searching.toLocaleString()}</strong>{" "}
+              {summary.funnel.read_without_searching === 1 ? "person" : "people"}{" "}
+              went off to the archive without ever running a search — they
+              arrived on a fandom or pairing hub, most likely from a search
+              engine, and found what they wanted there. That is the same result
+              by a different route, and it is counted apart from the funnel
+              rather than inside it so each step above stays a subset of the one
+              before.
+            </p>
+          )}
         </>
       )}
 
