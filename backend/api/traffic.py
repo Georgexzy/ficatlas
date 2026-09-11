@@ -161,6 +161,10 @@ def summary(days: int = Query(30, ge=1, le=365),
         -- it discards the very days this query exists to keep.
         LEFT JOIN visit_events e
                ON e.at >= d AND e.at < d + interval '1 day' {bots}
+              -- and not a session that only ever called the API. See
+              -- _NOT_A_BROWSER: this is the backstop for automation that sends
+              -- a browser's user agent, which is_bot cannot see.
+              AND NOT ({_NOT_A_BROWSER})
         GROUP BY 1 ORDER BY 1
     """), {"first": first, "last": last}).fetchall()
 
@@ -177,6 +181,19 @@ def summary(days: int = Query(30, ge=1, le=365),
                count(*) FILTER (WHERE kind='search')
         FROM visit_events WHERE at >= :cut AND bot
     """), {"cut": _window(days)}).first()
+
+    # Reported, never silently dropped. A number removed from a total without
+    # being named anywhere is indistinguishable from a number that was never
+    # there, and the next person to read this page deserves to see the size of
+    # the correction rather than trust it.
+    script_searches, script_visitors = db.execute(text(f"""
+        SELECT count(*) FILTER (WHERE e.kind = 'search'), count(DISTINCT e.visitor)
+          FROM visit_events e
+         WHERE e.at >= CAST(:first AS date)
+           AND e.at <  CAST(:last AS date) + interval '1 day'
+           AND NOT e.bot
+           AND ({_NOT_A_BROWSER})
+    """), {"first": first, "last": last}).first()
 
     busiest = max(rows, key=lambda r: r[3], default=None)
 
@@ -224,6 +241,9 @@ def summary(days: int = Query(30, ge=1, le=365),
             "active_days": sum(1 for r in rows if r[1] or r[2]),
             "bot_views": bot_views or 0,
             "bot_searches": bot_searches or 0,
+            # Held back by _NOT_A_BROWSER: searched, never rendered a page.
+            "script_searches": script_searches or 0,
+            "script_visitors": script_visitors or 0,
         },
         # Named "previous" rather than folded into a percentage: a delta on
         # small numbers is mostly noise, and the raw pair lets the reader see
@@ -268,6 +288,38 @@ def summary(days: int = Query(30, ge=1, le=365),
 # rather than no clicks, and a funnel that does not say so is a lie told with
 # real numbers.
 _OUT_SINCE = "2026-09-07"
+
+
+# Sessions that ran a search and never rendered a page.
+#
+# The search page is what fires the pageview beacon, so a visitor with searches
+# and no pageviews did not have the page open — it is a script calling
+# /api/search directly. The funnel has excluded them since it was written ("a
+# script and not an audience"), and the headline counts did not, so the same
+# sessions were scripts in one panel and readers in another two tiles away.
+#
+# A backstop rather than the main defence: `is_bot` catches automation at write
+# time by user agent, and this catches what gets past it — a script that sends a
+# browser's user agent string, which costs one line to do. Measured when this
+# was added: 65 searches across 12 such visitors, every one of them testing from
+# this repo.
+#
+# Applied at READ time, not by flagging rows, so it self-corrects. A visitor who
+# searches and then loads a page stops matching on the next query rather than
+# staying mislabelled for ever.
+#
+# The honest caveat: a reader whose privacy blocker eats the beacon POST looks
+# identical to a script here. They contribute no pageviews either way, so the
+# only number this can understate is searches, and on this site the measured
+# population has been developer traffic every time it has been looked at.
+_NOT_A_BROWSER = """
+    e.visitor IN (SELECT visitor FROM visit_events
+                   WHERE at >= CAST(:first AS date)
+                     AND at <  CAST(:last AS date) + interval '1 day'
+                   GROUP BY visitor
+                  HAVING count(*) FILTER (WHERE kind = 'search') > 0
+                     AND count(*) FILTER (WHERE kind = 'page')   = 0)
+"""
 
 
 def _funnel(db: Session, first, last) -> dict:

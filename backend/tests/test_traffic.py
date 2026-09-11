@@ -476,3 +476,38 @@ def test_a_bot_never_reaches_the_funnel(db):
     f = _funnel(db, today - timedelta(days=1), today)
     assert f == {**f, "searched": 0, "opened_a_story": 0,
                  "read_it": 0, "read_without_searching": 0}
+
+
+def test_a_session_that_only_calls_the_api_is_not_an_audience(db):
+    """Searched, never rendered a page.
+
+    The search page fires the pageview beacon, so a visitor with searches and no
+    pageviews did not have it open. The funnel always excluded these; the
+    headline counts did not, so the same sessions were scripts in one tile and
+    readers two along. Read-time, so a visitor who later loads a page stops
+    matching rather than staying mislabelled.
+    """
+    from api.traffic import summary
+    _seed(db, [
+        ("script1", "search", "/api/search", False),
+        ("script1", "search", "/api/search", False),
+        ("reader1", "search", "/api/search", False),
+        ("reader1", "page",   "/story/a",    False),
+    ])
+    d = summary(days=2, include_bots=False, db=db, _owner=None)
+    assert d["totals"]["searches"] == 1, "the script's searches must not count"
+    assert d["totals"]["script_searches"] == 2
+    assert d["totals"]["script_visitors"] == 1
+
+
+def test_the_exclusion_reverses_itself_once_a_page_is_loaded(db):
+    """Not a label baked into the row — a visitor who searches and THEN loads a
+    page is a reader, and must count as one without anything being rewritten."""
+    from api.traffic import summary
+    _seed(db, [
+        ("late1", "search", "/api/search", False),
+        ("late1", "page",   "/",           False),
+    ])
+    d = summary(days=2, include_bots=False, db=db, _owner=None)
+    assert d["totals"]["searches"] == 1
+    assert d["totals"]["script_searches"] == 0
