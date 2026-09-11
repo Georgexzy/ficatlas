@@ -321,6 +321,36 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     did-you-mean exists to serve; blinding the data to them would cost more than
     one stray row in 733.
 
+- **Hubs and search are two front doors and nothing compared them.** The panel
+  could say a hub was viewed and that a story was viewed, and nothing about one
+  leading to the other. `/api/traffic/routes` attributes each story-page view to
+  the event immediately before it, within 30 minutes. Measured 2026-09-11:
+
+  | came from | opens | people |
+  |---|---:|---:|
+  | another story page | 85 | 30 |
+  | a search | 82 | 26 |
+  | **a fandom or pairing hub** | **55** | **45** |
+  | the home page | 48 | 22 |
+  | straight in | 24 | 24 |
+
+  - **Read the PEOPLE column, not opens.** Hubs reach 45 distinct readers
+    against search's 26 off a third of the views — 197 hub views produced 55
+    story opens, while 734 searches produced 82. A searcher opens several
+    stories in one sitting; a hub brings one new person to one story, which is
+    what a page greeting strangers from a search engine should do. The SEO
+    surface is out-performing the product on reach.
+  - **Per-view, not per-session.** Session counting cannot tell "searched, then
+    browsed a hub, then opened a story" from the reverse, and most people who
+    open a story here have done both — 6 visitors did both, 26 searched only, 46
+    used hubs only.
+  - The 30-minute cutoff is load-bearing: a story opened an hour after a hub
+    view is a new visit, and crediting the hub would hand it traffic it never
+    sent. Locked by a test.
+  - Hub pageviews were never at risk from `_NOT_A_BROWSER`: it needs
+    `searches > 0 AND pages = 0`, and 290 non-searching readers have pageviews.
+    `NavRecorder` is mounted in the root layout, so every route reports itself.
+
 - **The "Did it work?" funnel was not a funnel.** Three tiles read as
   searched → opened a story → went and read it, but the last step counted
   EVERYONE with an outbound click regardless of whether they had searched.

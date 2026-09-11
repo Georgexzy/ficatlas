@@ -240,6 +240,24 @@ interface Searches {
   totals: { runs: number; empty_runs: number; distinct: number; search_only?: number }
 }
 
+interface Routes {
+  sources: { source: string; opens: number; people: number }[]
+  hub_views: number
+  searches: number
+}
+
+// What each route is, in the words an operator thinks in rather than the ones
+// the query groups by.
+const ROUTE_LABEL: Record<string, string> = {
+  search:        "A search",
+  hub:           "A fandom or pairing hub",
+  hub_index:     "The hub index",
+  another_story: "Another story page",
+  home:          "The home page",
+  entry:         "Straight in (no previous page)",
+  other:         "Somewhere else on the site",
+}
+
 const RANGES = [7, 30, 90]
 
 // Dates arrive as plain YYYY-MM-DD. Parsing them with `new Date(iso)` alone
@@ -360,6 +378,7 @@ export default function TrafficPanel() {
   const [pages, setPages] = useState<PageRow[] | null>(null)
   const [searches, setSearches] = useState<Searches | null>(null)
   const [refs, setRefs] = useState<RefRow[] | null>(null)
+  const [routes, setRoutes] = useState<Routes | null>(null)
   const [cf, setCf] = useState<Cloudflare | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -373,10 +392,12 @@ export default function TrafficPanel() {
     try {
       // In parallel: four small aggregates over the same window, and waiting for
       // them one after another would show the page filling in for no reason.
-      const [s, p, q, rf] = await Promise.all([
+      const [s, p, q, rf, rt] = await Promise.all([
         get("summary"), get("pages"), get("searches"), get("referrers"),
+        get("routes"),
       ])
       setSummary(s); setPages(p.pages); setSearches(q); setRefs(rf.referrers)
+      setRoutes(rt)
     } catch (e: any) { setError(e.message) }
 
     // Deliberately NOT in the Promise.all above. This one leaves the building
@@ -588,6 +609,70 @@ export default function TrafficPanel() {
               before.
             </p>
           )}
+        </>
+      )}
+
+      {/* Which front door is working.
+          The site has two and they serve different people: the search box is
+          the product, and the 11,196 hub pages are the SEO surface — every page
+          Google currently sends a reader to is one of them. Nothing on this
+          panel could compare them; it could say a hub was viewed and that a
+          story was viewed, and nothing about one leading to the other.
+
+          Measured on the event immediately before each story-page view, within
+          thirty minutes, rather than on what a session contains. Session-level
+          counting cannot tell "searched, then browsed a hub, then opened a
+          story" from the reverse, and most people who open a story here have
+          done both. */}
+      {routes && routes.sources.length > 0 && (
+        <>
+          <h2 className="admin-site__name">How readers reach a story</h2>
+          <p className="admin-note">
+            The page each story view directly followed. Counted per view, with a
+            thirty-minute cutoff — a story opened an hour after a hub view is a
+            new visit, not a click, and crediting the hub for it would flatter
+            the wrong door.
+          </p>
+          <table className="traffic-table">
+              <thead>
+              <tr>
+                <th>Came from</th>
+                <th className="num">Story opens</th>
+                <th className="num">People</th>
+                <th className="num">Share</th>
+              </tr>
+            </thead>
+            <tbody>
+                {routes.sources.map(r => {
+                  const total = routes.sources.reduce((a, b) => a + b.opens, 0)
+                  return (
+                    <tr key={r.source}>
+                      <td>{ROUTE_LABEL[r.source] ?? r.source}</td>
+                      <td className="num">{r.opens.toLocaleString()}</td>
+                      <td className="num">{r.people.toLocaleString()}</td>
+                      <td className="num">
+                        {total > 0 ? `${Math.round(100 * r.opens / total)}%` : "—"}
+                      </td>
+                    </tr>
+                  )
+                })}
+            </tbody>
+          </table>
+          {/* The comparison worth drawing, spelled out rather than left to be
+              inferred from two rows of a table. "People" is the column that
+              matters for the hubs: they reach MORE distinct readers than search
+              does off far fewer views, which is what a discovery surface for
+              strangers should look like. */}
+          <p className="admin-note">
+            Hub pages were viewed{" "}
+            <strong>{routes.hub_views.toLocaleString()}</strong> times and
+            searches ran <strong>{routes.searches.toLocaleString()}</strong>{" "}
+            times in this window. Compare the two rows above on{" "}
+            <em>people</em> rather than opens: a reader who searches opens
+            several stories in one sitting, while a hub tends to bring one new
+            person to one story — which is what a page that greets strangers
+            from a search engine is supposed to do.
+          </p>
         </>
       )}
 
