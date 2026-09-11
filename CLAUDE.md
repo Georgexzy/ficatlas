@@ -294,6 +294,33 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     by a test, not by review.
   - `fandom: potter` is NOT this case: the value runs to the next key, so
     "potter" is the fandom. Locked by its own test so the drop cannot widen.
+- **The "Did it work?" funnel was not a funnel.** Three tiles read as
+  searched → opened a story → went and read it, but the last step counted
+  EVERYONE with an outbound click regardless of whether they had searched.
+  Measured over 30 days: 6 in the last step, only 4 of whom appeared in the
+  second. A reader who arrived on a hub from Google and went straight to the
+  archive was being added to a funnel they had never entered, and with different
+  data the last tile could have exceeded the one above it.
+  - `read_it` is now `outs > 0 AND searches > 0 AND stories > 0`, so each step
+    is a genuine subset of the one before, and the tile can show a percentage.
+  - Those other readers are not noise — they are the OTHER route, and the one
+    the SEO work is building: every page Google sends a reader to is a hub, so
+    arriving there and leaving for the archive never touches the search box.
+    Reported separately as `read_without_searching` rather than folded in,
+    because mixing the two is what made the funnel wrong.
+  - `read_it_partial` gates the "only counted since" caveat on whether the
+    window actually starts before collection began. Printing it unconditionally
+    teaches the reader to discount a figure that is usually complete.
+  - `tests/test_traffic.py` seeds one visitor per route and asserts
+    `read_it <= opened_a_story <= searched`.
+- **`previous.visitors` was visitor-DAYS wearing the word "visitors".** The hash
+  is per day, so `count(DISTINCT visitor)` across a 30-day window counts a daily
+  regular thirty times. The comment two lines above it already said summing the
+  column would be wrong; this was the same mistake spelled with
+  `count(DISTINCT)`. Renamed `visitor_days`. Nothing rendered it, which is
+  exactly why it was free to be wrong — an unused field that is subtly false is
+  a trap for whoever uses it next.
+
 - **The traffic panel was measuring the developer.** `_BOT_RE` named
   `python-requests` and not `python-urllib`, and a test script in this repo used
   urllib's default `Python-urllib/3.12` — so every query it ran counted as a

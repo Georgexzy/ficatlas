@@ -416,3 +416,63 @@ def test_an_unknown_kind_is_recorded_as_a_pageview_not_dropped(db):
     kinds = [r[0] for r in db.execute(text(
         "SELECT kind FROM visit_events WHERE path = '/x'")).fetchall()]
     assert kinds == ["page"]
+
+
+# ── The funnel has to be a funnel ────────────────────────────────────────────
+
+def _seed(db, rows):
+    from sqlalchemy import text as t
+    db.execute(t("DELETE FROM visit_events"))
+    for visitor, kind, path, bot in rows:
+        db.execute(t("""
+            INSERT INTO visit_events (at, visitor, kind, path, bot, q)
+            VALUES (now(), :v, :k, :p, :b, CASE WHEN :k='search' THEN 'x' END)
+        """), {"v": visitor.ljust(16)[:16], "k": kind, "p": path, "b": bot})
+    db.commit()
+
+
+def test_each_funnel_step_is_a_subset_of_the_one_before(db):
+    """The last step used to count everybody with an outbound click, whether or
+    not they had searched — so a reader who arrived on a hub from Google and
+    went straight to the archive was added to a funnel they had never entered.
+    Measured on real data: 6 in the last step, 4 of whom were in the second."""
+    from datetime import date, timedelta
+    from api.traffic import _funnel
+    _seed(db, [
+        # searched, opened a story, clicked out — the whole funnel
+        ("full1", "search", "/api/search", False),
+        ("full1", "page",   "/story/a",    False),
+        ("full1", "out",    "/story/a",    False),
+        # searched and opened, did not go on to read
+        ("mid1",  "search", "/api/search", False),
+        ("mid1",  "page",   "/story/b",    False),
+        # searched only
+        ("top1",  "search", "/api/search", False),
+        ("top1",  "page",   "/",           False),
+        # NEVER searched: hub -> story -> archive. Real, and not this funnel.
+        ("hub1",  "page",   "/ship/x",     False),
+        ("hub1",  "page",   "/story/c",    False),
+        ("hub1",  "out",    "/story/c",    False),
+    ])
+    today = date.today()
+    f = _funnel(db, today - timedelta(days=1), today)
+
+    assert f["read_it"] <= f["opened_a_story"] <= f["searched"]
+    assert f["searched"] == 3          # full1, mid1, top1
+    assert f["opened_a_story"] == 2    # full1, mid1
+    assert f["read_it"] == 1           # full1 only
+    assert f["read_without_searching"] == 1   # hub1, counted apart
+
+
+def test_a_bot_never_reaches_the_funnel(db):
+    from datetime import date, timedelta
+    from api.traffic import _funnel
+    _seed(db, [
+        ("bot1", "search", "/api/search", True),
+        ("bot1", "page",   "/story/a",    True),
+        ("bot1", "out",    "/story/a",    True),
+    ])
+    today = date.today()
+    f = _funnel(db, today - timedelta(days=1), today)
+    assert f == {**f, "searched": 0, "opened_a_story": 0,
+                 "read_it": 0, "read_without_searching": 0}
