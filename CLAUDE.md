@@ -274,6 +274,36 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   index is busy. `recs_only` narrows through GIN containment first. Measured:
   **503 against 0.2s.** The same trap sits behind `min_recs`, which is why that
   one already required the marker via `@>` before its per-row unnest.
+- **An unfinished operator was being searched for as text.** Found in the
+  traffic log, in a real reader's query:
+
+      fandom: fandom:Harry Potter tag:Female Harry Potter complete
+
+  A bare `fandom:` sat in the bar — typed, or left by the syntax helper —
+  `parseQuery` kept it in `clean_text` because it had no value, and
+  `serializeFiltersToQuery` writes `cleanText + chips`, so it was re-emitted in
+  front of the real operator. The search then full-text matched the literal
+  string `"fandom:"`: **51 results where there should have been 1,646.** No
+  error, no empty page, just a much smaller answer to a question the reader
+  thought they had asked — which is why it survived.
+  - Both parsers now drop a bare operator, and both check **FIELD_ALIASES**
+    rather than matching any `\w+:`. That second half is the whole fix: the
+    first attempt used `/^-?\w+:$/`, which also matches `3:`, and turned
+    "chapter 3: the return" into "chapter the return". A colon is ordinary
+    punctuation everywhere except after a word the parser recognises — caught
+    by a test, not by review.
+  - `fandom: potter` is NOT this case: the value runs to the next key, so
+    "potter" is the fandom. Locked by its own test so the drop cannot widen.
+- **Nobody can see anybody else's recent searches, and it is worth being able to
+  say so.** `RecentSearches` reads `localStorage["ficatlas:recent-searches"]`
+  and nothing else; there is no endpoint that serves them. With an account they
+  sync through `userdata.py`, where every route filters on
+  `UserData.user_id == user.id`. What looks like other people's queries
+  reappearing in the traffic panel is automated testing from this repo — curl
+  and Playwright runs are recorded as ordinary searches, and each run derives a
+  fresh visitor hash, so a single test script reads as several new visitors.
+  Treat same-second bursts of identical queries as what they are.
+
 - **Zero-result searches now suggest a spelling.** A real visitor searched
   `hsrry potter wandcrafter` and got nothing, with `Harry Potter` — 686,558
   works — one transposed letter away. `_did_you_mean` trigram-matches the WHOLE
