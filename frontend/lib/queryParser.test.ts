@@ -250,3 +250,55 @@ describe("exclude filters survive a reload without multiplying", () => {
     expect(p.cleanText.trim()).toBe("harry potter")
   })
 })
+
+// ── Unfinished operators ─────────────────────────────────────────────────────
+//
+// From a real query in the traffic log:
+//
+//   fandom: fandom:Harry Potter tag:Female Harry Potter complete
+//
+// A bare `fandom:` sat in the bar, parseQuery kept it as free text, and
+// serializeFiltersToQuery — which writes cleanText followed by the chips —
+// re-emitted it in front of the real operator. The search then matched the
+// literal string "fandom:", cutting 686,558 Harry Potter works down to 51 with
+// no error and no empty page to hint that anything was wrong.
+describe("an operator with no value is not search text", () => {
+  it.each(["fandom:", "tag:", "ship:", "char:", "-tag:", "fandom: "])(
+    "drops a bare %s", (q) => {
+      expect(parseQuery(q).cleanText).toBe("")
+    })
+
+  it("drops it without disturbing the words around it", () => {
+    expect(parseQuery("harry potter fandom:").cleanText).toBe("harry potter")
+  })
+
+  // NOT a bare operator: `fandom: potter` has a value, and _take_value runs to
+  // the next key — so "potter" is the fandom and the text is just "harry".
+  // Asserted because it is the behaviour the drop above must not disturb.
+  it("still treats a following word as the operator's value", () => {
+    const p = parseQuery("harry fandom: potter")
+    expect(p.fandoms).toEqual(["potter"])
+    expect(p.cleanText).toBe("harry")
+  })
+
+  it("still parses the operator when it HAS a value", () => {
+    const p = parseQuery("fandom: Harry Potter")
+    expect(p.fandoms).toEqual(["Harry Potter"])
+    expect(p.cleanText).toBe("")
+  })
+
+  // The guard that stops this from eating real searches: a colon inside a
+  // phrase is ordinary punctuation, and titles are full of it.
+  it("leaves a colon that is part of real text alone", () => {
+    expect(parseQuery("chapter 3: the return").cleanText).toBe("chapter 3: the return")
+    expect(parseQuery("star wars: a new hope").cleanText).toBe("star wars: a new hope")
+  })
+
+  // The whole point: the round trip must no longer double the operator.
+  it("does not re-emit the operator through a serialize/parse cycle", () => {
+    const pq = parseQuery("fandom:")
+    const rebuilt = [pq.cleanText.trim(), 'fandom:"Harry Potter"'].filter(Boolean).join(" ")
+    expect(rebuilt).toBe('fandom:"Harry Potter"')
+    expect(parseQuery(rebuilt).fandoms).toEqual(["Harry Potter"])
+  })
+})

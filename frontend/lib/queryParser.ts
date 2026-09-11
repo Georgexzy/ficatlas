@@ -169,6 +169,18 @@ function isWordCountShorthand(word: string): boolean {
 // Find all "key:" positions
 const KEY_RE = /(-?)(\w+)\s*:\s*/gi
 
+// A word that is ONLY a RECOGNISED operator and a colon — `fandom:`, `-tag:`.
+//
+// Anchored at both ends, and checked against FIELD_ALIASES rather than matching
+// any `\w+:`. That second half is load-bearing: `/^-?\w+:$/` alone also matches
+// `3:`, so "chapter 3: the return" came back as "chapter the return" and a
+// reader searching a title with a colon in it silently lost a word. A colon is
+// ordinary punctuation everywhere except after a word this parser knows.
+function isBareOperator(word: string): boolean {
+  const m = /^-?(\w+):$/.exec(word)
+  return !!m && !!FIELD_ALIASES[m[1].toLowerCase()]
+}
+
 /** Does this operator value need quoting to survive a round trip through
  *  parseQuery?
  *
@@ -357,6 +369,21 @@ export function parseQuery(raw: string): ParsedQuery {
     } else if (RATING_WORDS[wl]) {
       pq.ratings.push(RATING_WORDS[wl])
       pq.tokens.push({ key: "ratings", value: RATING_WORDS[wl], exclude: false, raw: word })
+    } else if (isBareOperator(word)) {
+      // An operator with nothing after it is an unfinished thought, not a word
+      // to search for. Dropped rather than kept, and the reason is a real query
+      // out of the traffic log:
+      //
+      //   fandom: fandom:Harry Potter tag:Female Harry Potter complete
+      //
+      // The bar held a bare `fandom:` — typed, or inserted by the syntax helper
+      // for the reader to fill in — and serializeFiltersToQuery writes
+      // `cleanText + chips`, so the leftover was re-emitted in front of the
+      // real operator. The backend then full-text searched for the literal
+      // string "fandom:", which narrowed Harry Potter from 686,558 works to 51.
+      //
+      // Silently: no error, no empty page, just a wrong and much smaller answer
+      // to a question the reader thought they had asked.
     } else {
       remaining.push(word)
     }

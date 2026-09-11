@@ -192,6 +192,10 @@ def canonical_site(value: str) -> Optional[str]:
 
 
 # Field aliases → canonical name
+# A word that is only an operator and a colon: `fandom:`, `-tag:`. Paired with
+# a FIELD_ALIASES lookup at the call site — see the note there.
+_BARE_OPERATOR_RE = re.compile(r"^-?(\w+):$")
+
 FIELD_ALIASES = {
     "fandom": "fandoms", "fandoms": "fandoms", "f": "fandoms",
     "ship": "relationships", "pairing": "relationships", "rel": "relationships",
@@ -443,6 +447,26 @@ def parse_query(raw: str) -> ParsedQuery:
         if wl in RATING_WORDS:
             pq.ratings.append(RATING_WORDS[wl])
             pq.tokens.append({"key": "ratings", "value": RATING_WORDS[wl], "exclude": False, "raw": word})
+            continue
+
+        # An operator with nothing after it is an unfinished thought, not a
+        # word to search for. Seen in the wild as:
+        #
+        #   fandom: fandom:Harry Potter tag:Female Harry Potter complete
+        #
+        # The search bar held a bare `fandom:`, the frontend serialiser writes
+        # `cleanText + chips`, and the leftover was re-emitted in front of the
+        # real operator. This parser then put "fandom:" into the free text, so
+        # the query full-text matched that literal string and returned 51 works
+        # instead of Harry Potter's 686,558 — silently, with no error and no
+        # empty page to suggest anything had gone wrong.
+        #
+        # Checked against FIELD_ALIASES rather than any `\w+:`, because a bare
+        # `\w+:` also matches "3:" and would quietly eat a word from a title
+        # like "chapter 3: the return". A colon is ordinary punctuation
+        # everywhere except after a word this parser recognises.
+        bare = _BARE_OPERATOR_RE.match(word)
+        if bare and FIELD_ALIASES.get(bare.group(1).lower()):
             continue
 
         remaining.append(word)
