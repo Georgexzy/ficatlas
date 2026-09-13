@@ -812,6 +812,66 @@ _UNDERAGE_TAGS = [
 ]
 
 
+# ── Tier 2: adult and deliberately disturbing content ───────────────────────
+#
+# Not blocked, but not served by DEFAULT either — these are what the Explicit
+# toggle should always have controlled, and did not.
+#
+# The toggle filtered on RATING alone, so a work rated Teen or Not Rated and
+# tagged `Rape/Non-con Elements`, `Incest` or `Dead Dove: Do Not Eat` came back
+# on a default search. The rating is the author's summary judgement and the
+# tags are the specifics; on this index the tags are far better populated, and
+# a reader pasting a search link in public is relying on the default being
+# safe.
+#
+# The bar is "could this get the link removed, or the person posting it
+# banned". r/HPFanfiction rule 6 is about minors specifically, but a link
+# surfacing incest or rape content is a problem in most fandom spaces and in
+# none of them is it what the searcher asked for.
+#
+# Exact values again, for the same reason as the underage list: substring
+# matching turns `Non-Consensual Drug Use` (18,580 works, not sexual) and
+# `Implied Sexual Content` into casualties, and a filter people find
+# capricious is one they turn off.
+_ADULT_WARNINGS = ["Rape/Non-Con", "Rape/Non-con"]
+
+_ADULT_TAGS = [
+    # Explicit sexual content, by its usual names.
+    "Smut", "PWP", "Plot What Plot/Porn Without Plot", "Porn With Plot",
+    "Porn with Feelings", "Porn", "Explicit Sexual Content",
+    "Graphic Depictions of Sex", "Pornography",
+    # AO3's own marker for "this is as unpleasant as it says on the tin".
+    "Dead Dove: Do Not Eat", "Dead Dove Do Not Eat",
+    # Non-consent.
+    "Rape/Non-con Elements", "Rape", "Non-Con", "Noncon", "Non-con",
+    "Implied/Referenced Rape/Non-con", "Past Rape/Non-con",
+    "Attempted Rape/Non-Con", "Rape/Non-con",
+    # Incest.
+    "Incest", "Sibling Incest", "Parent/Child Incest",
+    "Brother/Brother Incest", "Brother/Sister Incest", "Twincest",
+    # The rest of the obvious.
+    "Bestiality", "Necrophilia", "Cannibalism",
+]
+
+
+def _adult_filter():
+    """Exclude adult and deliberately disturbing content.
+
+    Applied when the reader has NOT asked for explicit material, alongside the
+    rating check rather than instead of it — the rating catches works whose
+    tags say nothing, and the tags catch works whose rating does.
+    """
+    if not ADULT_FILTER_ON:
+        return None
+    return and_(
+        not_(Story.warnings.op("&&")(cast(_ADULT_WARNINGS, PG_ARRAY(Text)))),
+        not_(Story.tags.op("&&")(cast(_ADULT_TAGS, PG_ARRAY(Text)))),
+    )
+
+
+ADULT_FILTER_ON = os.getenv("SEARCH_FILTER_ADULT", "1") != "0"
+
+
 def _underage_filter():
     """Exclude works that flag sexual content involving minors.
 
@@ -1405,6 +1465,15 @@ def search(          # NOT async — see below
                     "on another person. Use min_recs instead when the NUMBER of "
                     "mentions matters; only the reddit source has one.",
     ),
+    include_underage:      bool          = Query(
+        False,
+        description="Include works flagged for sexual content involving minors. "
+                    "Off by default and SEPARATE from `explicit`, which is a "
+                    "taste control — this one exists because a search URL gets "
+                    "pasted in public and the person pasting it carries the "
+                    "consequences. Nothing that generates a shareable link ever "
+                    "sets it.",
+    ),
     exclude_ids:           Optional[str] = Query(
         None,
         description="Story ids to leave out, comma-separated. For a reader who "
@@ -1491,14 +1560,19 @@ def search(          # NOT async — see below
     if not is_operator:
         filters.append(Story.delisted_at.is_(None))
 
-    # Sexualised minors, excluded for EVERYONE including operators.
+    # Sexualised minors: excluded by DEFAULT, findable on request.
     #
-    # Deliberately not tied to the delisted gate above, and deliberately not
-    # exempting operators. Delisting is a takedown queue an operator has to be
-    # able to see in order to work it; this is not a moderation state, it is
-    # content the site does not serve, and the person most likely to paste a
-    # search link somewhere public is the operator.
-    _ua = _underage_filter()
+    # Not removed from the index and not unfindable — this is an index of what
+    # the archives hold, and a reader who deliberately asks for a thing the
+    # archives label is entitled to find it. What the site will not do is put
+    # it in front of somebody who did not ask, or in a URL they then paste
+    # somewhere public. A reader was banned for fourteen days from
+    # r/HPFanfiction for exactly that.
+    #
+    # So the control is separate from `explicit`. That toggle is about taste
+    # and readers leave it on; this one is about what a link carries, and
+    # nothing that GENERATES a link ever sets it.
+    _ua = None if include_underage else _underage_filter()
     if _ua is not None:
         filters.append(_ua)
 
@@ -1627,6 +1701,15 @@ def search(          # NOT async — see below
         # bulk import (HF FFN dump etc.) from every default search. Permit NULL.
         _explicit_pred = or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None))
         filters.append(_explicit_pred)
+        # And the TAGS, not only the rating. A work rated Teen or Not Rated and
+        # tagged `Rape/Non-con Elements` or `Dead Dove: Do Not Eat` came back on
+        # a default search, because the rating is the author's summary
+        # judgement while the tags are the specifics — and on this index the
+        # tags are far better populated. Somebody pasting a search link in
+        # public is relying on this default.
+        _ad = _adult_filter()
+        if _ad is not None:
+            filters.append(_ad)
 
     # An operator value that ran on into the query gets handed back here, BEFORE
     # anything reads `q` — ship resolution, the category test and the FTS
@@ -2402,6 +2485,10 @@ def search(          # NOT async — see below
             if not explicit:
                 fuzzy_q = fuzzy_q.filter(or_(
                     Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
+                # This arm builds its own query and never sees `filters`.
+                _ad2 = _adult_filter()
+                if _ad2 is not None:
+                    fuzzy_q = fuzzy_q.filter(_ad2)
             parts.append(fuzzy_q.filter(fuzzy_pred).limit(50))
         # For a BROAD query the arbitrary slice is the whole problem. Searching
         # "harry potter" matches far more than the ceiling, so the 5,001 rows the
@@ -4101,6 +4188,11 @@ def random_stories(
         params["ua_t"] = _UNDERAGE_TAGS
     if not explicit:
         where.append("(rating <> 'explicit' OR rating IS NULL)")
+        if ADULT_FILTER_ON:
+            where.append("NOT (warnings && CAST(:ad_w AS text[]))")
+            where.append("NOT (tags && CAST(:ad_t AS text[]))")
+            params["ad_w"] = _ADULT_WARNINGS
+            params["ad_t"] = _ADULT_TAGS
     if fandom_pat:
         where.append("fic_arr(fandoms) ILIKE :fandom_pat")
         params["fandom_pat"] = fandom_pat

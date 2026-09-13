@@ -74,9 +74,24 @@ function readTitles(raw: string): string[] {
     .slice(0, 10)
 }
 
-/** The search as a reader would link to it. */
-const publicLink = (q: string) =>
-  `${PUBLIC}/?q=${encodeURIComponent(q).replace(/%20/g, "+")}`
+// Parameters and operators that must never appear in a link this panel hands
+// somebody to paste in public. A reader was banned for fourteen days from
+// r/HPFanfiction for posting a FicAtlas search that listed works tagged
+// "Underage Sex"; the rules of most fandom spaces, and Reddit's own policy,
+// make the person who pasted the link responsible for what it shows.
+//
+// Stripped here rather than merely "not added", because the query box is free
+// text and an operator typed into it would otherwise ride along.
+const UNSAFE_IN_A_LINK = /\b(?:include_underage|explicit)\s*[:=]\s*(?:true|1|yes)\b/gi
+
+/** The search as a reader would link to it — always in the safe default. */
+const publicLink = (q: string) => {
+  const safe = q.replace(UNSAFE_IN_A_LINK, "").replace(/\s+/g, " ").trim()
+  return `${PUBLIC}/?q=${encodeURIComponent(safe).replace(/%20/g, "+")}`
+}
+
+/** Did the operator ask for something a shared link must not carry? */
+const asksForUnsafe = (q: string) => UNSAFE_IN_A_LINK.test(q)
 
 // Framing that carries no information about any story. Stripped from a pasted
 // post before it reaches the box, because every word in a search is a
@@ -179,7 +194,12 @@ export default function OutreachPanel() {
   // does not accuse an untouched box of having failed.
   const searched = res !== null
   const foundSomething = searched && (res!.total ?? 0) > 0
-  const reply = !foundSomething ? null : found.trim()
+  // A link is generated in the safe default whatever the box says, so a query
+  // asking for gated content would produce a link that does not match what is
+  // on screen. Better to say so than to hand over a link quietly different
+  // from the search that was run.
+  const unsafeQuery = asksForUnsafe(q)
+  const reply = (!foundSomething || unsafeQuery) ? null : found.trim()
     ? `I think this is ${found.trim()}.\n\nFound it here if you want to check: ${publicLink(q)}\n(searches AO3, FanFiction.net and FictionAlley together)`
     : `Try this: ${publicLink(q)}\n\nIt searches AO3, FanFiction.net and FictionAlley at once — worth a look if it might not be on AO3.`
 
@@ -431,7 +451,11 @@ export default function OutreachPanel() {
         </>
       ) : (
         <p className="outreach__blocked">
-          {!searched
+          {unsafeQuery
+            ? "This search asks for content that must not appear in a link " +
+              "you paste in public — that is what got the r/HPFanfiction ban. " +
+              "Remove it from the box and search again."
+            : !searched
             ? "Run a search first — the reply is built from what it finds."
             : "This search found nothing, so there is no reply to send. " +
               "Narrow it to two or three of the terms above, or close the tab: " +
