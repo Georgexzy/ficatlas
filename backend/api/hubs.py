@@ -24,7 +24,9 @@ from db.session import get_db
 # rather than copied: two lists of what counts as this content would drift, and
 # the one that drifts laxer is the bug.
 from api.search import (_UNDERAGE_TAGS as _UA_TAGS,
-                        _UNDERAGE_WARNINGS as _UA_WARNINGS)
+                        _UNDERAGE_WARNINGS as _UA_WARNINGS,
+                        _ADULT_TAGS as _AD_TAGS,
+                        _ADULT_WARNINGS as _AD_WARNINGS)
 
 router = APIRouter()
 ships_router = APIRouter()
@@ -254,9 +256,15 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
                -- exact rather than a pattern.
                AND NOT (s.warnings && CAST(:ua_w AS text[]))
                AND NOT (s.tags && CAST(:ua_t AS text[]))
+               -- Adult and deliberately disturbing content too. A hub has no
+               -- Explicit toggle: it is a static page a search engine hands to
+               -- a stranger, so the safe default is the ONLY setting it has.
+               AND NOT (s.warnings && CAST(:ad_w AS text[]))
+               AND NOT (s.tags && CAST(:ad_t AS text[]))
              ORDER BY t.ord
         """), {"ids": ids,
-               "ua_w": _UA_WARNINGS, "ua_t": _UA_TAGS}).fetchall()
+               "ua_w": _UA_WARNINGS, "ua_t": _UA_TAGS,
+               "ad_w": _AD_WARNINGS, "ad_t": _AD_TAGS}).fetchall()
         _fandoms = [f for r in rows for f in (r[9] or [])]
         _rels = [v for r in rows for v in (r[10] or [])]
         works = [

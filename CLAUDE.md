@@ -5,17 +5,45 @@ fanfiction search engine: Next.js 15 frontend (port 3000, reverse-proxies
 `/api/*`) + FastAPI backend (8000) + PostgreSQL 16 (~19.7M `stories` rows).
 Live tree is `/home/george/ficatlas` (not this worktree).
 
-## Content safety: sexualised minors
+## Content safety: two tiers, both default-safe
 
-**Excluded from every surface, by default, for everyone — including operators.**
-This is a safety default, not a preference, and it exists because its absence
-did real harm: a reader was **banned for fourteen days from r/HPFanfiction**
-for linking a FicAtlas search that listed works tagged "Underage Sex".
+Everything here exists because its absence did real harm: a reader was **banned
+for fourteen days from r/HPFanfiction** for linking a FicAtlas search that
+listed works tagged "Underage Sex".
+
+**The principle is not censorship — it is that a URL gets pasted in public and
+the person pasting it carries the consequences.** Nothing is removed from the
+index. This is an index of what the archives hold, and a reader who deliberately
+asks for something the archives themselves label is entitled to find it. What
+the site will not do is put it in front of somebody who did not ask, or bake it
+into a link they then share.
+
+### Tier 1 — sexualised minors (`include_underage`, default off)
+
+- **Its own parameter, separate from `explicit`.** That toggle is about taste
+  and readers leave it on; this is about what a link carries. Verified:
+  `explicit=true` returns 0 underage-flagged works on a page where
+  `include_underage=true` returns 4.
+- **Nothing that GENERATES a link may set it.** `OutreachPanel` strips
+  `include_underage`/`explicit` from every link it builds — stripped rather
+  than merely not-added, because the query box is free text — and refuses to
+  build a reply at all when the box asks for gated content, since the link
+  would then differ from the search on screen.
+
+### Tier 2 — adult and deliberately disturbing (`explicit`, default off)
+
+`Smut`, `PWP`, `Dead Dove: Do Not Eat`, `Incest`, `Rape/Non-con` and friends.
+**The Explicit toggle filtered on RATING alone**, so a work rated Teen or Not
+Rated and tagged `Rape/Non-con Elements` came back on a default search — the
+rating is the author's summary judgement, the tags are the specifics, and on
+this index the tags are far better populated.
+
+### Both tiers
 
 - **The explicit toggle was OFF and did nothing.** It filters on RATING, and
   every offending work was rated **M** or **Not Rated** — AO3's "Underage" is an
   archive WARNING, orthogonal to the rating, and the two had never been
-  connected. The rating toggle cannot be the control for this and is not.
+  connected.
 - **Warnings AND tags**, because the same fact is recorded twice and neither
   implies the other: 10,037 works carry the `Underage Sex` archive warning and
   22,968 carry an `Underage Sex - Freeform` tag.
@@ -31,10 +59,11 @@ for linking a FicAtlas search that listed works tagged "Underage Sex".
   crawlable surface search engines send strangers to). `api/hubs.py` imports the
   lists from `api/search.py` rather than copying them — two lists of what counts
   as this content would drift, and the one that drifts laxer is the bug.
-- **Operators are not exempt.** Delisting is a takedown queue an operator must
-  see to work it; this is not a moderation state but content the site does not
-  serve, and the operator is the person most likely to paste a search link
-  somewhere public.
+- **Operators get no exemption by default.** Delisting is a takedown queue an
+  operator must see to work it; this is a different question, and the operator
+  is the person most likely to paste a search link somewhere public.
+- **Hub pages have no toggle at all.** They are static pages a search engine
+  hands to a stranger, so the safe default is the only setting they have.
 - Measured on the exact search that caused the ban: **9 of 30 flagged works on
   page one, now 0**, with `underage drinking` and `underage smoking` still
   returning normally.

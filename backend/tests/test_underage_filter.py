@@ -36,10 +36,26 @@ def test_ordinary_content_is_not_swept_up(tag):
 
 
 def test_the_filter_is_on_by_default():
-    """A safety default, not a preference. Nothing in the UI exposes the
-    switch; the environment variable exists so a future instance with a reason
-    can turn it off deliberately."""
+    """Excluded by DEFAULT, and findable on request — not removed from the
+    index. This is an index of what the archives hold, and a reader who
+    deliberately asks for something the archives themselves label is entitled
+    to find it. What the site will not do is put it in front of somebody who
+    did not ask, or in a URL they then paste in public."""
     assert _underage_filter() is not None
+
+
+def test_the_explicit_toggle_does_not_unlock_it():
+    """`explicit` is a taste control that readers leave on. This is a
+    different question — what a shared LINK carries — so it has its own
+    parameter, off by default, and nothing that generates a link sets it.
+    Verified live: explicit=true returns 0 underage-flagged works on a page
+    where include_underage=true returns 4."""
+    import inspect
+    from api import search as search_mod
+    sig = inspect.signature(search_mod.search)
+    assert "include_underage" in sig.parameters, \
+        "the gate must be its own parameter, not a mode of `explicit`"
+    assert sig.parameters["include_underage"].default.default is False
 
 
 def test_it_is_not_the_rating_toggle(db):
