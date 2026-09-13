@@ -505,6 +505,31 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   otherwise says so and tells you to narrow or close the tab. Verified the
   search was never at fault: `harry potter daphne greengrass fluff` returns
   1,058 works.
+- **A concept is a GROUP of spellings, and using the rarest one told a reader
+  their fics did not exist.** Reported by someone who had demonstrably read
+  fics with lordship AND magical power AND politics. They were right: **113
+  works carry lordship and powerful together, 26 carry all three, 12 of those
+  are 150k+**.
+  - `resolve_trope_tags` works from windows of the reader's own words, so
+    "harry is magically and politically powerful" found
+    `Magically Powerful Harry` — **48 works** — and never saw
+    `Magically Powerful Harry Potter`, the same concept on **1,719**. Every
+    step after inherited that: `_biggest_spelling` chose the best of what it
+    was handed, and the probe tested that one spelling, found no co-occurrence,
+    and dropped a concept the post had asked for in as many words.
+  - Three changes, each needed alone: `_biggest_spelling` matches PREFIXES as
+    well as exact values (a tag beginning with another is the same concept
+    spelled longer); the bigger spelling joins the concept's GROUP rather than
+    only being its label; and the probe ORs within a concept and ANDs between
+    them, which is the shape the search itself builds.
+  - **A bare natural-language query beats explicit tag operators**: the same
+    three concepts as plain words return **120 works against 52**, because the
+    search resolves each phrase and ORs every spelling while an operator pins
+    exactly one. Worth remembering before reaching for `tag:"…"`.
+  - Caution for the prefix rule: it is semantic-blind. `Dark Lord Harry Potter`
+    is a prefix-extension of `Dark Lord Harry` and NOT the inheritance-lordship
+    concept a reader means by "lord of two houses".
+
 - **A bulleted fic-finder post is a LIST of constraints, one per line, and
   reading it as one bag of words threw that structure away.** "harry is lord of
   at least 2 houses" became the word "houses", which matched `House`, the

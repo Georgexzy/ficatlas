@@ -227,10 +227,13 @@ def test_a_longer_spelling_of_the_same_concept_is_found(bulleted):
     """`Powerful Harry` and `Powerful Harry Potter` are one concept written two
     ways; the archives' own usage decides which a search should carry."""
     from api.search import _biggest_spelling
+    # ON CONFLICT, because the fixture already carries the short spelling —
+    # inserting it again aborted the transaction and took the rest of the
+    # module's teardown with it.
     bulleted.execute(text("""
         INSERT INTO facets (kind, value, count) VALUES
-          ('tag','Magically Powerful Harry',48),
           ('tag','Magically Powerful Harry Potter',1719)
+        ON CONFLICT (kind, value) DO UPDATE SET count = EXCLUDED.count
     """))
     bulleted.commit()
     best = _biggest_spelling(bulleted, ["Magically Powerful Harry"])
