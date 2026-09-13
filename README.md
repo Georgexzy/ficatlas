@@ -1,9 +1,20 @@
 # FicAtlas
 
-A unified search engine for fanfiction. **20.0M works** indexed across AO3 (13.5M),
+### [ficatlas.com](https://ficatlas.com) — search AO3, FanFiction.net and FictionAlley at once
+
+A unified search engine for fanfiction. **20.5M works** indexed across AO3 (14.0M),
 FanFiction.net (6.6M) and FictionAlley (30k), plus smaller curated sets and any
 user-supplied EPUB. About 30,000 of those can be read in the app; the rest link
 out to the archive that hosts them.
+
+Search a half-remembered plot in plain English — *"fic where harry is a
+wandmaker"*, *"hermione time turner ron dies"* — or use AO3-parity filters and
+operators. Free, no adverts, no tracking, no AI trained on anybody's fic.
+
+**Try these:** [Drarry](https://ficatlas.com/ship/draco-malfoy-harry-potter) ·
+[Every pairing](https://ficatlas.com/ships) ·
+[Every fandom](https://ficatlas.com/fandoms) ·
+[Reader-recommended works](https://ficatlas.com/?recs_only=true)
 
 One search bar over a single index spanning multiple sites, with AO3-parity filters, a clean reader for stories hosted directly, and one-click import for fresh stories from any URL.
 
