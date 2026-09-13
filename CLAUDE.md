@@ -5,6 +5,41 @@ fanfiction search engine: Next.js 15 frontend (port 3000, reverse-proxies
 `/api/*`) + FastAPI backend (8000) + PostgreSQL 16 (~19.7M `stories` rows).
 Live tree is `/home/george/ficatlas` (not this worktree).
 
+## Systems audit: what was actually redundant
+
+Audited on request across all systems, not just background jobs. Most of what
+looked duplicated was already shared, and the real fault was the opposite —
+jobs that existed and nothing ran.
+
+**Already harmonised, checked and left alone:**
+- `is_bot` has ONE implementation in `tracking.py`; `main.py` and
+  `api/traffic.py` both import it.
+- `hub_build.build_groups` is shared by `fandom_hubs` and `ship_hubs` — it
+  looked orphaned in a reference scan and is not.
+- `admin._site_totals` calls `stats.site_counts_without_scanning()` first and
+  only scans on a cold cache, behind the same advisory lock.
+- Author opt-outs: `optout_sweep.py` is documented as a ONE-TIME sweep, and new
+  imports are covered at ingest by `author_permission.py` calling
+  `external_optout.has_external_optout`. Two mechanisms, one policy, no gap.
+
+**The real finding: three jobs were written, committed, and never scheduled.**
+`content_gates`, `reddit_recs_import` and `tropedia_recs_import` each existed
+only as a command somebody had to remember to type. They now share ONE
+`_curation_loop` rather than getting three of their own, because they are one
+job in three parts: two sources of community recommendations writing the same
+marker, and the gate repair that must follow any bulk change to tags.
+- Order matters: the recs imports rewrite `tags`, which fires the content-gate
+  trigger per row, so gates are already correct for anything they touched. The
+  repair exists for the other case — a change to the TERM LISTS, which no
+  trigger can retrofit onto rows written before it.
+- One source failing must not stop the others, and must not stop the gate
+  repair, which is the safety-relevant half.
+
+**Not redundant, despite appearances:** 10 series-related modules,
+6 importers, 4 alias miners. The importers are one-off bulk loads; the series
+modules are strategies (`series_from_sequels`, `series_from_summary`,
+`series_cues`) composed by `series_detect`, not competing implementations.
+
 ## Content safety: two tiers, both default-safe
 
 Everything here exists because its absence did real harm: a reader was **banned
