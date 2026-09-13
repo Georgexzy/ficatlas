@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, aliased
 import os
 import threading
 import time
-from sqlalchemy import and_, or_, func, literal_column, cast, case, Text, text as sql_text
+from sqlalchemy import and_, not_, or_, func, literal_column, cast, case, Text, text as sql_text
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from typing import Dict, Optional, List
 from pydantic import BaseModel
@@ -1614,6 +1614,12 @@ def search(          # NOT async — see below
             parsed_tokens.extend(intent.tokens)
             trope_tags, trope_leftover = intent.tags, intent.tag_leftover
             trope_extra_groups = intent.extra_tag_groups
+            # "No harems." Applied as a filter on the WHOLE query, not inside
+            # the trope branch, because a negation is unconditional: the reader
+            # does not want it however the work was found.
+            for _group in intent.exclude_tag_groups:
+                filters.append(
+                    not_(Story.tags.op("&&")(cast(_group, PG_ARRAY(Text)))))
             # The resolution always votes in the ranking; it only joins the
             # PREDICATE when it can actually narrow something. See
             # TROPE_BRANCH_MAX_WORKS — an unbounded branch over a 577,244-work

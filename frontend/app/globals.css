@@ -5946,3 +5946,9 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .outreach__rules { margin: 8px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.6; }
 .outreach__rules li { margin-bottom: 6px; color: var(--text-dim); }
 .outreach__rules strong { color: var(--text); }
+
+/* The negative conditions lifted out of a pasted post. Each is one click to
+   add; the backend turns "no harems" into an exclusion rather than a search
+   term. See _extract_negations in backend/query_intent.py. */
+.outreach__negs { padding-bottom: 2px; }
+.outreach__negs .btn { font-size: 12px; }

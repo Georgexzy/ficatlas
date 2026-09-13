@@ -414,6 +414,42 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   fresh visitor hash, so a single test script reads as several new visitors.
   Treat same-second bursts of identical queries as what they are.
 
+- **"No harems" was searching FOR harems.** From a corpus of real fic-finder
+  posts: one request listed NINE negative conditions against six positive ones,
+  and none of it was parsed, so the words went into the positive query.
+  Measured before the fix:
+
+      harry potter no harem  ->  "The Harem War" first, and a work tagged
+                                 `Harry Potter Has a Harem` third
+      no character death     ->  works tagged `Character Death`
+
+  Worse than zero results: the reader is handed the opposite of what they asked
+  for, and it looks like it worked.
+  - `_extract_negations` resolves the subject against the SAME tag vocabulary
+    the positive path uses, which is what makes it general instead of a list of
+    tropes somebody thought of. The window logic also settles where the
+    negation stops: "no character death fluff" excludes `Character Death` and
+    KEEPS "fluff", which no punctuation-guessing would have decided.
+  - **`no`/`not` are gated on the query reading as a request; `without` and
+    `excluding` are not.** Resolution alone is NOT a sufficient guard, and this
+    was measured rather than assumed — with the gate off, `no country for old
+    men` excluded `Grumpy Old Men`, `no way home peter parker` excluded
+    `Homeless Peter Parker`, and `the boy who had no name` excluded `Names`.
+    The vocabulary is 1.57M freeform strings and the match is fuzzy by design,
+    so almost any phrase resolves to something.
+  - The cost is stated in the code: `harry potter no harem` typed bare is not
+    recognised as a request, so its negation is missed. It fails by doing
+    nothing rather than by excluding the wrong thing — wrong exclusions are
+    invisible, missed ones are not.
+  - Single-word subjects ("no harems") need an EXACT vocabulary match, not a
+    substring one. `LIKE '%home%'` is how `no way home` matched
+    `Homeless Peter Parker`.
+- **`_strip_frames` was eating the "with" of "without".** The framing pattern
+  listed `with` as a connective after the fic-noun with no trailing `\b`, so
+  "looking for a fic without character death" became "a out character death" —
+  the negation destroyed before anything could read it, and "out" searched for
+  as a word. Pre-existing, found only because negation parsing tripped over it.
+
 - **"at least 150k words" set the floor to 50,000.** The vague `long` qualifier
   matched "very long" elsewhere in the post and the number the reader actually
   gave was ignored. Being handed 50k fics when you asked for 150k is worse than

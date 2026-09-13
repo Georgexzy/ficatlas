@@ -60,6 +60,15 @@ const FRAMING = [
   /\b(?:i\s+(?:have\s+)?(?:already\s+)?read|i've\s+read|already\s+read)\b[\s\S]*$/gi,
 ]
 
+// The negative half of a request, kept rather than stripped.
+//
+// Real posts are as much about what the reader does not want as what they do —
+// one in the sample corpus listed nine negative conditions against six
+// positive. The backend now reads "no X" and "without X" as exclusions (see
+// _extract_negations in query_intent.py), so these lines are worth keeping in
+// the condensed query instead of being thrown away with the rest of the prose.
+const NEGATIVE_LINE = /\b(?:no|not|without|excluding|avoid|don'?t want)\b/i
+
 /** A pasted post, reduced to something worth searching. */
 function condense(raw: string): string {
   let t = raw
@@ -70,6 +79,20 @@ function condense(raw: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 220)
+}
+
+/** The lines of a post that say what the reader does NOT want.
+ *
+ * Offered as one-click additions rather than merged into the query, because a
+ * post's negative list is usually longer than any search should be and the
+ * person running the tool is better placed than a regex to pick the two that
+ * matter. */
+function negativeLines(raw: string): string[] {
+  return raw
+    .split(/[\r\n]+/)
+    .map(l => l.replace(/^\s*[-*•]\s*/, "").trim())
+    .filter(l => l.length > 2 && l.length < 60 && NEGATIVE_LINE.test(l))
+    .slice(0, 6)
 }
 
 export default function OutreachPanel() {
@@ -147,6 +170,23 @@ export default function OutreachPanel() {
           tropes beats forty words.
         </span>
       </div>
+
+      {/* The "not looking for" half, which is where these posts carry most of
+          their information and which the tool previously dropped on the floor.
+          One click each, because a post's negative list is longer than any
+          search should be. */}
+      {negativeLines(raw).length > 0 && (
+        <div className="outreach__row outreach__negs">
+          <span className="outreach__hint">They said no to:</span>
+          {negativeLines(raw).map(l => (
+            <button key={l} className="btn"
+              title="Add this to the search as an exclusion"
+              onClick={() => setQ(q => `${q} ${l}`.replace(/\s+/g, " ").trim())}>
+              {l.length > 34 ? l.slice(0, 33) + "…" : l}
+            </button>
+          ))}
+        </div>
+      )}
 
       <label className="outreach__label" htmlFor="outreach-q">Search</label>
       <div className="outreach__row">
