@@ -20,6 +20,12 @@ from sqlalchemy.orm import Session
 
 from db.session import get_db
 
+# Shared with api/search.py, which owns the list and the reasoning. Imported
+# rather than copied: two lists of what counts as this content would drift, and
+# the one that drifts laxer is the bug.
+from api.search import (_UNDERAGE_TAGS as _UA_TAGS,
+                        _UNDERAGE_WARNINGS as _UA_WARNINGS)
+
 router = APIRouter()
 ships_router = APIRouter()
 
@@ -241,8 +247,16 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
               JOIN stories s ON s.id = t.id
              WHERE s.delisted_at IS NULL
                AND s.source_restricted_at IS NULL
+               -- Sexualised minors, excluded here as everywhere. Hub pages are
+               -- the crawlable surface and the pages search engines send
+               -- strangers to, so they are the LAST place this should appear.
+               -- See _UNDERAGE_TAGS in api/search.py for why the tag list is
+               -- exact rather than a pattern.
+               AND NOT (s.warnings && CAST(:ua_w AS text[]))
+               AND NOT (s.tags && CAST(:ua_t AS text[]))
              ORDER BY t.ord
-        """), {"ids": ids}).fetchall()
+        """), {"ids": ids,
+               "ua_w": _UA_WARNINGS, "ua_t": _UA_TAGS}).fetchall()
         _fandoms = [f for r in rows for f in (r[9] or [])]
         _rels = [v for r in rows for v in (r[10] or [])]
         works = [
