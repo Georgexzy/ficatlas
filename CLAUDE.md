@@ -414,6 +414,35 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   fresh visitor hash, so a single test script reads as several new visitors.
   Treat same-second bursts of identical queries as what they are.
 
+- **`angst` and `fluff` return a 503, and this is still OPEN.** The two
+  most-used tags in fanfiction — 868,737 and 1,130,841 works here — time out
+  after 20s. A bare one-word trope was refused a tag branch, so it fell to a
+  full-text scan over every matching row. That half is fixed: an EXACT one-word
+  tag match now resolves (`whump` 45,105 works and `omegaverse` 9,489 went from
+  a text scan to ~2s), and `_names_a_thing` still rejects `harry`, `naruto` and
+  `hermione` before any window is tried, which is what the old rule was really
+  protecting.
+  - **It did not fix the biggest tags, and one attempt made things worse.**
+    Replacing the OR with the tag branch ALONE for a whole-query match fixed
+    `fluff` (503 → 10.3s) and REGRESSED `hurt comfort` (7.4s → 503). Reverted,
+    with a note at the call site. The lesson is the diagnosis: the cost of these
+    queries is the candidate pull and ranking over a huge match set, NOT the
+    predicate that selects it, so changing the predicate moves the problem
+    around without solving it.
+  - Where to look next: a whole-query tag match is really a BROWSE, and browse
+    already has machinery for this (`_browse_arm`, popularity ordering off an
+    index) that relevance ranking does not use.
+  - The test that asserted the old behaviour was updated rather than deleted,
+    and records why the original reasoning ("the text search already matches
+    every tag containing it") did not survive measurement.
+- **Ship nicknames are mined from TAGS, so nicknames people only *say* are
+  missing.** `romoine` returns 7 results and `bellamione` 282, while `drarry`
+  (2,514 tagged), `jegulus` (2,072) and `tomarry` resolve properly —
+  `ship_aliases` needs 100+ works tagged with the nickname and those two are
+  used in prose, not in tag fields. Not a mechanism bug; a coverage ceiling.
+  Generalising it would mean deriving portmanteaus from character-name
+  fragments rather than lowering the threshold, which would admit noise.
+
 - **"No harems" was searching FOR harems.** From a corpus of real fic-finder
   posts: one request listed NINE negative conditions against six positive ones,
   and none of it was parsed, so the words went into the positive query.
