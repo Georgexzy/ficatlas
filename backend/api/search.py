@@ -777,6 +777,62 @@ _RECS_PREFIX = "reddit_refs:"
 RECS_BONUS = float(os.getenv("SEARCH_RECS_BONUS", "1.5"))
 
 
+# ── Sexualised minors: excluded by default, everywhere ──────────────────────
+#
+# This is a safety default, not a taste filter, and it exists because the
+# absence of one did real harm: a reader was banned for fourteen days from
+# r/HPFanfiction for linking a FicAtlas search that listed works tagged
+# "Underage Sex". The explicit toggle was OFF at the time and did nothing,
+# because it filters on RATING and these works are rated M or Not Rated —
+# AO3's "Underage" is an archive WARNING, orthogonal to the rating, and the
+# two had never been connected.
+#
+# So the rating toggle cannot be the control for this. It is excluded on every
+# search unless a caller explicitly asks otherwise, which nothing in the UI
+# currently does.
+#
+# WARNINGS and TAGS both, because the same fact is recorded in two places:
+# 10,037 works carry the `Underage Sex` archive warning and 22,968 carry an
+# `Underage Sex - Freeform` tag, and neither implies the other.
+_UNDERAGE_WARNINGS = ["Underage Sex", "Underage"]
+
+# Matched as EXACT tag values, never as a substring, and the reason is in the
+# vocabulary: `Underage Drinking` (25,321 works), `Underage Smoking` (7,655),
+# `Underage Drug Use` (3,567) and `Underage Kissing` (3,686) are not
+# sexualisation of minors and must not be swept up — nor must `Chance
+# Meetings`, which a `chan%` pattern matches. Over-blocking would hide tens of
+# thousands of ordinary stories and teach people the filter is broken.
+_UNDERAGE_TAGS = [
+    "Underage Sex - Freeform", "Consensual Underage Sex",
+    "Underage Rape/Non-con", "Implied/Referenced Underage Sex",
+    "Underage - Freeform", "Extremely Underage", "Underage",
+    "Underage Sex", "Underage Sexual Activity", "Underage Masturbation",
+    "Pedophilia", "Implied/Referenced Pedophilia", "Pedophile",
+    "Shotacon", "Lolicon", "Chan",
+]
+
+
+def _underage_filter():
+    """Exclude works that flag sexual content involving minors.
+
+    Returns a predicate, or None when the feature is switched off. A work is
+    excluded if EITHER its archive warnings or its tags say so — the two are
+    recorded independently and each is authoritative on its own.
+    """
+    if not UNDERAGE_FILTER_ON:
+        return None
+    return and_(
+        not_(Story.warnings.op("&&")(cast(_UNDERAGE_WARNINGS, PG_ARRAY(Text)))),
+        not_(Story.tags.op("&&")(cast(_UNDERAGE_TAGS, PG_ARRAY(Text)))),
+    )
+
+
+# A kill switch, not a user setting. If a future instance has a reason to serve
+# this content it can set the variable; nothing in the UI exposes it, and the
+# default is on.
+UNDERAGE_FILTER_ON = os.getenv("SEARCH_FILTER_UNDERAGE", "1") != "0"
+
+
 def _thin(entity=Story):
     """1.0 for a row with no summary, 0.0 otherwise.
 
@@ -1434,6 +1490,17 @@ def search(          # NOT async — see below
     is_operator = viewer is not None and viewer.at_least(ROLE_ADMIN)
     if not is_operator:
         filters.append(Story.delisted_at.is_(None))
+
+    # Sexualised minors, excluded for EVERYONE including operators.
+    #
+    # Deliberately not tied to the delisted gate above, and deliberately not
+    # exempting operators. Delisting is a takedown queue an operator has to be
+    # able to see in order to work it; this is not a moderation state, it is
+    # content the site does not serve, and the person most likely to paste a
+    # search link somewhere public is the operator.
+    _ua = _underage_filter()
+    if _ua is not None:
+        filters.append(_ua)
 
     # Works whose title we hold in a visibly broken state.
     #
@@ -2324,7 +2391,12 @@ def search(          # NOT async — see below
         if fuzzy_pred is not None:
             # Structural filters only — same site/explicit/delisted gate as the
             # main query, but no FTS, so a near-miss title is allowed in.
+            # Its own query, so it needs the gate again — this arm bypasses
+            # `filters` entirely and would otherwise be a hole straight through
+            # the exclusion above.
             fuzzy_q = db.query(Story).filter(Story.delisted_at.is_(None))
+            if _ua is not None:
+                fuzzy_q = fuzzy_q.filter(_ua)
             if site_enums:
                 fuzzy_q = fuzzy_q.filter(Story.site.in_(site_enums))
             if not explicit:
@@ -4019,6 +4091,14 @@ def random_stories(
 
     where = ["word_count > :min_w", "delisted_at IS NULL"]
     params: dict = {"min_w": min_w, "count": count}
+    # Raw SQL, so the ORM filter cannot reach it — and "Surprise me" is on the
+    # landing page, which makes it the likeliest place for this content to be
+    # put in front of somebody who did not ask for anything at all.
+    if UNDERAGE_FILTER_ON:
+        where.append("NOT (warnings && CAST(:ua_w AS text[]))")
+        where.append("NOT (tags && CAST(:ua_t AS text[]))")
+        params["ua_w"] = _UNDERAGE_WARNINGS
+        params["ua_t"] = _UNDERAGE_TAGS
     if not explicit:
         where.append("(rating <> 'explicit' OR rating IS NULL)")
     if fandom_pat:

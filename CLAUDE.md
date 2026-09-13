@@ -5,6 +5,42 @@ fanfiction search engine: Next.js 15 frontend (port 3000, reverse-proxies
 `/api/*`) + FastAPI backend (8000) + PostgreSQL 16 (~19.7M `stories` rows).
 Live tree is `/home/george/ficatlas` (not this worktree).
 
+## Content safety: sexualised minors
+
+**Excluded from every surface, by default, for everyone — including operators.**
+This is a safety default, not a preference, and it exists because its absence
+did real harm: a reader was **banned for fourteen days from r/HPFanfiction**
+for linking a FicAtlas search that listed works tagged "Underage Sex".
+
+- **The explicit toggle was OFF and did nothing.** It filters on RATING, and
+  every offending work was rated **M** or **Not Rated** — AO3's "Underage" is an
+  archive WARNING, orthogonal to the rating, and the two had never been
+  connected. The rating toggle cannot be the control for this and is not.
+- **Warnings AND tags**, because the same fact is recorded twice and neither
+  implies the other: 10,037 works carry the `Underage Sex` archive warning and
+  22,968 carry an `Underage Sex - Freeform` tag.
+- **Exact tag values, never a substring.** `Underage Drinking` (25,321 works),
+  `Underage Smoking` (7,655), `Underage Drug Use` (3,567) and
+  `Underage Kissing` (3,686) are not sexualisation of minors, and a `chan%`
+  pattern catches `Chance Meetings`. Over-blocking would hide tens of thousands
+  of ordinary stories and teach people the filter is broken.
+- **Four separate code paths needed it**, and missing any one would have left
+  the hole open: the main search `filters`, the fuzzy-title arm (which builds
+  its own query and bypasses `filters` entirely), `/api/search/random` (raw SQL,
+  and it is on the LANDING page), and the hub work lists in `api/hubs.py` (the
+  crawlable surface search engines send strangers to). `api/hubs.py` imports the
+  lists from `api/search.py` rather than copying them — two lists of what counts
+  as this content would drift, and the one that drifts laxer is the bug.
+- **Operators are not exempt.** Delisting is a takedown queue an operator must
+  see to work it; this is not a moderation state but content the site does not
+  serve, and the operator is the person most likely to paste a search link
+  somewhere public.
+- Measured on the exact search that caused the ban: **9 of 30 flagged works on
+  page one, now 0**, with `underage drinking` and `underage smoking` still
+  returning normally.
+- `SEARCH_FILTER_UNDERAGE=0` is a kill switch for a future instance with a
+  deliberate reason. Nothing in the UI exposes it.
+
 ## Running tests
 
 ```bash
