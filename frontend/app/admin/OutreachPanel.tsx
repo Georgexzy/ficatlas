@@ -42,6 +42,32 @@ interface Result {
 
 const PUBLIC = "https://ficatlas.com"
 
+interface Taste {
+  matched: { asked: string; id: string; title: string; site: string; kudos: number }[]
+  unmatched: string[]
+  tags: { value: string; kind: string; shared_by: number; works: number }[]
+  query: string
+}
+
+// The "I have already read" list, which these posts almost always carry and
+// which is the richest signal in the whole request — far better than the
+// adjectives. Somebody who names three Slytherin!Harry fics has told you what
+// they want in the index's own vocabulary.
+const READ_LIST = /\b(?:i(?:'ve| have)?\s+(?:already\s+)?read|already\s+read|read\s+so\s+far|stories\s+i(?:'ve| have)\s+read)\b/i
+
+/** The titles under an "I have read" heading, one per line. */
+function readTitles(raw: string): string[] {
+  const lines = raw.split(/[\r\n]+/)
+  const start = lines.findIndex(l => READ_LIST.test(l))
+  if (start < 0) return []
+  return lines.slice(start + 1)
+    .map(l => l.replace(/^\s*[-*•\d.)\s]+/, "")
+                .replace(/\s*[-–—]\s*(enjoyed|loved|liked|great|good|meh).*$/i, "")
+                .trim())
+    .filter(l => l.length > 2 && l.length < 90)
+    .slice(0, 10)
+}
+
 /** The search as a reader would link to it. */
 const publicLink = (q: string) =>
   `${PUBLIC}/?q=${encodeURIComponent(q).replace(/%20/g, "+")}`
@@ -103,6 +129,7 @@ export default function OutreachPanel() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const [taste, setTaste] = useState<Taste | null>(null)
 
   const run = useCallback(async (query: string) => {
     const term = query.trim()
@@ -170,6 +197,49 @@ export default function OutreachPanel() {
           tropes beats forty words.
         </span>
       </div>
+
+      {/* The "I have already read" half.
+          Resolved against the index, then reduced to the tags those works have
+          IN COMMON — one work's tag list describes that work; what several
+          share is taste. The works themselves are then excluded from the
+          search, since recommending back what somebody has told you they have
+          read is the one answer they have ruled out. */}
+      {readTitles(raw).length > 0 && (
+        <div className="outreach__row outreach__negs">
+          <button className="btn" onClick={async () => {
+            try {
+              const r = await fetch("/api/search/taste?titles=" +
+                encodeURIComponent(readTitles(raw).join("|")),
+                { credentials: "include" })
+              if (!r.ok) throw new Error(`Could not read their list (${r.status})`)
+              const t: Taste = await r.json()
+              setTaste(t)
+              if (t.query) { setQ(t.query); run(t.query) }
+            } catch (e: any) { setErr(e.message) }
+          }}>
+            Use the {readTitles(raw).length} fics they&rsquo;ve read →
+          </button>
+          <span className="outreach__hint">
+            Finds what those works have in common and searches for more of it.
+          </span>
+        </div>
+      )}
+
+      {taste && (
+        <p className="outreach__hint">
+          {taste.matched.length > 0 && (
+            <>Matched <strong>{taste.matched.map(m => m.title).join(", ")}</strong>. </>
+          )}
+          {taste.tags.length > 0 && (
+            <>Shared: {taste.tags.map(t => `${t.value} (${t.shared_by})`).join(" · ")}. </>
+          )}
+          {taste.unmatched.length > 0 && (
+            <>Not in the index: {taste.unmatched.join(", ")}. </>
+          )}
+          {taste.tags.length === 0 && taste.matched.length > 0 &&
+            <>They share no tags — too different to derive a taste from.</>}
+        </p>
+      )}
 
       {/* The "not looking for" half, which is where these posts carry most of
           their information and which the tool previously dropped on the floor.
