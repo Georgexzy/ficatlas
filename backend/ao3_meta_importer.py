@@ -44,6 +44,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from db.session import db_session
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
+from crossover import is_crossover as fic_is_crossover
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
@@ -173,7 +174,7 @@ def _to_row(obj: dict) -> dict | None:
         genres=[],
         published_at=_parse_date(meta.get("published")),
         is_hosted=False,
-        is_crossover=len(fandoms) > 1,
+        is_crossover=fic_is_crossover(fandoms),
     )
 
 

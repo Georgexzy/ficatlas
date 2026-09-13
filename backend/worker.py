@@ -1294,6 +1294,12 @@ async def _curation_loop() -> None:
     the other case: a change to the TERM LISTS in content_gates.py, which no
     trigger can retrofit onto rows written before it.
 
+    The crossover flags are the fifth, and belong here for exactly the reason
+    the gate repair does: `is_crossover` is written by five importers and the
+    crawler from the fandom list, so it is correct for anything written since
+    the definition changed and wrong for everything written before it. No
+    trigger can retrofit a definition onto rows that predate it.
+
     The series word counts are the fourth part and belong here for the same
     reason as the gate repair: both are a denormalised column that has to be
     rebuilt after a BULK change to what it was derived from. `_series_fill_loop`
@@ -1309,6 +1315,7 @@ async def _curation_loop() -> None:
     wrong, so a run with nothing to fix does one query and stops.
     """
     import content_gates
+    import crossover
     import reddit_recs_import
     import series_wordcount
     import tropedia_recs_import
@@ -1319,7 +1326,8 @@ async def _curation_loop() -> None:
         for name, fn in (("reddit recs", reddit_recs_import.run),
                          ("tropedia recs", tropedia_recs_import.run),
                          ("content gates", content_gates.run),
-                         ("series word counts", series_wordcount.run)):
+                         ("series word counts", series_wordcount.run),
+                         ("crossover flags", crossover.run)):
             try:
                 stats = await asyncio.to_thread(fn)
                 log.info("%s: %s", name, stats)

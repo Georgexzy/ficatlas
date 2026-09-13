@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from crawlers.base import BaseCrawler
 from models.story import SiteEnum, RatingEnum, StatusEnum
 from db.session import db_session
+from crossover import is_crossover as fic_is_crossover
 
 AO3_RATING_MAP = {
     "Not Rated": RatingEnum.not_rated,
@@ -165,7 +166,7 @@ class AO3Crawler(BaseCrawler):
             published_at = parse_date("dd.published")
             updated_at = parse_date("dd.status") or parse_date("dd.published")
 
-            is_crossover = len(fandoms) > 1
+            is_crossover = fic_is_crossover(fandoms)
 
             return {
                 "site_id": work_id,
