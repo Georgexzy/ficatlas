@@ -3580,6 +3580,9 @@ class ExtractResponse(BaseModel):
     already_read: list[str] = []
     # "ongoing", "complete", "WIP" — a filter, not a word to search for.
     status: Optional[str] = None
+    # "no crossovers" / "naruto x bleach crossover" — read from the post, never
+    # assumed. See the note in extract() for why there is no default.
+    crossovers: Optional[str] = None
     # "good fics", "worth reading", "best" — a request about QUALITY, which no
     # tag expresses. It is a sort order.
     sort: Optional[str] = None
@@ -3692,6 +3695,23 @@ _TAG_ABBREV = {
 _QUALITY_WORDS = re.compile(
     r"\b(?:good|best|worth\s+reading|quality|well[-\s]written|favourite|"
     r"favorite|recommend\w*|top|great|excellent)\b", re.I)
+
+# Crossovers, in the reader's own words. NEGATIVE first and deliberately so:
+# "no crossovers" contains the word "crossover", so testing for the want before
+# the refusal reads a refusal as a want — which is exactly what happened. See
+# the note where these are used.
+_CROSSOVER_WORDS = [
+    (re.compile(r"\b(?:no|not|non|without|avoid|excluding|except)[-\s]*"
+                r"(?:a\s+|any\s+)?cross[-\s]?overs?\b", re.I), "exclude"),
+    (re.compile(r"\bcross[-\s]?overs?\s+(?:are\s+)?(?:not\s+|un)"
+                r"(?:welcome|wanted|please)\b", re.I), "exclude"),
+    (re.compile(r"\bcross[-\s]?overs?\b", re.I), "only"),
+]
+
+
+def _is_crossover_word(value: str) -> bool:
+    return bool(re.fullmatch(r"cross[-\s]?overs?", value.strip(), re.I))
+
 
 # Status, in the words readers write rather than the ones the filter uses.
 _STATUS_WORDS = [
@@ -4092,6 +4112,34 @@ def extract(
         if rx.search(raw):
             status = value
             break
+
+    # Crossovers: read from the post, never assumed.
+    #
+    # "no crossovers please" came back as `tag:"Crossover"` — the search asked
+    # for the one thing the reader had ruled out, which is the same failure as
+    # "no harems" searching FOR harems, in a new place. The word is in the post
+    # either way, so only the words AROUND it can tell a want from a refusal.
+    #
+    # Deliberately NOT a default. The instinct to hide crossovers unless asked
+    # is a reasonable one and the column cannot carry it: `is_crossover` is
+    # `len(fandoms) > 1`, and AO3 authors routinely tag several spellings of
+    # ONE franchise — `Star Wars - All Media Types` beside
+    # `Star Wars: The Clone Wars`, `Percy Jackson … - Rick Riordan` beside
+    # `Percy Jackson … & Related Fandoms`. Measured over a 20,000-work sample
+    # of flagged AO3 works, **33% have fandoms that all share a first word**,
+    # i.e. are not crossovers at all. On the real TWD post: 74 works, 22
+    # flagged, 11 of those wrongly. Excluding by default would delete a third
+    # of the answer, half of it for a bug, and do it invisibly — fewer results
+    # look exactly like a search that worked.
+    # It would also skew the archive mix, which is the thing this site exists
+    # to get right: AO3 is 16.19% flagged and FF.net 5.33%, and that gap is
+    # coverage rather than fact — the FF.net bulk dumps carry one fandom per
+    # row, so `false` there means "unknown", the same trap as `status`.
+    crossovers = None
+    for rx, value in _CROSSOVER_WORDS:
+        if rx.search(raw):
+            crossovers = value
+            break
     sort = "popular" if _QUALITY_WORDS.search(raw) else None
 
     # The fandom, from the abbreviation table the search path already mines.
@@ -4222,6 +4270,8 @@ def extract(
                 and t.value.strip().lower() == _alias_word):
             return True
         if (wc_min or wc_max) and _is_length_word(t.value):
+            return True
+        if crossovers and _is_crossover_word(t.value):
             return True
         return False
 
@@ -4418,6 +4468,8 @@ def extract(
     # the bar, so a caller that wants it has to pass it.
     if status:
         parts.append("complete" if status == "complete" else "wip")
+    if crossovers:
+        parts.append(f"xover:{crossovers}")
     if wc_min:
         # The SERIES add-on, turned on whenever the post named a length.
         #
@@ -4444,7 +4496,8 @@ def extract(
     return ExtractResponse(terms=terms, query=" ".join(parts),
                            ignored_words=max(len(words) - len(used), 0),
                            word_count_min=wc_min, word_count_max=wc_max,
-                           already_read=already_read, status=status, sort=sort)
+                           already_read=already_read, status=status, sort=sort,
+                           crossovers=crossovers)
 
 
 @router.get("/taste", response_model=TasteResponse)
