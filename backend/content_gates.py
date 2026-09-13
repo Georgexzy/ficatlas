@@ -51,6 +51,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 
 sys.path.insert(0, "/app")
 from db.dsn import default_database_url  # noqa: E402
@@ -189,10 +190,30 @@ PARAMS = {"uw": UNDERAGE_WARNINGS, "ut": UNDERAGE_TAGS,
 # Batched, because this touches 20.5M rows and a single statement would hold a
 # transaction open for the whole run — on a box that is also serving searches.
 BATCH = int(os.getenv("CONTENT_GATE_BATCH", "50000"))
+# Seconds between statements. See the note where it is used.
+PAUSE_S = float(os.getenv("CONTENT_GATE_PAUSE_S", "5"))
+
+
+# One run at a time, enforced by the database rather than by whoever is typing.
+#
+# Two of these were started concurrently by hand and the result was not two
+# backfills — it was a deadlock that also blocked the crawler's inserts, ANALYZE,
+# the watchdog and the traffic panel, and left the site answering searches in
+# sixteen seconds. Each run rewrites hundreds of thousands of rows; two touching
+# the same rows in different orders is the textbook case.
+#
+# An advisory lock is the right shape: held on the connection, so it cannot
+# outlive a crash the way a flag in a table could, and pg_try_advisory_lock
+# never waits — a second run has nothing useful to do and says so.
+_LOCK_KEY = 0x6721C0DE
 
 
 def run(dry_run: bool = False) -> dict:
     with db_session() as db:
+        if not dry_run and not db.execute(
+                text("SELECT pg_try_advisory_lock(:k)"), {"k": _LOCK_KEY}).scalar():
+            log.warning("content_gates: another run holds the lock; skipping")
+            return {"skipped": True}
         if dry_run:
             row = db.execute(text("""
                 SELECT count(*) FILTER (WHERE warnings && CAST(:uw AS text[])
@@ -230,6 +251,11 @@ def run(dry_run: bool = False) -> dict:
             db.commit()
             total += n
             log.info("content_gates: %s via %s -> %s rows", col, arr, f"{n:,}")
+            # Breathe. This runs on the same box that serves searches, and the
+            # statements above rewrite hundreds of thousands of rows each; a
+            # pause between them lets the crawler, ANALYZE and autovacuum get a
+            # turn instead of queueing behind the whole job.
+            time.sleep(PAUSE_S)
 
         for col, w, t in (("gate_underage", UNDERAGE_WARNINGS, UNDERAGE_TAGS),
                           ("gate_adult",    ADULT_WARNINGS,    ADULT_TAGS)):
