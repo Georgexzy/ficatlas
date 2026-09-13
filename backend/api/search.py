@@ -145,7 +145,7 @@ def _cost_ttl(elapsed_ms: float) -> int:
     return max(SEARCH_CACHE_SECONDS,
                min(SEARCH_CACHE_MAX_SECONDS, int(elapsed_ms * SEARCH_CACHE_COST_FACTOR)))
 from query_parser import parse_query, parsed_to_search_params
-from query_intent import resolve_intent
+from query_intent import resolve_intent, read_request, resolve_trope_tags
 import re
 from character_aliases import character_variants, relationship_variants
 from language_aliases import language_variants
@@ -3319,12 +3319,22 @@ class ExtractedTerm(BaseModel):
     value: str
     count: int
     matched: str       # the words in the post it came from
+    # Resolved from a whole LINE of the post rather than found as a loose word
+    # in the prose. The line SAID what it wanted; a bare word merely appeared
+    # in it, so this outranks frequency and must survive any later sort.
+    from_line: bool = False
 
 
 class ExtractResponse(BaseModel):
     terms: list[ExtractedTerm]
     query: str
     ignored_words: int
+    # "at least 150k words", read from the post rather than guessed at.
+    word_count_min: Optional[int] = None
+    word_count_max: Optional[int] = None
+    # Titles under an "I have read" heading. NOT wants — see the note in
+    # extract() — and handed back for /api/search/taste to resolve.
+    already_read: list[str] = []
 
 
 # A term nobody would be narrowing by. `Fluff` is on 1.13M works and is still
@@ -3368,6 +3378,36 @@ def _is_grammar(phrase: str) -> bool:
     """
     parts = [w.split("'")[0] for w in phrase.lower().split()]
     return bool(parts) and all(w in _FUNCTION_WORDS for w in parts if w)
+
+
+# Where a request stops and a bibliography starts.
+_READ_HEADING = re.compile(
+    r"^\s*(?:i(?:'ve| have)?\s+(?:already\s+)?read|already\s+read|"
+    r"(?:fics?|stories|things)\s+i(?:'ve| have)\s+read|read\s+so\s+far|"
+    r"here'?s?\s+(?:a\s+)?list)\b", re.I)
+
+
+def _split_read_list(raw: str) -> tuple[str, list[str]]:
+    """The request, and the titles the reader says they have already read.
+
+    Everything after the heading is a bibliography. Read as wants it is
+    actively misleading — a post listing "sarcasm and slytherin" and "prince of
+    slytherin" as fics already read produced `Sarcasm` and `Slytherin` as
+    things the reader was asking for.
+    """
+    lines = raw.splitlines()
+    at = next((i for i, l in enumerate(lines) if _READ_HEADING.match(l)), None)
+    if at is None:
+        return raw, []
+    titles = []
+    for l in lines[at + 1:]:
+        t = re.sub(r"^\s*[-*\u2022\d.)\s]+", "", l)
+        # "- prince of slytherin - enjoyed" — the verdict is not part of it.
+        t = re.sub(r"\s*[-\u2013\u2014]\s*(enjoyed|loved|liked|good|great|meh|ok(ay)?)\b.*$",
+                   "", t, flags=re.I).strip()
+        if 2 < len(t) < 90:
+            titles.append(t)
+    return "\n".join(lines[:at]), titles[:12]
 
 
 def _canonical_character(db, name: str) -> Optional[str]:
@@ -3461,6 +3501,56 @@ def _stem_sibling(db, tag: str) -> Optional[tuple[str, int]]:
     return (row[0], row[1]) if row else None
 
 
+# How many works survive a candidate query. Capped: the question is "is this
+# still worth searching", not "how many", and a bounded count answers it for a
+# fraction of the cost.
+_PROBE_CAP = 20
+# Below this a term has narrowed the search past usefulness. Three rather than
+# one, because a single surviving work usually means the terms happen to
+# co-occur on it rather than that it is the answer.
+_PROBE_MIN_KEEP = 3
+
+
+def _biggest_spelling(db, tags: list[str]) -> Optional[tuple[str, int]]:
+    """Of several ways to write one concept, the one most works actually use."""
+    if not tags:
+        return None
+    row = db.execute(sql_text("""
+        SELECT value, count FROM facets
+         WHERE kind = 'tag' AND value = ANY(CAST(:t AS text[]))
+         ORDER BY count DESC LIMIT 1
+    """), {"t": tags}).first()
+    return (row[0], int(row[1])) if row else None
+
+
+def _probe_count(db, parts: list[str], word_count_min: Optional[int] = None) -> int:
+    """Would this combination of terms find anything at all?"""
+    clauses, params = [], {}
+    for i, part in enumerate(parts):
+        m = re.match(r'(\w+):"(.+)"$', part)
+        if not m:
+            continue
+        op_name, value = m.group(1), m.group(2)
+        col = {"tag": "tags", "char": "characters", "ship": "relationships",
+               "fandom": "fandoms"}.get(op_name)
+        if not col:
+            continue
+        clauses.append(f"{col} && ARRAY[:v{i}]::text[]")
+        params[f"v{i}"] = value
+    if not clauses:
+        return 1
+    # The length constraint counts too. Without it the probe passed a pair of
+    # tags that co-occur on works of any size and the reader's actual query —
+    # those tags AND 150k words — still returned nothing.
+    if word_count_min:
+        clauses.append("word_count >= :wcmin")
+        params["wcmin"] = int(word_count_min)
+    params["cap"] = _PROBE_CAP
+    return int(db.execute(sql_text(
+        "SELECT count(*) FROM (SELECT 1 FROM stories WHERE delisted_at IS NULL "
+        "AND " + " AND ".join(clauses) + " LIMIT :cap) x"), params).scalar() or 0)
+
+
 @router.get("/extract", response_model=ExtractResponse)
 def extract(
     text: str = Query(..., description="A whole fic-finder post, pasted"),
@@ -3485,7 +3575,83 @@ def extract(
     taken and "Daphne" is not, and a character or pairing outranks a generic
     tag of the same length.
     """
-    raw = (text or "")[:4000]
+    raw_full = (text or "")[:4000]
+
+    # SPLIT OFF the "I have read" list before anything reads the words.
+    #
+    # Those lines are TITLES, not wants, and treating them as wants is actively
+    # wrong: on a post listing "sarcasm and slytherin" and "prince of
+    # slytherin" as fics already read, the extractor returned `Sarcasm` and
+    # `Slytherin` as things the reader was asking for. They are the opposite —
+    # works to exclude, and a taste signal. /api/search/taste resolves them.
+    raw, already_read = _split_read_list(raw_full)
+
+    # LINE BY LINE through the existing intent machinery, before falling back
+    # to loose n-grams.
+    #
+    # A fic-finder post is usually a LIST, one constraint per line, and each
+    # line is a small natural-language request that query_intent already knows
+    # how to read. Treating the whole post as one bag of words threw that
+    # structure away and the result was nonsense — "harry is lord of at least 2
+    # houses" became the word "houses", which matched `House`, the television
+    # programme. Per line it resolves to `Harry is Lord Potter`.
+    line_terms: list[ExtractedTerm] = []
+    wc_min = wc_max = None
+    for line in raw.splitlines():
+        line = re.sub(r"^\s*[-*\u2022\d.)\s]+", "", line).strip()
+        if len(line) < 4:
+            continue
+        # Punctuation to spaces before anything reads it. Readers group
+        # alternatives with brackets and slashes — "bashing
+        # (dumbles/weasleys/hermione)- but not WAAAYYY TOOOO much" — and the
+        # trope resolver saw one unbroken token and found nothing, while the
+        # same words spaced out resolve to `Albus Dumbledore Bashing`.
+        # A caveat is not a want. Readers qualify their own asks — "bashing
+        # (dumbles/weasleys/hermione) but not WAAAYYY TOOOO much", "time
+        # travel though I'd prefer canon divergence" — and the trailing clause
+        # defeated the window match entirely: the same line without it resolves
+        # to `Albus Dumbledore Bashing`, with it to nothing. The qualifier is
+        # dropped rather than parsed; "not too much bashing" is a matter of
+        # degree the tag vocabulary cannot express anyway.
+        line = re.split(r"\b(?:but|though|although|however)\b", line, 1, re.I)[0]
+        line = re.sub(r"[()\[\]{}/,;:]+", " ", line)
+        line = re.sub(r"\s+-\s+|\s*-\s*$", " ", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        req = read_request(line)
+        if wc_min is None and req.word_count_min is not None:
+            wc_min = req.word_count_min
+        if wc_max is None and req.word_count_max is not None:
+            wc_max = req.word_count_max
+        # Every concept on the line, not just the first: a line like
+        # "bashing (dumbles/weasleys/hermione)" names three.
+        probe, guard = req.text, 0
+        while probe.strip() and guard < 4:
+            guard += 1
+            tags, works, leftover, _whole = resolve_trope_tags(db, probe)
+            if not tags:
+                break
+            # The BIGGEST spelling, not the first.
+            #
+            # resolve_trope_tags returns every way the archives write a concept
+            # and the search path ORs them; a single `tag:"…"` operator cannot,
+            # so picking tags[0] silently chose one variant of several. On this
+            # post that meant `Harry is Lord Potter` (82 works) over
+            # `Lord Harry Potter`, and it is starker for bashing: the first
+            # spelling is `Albus Dumbledore Bashing` but the set spans six
+            # spellings and 3,481 works. A query built from the rarest of them
+            # finds almost nothing and looks like the index is empty.
+            best = _biggest_spelling(db, tags) or (tags[0], works)
+            line_terms.append(ExtractedTerm(kind="tag", value=best[0],
+                                            count=best[1], matched=line[:60],
+                                            from_line=True))
+            if leftover.strip() == probe.strip():
+                break
+            probe = leftover
+
+    # `raw` stays the REQUEST half. Restoring raw_full here put the "I have
+    # read" titles back into the n-gram pass, which is how `Sarcasm` and
+    # `Slytherin` — two words from a title the reader had already finished —
+    # came back as things they were asking for.
     # Strip URLs and anything that is not a letter, digit or apostrophe. Emoji
     # are common in these posts and are not vocabulary.
     raw = re.sub(r"https?://\S+", " ", raw)
@@ -3570,6 +3736,30 @@ def extract(
     terms = [ExtractedTerm(kind=k, value=v, count=c, matched=m)
              for k, v, c, m in chosen]
 
+
+
+    # Pairing (or whatever leads) plus the two best TAGS. The fandom is already
+    # implied by the pairing, so spending one of three slots on it would narrow
+    # nothing while dropping a quality the reader asked for — it is still
+    # offered as a term for anyone who wants it.
+    # Concepts resolved from a LINE lead, ahead of words found loose in the
+    # prose: the line SAID what it wanted, and a bare word merely appeared in
+    # it. `Harry is Lord Potter` is on 82 works and `House` on 22,251, and the
+    # reader asked for the first and never mentioned the second.
+    # Line concepts ordered by how well attested they are, so the query builds
+    # from the broadest. `Albus Dumbledore Bashing` is on 3,481 works and
+    # `Harry is Lord Potter` on 82 — leading with the rare one narrows to
+    # almost nothing before the useful terms are even tried.
+    line_terms.sort(key=lambda t: -t.count)
+
+    seen_vals: set[str] = set()
+    merged: list[ExtractedTerm] = []
+    for t in line_terms + terms:
+        if t.value in seen_vals:
+            continue
+        seen_vals.add(t.value)
+        merged.append(t)
+    terms = merged
     # The pairing goes FIRST when there is one. This is the exception to
     # ranking by frequency, and it is not arbitrary: a resolved pairing is the
     # subject of the request, while a tag is a quality the reader wants it to
@@ -3589,8 +3779,16 @@ def extract(
                                   matched=t.matched)
         if t.value not in [x.value for x in swapped]:
             swapped.append(t)
+    # Frequency orders the LOOSE words only. Concepts resolved from a line are
+    # already in the order the reader wrote them and must not be re-sorted
+    # underneath the merge below — doing that put `Harry is Lord Potter` (82
+    # works) beneath `House`, the television programme, matched from "houses".
+    # Line concepts stay ahead of loose words, and frequency orders WITHIN each
+    # group. A flat sort by count put `Plot` (5,367 works, a stray noun in
+    # "decent plot/characters") above `Albus Dumbledore Bashing` (3,481), which
+    # the reader had asked for in as many words.
+    swapped.sort(key=lambda t: (not t.from_line, -t.count))
     terms = swapped
-    terms.sort(key=lambda t: -t.count)
 
     if pair_term:
         # The pairing FIRST, and the fandom it implies second. This is the
@@ -3608,22 +3806,54 @@ def extract(
                                       count=fand[1], matched=pair_term.matched))
         keep = [t for t in terms if t.value not in {h.value for h in head}]
         terms = (head + keep)[:EXTRACT_MAX_TERMS]
+    else:
+        terms = terms[:EXTRACT_MAX_TERMS]
 
     # Three terms, not six. Every one is a requirement, so a query built from
     # everything the post mentions is the same over-specified search this
     # endpoint exists to replace.
     op = {"fandom": "fandom", "character": "char",
           "relationship": "ship", "tag": "tag"}
-    # Pairing (or whatever leads) plus the two best TAGS. The fandom is already
-    # implied by the pairing, so spending one of three slots on it would narrow
-    # nothing while dropping a quality the reader asked for — it is still
-    # offered as a term for anyone who wants it.
-    lead = [t for t in terms[:1]]
-    tags_only = [t for t in terms if t.kind == "tag"][:2]
-    picked = lead + [t for t in tags_only if t.value != lead[0].value] if lead else tags_only
-    parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in picked[:3]]
+
+    # Built up one term at a time, and CHECKED.
+    #
+    # Every term is a requirement, so a query assembled from the best three
+    # concepts can easily match nothing: `Harry is Lord Potter` (82 works),
+    # `Magically Powerful Harry` (48) and `Politically Powerful Character` (24)
+    # are each exactly what the reader asked for and together they returned
+    # ZERO. Three right answers make a wrong query.
+    #
+    # So each term is added only if the result set survives it. The count is
+    # capped and the predicate is GIN containment, so this is a few tens of
+    # milliseconds per candidate on an endpoint that is not the search path.
+    parts: list[str] = []
+    for t in terms[:5]:
+        cand = parts + [f'{op.get(t.kind, "tag")}:"{t.value}"']
+        if len(cand) > 3:
+            break
+        try:
+            n = _probe_count(db, cand, wc_min)
+        except Exception:
+            log.debug("extract probe failed", exc_info=True)
+            n = 1
+        # Not merely non-empty — still WORTH READING. A term that cuts the
+        # result set to a single work has answered the request too precisely to
+        # be useful, and the reader said "at least", not "exactly".
+        if n >= _PROBE_MIN_KEEP:
+            parts = cand
+
+    # If nothing survived, fall back to the single best term rather than
+    # returning nothing. The probe is a refinement, not a gate: a one-term
+    # query is always at least as good as an empty one, and an empty one hands
+    # the caller the very "search that finds nothing" this endpoint exists to
+    # avoid. Also the honest behaviour when the probe cannot run at all.
+    if not parts and terms:
+        t = terms[0]
+        parts = [f'{op.get(t.kind, "tag")}:"{t.value}"']
     return ExtractResponse(terms=terms, query=" ".join(parts),
-                           ignored_words=len(words) - len(used))
+                           ignored_words=max(len(words) - len(used), 0),
+                           word_count_min=wc_min, word_count_max=wc_max,
+                           already_read=already_read)
 
 
 @router.get("/taste", response_model=TasteResponse)

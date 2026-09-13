@@ -145,3 +145,63 @@ def test_the_query_spends_its_slots_on_the_ship_and_qualities(ships):
     out = extract(text="Harry/Daphne fics fluffy and romance", db=ships)
     assert out.query.startswith('ship:"Daphne Greengrass/Harry Potter"')
     assert "fandom:" not in out.query
+
+
+# ── A bulleted post is a LIST of constraints, one per line ───────────────────
+
+@pytest.fixture()
+def bulleted(db):
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag','Albus Dumbledore Bashing',3481), ('tag','Dumbledore Bashing',942),
+          ('tag','Harry is Lord Potter',82), ('tag','Lord Harry Potter',38),
+          ('tag','Magically Powerful Harry',48),
+          ('fandom','House',22251), ('tag','Sarcasm',3368), ('tag','Slytherin',1902)
+    """))
+    db.commit()
+    yield db
+    db.execute(text("DELETE FROM facets"))
+    db.commit()
+
+
+def test_the_already_read_list_is_not_a_list_of_wants(bulleted):
+    """A post naming "sarcasm and slytherin" and "prince of slytherin" as fics
+    ALREADY READ had `Sarcasm` and `Slytherin` returned as things it wanted.
+    They are the opposite: works to exclude, and a taste signal."""
+    out = extract(text=(
+        "harry is lord of at least 2 houses\n"
+        "I have read\n- sarcasm and slytherin - enjoyed\n- prince of slytherin"
+    ), db=bulleted)
+    values = [t.value for t in out.terms]
+    assert "Sarcasm" not in values and "Slytherin" not in values
+    assert "sarcasm and slytherin" in out.already_read
+
+
+def test_a_written_word_count_comes_back_from_the_post(bulleted):
+    out = extract(text="at least 150k words - very long\nharry is powerful",
+                  db=bulleted)
+    assert out.word_count_min == 150_000
+
+
+def test_a_caveat_is_not_a_want(bulleted):
+    """"bashing (dumbles/weasleys/hermione)- but not WAAAYYY TOOOO much" — the
+    trailing clause defeated the window match entirely. Without it the line
+    resolves; with it, nothing."""
+    out = extract(text="bashing (dumbles/weasleys/hermione)- but not WAAAYYY TOOOO much",
+                  db=bulleted)
+    assert any("Bashing" in t.value for t in out.terms)
+
+
+def test_the_biggest_spelling_of_a_concept_wins(bulleted):
+    """The archives write one concept several ways and a single tag: operator
+    cannot OR them, so picking the first silently chose a rare variant."""
+    out = extract(text="dumbledore bashing", db=bulleted)
+    assert out.terms[0].value == "Albus Dumbledore Bashing"   # 3,481, not 942
+
+
+def test_a_line_concept_beats_a_word_that_merely_appeared(bulleted):
+    """"harry is lord of at least 2 houses" became the word "houses", which
+    matched `House` — the television programme."""
+    out = extract(text="harry is lord of at least 2 houses", db=bulleted)
+    assert out.terms[0].value != "House"
