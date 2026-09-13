@@ -129,6 +129,12 @@ export interface SearchParams {
   dlp_min_rating?: number
   /** Restrict to works that are (true) or are not (false) part of a series. */
   in_series?: boolean
+  /**
+   * Let a work satisfy `word_count_min` on the strength of its SERIES total,
+   * when the series has more than one work. An ADD-ON: it widens the length
+   * filter and never restricts results to works that are in a series.
+   */
+  count_series?: boolean
   search_within?: string
   // Pagination
   sort?: string

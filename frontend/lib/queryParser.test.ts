@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { parseQuery, canonicalSite, quoteValue } from "./queryParser"
+import { parseQuery, parsedToSearchParams, canonicalSite, quoteValue } from "./queryParser"
 
 // This parser has a twin: backend/query_parser.py. The search bar parses a query
 // here to render its chips and build the URL, and the API re-parses the same
@@ -300,5 +300,33 @@ describe("an operator with no value is not search text", () => {
     const rebuilt = [pq.cleanText.trim(), 'fandom:"Harry Potter"'].filter(Boolean).join(" ")
     expect(rebuilt).toBe('fandom:"Harry Potter"')
     expect(parseQuery(rebuilt).fandoms).toEqual(["Harry Potter"])
+  })
+})
+
+// Mirrored against backend/tests/test_query_parser.py. The two parsers read the
+// same string — the bar to render chips and build the URL, the API when it
+// re-parses on the way in — so a value one of them understands and the other
+// does not is a filter that changes meaning between the box and the results.
+describe("series:count — the length add-on", () => {
+  it("does not set inSeries", () => {
+    const p = parseQuery('tag:"A" >150k series:count')
+    expect(p.countSeries).toBe(true)
+    expect(p.inSeries).toBe(null)
+    expect(p.wordCountMin).toBe(150000)
+  })
+
+  it("can be asked for alongside membership", () => {
+    const p = parseQuery("series:true series:count")
+    expect(p.inSeries).toBe(true)
+    expect(p.countSeries).toBe(true)
+  })
+
+  it("reaches the API as count_series", () => {
+    expect(parsedToSearchParams(parseQuery("series:count")).count_series).toBe(true)
+    expect(parsedToSearchParams(parseQuery("series:true")).count_series).toBeUndefined()
+  })
+
+  it("leaves the rest of the query alone", () => {
+    expect(parseQuery("space opera series:count").cleanText).toBe("space opera")
   })
 })

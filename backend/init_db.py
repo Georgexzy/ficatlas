@@ -407,6 +407,18 @@ ALTER TABLE stories ADD COLUMN IF NOT EXISTS gate_underage boolean NOT NULL DEFA
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS gate_adult boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS ix_stories_gate_underage ON stories (gate_underage) WHERE gate_underage;
 CREATE INDEX IF NOT EXISTS ix_stories_gate_adult ON stories (gate_adult) WHERE gate_adult;
+-- The total length of the SERIES this work belongs to, denormalised onto the
+-- work. Written by backend/series_wordcount.py; NULL for a standalone and for
+-- a one-work series, where the total is just this work's own word count and
+-- the add-on would mean applying the same filter twice.
+--
+-- Denormalised deliberately. As a join it is a semi-join over ~1.06M member
+-- works OR-ed onto the length filter, which cannot use an index and measured
+-- 16.2s against 0.9s on `tag:"Time Travel" words:>150k`. As a column beside
+-- word_count it is a BitmapOr of two index scans on one table.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS series_total_words bigint;
+CREATE INDEX IF NOT EXISTS ix_stories_series_total_words
+    ON stories (series_total_words DESC) WHERE series_total_words IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_stories_popularity ON stories (popularity DESC)
     WHERE popularity IS NOT NULL;
 

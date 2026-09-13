@@ -77,6 +77,9 @@ class Story(Base):
     # default is false, which reads as safe. See backend/content_gates.py.
     gate_underage = Column(Boolean, nullable=False, server_default="false")
     gate_adult = Column(Boolean, nullable=False, server_default="false")
+    # The total length of the SERIES this work belongs to. NULL for a
+    # standalone and for a one-work series. See series_wordcount.py.
+    series_total_words = Column(BigInteger)
     favourites = Column(Integer, default=0)
 
     fandoms = Column(ARRAY(Text), default=list)

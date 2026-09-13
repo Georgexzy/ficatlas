@@ -21,6 +21,7 @@ Operators (case-insensitive, any order):
                                (also fanfiction.net, ff.net, archiveofourown.org,
                                 ffn, ficalley — see SITE_ALIASES)
   series:true                  series:false   (in a series / standalone)
+  series:count                 count the whole series towards the word count
 
 Shorthand without operator key:
   >100k  <50k  100k+           → word count
@@ -259,6 +260,9 @@ class ParsedQuery:
     crossovers: Optional[str]      = None  # include | exclude | only
     # True = in a series, False = standalone, None = either.
     in_series: Optional[bool]      = None
+    # `series:count` — the length ADD-ON, not a membership filter. See the note
+    # on the `in_series` branch in parse_query.
+    count_series: bool             = False
 
     # Meta
     tokens: list[dict] = field(default_factory=list)  # for UI highlighting
@@ -409,7 +413,17 @@ def parse_query(raw: str) -> ParsedQuery:
 
         elif canonical == "in_series":
             v = value.lower()
-            if v in ("true", "yes", "in", "series"):
+            # `series:count` is a third thing, and deliberately does NOT set
+            # `in_series`. It says "count the series total towards the word
+            # count", which widens a length filter; filtering to works that are
+            # IN a series would narrow it, and a long standalone still answers
+            # a request for a long read. Both can be asked for together
+            # (`series:true series:count`), because they are different
+            # questions about the same relation.
+            if v in ("count", "total", "totals", "combined"):
+                pq.count_series = True
+                token["value"] = "count"
+            elif v in ("true", "yes", "in", "series"):
                 pq.in_series = True
                 token["value"] = "true"
             elif v in ("false", "no", "standalone", "alone", "oneshot", "one-shot"):
@@ -501,6 +515,7 @@ def parsed_to_search_params(pq: ParsedQuery) -> dict:
         "updated_after":       pq.updated_after,
         "crossovers":          pq.crossovers,
         "in_series":           pq.in_series,
+        "count_series":        pq.count_series or None,
     }
 
 
@@ -628,6 +643,8 @@ def serialise_filters(params) -> str:
         parts.append("series:true")
     elif one("in_series") == "false":
         parts.append("series:false")
+    if one("count_series") in ("true", "True", "1"):
+        parts.append("series:count")
 
     # Sites only when fewer than all three, for the same reason as ratings.
     sites = [s for s in values("sites") if s in _ALL_SITES]
