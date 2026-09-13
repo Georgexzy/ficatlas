@@ -19,7 +19,7 @@ from fandom_aliases import _initialisms, STOPLIST
     # While here they do not.
     ("Percy Jackson and the Olympians",              "pjo"),
     ("Marvel Cinematic Universe",                    "mcu"),
-    ("Game of Thrones (TV)",                         "got"),
+
     ("Avatar: The Last Airbender",                   "atla"),
 ])
 def test_the_convention_is_not_one_rule(name, expected):
@@ -34,6 +34,25 @@ def test_both_halves_of_an_ao3_name_are_tried():
     and readers use both: this fandom is `bnha` to some and `mha` to others."""
     got = _initialisms("僕のヒーローアカデミア | Boku no Hero Academia | My Hero Academia")
     assert "bnha" in got and "mha" in got
+
+
+def test_a_word_people_type_by_accident_beats_the_fandom_that_owns_it():
+    """`got` IS Game of Thrones' initialism and it is also the past tense of
+    "get", which appears in ordinary sentences constantly — "I got into this
+    fandom", "anything you got". The word wins, deliberately.
+
+    The asymmetry decides it: a wrong fandom filter silently returns a
+    different fandom's stories and the reader cannot see why, while an absent
+    alias costs them typing four more characters. Measured on a real post,
+    `any` resolved to `Akatsuki no Yona | Yona of the Dawn` and hijacked the
+    whole search.
+
+    Game of Thrones is still reachable by name, and `asoiaf` still resolves.
+    """
+    from fandom_aliases import STOPLIST, _initialisms
+    assert "got" in STOPLIST
+    assert "got" not in _initialisms("Game of Thrones (TV)")
+    assert "asoiaf" in _initialisms("A Song of Ice and Fire - George R. R. Martin")
 
 
 def test_a_one_word_fandom_yields_nothing():

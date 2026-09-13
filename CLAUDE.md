@@ -630,6 +630,36 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     is a prefix-extension of `Dark Lord Harry` and NOT the inheritance-lordship
     concept a reader means by "lord of two houses".
 
+- **A request names a FANDOM, a STATUS and a QUALITY, not only tags.** Ground
+  truth from a real post: "any good TWD fics… preferably ongoing with SI main
+  character". The extractor returned `or something` (471 works), `ongoing` as a
+  TAG (450), `tbh` (332) and `twd` as a tag (163) — while The Walking Dead is a
+  fandom on **20,498**, "ongoing" is a status filter and SI means Self-Insert.
+  Every one of those IS a real tag somebody has used, which is exactly why the
+  n-gram lookup finds them and why each had to be recognised first.
+  - **Fandom abbreviations** come from `fandom_aliases`, mined from the naming
+    convention, so this generalises rather than being a list.
+  - **Status** → a filter. **Quality** ("good", "worth reading", "best") → a
+    SORT, because no tag expresses quality and what the reader means is the
+    works other readers actually read.
+  - **`SI` and `OC` are TAG abbreviations**, not fandom initialisms, and need a
+    small hand-written map — they abbreviate a concept rather than a title, so
+    no rule derives them. Two letters also match nothing in an n-gram lookup.
+  - Recognised terms are then SUPPRESSED from the term list: returning
+    `ongoing` as a subject spends a slot saying what the status filter already
+    says, and says it worse.
+  - Result: `fandom:"The Walking Dead (TV)" tag:"Self-Insert" wip` sorted by
+    popularity → 32 works, led by SI fics.
+- **An alias that fires on an ordinary word is worse than no alias.** `any`
+  resolved to `Akatsuki no Yona | Yona of the Dawn` and hijacked a post that
+  said "any good TWD fics"; `si` resolved to `SK8 the Infinity` on a post that
+  meant Self-Insert. Both are now in the miner's STOPLIST.
+  - **`got` is in it too, and that costs Game of Thrones its initialism** — a
+    deliberate trade, recorded in a test. The asymmetry decides it: a wrong
+    fandom filter silently returns a different fandom's stories and the reader
+    cannot see why, while an absent alias costs four keystrokes. GoT is still
+    reachable by name and `asoiaf` still resolves.
+
 - **A bulleted fic-finder post is a LIST of constraints, one per line, and
   reading it as one bag of words threw that structure away.** "harry is lord of
   at least 2 houses" became the word "houses", which matched `House`, the
