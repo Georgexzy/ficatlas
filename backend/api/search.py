@@ -144,7 +144,7 @@ def _cost_ttl(elapsed_ms: float) -> int:
     """Cache time earned by what the search actually cost to compute."""
     return max(SEARCH_CACHE_SECONDS,
                min(SEARCH_CACHE_MAX_SECONDS, int(elapsed_ms * SEARCH_CACHE_COST_FACTOR)))
-from query_parser import parse_query, parsed_to_search_params
+from query_parser import STATUS_WORDS, parse_query, parsed_to_search_params
 from query_intent import (resolve_intent, read_request, resolve_trope_tags,
                           _fandom_aliases)
 import re
@@ -2242,7 +2242,18 @@ def search(          # NOT async — see below
     elif crossovers == "exclude": filters.append(Story.is_crossover == False)
 
     if status:
-        s_vals = [StatusEnum(s.strip()) for s in status.split(",") if s.strip() in StatusEnum.__members__]
+        # Through the SAME vocabulary the search bar uses, not the enum's own
+        # member names. `status=ongoing` — which is the word this site's UI,
+        # its README and `/api/search/extract` all say — was not a member, so
+        # `s_vals` came out empty and the filter was DROPPED: the request asked
+        # for unfinished works and got every work. Silent, and in the direction
+        # that looks like it worked. Measured on one AOT search: `ongoing` 21
+        # results, `in_progress` 4.
+        s_vals = []
+        for s in status.split(","):
+            s = STATUS_WORDS.get(s.strip().lower(), s.strip())
+            if s in StatusEnum.__members__:
+                s_vals.append(StatusEnum(s))
         if s_vals:
             # "unknown" is a real stored value for bulk imports that carried no
             # completion data, so it counts as unknown here alongside NULL.
@@ -3646,6 +3657,20 @@ _STATUS_WORDS = [
 ]
 
 
+def _implies(specific: str, general: str) -> bool:
+    """Does carrying `specific` already mean carrying `general`?
+
+    Word-boundary containment, not substring: `Whump` is inside
+    `Levi Ackerman Whump` and means the same thing there, while `Rape` is
+    inside `Grape` and does not. Same-length strings cannot imply each other,
+    so this never fires on a pair of unrelated tags of equal length.
+    """
+    a, b = specific.strip().lower(), general.strip().lower()
+    if a == b or len(b) >= len(a):
+        return False
+    return re.search(r"(?:^|\W)" + re.escape(b) + r"(?:\W|$)", a) is not None
+
+
 def _is_status_word(value: str) -> bool:
     return any(rx.fullmatch(value.strip()) for rx, _ in _STATUS_WORDS)
 
@@ -3745,10 +3770,19 @@ def _stem_sibling(db, tag: str) -> Optional[tuple[str, int]]:
 # still worth searching", not "how many", and a bounded count answers it for a
 # fraction of the cost.
 _PROBE_CAP = 20
-# Below this a term has narrowed the search past usefulness. Three rather than
-# one, because a single surviving work usually means the terms happen to
-# co-occur on it rather than that it is the answer.
-_PROBE_MIN_KEEP = 3
+# Below this a term has narrowed the search past usefulness.
+#
+# Three was too low, and the failure was easy to miss because it looked like
+# precision. "best atla fics, ongoing, zuko centric" went from 286 works to
+# THREE when a freed slot let a third tag in: every adjective in the post was
+# honoured and the answer became unusable. Ten is "a page of results" — below
+# that the terms have stopped describing what the reader wants and started
+# describing one particular story.
+#
+# A reader asking for three qualities wants stories with those qualities, not
+# the intersection of every word they used. The extra terms are still returned
+# for them to add by hand.
+_PROBE_MIN_KEEP = int(os.getenv("SEARCH_EXTRACT_MIN_KEEP", "10"))
 
 
 def _biggest_spelling(db, tags: list[str]) -> Optional[tuple[str, int]]:
@@ -3781,7 +3815,18 @@ def _biggest_spelling(db, tags: list[str]) -> Optional[tuple[str, int]]:
     return (row[0], int(row[1])) if row else None
 
 
-def _probe_count(db, terms: list, word_count_min: Optional[int] = None) -> int:
+def _k(n: Optional[int]) -> str:
+    """A word count in the shorthand the search bar parses."""
+    n = int(n or 0)
+    if n >= 1_000_000 and n % 100_000 == 0:
+        return f"{n / 1_000_000:g}m"
+    # Below 1,000 there is no suffix to use and no reader asks for it; round up
+    # to 1k rather than emit a token `parse_query` will discard.
+    return f"{max(n, 1000) / 1000:g}k"
+
+
+def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
+                 status: Optional[str] = None) -> int:
     """Would this combination of concepts find anything at all?"""
     # OR within a concept, AND between them — the shape the search itself
     # builds. Probing ONE spelling per concept is why good combinations were
@@ -3805,6 +3850,19 @@ def _probe_count(db, terms: list, word_count_min: Optional[int] = None) -> int:
     if word_count_min:
         clauses.append("word_count >= :wcmin")
         params["wcmin"] = int(word_count_min)
+    # The STATUS counts too, and leaving it out was the last place a query
+    # could pass the probe and still be narrowed to nothing afterwards: on
+    # "best aot fics, ongoing, levi whump" the probe saw twelve works and the
+    # `wip` filter then cut them to four. A probe that does not test what the
+    # search will actually run is only guessing.
+    # Mirrored through STATUS_WORDS so the probe tests the predicate the search
+    # will actually run. `status <> 'complete'` was an approximation of it and
+    # over-counted by the works whose status is `unknown` — on the AOT probe,
+    # seven against the four the search returns.
+    _st = STATUS_WORDS.get((status or "").lower(), status)
+    if _st in StatusEnum.__members__:
+        clauses.append("status = :st")
+        params["st"] = _st
     params["cap"] = _PROBE_CAP
     return int(db.execute(sql_text(
         "SELECT count(*) FROM (SELECT 1 FROM stories WHERE delisted_at IS NULL "
@@ -4008,14 +4066,7 @@ def extract(
             continue
         if _is_grammar(value):
             continue
-        # Already handled as a FILTER, so it is not a word to search for.
-        # "ongoing" is a real tag on 450 works and it is also the status this
-        # reader asked for; returning it as a subject spends a slot saying
-        # something the status filter already says, and says it worse.
-        if status and _is_status_word(value):
-            continue
-        if sort and _QUALITY_WORDS.fullmatch(value.strip()):
-            continue
+
         cands.append({"count": count, "rank": RANK.get(kind, 9),
                       "n": span[1] - span[0], "kind": kind,
                       "value": value, "span": span})
@@ -4070,6 +4121,34 @@ def extract(
     # almost nothing before the useful terms are even tried.
     line_terms.sort(key=lambda t: -t.count)
 
+    # Anything already handled as a FILTER is not also a word to search for,
+    # and this is checked ONCE over the merged list rather than in each path.
+    # It was in the n-gram loop only, so `ongoing` — a real tag on 450 works —
+    # sailed through the LINE path and ended up as `tag:"ongoing"` in the query
+    # beside the status filter that already said it. Two paths and one check is
+    # how a rule quietly applies to half its input.
+    # The abbreviation a reader typed belongs to the FANDOM it resolved to, and
+    # to nothing else. `asoiaf` and `tvd` are both real freeform tags as well as
+    # fandom initialisms, so the n-gram lookup found them and the query came out
+    # `fandom:"A Song of Ice and Fire…" tag:"ASoIaF"` — the second half narrowing
+    # to the handful of works that happen to carry the abbreviation as a tag,
+    # inside the fandom it had already selected. Same shape as the status words
+    # above: a word consumed by one mechanism must not be spent again by another.
+    _alias_word = (fandom_term.matched or "").strip().lower() if fandom_term else None
+
+    def _already_a_filter(t: ExtractedTerm) -> bool:
+        if status and _is_status_word(t.value):
+            return True
+        if sort and _QUALITY_WORDS.fullmatch(t.value.strip()):
+            return True
+        if (_alias_word and t.kind != "fandom"
+                and t.value.strip().lower() == _alias_word):
+            return True
+        return False
+
+    line_terms = [t for t in line_terms if not _already_a_filter(t)]
+    terms = [t for t in terms if not _already_a_filter(t)]
+
     seen_vals: set[str] = set()
     merged: list[ExtractedTerm] = []
     for t in line_terms + terms:
@@ -4095,6 +4174,27 @@ def extract(
             if sib and sib[1] > t.count * 10:
                 t = ExtractedTerm(kind="tag", value=sib[0], count=sib[1],
                                   matched=t.matched)
+        # A reader naming a character uses the name they say out loud, and the
+        # archives file the full one. Same swap as the tag above and the same
+        # argument: `Damon` is a character on 76 works and `Damon Salvatore` on
+        # thousands, so a post asking for "damon centric" tvd fics was narrowed
+        # to the handful of works whose character list says only "Damon".
+        # `_resolve_pair` has canonicalised each half of a PAIRING this way
+        # since it was written — the rule was simply never applied to a
+        # character found loose in the prose, which is how most of them arrive.
+        elif t.kind == "character" and " " not in t.value.strip():
+            full = _canonical_character(db, t.value)
+            if full and full.lower() != t.value.strip().lower():
+                cnt = db.execute(sql_text(
+                    "SELECT count FROM facets WHERE kind='character' AND value=:v"),
+                    {"v": full}).scalar()
+                # Only UP. A canonical spelling that is rarer than the bare
+                # name is not the canonical spelling; it is a different person
+                # who happens to share a first name.
+                if int(cnt or 0) > t.count:
+                    t = ExtractedTerm(kind="character", value=full,
+                                      count=int(cnt), matched=t.matched,
+                                      from_line=t.from_line)
         if t.value not in [x.value for x in swapped]:
             swapped.append(t)
     # Frequency orders the LOOSE words only. Concepts resolved from a line are
@@ -4108,8 +4208,16 @@ def extract(
     swapped.sort(key=lambda t: (not t.from_line, -t.count))
     terms = swapped
 
-    if fandom_term and not pair_term:
-        terms = [fandom_term] + [t for t in terms if t.value != fandom_term.value]
+    # The fandom leads, whether it came from the abbreviation table or from the
+    # reader writing it out. It is the SCOPE of the request — every other term
+    # narrows within it — and on "looking for naruto fics, ongoing, time
+    # travel" it ranked third behind `Time Travel`, so the query went out
+    # without it and returned nine works from every fandom at once.
+    if not pair_term:
+        lead = fandom_term or next(
+            (t for t in terms if t.kind == "fandom"), None)
+        if lead:
+            terms = [lead] + [t for t in terms if t.value != lead.value]
 
     if pair_term:
         # The pairing FIRST, and the fandom it implies second. This is the
@@ -4148,12 +4256,20 @@ def extract(
     # capped and the predicate is GIN containment, so this is a few tens of
     # milliseconds per candidate on an endpoint that is not the search path.
     kept: list[ExtractedTerm] = []
-    for t in terms[:5]:
+    for t in terms[:6]:
+        # A term already IMPLIED by one that is kept adds no information and
+        # costs a slot. `Levi Ackerman Whump` and `Whump` were both going into
+        # the same query: every work carrying the first carries the second, so
+        # the AND narrowed nothing and the third slot was spent saying the
+        # second thing twice. The more specific term wins, because it is the
+        # one the reader was more nearly asking for.
+        if any(_implies(k.value, t.value) for k in kept):
+            continue
         cand = kept + [t]
         if len(cand) > 3:
             break
         try:
-            n = _probe_count(db, cand, wc_min)
+            n = _probe_count(db, cand, wc_min, status)
         except Exception:
             log.debug("extract probe failed", exc_info=True)
             n = 1
@@ -4173,6 +4289,28 @@ def extract(
     if not parts and terms:
         t = terms[0]
         parts = [f'{op.get(t.kind, "tag")}:"{t.value}"']
+
+    # The STATUS and the LENGTH go into the query string, not only into their
+    # own fields, because the query string is the thing a caller runs and a
+    # reader pastes. Every field beside it is a field somebody has to remember
+    # to pass, and the panel this endpoint was written for did not: it read
+    # `query` and dropped `status`, `word_count_min` and `word_count_max`, so a
+    # post saying "ongoing, at least 150k words" was searched with neither
+    # constraint. The bar's own shorthand expresses both, `parse_query` reads
+    # them back, and `/api/search` re-parses `q` — so one string carries the
+    # whole request to any client at all.
+    #
+    # `sort` is the exception and stays a field: quality is not expressible in
+    # the bar, so a caller that wants it has to pass it.
+    if status:
+        parts.append("complete" if status == "complete" else "wip")
+    if wc_min or wc_max:
+        # k/m suffixes are REQUIRED — `words:>150000` parses to nothing at all,
+        # silently, which is the same shape of bug as the status one above.
+        parts.append("words:" + (f"{_k(wc_min)}-{_k(wc_max)}" if wc_min and wc_max
+                                 else f">{_k(wc_min)}" if wc_min
+                                 else f"<{_k(wc_max)}"))
+
     return ExtractResponse(terms=terms, query=" ".join(parts),
                            ignored_words=max(len(words) - len(used), 0),
                            word_count_min=wc_min, word_count_max=wc_max,
