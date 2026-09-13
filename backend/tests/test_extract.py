@@ -481,3 +481,66 @@ def test_a_bare_first_name_ranks_behind_what_the_post_spelled_out(ships):
     values = [t.value for t in out.terms]
     if "Harry Potter" in values and "Harry is Lord Potter" in values:
         assert values.index("Harry is Lord Potter") < values.index("Harry Potter")
+
+
+@pytest.fixture()
+def xover(db):
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag','Crossover',88000), ('tag','Self-Insert',20498),
+          ('fandom','Naruto',150000), ('fandom','Bleach',40000)
+    """))
+    db.commit()
+    yield db
+    db.execute(text("DELETE FROM facets"))
+    db.commit()
+
+
+def test_no_crossovers_does_not_search_for_crossovers(xover):
+    """"no crossovers please" came back as `tag:"Crossover"` — the search asked
+    for the one thing the reader had ruled out.
+
+    Same failure as "no harems" searching FOR harems, in a new place, and for
+    the same reason: the word is in the post either way, so only the words
+    AROUND it separate a want from a refusal. The refusal is therefore tested
+    FIRST, because "no crossovers" contains "crossovers"."""
+    out = extract(text="any good fics, self-insert, no crossovers please",
+                  db=xover)
+    assert out.crossovers == "exclude"
+    assert "xover:exclude" in out.query
+    assert "Crossover" not in [t.value for t in out.terms]
+
+
+@pytest.mark.parametrize("phrase", [
+    "no crossovers", "not a crossover", "non-crossover",
+    "without crossovers", "no cross-overs", "avoid crossovers",
+])
+def test_every_way_a_reader_refuses_a_crossover(xover, phrase):
+    assert extract(text=f"looking for fics, {phrase}", db=xover).crossovers \
+        == "exclude"
+
+
+def test_asking_for_a_crossover_asks_for_one(xover):
+    """The other direction has to keep working, or the refusal pattern has
+    simply swallowed the want."""
+    out = extract(text="looking for a naruto/bleach crossover", db=xover)
+    assert out.crossovers == "only"
+    assert "xover:only" in out.query
+
+
+def test_a_post_that_never_mentions_crossovers_gets_no_filter(xover):
+    """Deliberately NOT a default, and the measurement is the reason.
+
+    `is_crossover` is `len(fandoms) > 1`, and AO3 authors routinely tag several
+    spellings of ONE franchise — `Star Wars - All Media Types` beside
+    `Star Wars: The Clone Wars`. Over a 20,000-work sample of flagged AO3
+    works, 33% have fandoms that all share a first word, i.e. are not
+    crossovers at all; on the real TWD post, 74 works with 22 flagged and 11 of
+    those wrongly. Excluding by default would delete a third of the answer,
+    half of it for a bug, and do it invisibly — fewer results look exactly like
+    a search that worked. It would also skew the archive mix: AO3 is 16.19%
+    flagged against FF.net's 5.33%, and that gap is coverage, not fact."""
+    out = extract(text="any good self-insert fics", db=xover)
+    assert out.crossovers is None
+    assert "xover:" not in out.query

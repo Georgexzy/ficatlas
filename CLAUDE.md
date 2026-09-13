@@ -776,6 +776,32 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     failure this endpoint exists to prevent.
   - Measured end to end: the Harry/Daphne post → 64 works; the lordship post →
     `tag:"Albus Dumbledore Bashing" words:>150k` → 160 works, all 150k+.
+- **"no crossovers please" was searching FOR crossovers, and a default would
+  have been worse than the bug.** The extractor returned `tag:"Crossover"` —
+  the one thing the reader had ruled out — which is "no harems" all over again:
+  the word is in the post either way, so only the words AROUND it separate a
+  want from a refusal. The refusal patterns are therefore tested FIRST, because
+  "no crossovers" contains "crossovers".
+  - **Deliberately NOT a default, and the measurement is the reason.** Hiding
+    crossovers unless asked is a reasonable instinct and `is_crossover` cannot
+    carry it: the column is `len(fandoms) > 1`, and AO3 authors routinely tag
+    several spellings of ONE franchise — `Star Wars - All Media Types` beside
+    `Star Wars: The Clone Wars (2008)`, `Percy Jackson … - Rick Riordan` beside
+    `Percy Jackson … & Related Fandoms`. Over a 20,000-work sample of flagged
+    AO3 works, **33% have fandoms that all share a first word**, i.e. are not
+    crossovers at all. On the real TWD post: 74 works, 22 flagged, **11 of them
+    wrongly**. Excluding by default would delete a third of the answer, half of
+    it for a bug, and do it invisibly — fewer results look exactly like a
+    search that worked.
+  - It would also skew the archive mix, which is the thing this site exists to
+    get right: AO3 is **16.19%** flagged and FF.net **5.33%**, and that gap is
+    coverage rather than fact — the FF.net bulk dumps carry one fandom per row,
+    so `false` there means "unknown". Same trap as `status` before the SQLite
+    importer filled it in. A default would be near-no-op on FF.net and
+    aggressive on AO3.
+  - Fixing the column is the real lever if this is ever wanted as a default:
+    compare fandoms after stripping AO3's `- All Media Types`/`(Movies)`/`:
+    Subtitle` furniture, rather than counting them.
 - **Three more rules from the same twelve-fandom battery, each a word spent
   twice or weighed wrong.**
   - **"longfics and one-shots welcome" is a reader saying they do not care.**

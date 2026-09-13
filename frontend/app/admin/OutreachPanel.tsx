@@ -54,6 +54,10 @@ interface Extracted {
   // asked for most plainly ("any GOOD fics") would be invisible and silently
   // dropped.
   status?: string | null
+  // "no crossovers" / "naruto x bleach crossover" — read from the post, never
+  // assumed, and already inside `query` as `xover:`. Listed so the type says
+  // what the endpoint returns.
+  crossovers?: string | null
   sort?: string | null
   word_count_min?: number | null
   word_count_max?: number | null
