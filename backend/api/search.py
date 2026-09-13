@@ -1349,6 +1349,12 @@ def search(          # NOT async — see below
                     "on another person. Use min_recs instead when the NUMBER of "
                     "mentions matters; only the reddit source has one.",
     ),
+    exclude_ids:           Optional[str] = Query(
+        None,
+        description="Story ids to leave out, comma-separated. For a reader who "
+                    "has told you what they have already read — recommending "
+                    "those back is the one answer they have ruled out.",
+    ),
     search_within:         Optional[str] = Query(None),
     include_broken_titles: bool          = Query(
         False,
@@ -1772,6 +1778,23 @@ def search(          # NOT async — see below
             filters.append(Story.tags.op("&&")(cast(trope_tags, PG_ARRAY(Text))))
         else:
             filters.append(or_(*branches) if len(branches) > 1 else text_pred)
+
+    if exclude_ids:
+        # Parsed as UUIDs, not interpolated. A malformed id is dropped rather
+        # than failing the search: this arrives from a reader's own paste and a
+        # typo in it should cost one exclusion, not the whole page.
+        import uuid as _uuid
+        _drop = []
+        for _raw in exclude_ids.split(","):
+            _raw = _raw.strip()
+            if not _raw:
+                continue
+            try:
+                _drop.append(_uuid.UUID(_raw))
+            except ValueError:
+                continue
+        if _drop:
+            filters.append(~Story.id.in_(_drop))
 
     if recs_only:
         # Containment against the GIN index on tags, NOT an ILIKE over
@@ -3244,6 +3267,145 @@ def search(          # NOT async — see below
     _note_total(request, _response)
     _apply_cache_headers(response, viewer, _earned_ttl)
     return _response
+
+
+class TasteWork(BaseModel):
+    """One work a reader named as already read and liked."""
+    asked: str                  # what they typed
+    id: Optional[str] = None    # what it resolved to, if anything
+    title: Optional[str] = None
+    site: Optional[str] = None
+    kudos: Optional[int] = None
+
+
+class TasteTag(BaseModel):
+    value: str
+    kind: str
+    shared_by: int              # how many of their works carry it
+    works: int                  # how many works in the index do
+
+
+class TasteResponse(BaseModel):
+    matched: list[TasteWork]
+    unmatched: list[str]
+    tags: list[TasteTag]
+    query: str                  # a ready-made search built from the shared tags
+
+
+# How many of a reader's named works a tag must appear on before it counts as
+# taste rather than coincidence. Two, because one work's tag list is a
+# description of that work — the signal is what its neighbours have in common.
+TASTE_MIN_SHARED = 2
+
+# This file's own recommendation markers. Provenance tags are stripped by
+# `content_tags` (see backend/provenance.py), which already exists for exactly
+# this distinction; these are the same kind of thing and that module does not
+# know about them — a label the pipeline attached, not something an author
+# chose. `reddit_refs:1376` is matched by prefix.
+_TASTE_IGNORE = {_RECS_MARKER, _ANY_RECS_MARKER, "tropedia_recs"}
+TASTE_TAG_LIMIT = 8
+
+
+@router.get("/taste", response_model=TasteResponse)
+def taste(
+    titles: str = Query(..., description="Titles the reader named, one per line "
+                                         "or separated by | — as they typed them"),
+    db: Session = Depends(get_db),
+):
+    """What a reader's "I have already read" list says about what they want.
+
+    Fic-finder posts almost always carry one, and it is the richest signal in
+    the whole request — far better than the adjectives. Somebody who names
+    Prince of Slytherin, Sarcasm and Slytherin and Daft Morons has told you
+    precisely what they are after, in a vocabulary the index already shares
+    with them. Until now that list was thrown away, or at best used as a
+    manual sanity check.
+
+    Resolution is by TITLE, which is ambiguous — this index holds eight works
+    called "Monochrome" — so the most-read match wins and every match is
+    returned for checking. A reader naming a title without an author almost
+    always means the one everybody has read, and showing the work that was
+    picked is what makes a wrong guess visible rather than silent.
+
+    The tags returned are the ones SHARED across their list, not the union.
+    One work's tags describe that work; what several have in common is taste.
+    """
+    asked = [t.strip() for t in re.split(r"[|\n]", titles) if t.strip()][:12]
+    if not asked:
+        return TasteResponse(matched=[], unmatched=[], tags=[], query="")
+
+    matched: list[TasteWork] = []
+    unmatched: list[str] = []
+    tag_rows: list[tuple[str, str]] = []
+
+    for name in asked:
+        row = db.execute(sql_text("""
+            SELECT id, title, site::text, kudos, tags, relationships, fandoms
+              FROM stories
+             WHERE delisted_at IS NULL AND lower(title) = lower(:t)
+             ORDER BY kudos DESC NULLS LAST
+             LIMIT 1
+        """), {"t": name}).first()
+        if not row:
+            unmatched.append(name)
+            continue
+        matched.append(TasteWork(asked=name, id=str(row[0]), title=row[1],
+                                 site=row[2], kudos=row[3]))
+        for v in content_tags(row[4] or []):
+            # PROVENANCE, not content. `ffnet_dump`, `ao3_meta_dump` and the
+            # rest record which import a row came from and live in the same
+            # array as real tags — see backend/provenance.py. Left in, they
+            # dominated the answer completely: four well-known works shared
+            # `reddit_recs`, `community_recs`, `ao3_meta_dump`, `ffnet_dump`
+            # and `hf_meta_2024` and nothing else, so the "taste" this derived
+            # was that all four had been imported by the same script.
+            if v in _TASTE_IGNORE or v.startswith(_RECS_PREFIX):
+                continue
+            tag_rows.append(("tag", v))
+        for v in (row[5] or []):
+            tag_rows.append(("relationship", v))
+
+    if not matched:
+        return TasteResponse(matched=[], unmatched=unmatched, tags=[], query="")
+
+    # Shared across their list, commonest first. Counted per WORK, so a work
+    # that lists a tag twice cannot vote twice.
+    from collections import Counter
+    seen_per_work = Counter()
+    for kind, value in set(tag_rows):
+        seen_per_work[(kind, value)] += 0
+    counts = Counter()
+    for kind, value in tag_rows:
+        counts[(kind, value)] += 1
+
+    shared = [(k, v, n) for (k, v), n in counts.items() if n >= TASTE_MIN_SHARED]
+    # A tag everybody uses says nothing about this reader. `Fluff` is on 1.13M
+    # works; carrying it in common is not a preference, it is arithmetic. The
+    # index's own count is the discriminator, so rarer shared tags rank first.
+    sizes = {}
+    if shared:
+        rows = db.execute(sql_text("""
+            SELECT kind, value, count FROM facets
+             WHERE (kind, value) IN (
+               SELECT unnest(CAST(:kinds AS text[])), unnest(CAST(:values AS text[])))
+        """), {"kinds": [k for k, _, _ in shared],
+               "values": [v for _, v, _ in shared]}).fetchall()
+        sizes = {(r[0], r[1]): r[2] for r in rows}
+
+    ranked = sorted(
+        shared,
+        key=lambda t: (-t[2], sizes.get((t[0], t[1]), 10 ** 9)),
+    )[:TASTE_TAG_LIMIT]
+
+    tags = [TasteTag(value=v, kind=k, shared_by=n,
+                     works=sizes.get((k, v), 0)) for k, v, n in ranked]
+
+    # A query they can run, built from the two or three most telling tags. More
+    # than that and the AND leaves nothing — every term is a requirement.
+    op = {"tag": "tag", "relationship": "ship"}
+    parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in tags[:3]]
+    return TasteResponse(matched=matched, unmatched=unmatched, tags=tags,
+                         query=" ".join(parts))
 
 
 @router.get("/random", response_model=List[StoryCard])

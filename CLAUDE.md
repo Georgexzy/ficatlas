@@ -470,6 +470,34 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     and the reader picks, rather than the ranker guessing. Verified it does not
     nag: correct spellings and legitimately narrow searches get nothing.
 
+- **The "I have already read" list is the richest signal in a fic-finder post,
+  and it was being thrown away.** `/api/search/taste` resolves the titles,
+  reduces them to the tags those works have IN COMMON, and hands back a runnable
+  query. Measured on four slow-burn Drarry fics: derives
+  `ship:"Draco Malfoy/Harry Potter" tag:"Slow Burn" tag:"Romance"` → 292 works.
+  - **Shared, not union.** One work's tag list describes that work; what several
+    have in common is taste. `TASTE_MIN_SHARED = 2`.
+  - **Provenance tags had to be excluded or they win outright.** `ffnet_dump`,
+    `ao3_meta_dump` and `hf_meta_2024` live in the same array as real tags —
+    four famous works shared those and the recs markers and NOTHING else, so
+    the derived "taste" was which script imported them. `content_tags()` in
+    provenance.py already existed for this distinction; the recs markers are
+    the same kind of thing and that module does not know about them.
+  - **Rarer shared tags rank first.** A tag everybody uses says nothing about
+    this reader — `Fluff` is on 1.13M works, so sharing it is arithmetic, not
+    preference.
+  - Title resolution is EXACT and most-read-wins, with every match returned for
+    checking. The index holds eight works called "Monochrome", and a reader
+    naming a title without an author almost always means the one everybody has
+    read. Unmatched titles are reported, not swallowed — "Sarcasm and
+    Slytherin" and "Daft Morons" are genuinely not indexed, and a taste quietly
+    built from half a list would be worse than none.
+  - Prefix matching was tried and rejected on cost: `LIKE 'daft moron%'` over
+    `lower(title)` took **18 seconds**.
+  - `exclude_ids` completes it. Recommending back what somebody has told you
+    they have read is the one answer they have ruled out — verified that
+    *Running on Air* drops out of its own derived search.
+
 - **"No harems" was searching FOR harems.** From a corpus of real fic-finder
   posts: one request listed NINE negative conditions against six positive ones,
   and none of it was parsed, so the words went into the positive query.
