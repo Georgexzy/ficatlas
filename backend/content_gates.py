@@ -170,18 +170,23 @@ def install_trigger(db) -> None:
 #
 # Two statements per tier, because warnings and tags are separate arrays and
 # `a && x OR b && y` cannot use either index.
+# Bounded, and that is the whole point: see _flag() below.
 _FLAG_SQL = """
 UPDATE stories SET {col} = true
- WHERE {arr} && CAST(:v AS text[]) AND NOT {col}
+ WHERE id IN (SELECT id FROM stories
+               WHERE {arr} && CAST(:v AS text[]) AND NOT {col}
+               LIMIT :batch)
 """
 
 # And the reverse, for when a term is REMOVED from a list: a row that no longer
 # matches anything must lose its flag, or the lists can only ever get stricter.
 _UNFLAG_SQL = """
 UPDATE stories SET {col} = false
- WHERE {col}
-   AND NOT (COALESCE(warnings,'{{}}') && CAST(:w AS text[]))
-   AND NOT (COALESCE(tags,'{{}}')     && CAST(:t AS text[]))
+ WHERE id IN (SELECT id FROM stories
+               WHERE {col}
+                 AND NOT (COALESCE(warnings,'{{}}') && CAST(:w AS text[]))
+                 AND NOT (COALESCE(tags,'{{}}')     && CAST(:t AS text[]))
+               LIMIT :batch)
 """
 
 PARAMS = {"uw": UNDERAGE_WARNINGS, "ut": UNDERAGE_TAGS,
@@ -239,6 +244,46 @@ def run(dry_run: bool = False) -> dict:
         db.commit()
         log.info("content_gates: write-time trigger installed")
 
+        # Committed in BATCHES, and this was learned the hard way twice.
+        #
+        # Each pass was ONE unbounded UPDATE. `gate_adult` via tags is 1.4M
+        # rows, so that statement ran for tens of minutes inside a single
+        # transaction — and every interruption rolled the whole thing back and
+        # left the gate exactly where it started. Three separate runs died that
+        # way (the container was restarted under them), each losing everything
+        # it had done, while the belt-and-braces array filter in api/search.py
+        # stayed in the hot path because the flags could not be trusted.
+        #
+        # `BATCH` was declared for this from the beginning and never wired in.
+        # Batched, an interruption costs the batch, the next run resumes where
+        # this one stopped (the predicate IS the progress marker — a flagged row
+        # no longer matches `NOT {col}`), and no transaction holds locks on the
+        # biggest table for longer than one batch.
+        #
+        # Same argument as tropedia_recs_import.py's 25-page commits and
+        # popularity_rank.py's detached run: a job measured in hours WILL be
+        # interrupted, and should cost only the work not yet done.
+        def _pass(sql: str, params: dict, what: str) -> int:
+            done = 0
+            while True:
+                n = db.execute(text(sql), {**params, "batch": BATCH}).rowcount
+                db.commit()
+                if not n:
+                    # Logged even at zero. A pass with nothing to do is the
+                    # NORMAL state once a backfill has caught up, and a log
+                    # that goes quiet for it is indistinguishable from one
+                    # that has hung — which is the distinction the admin
+                    # panel's "evidence, not heartbeats" rule exists to make.
+                    log.info("content_gates: %s -> %s rows", what, f"{done:,}")
+                    return done
+                done += n
+                log.info("content_gates: %s -> %s rows (%s so far)",
+                         what, f"{n:,}", f"{done:,}")
+                # Breathe. This runs on the same box that serves searches; a
+                # pause between batches lets the crawler, ANALYZE and autovacuum
+                # get a turn instead of queueing behind the whole job.
+                time.sleep(PAUSE_S)
+
         total = 0
         for col, arr, values in (
             ("gate_underage", "warnings", UNDERAGE_WARNINGS),
@@ -246,24 +291,13 @@ def run(dry_run: bool = False) -> dict:
             ("gate_adult",    "warnings", ADULT_WARNINGS),
             ("gate_adult",    "tags",     ADULT_TAGS),
         ):
-            n = db.execute(text(_FLAG_SQL.format(col=col, arr=arr)),
-                           {"v": values}).rowcount
-            db.commit()
-            total += n
-            log.info("content_gates: %s via %s -> %s rows", col, arr, f"{n:,}")
-            # Breathe. This runs on the same box that serves searches, and the
-            # statements above rewrite hundreds of thousands of rows each; a
-            # pause between them lets the crawler, ANALYZE and autovacuum get a
-            # turn instead of queueing behind the whole job.
-            time.sleep(PAUSE_S)
+            total += _pass(_FLAG_SQL.format(col=col, arr=arr), {"v": values},
+                           f"{col} via {arr}")
 
         for col, w, t in (("gate_underage", UNDERAGE_WARNINGS, UNDERAGE_TAGS),
                           ("gate_adult",    ADULT_WARNINGS,    ADULT_TAGS)):
-            n = db.execute(text(_UNFLAG_SQL.format(col=col)),
-                           {"w": w, "t": t}).rowcount
-            db.commit()
-            if n:
-                log.info("content_gates: %s cleared on %s rows", col, f"{n:,}")
+            _pass(_UNFLAG_SQL.format(col=col), {"w": w, "t": t},
+                  f"{col} cleared")
 
         counts = db.execute(text(
             "SELECT count(*) FILTER (WHERE gate_underage), "

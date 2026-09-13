@@ -65,6 +65,26 @@ into a link they then share.
   build a reply at all when the box asks for gated content, since the link
   would then differ from the search on screen.
 
+### The backfill is BATCHED, and three runs were lost before it was
+
+Each pass was one unbounded `UPDATE`. `gate_adult` via tags is **1.4M rows**,
+so that statement ran for tens of minutes inside a single transaction — and
+every interruption rolled the whole thing back and left the gate exactly where
+it started. Three runs died that way (the container was restarted under them),
+each losing everything it had done, while the belt-and-braces array filter in
+`api/search.py` stayed in the hot path because the flags could not be trusted.
+`BATCH` was declared for this from the beginning and never wired in.
+
+Batched, an interruption costs the batch; the next run resumes where the last
+stopped, because **the predicate IS the progress marker** — a flagged row no
+longer matches `NOT gate_adult`. Same argument as `tropedia_recs_import.py`'s
+25-page commits and `popularity_rank.py`'s detached run.
+
+Run it on the WORKER, not the backend: `docker exec -d ficatlas-worker-1 sh -c
+"cd /app && python -u content_gates.py > /tmp/gates.log 2>&1"`. The backend is
+the container that gets restarted to pick up a code change, which is what
+killed every previous attempt.
+
 ### Tier 2 — adult and deliberately disturbing (`explicit`, default off)
 
 `Smut`, `PWP`, `Dead Dove: Do Not Eat`, `Incest`, `Rape/Non-con` and friends.
