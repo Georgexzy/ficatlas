@@ -3,6 +3,7 @@
 import Link from "next/link"
 import TakedownQueue from "./TakedownQueue"
 import TrafficPanel from "./TrafficPanel"
+import OutreachPanel from "./OutreachPanel"
 import BackLink from "../BackLink"
 import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
@@ -218,7 +219,7 @@ interface Person {
 }
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<"health" | "takedowns" | "traffic">("health")
+  const [tab, setTab] = useState<"health" | "takedowns" | "traffic" | "outreach">("health")
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab")
     if (t === "takedowns" || t === "traffic") setTab(t)
@@ -295,9 +296,16 @@ export default function AdminPage() {
           onClick={() => setTab("takedowns")}>Takedown requests</button>
         <button className={`library-tab ${tab === "traffic" ? "library-tab--on" : ""}`}
           onClick={() => setTab("traffic")}>Traffic</button>
+        {/* The traffic tab says nobody is coming; this is the one that does
+            something about it. Answering fic-finder threads is the only
+            outreach channel where the reply is useful on its own terms and the
+            link is the demonstration — see OutreachPanel. */}
+        <button className={`library-tab ${tab === "outreach" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("outreach")}>Fic finder</button>
       </div>
 
-      {tab === "traffic" ? <TrafficPanel /> :
+      {tab === "outreach" ? <OutreachPanel /> :
+       tab === "traffic" ? <TrafficPanel /> :
        tab === "takedowns" ? <TakedownQueue /> : (
       <>
       <h1 className="settings-title">Index health</h1>
