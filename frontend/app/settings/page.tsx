@@ -86,6 +86,7 @@ const PREF_FALLBACK: Prefs = {
   default_sort: "relevance",
   results_per_page: "20",
   show_explicit: "false",
+  show_underage: "false",
   reader_font: "serif",
   reader_width: "narrow",
 }
@@ -355,16 +356,42 @@ export default function SettingsPage() {
           </select>
         </div>
 
+        {/* Two tiers, two controls, and they are deliberately not one.
+            The first is about taste; the second is about what a link you paste
+            somewhere public will show a stranger. Collapsing them into a single
+            "adult content" switch is what caused the harm this exists to
+            prevent — a reader had the explicit toggle OFF and a search link
+            still listed works tagged "Underage Sex", because that toggle
+            filtered on RATING and those works were rated M and Not Rated. */}
         <div className="setting-row">
           <div className="setting-row__label">
-            <span className="setting-row__name">Show explicit works</span>
+            <span className="setting-row__name">Show explicit &amp; adult content</span>
             <span className="setting-row__hint">
-              Include E-rated works in results without switching it on each time.
+              E-rated works, and anything tagged for explicit sex, non-con,
+              incest or <em>Dead Dove: Do Not Eat</em>. Off by default so a
+              search you share does not surprise anybody.
             </span>
           </div>
           <Toggle on={prefs.show_explicit === "true"}
-            label="Show explicit works"
+            label="Show explicit and adult content"
             onToggle={v => setPref("show_explicit", String(v))} />
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-row__label">
+            <span className="setting-row__name">Show works flagged for underage content</span>
+            <span className="setting-row__hint">
+              Separate from the switch above, and not unlocked by it. These
+              works stay in the index and stay findable — this only decides
+              whether they appear when you have not asked for them.{" "}
+              <strong>Links you copy from FicAtlas never include this</strong>,
+              because most fandom spaces and Reddit itself hold the person who
+              posted the link responsible for what it shows.
+            </span>
+          </div>
+          <Toggle on={prefs.show_underage === "true"}
+            label="Show works flagged for underage content"
+            onToggle={v => setPref("show_underage", String(v))} />
         </div>
       </section>
 

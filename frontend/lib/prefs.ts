@@ -23,12 +23,14 @@ export interface Prefs {
   default_sort: string
   results_per_page: string
   show_explicit: string
+  show_underage: string
   reader_font: string
   reader_width: string
 }
 
 export const PREF_KEYS: (keyof Prefs)[] = [
   "default_sites", "default_sort", "results_per_page", "show_explicit",
+  "show_underage",
   "reader_font", "reader_width",
 ]
 

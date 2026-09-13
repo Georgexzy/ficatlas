@@ -1313,6 +1313,10 @@ function SearchPageInner() {
   // that times out and the reader is told the index is busy. `recs_only`
   // narrows through GIN containment first. Measured: 503 against 0.2s.
   const [recsOnly,   setRecsOnly]   = useState(get("recs_only") === "true")
+  // Tier 1, and deliberately its own state rather than a mode of `explicit`.
+  // That toggle is about taste and readers leave it on; this one decides what
+  // a link shows a stranger. See content_gates.py.
+  const [showUnderage, setShowUnderage] = useState(get("include_underage") === "true")
 
   // More options
   const [status,       setStatus]       = useState<string[]>(csv(get("status")))
@@ -1670,6 +1674,7 @@ function SearchPageInner() {
       if (rawParams.get("explicit") === null) {
         const mine = readAllPrefs()
         if (mine.show_explicit !== undefined) setExplicit(mine.show_explicit === "true")
+        if (mine.show_underage !== undefined) setShowUnderage(mine.show_underage === "true")
       }
       return
     }
@@ -1683,6 +1688,7 @@ function SearchPageInner() {
       if (v.default_sites) setSites(v.default_sites.split(",").filter(Boolean))
       if (v.default_sort) setSort(v.default_sort)
       if (v.show_explicit !== undefined) setExplicit(v.show_explicit === "true")
+      if (v.show_underage !== undefined) setShowUnderage(v.show_underage === "true")
       const n = Number(v.results_per_page)
       if (Number.isFinite(n) && n > 0 && n <= 100) setPerPage(n)
     }
@@ -1992,6 +1998,7 @@ function SearchPageInner() {
       word_count_max:        wordMax ?? pq.wordCountMax ?? undefined,
       updated_after:         updatedAfter || pq.updatedAfter || undefined,
       explicit,
+      include_underage:      showUnderage || undefined,
       // Fall through to the parsed value like every other field does. The
       // sidebar has no author input, so a typed `author:` operator was the only
       // way to set it — and buildParams read the state variable alone, so the
@@ -2011,7 +2018,7 @@ function SearchPageInner() {
       // was created with: clicking a section updated the state, re-rendered the
       // pill as selected, and sent a search that still said nothing about it.
       // The control looked like it worked and changed no results.
-      dlpMinRating, sections, recsOnly])
+      dlpMinRating, sections, recsOnly, showUnderage])
 
   // Everything a search depends on, in one string. Cheap to compare and it
   // cannot drift from the real dependency list the way a hand-maintained
@@ -2021,6 +2028,7 @@ function SearchPageInner() {
     incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
     language, wordMin, wordMax, updatedAfter, explicit, includeUnknown,
     authorFilter, matchMode, sort, dlpMinRating, sections, inSeries, recsOnly,
+    showUnderage,
   ])
   const filtersDirty = appliedSig !== null && appliedSig !== filterSig
 
