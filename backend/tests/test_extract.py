@@ -83,3 +83,65 @@ def test_the_query_is_short_enough_to_match_something(vocab):
 def test_an_empty_post_is_not_an_error(vocab):
     out = extract(text="   ", db=vocab)
     assert out.terms == [] and out.query == ""
+
+
+# ── The pairing is the subject of the request ────────────────────────────────
+
+@pytest.fixture()
+def ships(db):
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('character','Daphne Greengrass',6973), ('character','Daphne Bridgerton',2324),
+          ('character','Harry Potter',152287), ('character','Harry',541),
+          ('relationship','Daphne Greengrass/Harry Potter',1035),
+          ('fandom','Harry Potter - J. K. Rowling',381225),
+          ('tag','Fluff',1130841), ('tag','Fluffy',8964),
+          ('tag','Romance',374075)
+    """))
+    db.commit()
+    yield db
+    db.execute(text("DELETE FROM facets"))
+    db.commit()
+
+
+def test_a_first_name_resolves_to_the_character_most_written(ships):
+    """"Daphne" is four different people here. The most-written one is what a
+    reader naming her without a surname means."""
+    from api.search import _canonical_character
+    assert _canonical_character(ships, "Daphne") == "Daphne Greengrass"
+
+
+def test_slash_notation_resolves_to_the_actual_pairing(ships):
+    """Looking each half up as a loose character was not enough: bare "Harry"
+    is on 541 works and bare "Daphne" on 79, so both sank below every generic
+    tag in the post and the pairing — the one thing asked for — never
+    appeared."""
+    out = extract(text="recommend me some Harry/Daphne fics that are fluffy", db=ships)
+    assert out.terms and out.terms[0].kind == "relationship"
+    assert out.terms[0].value == "Daphne Greengrass/Harry Potter"
+
+
+def test_the_variant_spelling_is_swapped_for_the_one_archives_use(ships):
+    """A reader writing "fluffy" means `Fluff` — 1,130,841 works against 8,964.
+    Same word, two orders of magnitude apart, and only one is filed under."""
+    out = extract(text="Harry/Daphne fics that are happy and fluffy", db=ships)
+    values = [t.value for t in out.terms]
+    assert "Fluff" in values and "Fluffy" not in values
+
+
+def test_the_pairing_outranks_a_million_work_tag(ships):
+    """The one exception to ranking by frequency. A pairing is the SUBJECT; a
+    tag is a quality the reader wants it to have, and they want the second WITH
+    the first rather than instead of it."""
+    out = extract(text="Harry/Daphne fluffy romance", db=ships)
+    assert out.terms[0].kind == "relationship"
+    assert out.terms[0].count < 1_130_841        # Fluff is far bigger
+
+
+def test_the_query_spends_its_slots_on_the_ship_and_qualities(ships):
+    """Not on the fandom, which the pairing already implies — that would narrow
+    nothing while dropping a quality the reader asked for."""
+    out = extract(text="Harry/Daphne fics fluffy and romance", db=ships)
+    assert out.query.startswith('ship:"Daphne Greengrass/Harry Potter"')
+    assert "fandom:" not in out.query

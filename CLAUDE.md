@@ -505,6 +505,34 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   otherwise says so and tells you to narrow or close the tab. Verified the
   search was never at fault: `harry potter daphne greengrass fluff` returns
   1,058 works.
+- **A pairing is the SUBJECT of a request and has to beat a million-work tag.**
+  On the Harry/Daphne post, looking each half up as a loose character was not
+  enough: bare "Harry" is on 541 works and bare "Daphne" on 79, so both sank
+  below every generic tag and the one thing the reader asked for never
+  appeared. `_resolve_pair` expands each half to the canonical character
+  (`Daphne` → `Daphne Greengrass`, most-written wins among four) and looks up
+  the relationship holding both — `Daphne Greengrass/Harry Potter`, 1,035
+  works. It then leads the list.
+  - That is the ONE exception to ranking by frequency, and it needs a RESOLVED
+    pairing. The rejected "characters outrank tags" rule let `God`, from "for
+    the love of God", beat every tag in the post.
+  - **The fandom is inferred from the works, not a lookup table.** Sample 300
+    works carrying the pairing and take the fandom most of them list: 18ms, and
+    233 of 300 say `Harry Potter - J. K. Rowling`. A two-thirds majority is
+    required — a bare plurality means the pairing crosses fandoms and naming
+    one would narrow to the wrong half. No per-fandom code, so it works for
+    pairings nobody has heard of.
+  - **A variant spelling is swapped for the one archives file under.** A reader
+    writing "fluffy" means `Fluff` (1,130,841 works); the literal match is
+    `Fluffy` (8,964). Same word, two orders of magnitude apart. Generalises
+    without a synonym list: a tag that is a prefix of another and vastly better
+    attested is its canonical spelling.
+  - The query spends its three slots on the pairing and two QUALITIES, not the
+    fandom — the pairing already implies it, so that slot would narrow nothing
+    while dropping something the reader asked for. Result on the real post:
+    `ship:"Daphne Greengrass/Harry Potter" tag:"Fluff" tag:"Romance"` → 76
+    works, led by *The House of Potter-Greengrass*.
+
 - **Condensing prose is the wrong shape; EXTRACT instead.** Stripping framing
   from a 200-word post leaves a 180-word query, and every term in a search is a
   requirement. `/api/search/extract` matches every 1–4 word run in the post
