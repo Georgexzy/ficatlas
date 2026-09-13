@@ -881,6 +881,19 @@ _DYM_MIN_SIM = 0.35
 _DYM_MIN_COUNT = 200
 _DYM_LIMIT = 3
 
+# When a search that DID return something is still probably a misspelling.
+#
+# A near miss is more dangerous than a miss: `romoine` returns seven unrelated
+# works and looks like an answer, so nothing offers the reader `romione`.
+SUGGEST_MAX_RESULTS = int(os.getenv("SEARCH_SUGGEST_MAX_RESULTS", "25"))
+# Short queries only. A typo on a name is one or two words; a long request
+# returning four works is precise, not misspelled.
+SUGGEST_MAX_WORDS = int(os.getenv("SEARCH_SUGGEST_MAX_WORDS", "3"))
+# Below the empty-result floor on purpose. A transposed letter barely moves
+# trigram similarity — "romoine" against "romione" is 0.333 — and the
+# better-attested test above is what keeps the looser floor honest.
+SUGGEST_NEAR_SIM = float(os.getenv("SEARCH_SUGGEST_NEAR_SIM", "0.30"))
+
 # The operator each kind of facet is searched with, so a suggestion is a working
 # query and not just a word to retype.
 _DYM_OPERATOR = {
@@ -889,7 +902,7 @@ _DYM_OPERATOR = {
 }
 
 
-def _did_you_mean(db, q: str) -> list[Suggestion]:
+def _did_you_mean(db, q: str, min_sim: float | None = None) -> list[Suggestion]:
     """What the reader might have meant, for a search that found nothing.
 
     Only ever called on an empty result set, which is 1.1% of searches — so this
@@ -927,7 +940,8 @@ def _did_you_mean(db, q: str) -> list[Suggestion]:
              ORDER BY similarity(value, :q) * ln(count) DESC
              LIMIT :lim
         """), {"q": q, "floor": _DYM_MIN_COUNT,
-               "minsim": _DYM_MIN_SIM, "lim": _DYM_LIMIT * 3}).fetchall()
+               "minsim": _DYM_MIN_SIM if min_sim is None else min_sim,
+               "lim": _DYM_LIMIT * 3}).fetchall()
     except Exception:
         # A suggestion is a nicety on a page that already says "no results".
         # It must never be the reason the response fails.
@@ -3089,13 +3103,42 @@ def search(          # NOT async — see below
     # page 1 only; pagination through `total` is driven purely by the indexed count.
     merged = live_cards + indexed_cards
 
-    # Only on a genuinely empty result set, and only when the reader typed
-    # something. A search narrowed to nothing by FILTERS is not a spelling
-    # problem, and suggesting a fandom to someone who ticked six checkboxes
-    # would be answering a question they did not ask.
+    # A near miss looks like an answer, which is why zero was the wrong trigger.
+    #
+    # `romoine` is how a real reader spelled Romione in a fic-finder post. It
+    # returns SEVEN works — none of them about the pairing — so the spelling
+    # rescue never ran, and the reader saw a short page of noise rather than
+    # `romione` (206 tagged works). Zero results announce themselves; a handful
+    # of wrong ones do not.
+    #
+    # Bounded three ways so this does not run on every narrow search:
+    #   * the query is short. Typos on a name are what this catches, and
+    #     "romoine" is one word. A six-word request returning four works is a
+    #     precise search, not a misspelling.
+    #   * the result set is small enough to be noise rather than an answer.
+    #   * a candidate has to be much better attested than what was found, which
+    #     is checked below — suggesting a 12-work tag to someone who already
+    #     found 11 is not help.
+    # It costs ~200-500ms and only on this path.
     _suggestions: list[Suggestion] = []
-    if total == 0 and not merged and (q or "").strip():
+    _typed = (q or "").strip()
+    if _typed and total == 0 and not merged:
         _suggestions = _did_you_mean(db, q)
+    elif (_typed and 0 < total <= SUGGEST_MAX_RESULTS
+            and len(_typed.split()) <= SUGGEST_MAX_WORDS):
+        # A LOWER similarity floor than the zero-result path, and it is the
+        # difference between catching this and not: `romoine` -> `romione`
+        # scores 0.333, just under the 0.35 the empty path uses.
+        #
+        # What keeps that honest is `_DYM_MIN_COUNT` inside the lookup — a
+        # candidate must be a term 200+ works actually carry — together with
+        # the small result set and short query above. An earlier version also
+        # required the candidate to be N times larger than `total`, which was
+        # wrong on its face: `sg.count` counts works carrying a TAG and `total`
+        # counts what a full-text search matched, so the comparison was
+        # between different things and rejected good suggestions for arithmetic
+        # reasons. Removed rather than retuned.
+        _suggestions = _did_you_mean(db, q, min_sim=SUGGEST_NEAR_SIM)
 
     _response = SearchResponse(
         total=total,                          # stable across pages — indexed count only

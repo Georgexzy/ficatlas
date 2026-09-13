@@ -435,13 +435,31 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   - The test that asserted the old behaviour was updated rather than deleted,
     and records why the original reasoning ("the text search already matches
     every tag containing it") did not survive measurement.
-- **Ship nicknames are mined from TAGS, so nicknames people only *say* are
-  missing.** `romoine` returns 7 results and `bellamione` 282, while `drarry`
-  (2,514 tagged), `jegulus` (2,072) and `tomarry` resolve properly —
-  `ship_aliases` needs 100+ works tagged with the nickname and those two are
-  used in prose, not in tag fields. Not a mechanism bug; a coverage ceiling.
-  Generalising it would mean deriving portmanteaus from character-name
-  fragments rather than lowering the threshold, which would admit noise.
+- **Ship nicknames are fine; I tested a typo and drew the wrong conclusion.**
+  The claim here used to be that `romoine` proved a coverage ceiling in
+  `ship_aliases`. It did not. The tag is **`romione`** — the fic-finder post it
+  came from had misspelled it — and every nickname works when spelled right:
+  romione 5,000+, tomarry 4,559, snamione 5,000+, hinny 5,000+, bellamione 288,
+  linny 225, pansmione 108. Check the vocabulary before blaming the mechanism.
+- **A near miss is worse than a miss, and only zero triggered the rescue.**
+  `romoine` returns EIGHT works, none about the pairing, so `_did_you_mean`
+  never ran and the reader saw a short page of noise. Zero results announce
+  themselves; a handful of wrong ones look like an answer. Suggestions now also
+  fire when a SHORT query (≤3 words) returns FEW works (≤25).
+  - The near-miss path uses a lower similarity floor, 0.30 against 0.35,
+    because a transposed letter barely moves trigram similarity: "romoine"
+    against "romione" is **0.333**, which is under the empty-path floor. What
+    keeps the looser floor honest is `_DYM_MIN_COUNT` — a candidate must be a
+    term 200+ works actually carry.
+  - **A guard was removed rather than retuned.** An earlier version required
+    the candidate to be 10× larger than `total`, which compares different
+    things: `sg.count` counts works carrying a TAG, `total` counts what a
+    full-text search matched. It rejected good suggestions for arithmetic
+    reasons.
+  - Neither trigram nor Levenshtein separates `romione` from `Routine` — both
+    score 0.333 and edit distance 2. So the panel offers all three candidates
+    and the reader picks, rather than the ranker guessing. Verified it does not
+    nag: correct spellings and legitimately narrow searches get nothing.
 
 - **"No harems" was searching FOR harems.** From a corpus of real fic-finder
   posts: one request listed NINE negative conditions against six positive ones,
