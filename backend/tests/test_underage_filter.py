@@ -90,3 +90,51 @@ def test_it_is_not_the_rating_toggle(db):
 
     db.execute(text("DELETE FROM stories"))
     db.commit()
+
+
+# ── Against the actual rules of the spaces these links get posted in ─────────
+#
+# Two subreddits' rules, as written. The tiers are not a guess at what might be
+# objectionable; they are a mapping onto what gets a link removed and a person
+# banned.
+
+def test_tier1_covers_pedophilia_as_the_rules_define_it():
+    """"No pedophilia. Defined as a child + adult or child + child
+    relationship. All will be removed." — removed outright, so tier 1."""
+    from content_gates import UNDERAGE_TAGS
+    for t in ("Pedophilia", "Implied/Referenced Pedophilia", "Pedophile",
+              "Child Sexual Abuse", "Child Grooming", "Shotacon", "Lolicon"):
+        assert t in UNDERAGE_TAGS
+
+
+def test_tier1_covers_underage_which_may_only_be_linked_with_a_warning():
+    """"Underage (teen + teen, teen + adult) fic must be linked with a clear
+    warning." A search result page carries no warning, so it does not appear
+    there by default — which is stricter than the rule and is the point."""
+    from content_gates import UNDERAGE_TAGS, UNDERAGE_WARNINGS
+    both = set(UNDERAGE_TAGS) | set(UNDERAGE_WARNINGS)
+    for t in ("Underage Sex", "Consensual Underage Sex",
+              "Underage Sex - Freeform", "Minor/Adult Relationship",
+              "Statutory Rape"):
+        assert t in both
+
+
+def test_tier2_covers_what_may_only_be_linked_with_a_warning():
+    """"Extreme or encouraged violence/rape fic, and excerpts of explicit smut
+    must be linked with a clear warning." Same reasoning, one tier down: behind
+    the Explicit toggle rather than its own."""
+    from content_gates import ADULT_TAGS, ADULT_WARNINGS
+    both = set(ADULT_TAGS) | set(ADULT_WARNINGS)
+    for t in ("Rape", "Rape/Non-con Elements", "Sexual Assault",
+              "Torture", "Mutilation", "Snuff",
+              "Smut", "PWP", "Explicit Sexual Content", "Porn"):
+        assert t in both
+
+
+def test_the_two_tiers_do_not_overlap_incoherently():
+    """A term in tier 1 must not ALSO be in tier 2: the Explicit toggle would
+    then appear to control something it does not, which is exactly the
+    confusion that caused the ban."""
+    from content_gates import UNDERAGE_TAGS, ADULT_TAGS
+    overlap = set(UNDERAGE_TAGS) & set(ADULT_TAGS)
+    assert not overlap, f"a term cannot be in both tiers: {overlap}"
