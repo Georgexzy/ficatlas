@@ -1572,9 +1572,42 @@ def search(          # NOT async — see below
     # So the control is separate from `explicit`. That toggle is about taste
     # and readers leave it on; this one is about what a link carries, and
     # nothing that GENERATES a link ever sets it.
-    _ua = None if include_underage else _underage_filter()
-    if _ua is not None:
-        filters.append(_ua)
+    # ONE predicate per column, not one per tier.
+    #
+    # Four separate `NOT (col && ARRAY[…])` checks — two tiers times two
+    # columns — cost more than the search they were protecting: `harry potter`
+    # went from 2.4s to 11.4s and `drarry` from 2.6s to 9.4s, which under load
+    # is a 503 and a reader who sees nothing at all. A negated containment
+    # cannot use the GIN index, so each one is a per-row test; merging the
+    # arrays makes it two tests over one array apiece instead of four.
+    # BELT AND BRACES while the backfill runs.
+    #
+    # The gate columns are the fast path — indexed booleans set by a database
+    # trigger, see backend/content_gates.py — but they are only as good as the
+    # backfill that populated them, and a column defaulting to `false` reads as
+    # SAFE. Until every row has been visited, trusting the column alone would
+    # be strictly less safe than the array check it replaced.
+    #
+    # So both, for now: the column is checked first and costs nothing, and the
+    # array containment catches anything the backfill has not reached. The
+    # array half comes out once `content_gates.py` has completed a clean run —
+    # it is what made `harry potter` take 11.4s.
+    _gates = []
+    _gate_w: list[str] = []
+    _gate_t: list[str] = []
+    if not include_underage and UNDERAGE_FILTER_ON:
+        _gates.append(Story.gate_underage.is_(False))
+        _gate_w += _UNDERAGE_WARNINGS
+        _gate_t += _UNDERAGE_TAGS
+    if not explicit and ADULT_FILTER_ON:
+        _gates.append(Story.gate_adult.is_(False))
+        _gate_w += _ADULT_WARNINGS
+        _gate_t += _ADULT_TAGS
+    filters.extend(_gates)
+    if _gate_w:
+        filters.append(not_(Story.warnings.op("&&")(cast(_gate_w, PG_ARRAY(Text)))))
+    if _gate_t:
+        filters.append(not_(Story.tags.op("&&")(cast(_gate_t, PG_ARRAY(Text)))))
 
     # Works whose title we hold in a visibly broken state.
     #
@@ -1701,15 +1734,8 @@ def search(          # NOT async — see below
         # bulk import (HF FFN dump etc.) from every default search. Permit NULL.
         _explicit_pred = or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None))
         filters.append(_explicit_pred)
-        # And the TAGS, not only the rating. A work rated Teen or Not Rated and
-        # tagged `Rape/Non-con Elements` or `Dead Dove: Do Not Eat` came back on
-        # a default search, because the rating is the author's summary
-        # judgement while the tags are the specifics — and on this index the
-        # tags are far better populated. Somebody pasting a search link in
-        # public is relying on this default.
-        _ad = _adult_filter()
-        if _ad is not None:
-            filters.append(_ad)
+        # The TAGS for this tier are merged into the single gate below, rather
+        # than added here as a second pair of predicates. See the note there.
 
     # An operator value that ran on into the query gets handed back here, BEFORE
     # anything reads `q` — ship resolution, the category test and the FTS
@@ -2476,19 +2502,16 @@ def search(          # NOT async — see below
             # main query, but no FTS, so a near-miss title is allowed in.
             # Its own query, so it needs the gate again — this arm bypasses
             # `filters` entirely and would otherwise be a hole straight through
-            # the exclusion above.
+            # the exclusions above.
             fuzzy_q = db.query(Story).filter(Story.delisted_at.is_(None))
-            if _ua is not None:
-                fuzzy_q = fuzzy_q.filter(_ua)
+            for _g in _gates:
+                fuzzy_q = fuzzy_q.filter(_g)
             if site_enums:
                 fuzzy_q = fuzzy_q.filter(Story.site.in_(site_enums))
             if not explicit:
                 fuzzy_q = fuzzy_q.filter(or_(
                     Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
-                # This arm builds its own query and never sees `filters`.
-                _ad2 = _adult_filter()
-                if _ad2 is not None:
-                    fuzzy_q = fuzzy_q.filter(_ad2)
+
             parts.append(fuzzy_q.filter(fuzzy_pred).limit(50))
         # For a BROAD query the arbitrary slice is the whole problem. Searching
         # "harry potter" matches far more than the ceiling, so the 5,001 rows the
@@ -4182,17 +4205,11 @@ def random_stories(
     # landing page, which makes it the likeliest place for this content to be
     # put in front of somebody who did not ask for anything at all.
     if UNDERAGE_FILTER_ON:
-        where.append("NOT (warnings && CAST(:ua_w AS text[]))")
-        where.append("NOT (tags && CAST(:ua_t AS text[]))")
-        params["ua_w"] = _UNDERAGE_WARNINGS
-        params["ua_t"] = _UNDERAGE_TAGS
+        where.append("NOT gate_underage")
     if not explicit:
         where.append("(rating <> 'explicit' OR rating IS NULL)")
         if ADULT_FILTER_ON:
-            where.append("NOT (warnings && CAST(:ad_w AS text[]))")
-            where.append("NOT (tags && CAST(:ad_t AS text[]))")
-            params["ad_w"] = _ADULT_WARNINGS
-            params["ad_t"] = _ADULT_TAGS
+            where.append("NOT gate_adult")
     if fandom_pat:
         where.append("fic_arr(fandoms) ILIKE :fandom_pat")
         params["fandom_pat"] = fandom_pat

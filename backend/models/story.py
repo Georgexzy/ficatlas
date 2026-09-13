@@ -69,6 +69,14 @@ class Story(Base):
     # the same as unpopular and is exactly what made engagement sorts misleading.
     # NULL here means unranked and sorts last rather than bottom.
     popularity = Column(Float)
+
+    # Content gates, set by a DATABASE TRIGGER on every insert and on any
+    # update touching tags or warnings — never by application code. The
+    # crawler adds ~15,000 works a day, so a column maintained by a periodic
+    # job would be stale by construction and stale in the worst direction: the
+    # default is false, which reads as safe. See backend/content_gates.py.
+    gate_underage = Column(Boolean, nullable=False, server_default="false")
+    gate_adult = Column(Boolean, nullable=False, server_default="false")
     favourites = Column(Integer, default=0)
 
     fandoms = Column(ARRAY(Text), default=list)
