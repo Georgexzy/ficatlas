@@ -414,6 +414,44 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   fresh visitor hash, so a single test script reads as several new visitors.
   Treat same-second bursts of identical queries as what they are.
 
+- **"at least 150k words" set the floor to 50,000.** The vague `long` qualifier
+  matched "very long" elsewhere in the post and the number the reader actually
+  gave was ignored. Being handed 50k fics when you asked for 150k is worse than
+  no filter, because it looks like it worked. `_explicit_word_counts` now runs
+  BEFORE the vague qualifiers and handles "at least 150k", "over 100k", "more
+  than 200,000", "150k+", "under 50k", "between 100k and 300k".
+  - **The trap, from the same post: "harry is lord of at least 2 houses".**
+    Identical comparator. A bare number is only a word count when it carries a
+    k/m suffix or reaches 1,000 — nobody asks for a fic over two words long.
+    Without that condition this reads a man's house count as a manuscript
+    length. "at least 3 horcruxes" and "more than 2 years later" are asserted
+    too.
+  - Verified across ten fandoms — HP, Naruto, MHA, Marvel, Star Wars, Percy
+    Jackson, Supernatural, Teen Wolf, Dragon Age, BTS — nine of ten spanning
+    two or more archives. Percy Jackson comes back FF.net-majority (303 v 40),
+    which is the case no AO3-only search can make.
+- **`\b` in a non-raw Python string is a BACKSPACE.** Nine word-boundary
+  anchors were written into `query_intent.py` by a generator script whose
+  replacement string was `'''...'''` rather than `r'''...'''`, so every `\b`
+  became `\x08`. The regexes compiled, matched nothing, and reported no error —
+  the feature simply did nothing. If a new pattern silently never fires, check
+  for control characters before rewriting the logic.
+- **The outreach panel is a fifth admin tab, not a document.** The traffic tab
+  says nobody is coming; `OutreachPanel.tsx` is the one that does something
+  about it. Paste a fic-finder post, condense it (framing, bullets and the whole
+  "I have read" list are stripped), search, see the archive split, copy a reply.
+  It reads the PUBLIC search API so what it shows is what a reader following the
+  link will see, and it posts nothing anywhere.
+  - It flags whether a search is worth linking: `spans archives` (good),
+    `one archive only` (weak), `too broad to show the split` (narrow it),
+    `nothing found` (fewer words). The whole pitch is that three archives were
+    searched, so a single-archive result is a true answer and a poor
+    advertisement.
+  - A condensed 30-word post still returns 0 and that is inherent — every term
+    in an AND query is a requirement. The panel's job is to get you to an
+    editable starting point; the guidance says two or three tropes beats forty
+    words, and the measured difference is 0 against 77 works.
+
 - **A fic-finder post names several tropes and only one of them was resolved.**
   `resolve_trope_tags` finds the single longest window that IS a tag and hands
   the rest back as words — right for "time travel naruto", where the leftover

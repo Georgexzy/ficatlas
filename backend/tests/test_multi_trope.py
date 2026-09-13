@@ -63,3 +63,54 @@ def test_a_single_trope_is_unchanged(vocab):
     i = resolve_intent(vocab, "dumbledore bashing")
     assert i.tags
     assert i.extra_tag_groups == []
+
+
+# ── Explicit word counts ─────────────────────────────────────────────────────
+
+from query_intent import read_request
+
+
+@pytest.mark.parametrize("q,lo,hi", [
+    ("at least 150k words",            150_000, None),
+    ("over 100k words",                100_000, None),
+    ("more than 200,000 words",        200_000, None),
+    ("150k+ words",                    150_000, None),
+    ("minimum of 80k words",            80_000, None),
+    ("under 50k words",                   None, 50_000),
+    ("less than 20k words",               None, 20_000),
+    ("between 100k and 300k words",    100_000, 300_000),
+])
+def test_a_written_word_count_is_taken_literally(q, lo, hi):
+    """"at least 150k words" used to set 50,000 — the vague `long` qualifier
+    matched "very long" elsewhere in the post and silently replaced the number
+    the reader had actually given. Being handed 50k fics when you asked for
+    150k is worse than no filter, because it looks like it worked."""
+    i = read_request(q)
+    assert i.word_count_min == lo
+    assert i.word_count_max == hi
+
+
+@pytest.mark.parametrize("q", [
+    "harry is lord of at least 2 houses",
+    "fic with at least 3 horcruxes",
+    "at least 4 siblings",
+    "more than 2 years later",
+])
+def test_a_plot_detail_is_not_a_word_count(q):
+    """The trap, and it is in the post this feature came from: "at least 2
+    houses" is the identical comparator. A bare number only counts as a length
+    when it carries a k/m suffix or reaches 1,000 — nobody asks for a fic over
+    two words long."""
+    i = read_request(q)
+    assert i.word_count_min is None
+    assert i.word_count_max is None
+
+
+def test_a_title_containing_long_is_still_a_title():
+    assert read_request("The Long Way Home").word_count_min is None
+
+
+def test_the_vague_qualifier_still_works_on_its_own():
+    """Nothing here replaces "long drabble fics" — it only stops a vague word
+    overriding a precise one."""
+    assert read_request("long drarry fics").word_count_min == 50_000

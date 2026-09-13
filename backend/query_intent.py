@@ -189,6 +189,99 @@ _QUALIFIERS = [
 _QUALIFIER_RES = [(re.compile(p, re.I), mn, mx, label, gated)
                   for p, mn, mx, label, gated in _QUALIFIERS]
 
+
+# EXPLICIT word counts, in the words people actually write them in.
+#
+# "at least 150k words" used to set word_count_min to 50,000 — the vague `long`
+# qualifier above matched "very long" on the next line and the number the reader
+# had actually given was ignored. Asking for 150k and being handed 50k fics is
+# worse than not filtering at all, because it looks like the filter worked.
+#
+# THE TRAP, and it is in the same post this came from:
+#
+#     harry is lord of at least 2 houses
+#
+# "at least 2" is the identical comparator. So a bare number is only a word
+# count when it carries a k/m suffix or is at least 1,000 — nobody asks for a
+# fic over 2 words, and every real request is "50k", "100k", "250,000". That
+# one condition is what separates a length from a plot detail, and without it
+# this reads a man's house count as a manuscript length.
+_WC_MIN_RE = re.compile(
+    r"\b(?:at\s+least|over|more\s+than|minimum(?:\s+of)?|min|above|longer\s+than|"
+    r"greater\s+than|no\s+less\s+than)\s+(\d[\d,]*)\s*([km])?\b\+?", re.I)
+_WC_MIN_PLUS_RE = re.compile(r"\b(\d[\d,]*)\s*([km])\s*\+", re.I)
+_WC_MAX_RE = re.compile(
+    r"\b(?:under|below|less\s+than|at\s+most|maximum(?:\s+of)?|max|shorter\s+than|"
+    r"no\s+more\s+than)\s+(\d[\d,]*)\s*([km])?\b", re.I)
+_WC_RANGE_RE = re.compile(
+    r"\bbetween\s+(\d[\d,]*)\s*([km])?\s+and\s+(\d[\d,]*)\s*([km])?\b", re.I)
+
+# Below this, a bare number is describing something in the story rather than its
+# length. Chosen rather than derived: it is the smallest round number no reader
+# would ever use as a word-count floor, and it is comfortably above the counts
+# that appear in plot descriptions (houses, horcruxes, siblings, years).
+_WC_BARE_FLOOR = 1_000
+
+
+def _wc_value(num: str, suffix: str | None) -> Optional[int]:
+    """A written word count as an integer, or None if it is not one."""
+    try:
+        n = int(num.replace(",", ""))
+    except ValueError:
+        return None
+    if suffix:
+        n *= 1_000 if suffix.lower() == "k" else 1_000_000
+    elif n < _WC_BARE_FLOOR:
+        return None            # "at least 2 houses" — see the note above
+    return n
+
+
+def _explicit_word_counts(text: str) -> tuple[str, Optional[int], Optional[int], list[dict]]:
+    """Pull written word counts out of a request.
+
+    Returns the text with them removed, so the vague qualifiers below cannot
+    then fire on the same phrase and overwrite a precise number with a guess.
+    """
+    lo = hi = None
+    tokens: list[dict] = []
+
+    m = _WC_RANGE_RE.search(text)
+    if m:
+        a, b = _wc_value(m.group(1), m.group(2)), _wc_value(m.group(3), m.group(4))
+        if a and b:
+            lo, hi = min(a, b), max(a, b)
+            tokens.append({"key": "word_count", "value": f"{lo}-{hi}",
+                           "exclude": False, "raw": m.group(0)})
+            text = text.replace(m.group(0), " ")
+
+    if lo is None:
+        for rx in (_WC_MIN_RE, _WC_MIN_PLUS_RE):
+            m = rx.search(text)
+            if not m:
+                continue
+            v = _wc_value(m.group(1), m.group(2))
+            if v:
+                lo = v
+                tokens.append({"key": "word_count", "value": f">{v}",
+                               "exclude": False, "raw": m.group(0)})
+                text = text.replace(m.group(0), " ")
+                break
+
+    if hi is None:
+        m = _WC_MAX_RE.search(text)
+        if m:
+            v = _wc_value(m.group(1), m.group(2))
+            if v:
+                hi = v
+                tokens.append({"key": "word_count", "value": f"<{v}",
+                               "exclude": False, "raw": m.group(0)})
+                text = text.replace(m.group(0), " ")
+
+    # "words" itself carries no meaning once the number beside it is a filter.
+    if tokens:
+        text = re.sub(r"\bwords?\b", " ", text, flags=re.I)
+    return re.sub(r"\s+", " ", text).strip(), lo, hi, tokens
+
 # Status words the syntax parser does not already know. `complete`, `completed`,
 # `wip`, `incomplete` and `ongoing` are handled there as ungated shorthand;
 # these are the natural-language spellings, and they ARE gated because
@@ -493,6 +586,16 @@ def read_request(raw: str) -> Intent:
     """
     intent = Intent(text=raw)
     text, is_request = raw, _is_request(raw)
+
+    # Precise before vague. A reader who wrote "at least 150k words" has already
+    # said what they want, and the `long` qualifier below would otherwise match
+    # "very long" on the next line and quietly replace 150,000 with 50,000.
+    text, _lo, _hi, _wc_tokens = _explicit_word_counts(text)
+    if _lo is not None:
+        intent.word_count_min = _lo
+    if _hi is not None:
+        intent.word_count_max = _hi
+    intent.tokens.extend(_wc_tokens)
 
     for rx, mn, mx, label, gated in _QUALIFIER_RES:
         if gated and not is_request:

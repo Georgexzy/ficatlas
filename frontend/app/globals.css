@@ -5845,3 +5845,104 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   padding-left: 12px;
 }
 .library-signin-note--stakes strong { color: var(--text); font-weight: 600; }
+
+/* ── Fic-finder outreach panel ────────────────────────────────────────────────
+ *
+ * A working surface, not a report: paste, condense, search, copy. Laid out as
+ * one column of labelled steps because that is the order the work happens in.
+ */
+.outreach { display: flex; flex-direction: column; gap: 10px; }
+
+.outreach__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-top: 8px;
+}
+
+.outreach__paste {
+  width: 100%;
+  min-height: 104px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.outreach__q {
+  flex: 1 1 16rem;
+  min-width: 0;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 9px 12px;
+}
+
+.outreach__row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.outreach__hint { font-size: 12px; color: var(--text-faint); line-height: 1.5; }
+
+/* The verdict line: how many, from where, and whether it is worth linking. */
+.outreach__verdict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 2px;
+}
+.outreach__total { font-size: 16px; font-weight: 600; }
+
+.outreach__chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.outreach__chip--ao3          { color: #d4908f; }
+.outreach__chip--ffnet        { color: #90a8d4; }
+.outreach__chip--fictionalley { color: #c890d4; }
+:root[data-theme="light"] .outreach__chip--ao3          { color: var(--badge-ao3); }
+:root[data-theme="light"] .outreach__chip--ffnet        { color: var(--badge-ffnet); }
+:root[data-theme="light"] .outreach__chip--fictionalley { color: var(--badge-falley); }
+
+/* Semantic, and separate from the archive colours above: this is a judgement
+   about the search, not a label for an archive. */
+.outreach__flag { font-size: 12px; font-weight: 600; }
+.outreach__flag.is-good { color: var(--green); }
+.outreach__flag.is-weak { color: var(--text-faint); }
+
+.outreach__suggest { padding-bottom: 4px; }
+.outreach__suggest .btn small { opacity: 0.6; font-family: var(--font-mono); }
+
+.outreach__results { margin-top: 4px; }
+.outreach__results a { color: inherit; }
+
+.outreach__reply {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px dashed var(--border2);
+  border-radius: 6px;
+  padding: 12px;
+  margin: 0;
+  overflow-x: auto;
+}
+
+.outreach__copied { font-size: 12px; font-weight: 600; color: var(--green); }
+
+.outreach__rules { margin: 8px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.6; }
+.outreach__rules li { margin-bottom: 6px; color: var(--text-dim); }
+.outreach__rules strong { color: var(--text); }
