@@ -42,6 +42,12 @@ interface Result {
 
 const PUBLIC = "https://ficatlas.com"
 
+interface Extracted {
+  terms: { kind: string; value: string; count: number; matched: string }[]
+  query: string
+  ignored_words: number
+}
+
 interface Taste {
   matched: { asked: string; id: string; title: string; site: string; kudos: number }[]
   unmatched: string[]
@@ -130,6 +136,7 @@ export default function OutreachPanel() {
   const [err, setErr] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
   const [taste, setTaste] = useState<Taste | null>(null)
+  const [ext, setExt] = useState<Extracted | null>(null)
 
   const run = useCallback(async (query: string) => {
     const term = query.trim()
@@ -157,11 +164,27 @@ export default function OutreachPanel() {
   // than leaving it to be noticed.
   const multiArchive = archives.length >= 2
 
-  const reply = found.trim()
+  // A reply is only offered once the search has actually been run and actually
+  // found something.
+  //
+  // This shipped without the guard and immediately did the one thing the rules
+  // on this very page forbid: a post asking for happy Harry/Daphne fics was
+  // condensed into a forty-word query, matched nothing, and the panel cheerfully
+  // produced "Try this: <link>" pointing at an empty results page. Posting that
+  // is worse than posting nothing — it is an advert that also wastes the
+  // reader's click, and it is exactly the "I couldn't find it, but try this
+  // site" reply the guidance below calls an advert.
+  //
+  // `searched` distinguishes "no results" from "not looked yet", so the panel
+  // does not accuse an untouched box of having failed.
+  const searched = res !== null
+  const foundSomething = searched && (res!.total ?? 0) > 0
+  const reply = !foundSomething ? null : found.trim()
     ? `I think this is ${found.trim()}.\n\nFound it here if you want to check: ${publicLink(q)}\n(searches AO3, FanFiction.net and FictionAlley together)`
     : `Try this: ${publicLink(q)}\n\nIt searches AO3, FanFiction.net and FictionAlley at once — worth a look if it might not be on AO3.`
 
-  const copy = async (text: string, what: string) => {
+  const copy = async (text: string | null, what: string) => {
+    if (!text) return
     try {
       await navigator.clipboard.writeText(text)
       setCopied(what)
@@ -187,16 +210,60 @@ export default function OutreachPanel() {
         placeholder={"at least 150k words - very long\nharry is lord of at least 2 houses\nmagically and politically powerful\nbashing (dumbles/weasleys/hermione)"}
         onChange={e => setRaw(e.target.value)} />
       <div className="outreach__row">
+        {/* EXTRACT, not condense.
+            Stripping framing from a two-hundred-word post leaves a
+            hundred-and-eighty-word query, and every term is a requirement, so
+            it matches nothing — observed on a real post asking for happy
+            Harry/Daphne, which returned zero while
+            `harry potter daphne greengrass fluff` returns 1,058. The index
+            knows its own vocabulary; asking it which words are searchable
+            beats guessing which ones were framing. */}
         <button className="btn btn--primary" disabled={!raw.trim()}
-          onClick={() => { const c = condense(raw); setQ(c); run(c) }}>
-          Condense &amp; search
+          onClick={async () => {
+            setErr(null)
+            try {
+              const r = await fetch("/api/search/extract?text=" +
+                encodeURIComponent(raw.slice(0, 4000)), { credentials: "include" })
+              if (!r.ok) throw new Error(`Could not read the post (${r.status})`)
+              const e: Extracted = await r.json()
+              setExt(e)
+              if (e.query) { setQ(e.query); run(e.query) }
+              else setErr("Nothing in that post matches a tag, character or fandom the index knows.")
+            } catch (e: any) { setErr(e.message) }
+          }}>
+          Find the searchable terms
         </button>
         <span className="outreach__hint">
-          Strips &ldquo;looking for a fic where&rdquo;, bullets and the
-          &ldquo;I have read&rdquo; list. Then edit the box below — two or three
-          tropes beats forty words.
+          Matches the post against the index&rsquo;s own vocabulary. Then click
+          the terms below to build the search — two or three beats forty words.
         </span>
       </div>
+
+      {/* Offered, not applied. Extraction from prose is genuinely ambiguous —
+          "for the love of God" really does contain a character this index
+          knows — so the shortlist is shown and a person decides. */}
+      {ext && ext.terms.length > 0 && (
+        <div className="outreach__row outreach__negs">
+          <span className="outreach__hint">In the post:</span>
+          {ext.terms.map(t => {
+            const op = t.kind === "relationship" ? "ship"
+                     : t.kind === "character" ? "char"
+                     : t.kind === "fandom" ? "fandom" : "tag"
+            const token = `${op}:"${t.value}"`
+            const on = q.includes(token)
+            return (
+              <button key={t.kind + t.value}
+                className={"btn" + (on ? " btn--primary" : "")}
+                title={`${t.count.toLocaleString()} works · from "${t.matched}"`}
+                onClick={() => setQ(cur => on
+                  ? cur.replace(token, "").replace(/\s+/g, " ").trim()
+                  : `${cur} ${token}`.replace(/\s+/g, " ").trim())}>
+                {t.value} <small>{t.count.toLocaleString()}</small>
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* The "I have already read" half.
           Resolved against the index, then reduced to the tags those works have
@@ -349,16 +416,28 @@ export default function OutreachPanel() {
         if the search did not find what they described, post nothing at all.
       </p>
 
-      <pre className="outreach__reply">{reply}</pre>
-      <div className="outreach__row">
-        <button className="btn btn--primary" onClick={() => copy(reply, "reply")}>
-          Copy reply
-        </button>
-        <button className="btn" onClick={() => copy(publicLink(q), "link")}>
-          Copy link only
-        </button>
-        {copied && <span className="outreach__copied">Copied {copied}</span>}
-      </div>
+      {reply ? (
+        <>
+          <pre className="outreach__reply">{reply}</pre>
+          <div className="outreach__row">
+            <button className="btn btn--primary" onClick={() => copy(reply, "reply")}>
+              Copy reply
+            </button>
+            <button className="btn" onClick={() => copy(publicLink(q), "link")}>
+              Copy link only
+            </button>
+            {copied && <span className="outreach__copied">Copied {copied}</span>}
+          </div>
+        </>
+      ) : (
+        <p className="outreach__blocked">
+          {!searched
+            ? "Run a search first — the reply is built from what it finds."
+            : "This search found nothing, so there is no reply to send. " +
+              "Narrow it to two or three of the terms above, or close the tab: " +
+              "a link to an empty page is an advert, not an answer."}
+        </p>
+      )}
 
       {/* The rules, on the screen where the reply is written rather than in a
           document that will not be open at the time. */}
