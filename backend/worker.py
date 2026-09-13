@@ -1294,12 +1294,23 @@ async def _curation_loop() -> None:
     the other case: a change to the TERM LISTS in content_gates.py, which no
     trigger can retrofit onto rows written before it.
 
+    The series word counts are the fourth part and belong here for the same
+    reason as the gate repair: both are a denormalised column that has to be
+    rebuilt after a BULK change to what it was derived from. `_series_fill_loop`
+    adds a few works to existing series every fifteen minutes, so a series total
+    goes stale slowly and in the direction that is safe — the add-on widens a
+    length filter, so a total that has not caught up simply fails to admit a
+    work yet, rather than admitting one that does not qualify.
+
     Weekly. A rec list that took years to form does not move in a day, and the
     gate repair is a near-no-op once the backfill has run — it asks an indexed
-    question and updates nothing when the answer has not changed.
+    question and updates nothing when the answer has not changed. The same is
+    true of the series pass: its batch is drawn from rows that are actually
+    wrong, so a run with nothing to fix does one query and stops.
     """
     import content_gates
     import reddit_recs_import
+    import series_wordcount
     import tropedia_recs_import
 
     interval = _num("CURATION_INTERVAL_HOURS", 168) * 3600
@@ -1307,7 +1318,8 @@ async def _curation_loop() -> None:
     while True:
         for name, fn in (("reddit recs", reddit_recs_import.run),
                          ("tropedia recs", tropedia_recs_import.run),
-                         ("content gates", content_gates.run)):
+                         ("content gates", content_gates.run),
+                         ("series word counts", series_wordcount.run)):
             try:
                 stats = await asyncio.to_thread(fn)
                 log.info("%s: %s", name, stats)

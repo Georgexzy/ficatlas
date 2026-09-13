@@ -1427,6 +1427,14 @@ def search(          # NOT async — see below
     updated_before:        Optional[str] = Query(None),
     published_after:       Optional[str] = Query(None),
     explicit:              bool          = Query(False),
+    count_series:          bool          = Query(
+        False,
+        description="Let a work satisfy the minimum word count on the strength "
+                    "of its SERIES total, when the series has more than one "
+                    "work. A reader asking for 150k+ wants something to "
+                    "disappear into, and an author who told one story across "
+                    "three 60k works has written it.",
+    ),
     include_unknown:       bool          = Query(
         False,
         description="Also return stories that have NO data for a filtered field "
@@ -1511,6 +1519,11 @@ def search(          # NOT async — see below
         if not tags          and parsed_params.get("tags"):          tags          = parsed_params["tags"]
         if not ratings       and parsed_params.get("ratings"):       ratings       = parsed_params["ratings"]
         if not status        and parsed_params.get("status"):        status        = parsed_params["status"]
+        # `series:count` from the bar. OR, not "explicit wins": it only ever
+        # widens, so a reader who typed it and a caller who passed the
+        # parameter are asking for the same thing and neither should cancel
+        # the other.
+        if parsed_params.get("count_series"):                        count_series  = True
         if not language      and parsed_params.get("language"):      language      = parsed_params["language"]
         # `author:` from the search bar. An explicit ?author= still wins, the
         # same rule every other operator follows.
@@ -2300,7 +2313,39 @@ def search(          # NOT async — see below
     if word_count_min:
         # NULL is unknown metadata, but a literal 0-word story is art/placeholder
         # and must always be excluded by a min-words filter.
-        filters.append(_or_unknown(Story.word_count >= word_count_min, Story.word_count.is_(None)))
+        _long_enough = Story.word_count >= word_count_min
+        if count_series:
+            # The SERIES add-on. A reader asking for 150k+ wants something to
+            # disappear into, and three 60k works the author filed as one story
+            # told in parts is exactly that — the length is real, it is just
+            # recorded across rows. Measured at a 150k floor: 18,077 series of
+            # more than one work qualify, holding 158,059 works, and **147,929
+            # of those are individually shorter** and could not otherwise be
+            # found by anyone who asked for a long read.
+            #
+            # `member_count > 1` is the whole guard, and it is not cosmetic:
+            # 75,622 one-work series are REAL — authors file a standalone in a
+            # series, or intend to add more — and for those the total is just
+            # that one work, so admitting them would mean applying the length
+            # filter twice and calling it a feature. It is also the partial
+            # index's own predicate (`ix_series_total_words`), so the guard is
+            # free.
+            #
+            # OFF by default. It WIDENS a filter the reader set deliberately,
+            # and a work that is short on its own is not what everybody asking
+            # for 150k means — so it is offered, and the extractor turns it on
+            # for a request that named a length, which is where the case is
+            # strongest.
+            # A COLUMN, not a join, and the difference is the whole design.
+            # Written as the semi-join it reads as — `id IN (SELECT story_id
+            # FROM series_works JOIN series …)` OR-ed onto the length filter —
+            # neither side can use an index and it measured **16.2s against
+            # 0.9s** on `tag:"Time Travel" words:>150k`, with a second query
+            # timing out at 30s. Beside `word_count` on the same table it is a
+            # BitmapOr of two index scans. See series_wordcount.py.
+            _long_enough = or_(_long_enough,
+                               Story.series_total_words >= word_count_min)
+        filters.append(_or_unknown(_long_enough, Story.word_count.is_(None)))
     if word_count_max:
         filters.append(_or_unknown(Story.word_count <= word_count_max, Story.word_count.is_(None)))
     # Date filters compare against updated_at OR, where we never captured one,
@@ -4304,6 +4349,22 @@ def extract(
     # the bar, so a caller that wants it has to pass it.
     if status:
         parts.append("complete" if status == "complete" else "wip")
+    if wc_min:
+        # The SERIES add-on, turned on whenever the post named a length.
+        #
+        # A reader asking for 150k+ wants something to disappear into, and an
+        # author who told one story across three 60k works has written it. At a
+        # 150k floor this admits 147,929 works that are individually shorter
+        # and could not otherwise be found by anybody asking for a long read —
+        # and it admits them WITHOUT removing anything, because the clause is
+        # OR-ed onto the length filter.
+        #
+        # In the query string rather than as a parameter, for the same reason
+        # as the status and the length themselves: it is what the caller runs
+        # and what the reader pastes. `series:count` is the bar's own syntax
+        # and deliberately not `series:true` — a long standalone still answers
+        # a request for a long read.
+        parts.append("series:count")
     if wc_min or wc_max:
         # k/m suffixes are REQUIRED — `words:>150000` parses to nothing at all,
         # silently, which is the same shape of bug as the status one above.

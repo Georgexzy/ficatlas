@@ -776,6 +776,59 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     failure this endpoint exists to prevent.
   - Measured end to end: the Harry/Daphne post → 64 works; the lordship post →
     `tag:"Albus Dumbledore Bashing" words:>150k` → 160 works, all 150k+.
+- **The series length ADD-ON: three 60k works the author filed as one story are
+  a 180k read.** Asked for directly — "for word count we could maybe include
+  series if all works in series add up to 150k+ … could be an 'add on'".
+  Measured at a 150k floor: 18,077 series of more than one work qualify,
+  holding 158,059 works, and **147,929 of those are individually shorter** and
+  could not otherwise be found by anybody asking for a long read.
+  - **It WIDENS and never narrows**, and that is the difference between an
+    add-on and a filter: the clause is OR-ed onto `word_count >= n`, so a long
+    standalone still comes back. It is also deliberately NOT `series:true` —
+    filtering to works that are in a series would narrow a request for a long
+    read.
+  - **`member_count > 1` is the guard**, and it is the reason this was checked
+    before it was built: 75,622 one-work series are real (authors file a
+    standalone in a series, or intend to add more), and for those the total is
+    just that one work, so counting it would mean applying the same filter
+    twice and calling it a feature. It is also the predicate of
+    `ix_series_total_words`, so the guard is free.
+  - **A COLUMN, not a join, and the measurement decided it.** As the semi-join
+    it reads as — `id IN (SELECT story_id FROM series_works JOIN series …)`
+    OR-ed onto the length filter — neither side can use an index: **16.2s
+    against 0.9s** on `tag:"Time Travel" words:>150k`, with a second query
+    timing out at 30s. As `stories.series_total_words` beside `word_count` it
+    is a BitmapOr of two index scans and measured FASTER than the unmodified
+    filter. `series_wordcount.py` maintains it; `_curation_loop` runs it
+    weekly, beside the content-gate repair and for the same reason — both are
+    a denormalised column that has to be rebuilt after a bulk change to what
+    it was derived from.
+  - Staleness is in the safe direction: the add-on widens, so a total that has
+    not caught up fails to admit a work rather than admitting one that does not
+    qualify.
+  - **`series:count` is bar syntax**, mirrored in both parsers, so it reaches
+    the reader as a chip, survives a paste, and travels in a link — and the
+    extractor appends it whenever a post named a length. There is a sidebar
+    checkbox too, shown only when a minimum is set, because a control that
+    changes nothing teaches readers the filters are decorative.
+  - **The fill walks the index once.** The first draft drew each batch from
+    "rows that are currently wrong", which terminates and resumes — and the
+    planner satisfies the LIMIT by walking `ix_series_works_story` from the
+    beginning every time, discarding what it has already fixed, so batch 21
+    probes a million rows to find the last fifty thousand. A keyset cursor over
+    `story_id` is O(n). Even so it is ~10 minutes per 50,000-row batch on this
+    disk: 1.06M member works, so budget hours and run it detached.
+  - **Adding the column to a live 20.5M-row table needed the worker stopped.**
+    `ALTER TABLE … ADD COLUMN` is metadata-only in PG 11+ and still needs
+    ACCESS EXCLUSIVE, which conflicts with every reader. Three minutes of
+    retries at a 1s `lock_timeout` never won it while the crawler and the gate
+    backfill were running; with `docker compose stop worker` it landed on the
+    seventh attempt. Use a `lock_timeout` and retry — NEVER let the DDL queue,
+    because a waiting ACCESS EXCLUSIVE blocks every reader behind it, and
+    queueing behind a nine-minute UPDATE is a nine-minute outage. That happened
+    once during this work; the symptom is every search 503ing while
+    `pg_stat_activity` shows a `CREATE`/`ALTER` in `wait_event_type = Lock`.
+    Build the index `CONCURRENTLY` by hand first, as the init_db note says.
 - **The series maker is not broken, and the 75,849 one-work series are real.**
   Checked before building anything on it. 99.8% are `source='explicit'`, 100% of
   those carry an AO3 series id, and **AO3's own `work_count` says 75,622 of them

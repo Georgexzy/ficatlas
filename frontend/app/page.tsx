@@ -62,7 +62,7 @@ const SEARCH_PARAM_KEYS = [
   // is exactly what the section badges on result cards produce — landed on
   // the page and ran no search at all.
   "sections",
-  "in_series",
+  "in_series", "count_series",
   // A browse has no classic filter in it at all, and until URL_DEFAULTS
   // existed it still carried `sites=ao3,ffnet,fictionalley` — which is what
   // made this check pass and the search run. Now that the defaults are
@@ -1274,6 +1274,10 @@ function SearchPageInner() {
 
   const [inSeries, setInSeries] = useState(get("in_series") === "true" ? "yes"
                                          : get("in_series") === "false" ? "no" : "")
+  // The length ADD-ON, not a membership filter — it widens the minimum word
+  // count to count a whole series, and deliberately does not restrict results
+  // to works that are in one.
+  const [countSeries, setCountSeries] = useState(get("count_series") === "true")
   // Set by clicking an author's name: browse their whole catalogue across archives.
   const [authorFilter, setAuthorFilter] = useState(get("author") ?? "")
   // How multiple values inside one filter combine. "all" finds crossovers and
@@ -1751,6 +1755,7 @@ function SearchPageInner() {
     // buildParams read are "", "yes" and "no", and "any" is truthy, so it read
     // as a set filter to everything that tests this value.
     setCrossovers("include"); setIncludeUnknown(false); setInSeries("")
+    setCountSeries(false)
     setPage(1)
   }, [])
 
@@ -1888,6 +1893,9 @@ function SearchPageInner() {
     // bar round-trips with the sidebar pills and with a typed operator.
     if (inSeries === "yes") parts.push("series:true")
     else if (inSeries === "no") parts.push("series:false")
+    // Independent of the three pills above: a reader can ask for standalones
+    // and still want a series total counted, or neither, or both.
+    if (countSeries) parts.push("series:count")
 
     // ── Everything below was filterable but unwritable ────────────────────
     //
@@ -1924,7 +1932,7 @@ function SearchPageInner() {
       // sections was missing, so the serializer closed over an empty list and
       // the search bar never mentioned a chosen section — the bar is meant to
       // be the single visible statement of what you asked for.
-      authorFilter, explicit, sections, inSeries,
+      authorFilter, explicit, sections, inSeries, countSeries,
       // The five added above have to be listed here too, for the same reason
       // the comment about `sections` gives: a useCallback that does not depend
       // on a value closes over a stale one, so the bar would go on describing
@@ -1958,6 +1966,10 @@ function SearchPageInner() {
       in_series: pq.inSeries !== null && pq.inSeries !== undefined
         ? pq.inSeries
         : inSeries === "yes" ? true : inSeries === "no" ? false : undefined,
+      // OR, not "the bar wins": it only ever widens, so the box and the
+      // checkbox are asking for the same thing and neither should cancel the
+      // other.
+      count_series: (pq.countSeries || countSeries) || undefined,
       q:                     pq.cleanText || undefined,
       sites:                 joinCsv(sites),
       fandoms:               joinCsv(merge(incFandoms, pq.fandoms)),
@@ -2011,7 +2023,7 @@ function SearchPageInner() {
       page:                  pg,
       per_page:              perPage,
     }
-  }, [perPage, inSeries, query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
+  }, [perPage, inSeries, countSeries, query, sites, explicit, includeUnknown, authorFilter, matchMode, incFandoms, incChars, incShips, incTags, incRatings,
       incWarnings, incCats, excFandoms, excChars, excShips, excTags,
       status, crossovers, language, wordMin, wordMax, updatedAfter, searchWithin, sort,
       // sections was missing here, so buildParams closed over the empty array it
@@ -2027,8 +2039,8 @@ function SearchPageInner() {
     sites, incFandoms, incChars, incShips, incTags, incRatings, incWarnings,
     incCats, excFandoms, excChars, excShips, excTags, status, crossovers,
     language, wordMin, wordMax, updatedAfter, explicit, includeUnknown,
-    authorFilter, matchMode, sort, dlpMinRating, sections, inSeries, recsOnly,
-    showUnderage,
+    authorFilter, matchMode, sort, dlpMinRating, sections, inSeries, countSeries,
+    recsOnly, showUnderage,
   ])
   const filtersDirty = appliedSig !== null && appliedSig !== filterSig
 
@@ -2240,6 +2252,13 @@ function SearchPageInner() {
       // Token removed from the bar — clear the pill, same as deleting author:.
       setInSeries("")
     }
+    // series:count ↔ the checkbox. Its own branch rather than a fourth pill
+    // state, because it is not exclusive with the three above.
+    if (pq.countSeries) {
+      if (!countSeries) setCountSeries(true)
+    } else if (countSeries && !/(?:^|\s)(?:series|in_series)\s*:\s*(?:count|total|totals|combined)\b/i.test(query)) {
+      setCountSeries(false)
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query])
 
@@ -2278,7 +2297,7 @@ function SearchPageInner() {
       // sections belongs here too: this is the effect that re-runs the search
       // when a filter changes, so leaving it out meant a section click updated
       // the pill and then sat there.
-      matchMode, sort, dlpMinRating, sections, inSeries])
+      matchMode, sort, dlpMinRating, sections, inSeries, countSeries])
 
   // Append a syntax fragment from the help panel and put the caret after it, so
   // an operator like "fandom:" is ready to be typed into rather than merely
@@ -2582,8 +2601,8 @@ function SearchPageInner() {
             </FilterSection>
           )}
 
-          <FilterSection label="Series" count={inSeries ? 1 : 0}
-            defaultOpen={!!inSeries}>
+          <FilterSection label="Series" count={(inSeries ? 1 : 0) + (countSeries ? 1 : 0)}
+            defaultOpen={!!inSeries || countSeries}>
             <p className="filter-note">
               Part of a longer sequence, or complete in itself.{" "}
               <HelpTip label="About series">
@@ -2604,6 +2623,22 @@ function SearchPageInner() {
                   onClick={() => setInSeries(v)}>{label}</button>
               ))}
             </div>
+            {/* The length ADD-ON. Shown only when there IS a minimum, because
+                with no length filter it changes nothing and a control that
+                does nothing teaches readers the filters are decorative. */}
+            {wordMin ? (
+              <label className="filter-check">
+                <input type="checkbox" checked={countSeries}
+                  onChange={e => setCountSeries(e.target.checked)} />
+                <span>Count a whole series towards the length</span>
+              </label>
+            ) : null}
+            {wordMin ? (
+              <p className="filter-note">
+                Three parts of 60,000 words are a 180,000-word read. This adds
+                those; it never removes a work that is long on its own.
+              </p>
+            ) : null}
           </FilterSection>
 
           {/* "Abandoned" is gone: it matched 0 rows out of 19.8M. Nothing has

@@ -1843,12 +1843,15 @@ kbd {
 .dlp-banner__icon { font-size: 18px; color: #b899d4; flex-shrink: 0; }
 .dlp-banner strong { color: var(--text); font-weight: 600; }
 
-.curated-check {
+/* `.filter-check` shares this: the mobile rule further up has named it since
+   it was written and no base rule ever defined it, so a checkbox carrying that
+   class rendered as an unstyled inline input. */
+.curated-check, .filter-check {
   display: flex; align-items: center; gap: 8px;
   font-size: 13px; color: var(--text-dim); cursor: pointer;
   padding: 4px 0;
 }
-.curated-check input { accent-color: var(--accent); }
+.curated-check input, .filter-check input { accent-color: var(--accent); }
 
 /* ── One-click import button states ──────────────────────────────────────── */
 .card-btn:disabled { opacity: 0.55; cursor: not-allowed; }

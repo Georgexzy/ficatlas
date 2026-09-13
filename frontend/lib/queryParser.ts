@@ -37,6 +37,8 @@ export interface ParsedQuery {
   crossovers: string | null
   /** true = in a series, false = standalone, null = either. */
   inSeries: boolean | null
+  /** `series:count` — the length ADD-ON, not a membership filter. */
+  countSeries: boolean
   tokens: ParsedToken[]
 }
 
@@ -230,7 +232,8 @@ export function parseQuery(raw: string): ParsedQuery {
     sections: [], ratings: [], warnings: [], categories: [], sites: [],
     excFandoms: [], excRelationships: [], excCharacters: [], excTags: [],
     status: null, language: null, author: null, wordCountMin: null, wordCountMax: null,
-    updatedAfter: null, crossovers: null, inSeries: null, tokens: [],
+    updatedAfter: null, crossovers: null, inSeries: null, countSeries: false,
+    tokens: [],
   }
 
   if (!raw?.trim()) return pq
@@ -338,7 +341,14 @@ export function parseQuery(raw: string): ParsedQuery {
     }
     else if (canonical === "in_series") {
       const v = value.toLowerCase()
-      if (["true", "yes", "in", "series"].includes(v)) {
+      // `series:count` is a third thing, and deliberately does NOT set
+      // inSeries. It says "count the series total towards the word count",
+      // which WIDENS a length filter; filtering to works that are in a series
+      // would narrow it, and a long standalone still answers a request for a
+      // long read. Mirrors backend/query_parser.py.
+      if (["count", "total", "totals", "combined"].includes(v)) {
+        pq.countSeries = true; tok.value = "count"
+      } else if (["true", "yes", "in", "series"].includes(v)) {
         pq.inSeries = true; tok.value = "true"
       } else if (["false", "no", "standalone", "alone", "oneshot", "one-shot"].includes(v)) {
         pq.inSeries = false; tok.value = "false"
@@ -418,5 +428,6 @@ export function parsedToSearchParams(pq: ParsedQuery): Record<string, any> {
     updated_after: pq.updatedAfter ?? undefined,
     crossovers: pq.crossovers ?? undefined,
     in_series: pq.inSeries ?? undefined,
+    count_series: pq.countSeries || undefined,
   }
 }

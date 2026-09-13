@@ -30,6 +30,31 @@ def test_series_false():
     assert parse_query("series:false").in_series is False
 
 
+def test_series_count_is_the_length_add_on_not_a_membership_filter():
+    """`series:count` says "count the series total towards the word count".
+
+    It deliberately does NOT set `in_series`. Counting the series WIDENS a
+    length filter; filtering to works that are in a series would narrow it, and
+    a long standalone still answers a request for a long read. The two are
+    different questions about the same relation and can be asked together."""
+    pq = parse_query('tag:"A" >150k series:count')
+    assert pq.count_series is True
+    assert pq.in_series is None
+    assert pq.word_count_min == 150000
+
+    both = parse_query("series:true series:count")
+    assert both.in_series is True and both.count_series is True
+
+
+def test_series_count_round_trips_through_the_bar():
+    """The bar is what a reader pastes, so a filter that cannot be written
+    back into it is a filter that gets lost on the next search."""
+    from query_parser import serialise_filters
+    line = serialise_filters({"count_series": "true"})
+    assert "series:count" in line
+    assert parse_query(line).count_series is True
+
+
 def test_in_series_alias():
     assert parse_query("in_series:true").in_series is True
 
