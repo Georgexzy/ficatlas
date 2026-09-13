@@ -414,7 +414,8 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   fresh visitor hash, so a single test script reads as several new visitors.
   Treat same-second bursts of identical queries as what they are.
 
-- **`angst` and `fluff` return a 503, and this is still OPEN.** The two
+- **`angst` and `fluff` returned a 503 — FIXED, and the diagnosis took three
+  attempts.** The two
   most-used tags in fanfiction — 868,737 and 1,130,841 works here — time out
   after 20s. A bare one-word trope was refused a tag branch, so it fell to a
   full-text scan over every matching row. That half is fixed: an EXACT one-word
@@ -422,16 +423,24 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   a text scan to ~2s), and `_names_a_thing` still rejects `harry`, `naruto` and
   `hermione` before any window is tried, which is what the old rule was really
   protecting.
-  - **It did not fix the biggest tags, and one attempt made things worse.**
-    Replacing the OR with the tag branch ALONE for a whole-query match fixed
-    `fluff` (503 → 10.3s) and REGRESSED `hurt comfort` (7.4s → 503). Reverted,
-    with a note at the call site. The lesson is the diagnosis: the cost of these
-    queries is the candidate pull and ranking over a huge match set, NOT the
-    predicate that selects it, so changing the predicate moves the problem
-    around without solving it.
-  - Where to look next: a whole-query tag match is really a BROWSE, and browse
-    already has machinery for this (`_browse_arm`, popularity ordering off an
-    index) that relevance ranking does not use.
+  - **Two wrong fixes before the right one, and the measurements are the
+    point.** (1) Swapping the OR for the tag branch alone fixed `fluff`
+    (503 → 10.3s) and REGRESSED `hurt comfort` (7.4s → 503). (2) Also skipping
+    relevance ranking changed nothing. Profiling the raw SQL is what settled
+    it: **containment picks 5,001 candidates in 434ms**, and `ORDER BY
+    popularity DESC NULLS LAST` over the match set costs **8.3s** — while the
+    index-friendly form (`popularity IS NOT NULL` + plain DESC, matching the
+    partial index) costs **33ms**.
+  - The actual fix is that a trope browse must skip the TEXT CANDIDATE
+    MACHINERY, not just the ranking. A title arm, a fuzzy-title arm and a
+    "best read" arm that intersects the match set with `ix_stories_kudos` all
+    ran for `angst` — that last one over 868,737 rows — and none of them has
+    anything to do for a query that names no work. `if q and q.strip() and not
+    _trope_browse` sends it down the filtered-browse path instead.
+  - Measured after: **angst 2.7s, fluff 2.5s, hurt comfort 2.7s**, all from
+    20s timeouts, with 5/5 of page one genuinely carrying the tag. No
+    regressions — `harry potter`, `drarry`, `coffee shop au` and
+    `all the young dudes` all unchanged or faster.
   - The test that asserted the old behaviour was updated rather than deleted,
     and records why the original reasoning ("the text search already matches
     every tag containing it") did not survive measurement.
