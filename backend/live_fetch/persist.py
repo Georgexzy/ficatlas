@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from provenance import PROVENANCE_TAGS
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
 import author_permission
+from crossover import is_crossover as fic_is_crossover
 
 log = logging.getLogger(__name__)
 
@@ -280,7 +281,7 @@ def persist_live_results(db: Session, live_results: list[dict],
                 warnings=d.get("warnings") or [],
                 categories=d.get("categories") or [],
                 genres=d.get("genres") or [],
-                is_crossover=len(d.get("fandoms", [])) > 1,
+                is_crossover=fic_is_crossover(d.get("fandoms", [])),
                 is_hosted=False,
                 published_at=None,
                 updated_at=updated_at,

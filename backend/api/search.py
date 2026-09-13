@@ -4443,6 +4443,26 @@ def extract(
         if n >= _PROBE_MIN_KEEP:
             kept = cand
 
+    # A post that NAMES a fandom and never mentions a crossover is asking for
+    # that fandom, so crossovers come out.
+    #
+    # Reported from the live site on the real TWD post: the first SIX results
+    # were crossovers — Avengers, Supernatural, Lord of the Rings, Teen Wolf,
+    # Resident Evil — and one was a twenty-one-fandom SI collection in which
+    # The Walking Dead is one entry. That is not bad luck, it is arithmetic:
+    # a crossover carries several fandoms, so it matches several fandom
+    # searches, and it draws readers from every one of them — so on a
+    # popularity sort it outranks a work written for the fandom that was
+    # actually asked for. Measured: 74 works, 15 genuine crossovers, and they
+    # took the whole of page one.
+    #
+    # Only in the EXTRACTOR, and only with a fandom in hand. The general search
+    # keeps returning them, because "TWD fics" typed into the box is not the
+    # same statement as a fic-finder post naming one fandom and asking for
+    # stories in it. An explicit mention still wins in both directions.
+    if crossovers is None and any(t.kind == "fandom" for t in kept):
+        crossovers = "exclude"
+
     parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in kept]
 
     # If nothing survived, fall back to the single best term rather than

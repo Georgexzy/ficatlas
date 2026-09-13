@@ -776,8 +776,53 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     failure this endpoint exists to prevent.
   - Measured end to end: the Harry/Daphne post → 64 works; the lordship post →
     `tag:"Albus Dumbledore Bashing" words:>150k` → 160 works, all 150k+.
-- **"no crossovers please" was searching FOR crossovers, and a default would
-  have been worse than the bug.** The extractor returned `tag:"Crossover"` —
+- **A crossover is more than one FRANCHISE, not more than one fandom tag — and
+  the first six results on a real post were all crossovers.** Reported from the
+  live site on the TWD fic-finder post: Avengers, Supernatural, Lord of the
+  Rings, Teen Wolf, Resident Evil, and a **twenty-one-fandom** SI collection in
+  which The Walking Dead is one entry. Arithmetic, not bad luck — a crossover
+  carries several fandoms, so it matches several fandom searches and draws
+  readers from all of them, and on a popularity sort it outranks a work written
+  for the fandom that was asked for. 74 works, 15 genuine crossovers, and they
+  took the whole of page one.
+  - **The flag had to be fixed before it could be trusted to hide anything.**
+    `is_crossover` was `len(fandoms) > 1` written out in FIVE places, and AO3
+    fandom tags are not franchises — an author files one story under every
+    spelling that fits. `crossover.py` strips the archive's naming furniture
+    (the `(TV)` disambiguator, the `- All Media Types` / `- J. K. Rowling`
+    tail, the subtitle after `:`, the `& Related Fandoms` umbrella, a leading
+    article, and the original-language half of `原神 | Genshin Impact`) and
+    counts distinct franchises. Not a synonym table: the furniture is a
+    convention the archive follows, so this generalises to fandoms nobody has
+    heard of.
+  - **The first measurement of the error rate was wrong and drove a wrong
+    recommendation.** A crude "do all the fandoms share a first word" proxy
+    said 33%, because a leading article collides everything — `The Walking
+    Dead` and `The Avengers` both reduce to "the". With a real franchise key it
+    is **20.6%**. On the TWD post: 22 flagged, 15 genuinely crossovers, 7
+    wrongly. Check what a proxy actually measures before quoting it.
+  - **The rule exists twice, in Python and in SQL, and a test asserts they
+    agree** over the 500 largest fandoms in the index — the same arrangement as
+    the two query parsers, and for the same reason. The repair rewrites
+    millions of rows and pulling each into Python would take days.
+  - **The known collision is recorded, not fixed.** `Avatar: The Last
+    Airbender` and `Avatar (Cameron Movies)` both reduce to `avatar`, so a
+    crossover between them reads as one franchise. That direction is safe — a
+    crossover kept is a work the reader can see and judge, a work wrongly
+    hidden is invisible — and it is rarer than the false positives the subtitle
+    rule removes. A test says so if it ever stops being true.
+  - `crossover.run` joins `_curation_loop` beside the gate repair, for exactly
+    that reason: the flag is written by five importers and the crawler, so it
+    is right for anything written since the definition changed and wrong for
+    everything before it, and no trigger retrofits a definition onto old rows.
+  - **The extractor now excludes crossovers when the post NAMES a fandom** and
+    never mentions one. Only the extractor — "TWD fics" typed into the search
+    box is not the same statement as a fic-finder post naming one fandom and
+    asking for stories in it. Measured on the real post: page one went from six
+    crossovers to none.
+
+- **"no crossovers please" was searching FOR crossovers, and a blanket default
+  would have been worse than the bug.** The extractor returned `tag:"Crossover"` —
   the one thing the reader had ruled out — which is "no harems" all over again:
   the word is in the post either way, so only the words AROUND it separate a
   want from a refusal. The refusal patterns are therefore tested FIRST, because
@@ -799,9 +844,8 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     so `false` there means "unknown". Same trap as `status` before the SQLite
     importer filled it in. A default would be near-no-op on FF.net and
     aggressive on AO3.
-  - Fixing the column is the real lever if this is ever wanted as a default:
-    compare fandoms after stripping AO3's `- All Media Types`/`(Movies)`/`:
-    Subtitle` furniture, rather than counting them.
+  - That "fix the column first" note was acted on the same day — see the entry
+    above.
 - **Three more rules from the same twelve-fandom battery, each a word spent
   twice or weighed wrong.**
   - **"longfics and one-shots welcome" is a reader saying they do not care.**

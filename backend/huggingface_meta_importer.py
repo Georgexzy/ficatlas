@@ -50,6 +50,7 @@ from sqlalchemy.exc import IntegrityError
 from db.session import db_session
 from completion_hints import declares_complete
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
+from crossover import is_crossover as fic_is_crossover
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
@@ -239,7 +240,7 @@ def main():
                     characters=[], relationships=[],
                     tags=["ffnet_dump", "hf_meta_2024"],
                     warnings=[], categories=[], genres=[],
-                    is_hosted=False, is_crossover=len(fandoms) > 1,
+                    is_hosted=False, is_crossover=fic_is_crossover(fandoms),
                 ))
             except Exception as e:
                 errors += 1

@@ -18,6 +18,7 @@ from collections import defaultdict
 from sqlalchemy import func, text as sql_text
 from sqlalchemy.orm import Session
 from models.story import Story
+from crossover import is_crossover as fic_is_crossover
 
 _PUNCT = re.compile(r"[^\w\s]")
 _WS = re.compile(r"\s+")
@@ -186,7 +187,7 @@ def merge_group(db: Session, stories: list[Story]) -> Story:
     canonical.tags = union("tags")
     canonical.warnings = union("warnings")
     canonical.categories = union("categories")
-    canonical.is_crossover = len(canonical.fandoms) > 1
+    canonical.is_crossover = fic_is_crossover(canonical.fandoms)
     canonical.cross_post_urls = sorted(alt_urls)
 
     # Keep the best metadata numbers across copies
