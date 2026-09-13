@@ -438,6 +438,11 @@ class Intent:
     tag_leftover: str = ""              # words the tag did NOT account for
     tag_is_whole: bool = False          # the tag consumed every content word
     tag_branch_ok: bool = False         # worth OR-ing into the predicate at all
+    # FURTHER concepts found in the leftover, each a list of spellings to OR.
+    # A request names as many tropes as it likes and resolve_trope_tags finds
+    # one window; see resolve_intent for why the rest were being thrown at the
+    # text index instead, and what that cost.
+    extra_tag_groups: list[list[str]] = field(default_factory=list)
     text_variants: list[str] = field(default_factory=list)  # same query, archive's words
     is_shorthand: bool = False          # the reader used a coined word, so: a category
     tokens: list[dict] = field(default_factory=list)  # chips for the UI
@@ -822,4 +827,37 @@ def resolve_intent(db, raw: str) -> Intent:
         intent.tag_branch_ok = bool(intent.tags) and (
             bool(intent.tag_leftover)
             or intent.tag_works <= TROPE_BRANCH_MAX_WORKS)
+
+        # KEEP GOING through the leftover.
+        #
+        # resolve_trope_tags finds the single longest window that is a tag and
+        # hands back the rest as words. That is right for "time travel naruto",
+        # where the leftover bounds the trope — and wrong for a request that
+        # names several tropes, which is what a fic-finder post actually looks
+        # like:
+        #
+        #     powerful harry dumbledore bashing
+        #
+        # resolved `Powerful Harry Potter` (653 works) and left "dumbledore
+        # bashing" to be AND-ed as free TEXT — even though it is itself a tag
+        # on 3,481 works. So a work had to carry one tag and happen to contain
+        # the other two words somewhere in its title, summary or author. On the
+        # live index that combination returned NOTHING, and the reader was told
+        # the archive had no such story.
+        #
+        # Each further window becomes its own group, AND-ed by the caller: the
+        # reader asked for both things, so both must hold. Bounded at three
+        # because a request naming four separate tropes is rare and each pass
+        # is another vocabulary lookup.
+        leftover = intent.tag_leftover
+        while leftover.strip() and len(intent.extra_tag_groups) < 3:
+            more, _works, rest, _whole = resolve_trope_tags(db, leftover)
+            if not more:
+                break
+            intent.extra_tag_groups.append(more)
+            # A window that consumes nothing would loop for ever.
+            if rest.strip() == leftover.strip():
+                break
+            leftover = rest
+        intent.tag_leftover = leftover
     return intent
