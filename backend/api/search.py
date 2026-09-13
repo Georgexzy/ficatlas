@@ -1573,6 +1573,7 @@ def search(          # NOT async — see below
     # which are the things it exists to improve.
     trope_tags: list[str] = []
     trope_extra_groups: list[list[str]] = []
+    trope_whole = False
     trope_works = 0
     trope_leftover = ""
     trope_branch_ok = False
@@ -1614,6 +1615,7 @@ def search(          # NOT async — see below
             parsed_tokens.extend(intent.tokens)
             trope_tags, trope_leftover = intent.tags, intent.tag_leftover
             trope_extra_groups = intent.extra_tag_groups
+            trope_whole = intent.tag_is_whole
             # "No harems." Applied as a filter on the WHOLE query, not inside
             # the trope branch, because a negation is unconditional: the reader
             # does not want it however the work was found.
@@ -1722,6 +1724,14 @@ def search(          # NOT async — see below
                 trope_pred = and_(trope_pred, _story_tsv().op("@@")(
                     func.websearch_to_tsquery(_REGCONFIG, trope_leftover)))
             branches.append(trope_pred)
+
+        # NOTE: replacing this OR with the tag branch alone was tried and
+        # reverted. It fixed `fluff` (503 -> 10.3s) and REGRESSED
+        # `hurt comfort` (7.4s -> 503), because the cost of these queries is
+        # the candidate pull and ranking over a huge match set rather than the
+        # predicate that selects it — so changing the predicate moves the
+        # problem without solving it. `angst` (868,737 works) and
+        # `hurt comfort` (577,244) still time out; see CLAUDE.md.
         filters.append(or_(*branches) if len(branches) > 1 else text_pred)
 
     if recs_only:

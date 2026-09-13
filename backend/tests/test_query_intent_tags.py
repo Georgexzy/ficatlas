@@ -135,12 +135,34 @@ def test_author_chatter_is_not_a_trope(vocab):
     assert resolve_trope_tags(vocab, "the long way home") == ([], 0, "", False)
 
 
-def test_one_word_needs_words_around_it(vocab):
-    """A bare one-word query cannot open a tag branch: the text search already
-    matches every tag containing it, so the branch would only widen."""
-    assert resolve_trope_tags(vocab, "omegaverse") == ([], 0, "", False)
+def test_a_bare_one_word_trope_resolves_when_it_IS_the_tag(vocab):
+    """This used to assert the opposite, on the reasoning that "the text search
+    already matches every tag containing it, so the branch would only widen".
+
+    That reasoning did not survive measurement. `angst` and `fluff` are the two
+    most-used tags in fanfiction — 868,737 and 1,130,841 works on this index —
+    and with no tag branch they fell to a full-text scan over every one of
+    those rows: both returned a **503 error page** after 20 seconds, while
+    `hurt comfort` (two words, so the branch fired) came back in 7.4s. The most
+    obvious word a reader can type was an error.
+
+    Admitted only on an EXACT match, which is what keeps the old worry honest:
+    a substring match would drag `Smut and Fluff` and `Eventual Smut` in behind
+    "smut", and that really would be unbounded widening.
+    """
+    tags, works, leftover, whole = resolve_trope_tags(vocab, "omegaverse")
+    assert tags == ["Omegaverse"]
+    assert leftover == "" and whole is True
+    # Still bounded when there are other words, exactly as before.
     tags, _, leftover, _ = resolve_trope_tags(vocab, "omegaverse bakugou")
     assert tags == ["Omegaverse"] and leftover == "bakugou"
+
+
+def test_a_bare_word_that_names_a_character_still_resolves_to_nothing(vocab):
+    """What the old rule was really protecting against, and it is still
+    protected: `_names_a_thing` rejects a fandom, ship or character before any
+    window is tried, so "harry" and "naruto" never open a tag branch."""
+    assert resolve_trope_tags(vocab, "bakugou") == ([], 0, "", False)
 
 
 def test_a_small_one_word_tag_is_noise(vocab):

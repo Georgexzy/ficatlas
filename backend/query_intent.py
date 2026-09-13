@@ -891,6 +891,12 @@ def resolve_trope_tags(db, text: str,
     return [], 0, "", False
 
 
+def _is_same_word(tag: str, word: str) -> bool:
+    """Is this tag simply the word itself? Singular and plural both."""
+    t, w = tag.strip().lower(), word.strip().lower()
+    return t in (w, w + "s", w.rstrip("s"), w.rstrip("s") + "s")
+
+
 def _windows(db, text: str, tokens: list[str], aliased: bool):
     """The window search over one phrasing. See resolve_trope_tags."""
     asked_negative = bool(_NEGATION_RE.search(text))
@@ -898,7 +904,23 @@ def _windows(db, text: str, tokens: list[str], aliased: bool):
         for start in range(0, len(tokens) - n + 1):
             window = tuple(tokens[start:start + n])
             leftover = tokens[:start] + tokens[start + n:]
-            if n < 2 and not (leftover or aliased):
+            # A bare one-word query IS admitted, but only when the word is
+            # exactly a tag (see the `bare_solo` condition in `kept` below).
+            #
+            # It used to be refused outright, and the cost was not a worse
+            # ranking — it was an error page. `angst` and `fluff` are the two
+            # most-used tags in fanfiction (868,737 and 1,130,841 works here),
+            # and with no tag branch they fell to a full-text scan over every
+            # one of those rows and hit the statement timeout. Measured: both
+            # returned **503** after 20s, while `hurt comfort` — two words, so
+            # the branch fired — came back in 7.4s.
+            #
+            # What the old rule was protecting against is still handled: a word
+            # that names a fandom, ship or character is rejected by
+            # `_names_a_thing` at the top of resolve_trope_tags and again per
+            # window below, so "harry" and "naruto" never reach here.
+            bare_solo = n < 2 and not leftover and not aliased
+            if n < 2 and not (leftover or aliased or bare_solo):
                 continue
             if n < 2 and len(window[0]) < 5:
                 continue
@@ -913,6 +935,12 @@ def _windows(db, text: str, tokens: list[str], aliased: bool):
                     and (asked_negative or not _NEGATION_RE.search(v))
                     and _tag_coverage(v, window) >= TROPE_TAG_MIN_COVERAGE
                     and (n > 1 or c >= TROPE_TAG_MIN_WORKS_SOLO)
+                    # EXACT for a bare one-word query. With a substring match
+                    # "smut" would drag in `Smut and Fluff`, `Eventual Smut`
+                    # and forty more, which is the unbounded widening the old
+                    # rule refused this case for. Plural too, because readers
+                    # type "harems" and the archive files `Harems`.
+                    and (not bare_solo or _is_same_word(v, window[0]))
                     ][:TROPE_TAG_CAP]
             if not kept:
                 continue
