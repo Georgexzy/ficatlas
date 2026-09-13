@@ -238,3 +238,75 @@ def test_a_longer_spelling_of_the_same_concept_is_found(bulleted):
     bulleted.commit()
     best = _biggest_spelling(bulleted, ["Magically Powerful Harry"])
     assert best == ("Magically Powerful Harry Potter", 1719)
+
+
+# ── A request names a fandom, a status and a quality, not just tags ──────────
+
+def test_an_abbreviated_fandom_becomes_a_fandom_not_a_word(bulleted):
+    """"any good TWD fics" returned `twd` as a TAG on 163 works, while The
+    Walking Dead is a fandom on 20,498. The alias table is mined from the
+    naming convention (see fandom_aliases.py), so this generalises to fandoms
+    nobody has heard of rather than being a list."""
+    bulleted.execute(text("""
+        CREATE TABLE IF NOT EXISTS fandom_aliases (
+            alias text PRIMARY KEY, fandom text NOT NULL,
+            works integer, built_at timestamp DEFAULT now())
+    """))
+    bulleted.execute(text("DELETE FROM fandom_aliases"))
+    bulleted.execute(text("INSERT INTO fandom_aliases (alias, fandom, works) "
+                          "VALUES ('twd','The Walking Dead (TV)',20498)"))
+    bulleted.execute(text("""
+        INSERT INTO facets (kind, value, count)
+        VALUES ('fandom','The Walking Dead (TV)',20498)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    bulleted.commit()
+    import query_intent
+    query_intent._FANDOM_ALIASES, query_intent._FANDOM_ALIASES_AT = {}, 0.0
+    out = extract(text="any good TWD fics, preferably ongoing", db=bulleted)
+    assert out.terms and out.terms[0].kind == "fandom"
+    assert "Walking Dead" in out.terms[0].value
+
+
+@pytest.mark.parametrize("phrase,expected", [
+    ("preferably ongoing",            "ongoing"),
+    ("still being updated",           "ongoing"),
+    ("wip is fine",                   "ongoing"),
+    ("completed fics only",           "complete"),
+])
+def test_status_is_a_filter_not_a_word(bulleted, phrase, expected):
+    """`ongoing` is a real tag on 450 works AND the status the reader asked
+    for. Returned as a subject it spends a slot saying what the status filter
+    already says, and says it worse."""
+    out = extract(text=phrase, db=bulleted)
+    assert out.status == expected
+    assert "ongoing" not in [t.value.lower() for t in out.terms]
+
+
+@pytest.mark.parametrize("phrase", [
+    "any good fics", "something worth reading", "the best ones",
+    "well-written please", "can you recommend anything",
+])
+def test_a_request_about_quality_becomes_a_sort(bulleted, phrase):
+    """No tag expresses "good". What a reader means is the works other readers
+    actually read, which is an ordering, not a filter."""
+    assert extract(text=phrase, db=bulleted).sort == "popular"
+
+
+def test_si_means_self_insert_not_a_fandom(bulleted):
+    """`SI` is Self-Insert to every reader who types it. That it is also the
+    initialism of SK8 the Infinity is a coincidence they will never have in
+    mind — which is why it is in the alias miner's STOPLIST and in the tag
+    abbreviation table instead."""
+    from fandom_aliases import STOPLIST
+    from api.search import _TAG_ABBREV
+    assert "si" in STOPLIST
+    assert _TAG_ABBREV["si"] == "Self-Insert"
+
+
+@pytest.mark.parametrize("filler", ["or something", "tbh", "preferably", "laying"])
+def test_conversational_filler_is_not_a_subject(filler):
+    """Each of these is a real tag somebody has used — `or something` on 471
+    works — which is exactly why the n-gram lookup keeps finding them."""
+    from api.search import _is_grammar
+    assert _is_grammar(filler)

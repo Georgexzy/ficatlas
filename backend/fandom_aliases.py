@@ -88,10 +88,33 @@ OPTIONAL = {"the", "a", "an", "of", "and", "to", "in", "for", "or",
 # Abbreviations that are ordinary English words. `it`, `us` and `she` are real
 # fandoms whose initialisms would swallow any query containing them, and an
 # alias that fires on a common word is worse than no alias at all.
-STOPLIST = {"it", "us", "me", "he", "she", "we", "in", "on", "at", "to", "is",
-            "as", "an", "of", "or", "if", "so", "no", "up", "my", "by", "do",
-            "the", "and", "for", "you", "all", "one", "two", "new", "old",
-            "who", "how", "why", "war", "art", "own", "out", "man", "day"}
+# Every one of these is a real fandom's initialism AND an ordinary English
+# word, and the ordinary meaning wins every time. Measured: `any` resolved to
+# `Akatsuki no Yona | Yona of the Dawn` and hijacked a post that said "any good
+# TWD fics"; `si` resolved to `SK8 the Infinity` on a post that meant
+# Self-Insert. An alias that fires on a word people write by accident is worse
+# than no alias, because the reader cannot see why their search went wrong.
+#
+# Written out rather than filtered by frequency: there is no list of "common
+# English words" in this codebase, a dependency for one would be absurd, and
+# the set of two-to-four letter strings that are both a fandom initialism and a
+# word people type is small and stable.
+STOPLIST = {
+    # Pronouns, articles, conjunctions, prepositions.
+    "it", "us", "me", "he", "she", "we", "in", "on", "at", "to", "is",
+    "as", "an", "of", "or", "if", "so", "no", "up", "my", "by", "do",
+    "the", "and", "for", "you", "all", "any", "am", "be", "but", "our",
+    "its", "his", "her", "was", "are", "has", "had", "not", "can", "may",
+    # Words that turn up in a request about fic.
+    "one", "two", "new", "old", "who", "how", "why", "war", "art", "own",
+    "out", "man", "day", "fic", "fics", "au", "ao", "ff", "wip", "ish",
+    "ask", "any", "got", "get", "see", "say", "way", "set", "run", "top",
+    "bit", "lot", "big", "few", "far", "yet", "now", "off", "per", "via",
+    # Abbreviations that mean a TAG rather than a fandom. `si` is Self-Insert
+    # to every reader who types it; that it is also SK8 the Infinity's
+    # initialism is a coincidence the reader will never have in mind.
+    "si", "oc", "ocs", "sioc", "poc", "hea", "ooc", "pwp", "bamf",
+}
 
 
 def _initialisms(name: str) -> set[str]:

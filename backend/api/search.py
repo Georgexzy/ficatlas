@@ -145,7 +145,8 @@ def _cost_ttl(elapsed_ms: float) -> int:
     return max(SEARCH_CACHE_SECONDS,
                min(SEARCH_CACHE_MAX_SECONDS, int(elapsed_ms * SEARCH_CACHE_COST_FACTOR)))
 from query_parser import parse_query, parsed_to_search_params
-from query_intent import resolve_intent, read_request, resolve_trope_tags
+from query_intent import (resolve_intent, read_request, resolve_trope_tags,
+                          _fandom_aliases)
 import re
 from character_aliases import character_variants, relationship_variants
 from language_aliases import language_variants
@@ -3521,6 +3522,11 @@ class ExtractResponse(BaseModel):
     # Titles under an "I have read" heading. NOT wants — see the note in
     # extract() — and handed back for /api/search/taste to resolve.
     already_read: list[str] = []
+    # "ongoing", "complete", "WIP" — a filter, not a word to search for.
+    status: Optional[str] = None
+    # "good fics", "worth reading", "best" — a request about QUALITY, which no
+    # tag expresses. It is a sort order.
+    sort: Optional[str] = None
 
 
 # A term nobody would be narrowing by. `Fluff` is on 1.13M works and is still
@@ -3552,6 +3558,15 @@ _FUNCTION_WORDS = {
     "there", "here", "what", "who", "when", "where", "how", "why", "one",
     "two", "even", "also", "still", "back", "out", "up", "down", "over",
     "long", "short", "care", "take", "give", "make", "read", "reading",
+    # Conversational filler. Every one of these is a real tag somebody has
+    # used — `or something` is on 471 works and `tbh` on 332 — which is
+    # precisely why an n-gram lookup keeps finding them and why they have to be
+    # named. Nobody is asking for a story ABOUT "tbh".
+    "something", "anything", "someone", "anyone", "somebody", "anybody",
+    "tbh", "imo", "idk", "pls", "plz", "thanks", "thank", "ty", "tia",
+    "preferably", "ideally", "basically", "actually", "honestly", "maybe",
+    "fine", "okay", "ok", "sure", "well", "much", "many", "lot", "bit",
+    "around", "laying", "wanted", "asking", "looking", "wondering",
 }
 
 
@@ -3594,6 +3609,45 @@ def _split_read_list(raw: str) -> tuple[str, list[str]]:
         if 2 < len(t) < 90:
             titles.append(t)
     return "\n".join(lines[:at]), titles[:12]
+
+
+# Abbreviations readers use for TAGS, as against for fandoms.
+#
+# `SI` is Self-Insert and is written that way more often than not; `OC` is an
+# original character. Neither survives an n-gram lookup — "si" is two letters
+# and matches nothing — and neither is derivable the way a fandom initialism
+# is, because they abbreviate a concept rather than a title. Short and
+# hand-written for that reason, and short on purpose: each entry is a claim
+# that this abbreviation means one thing, and most do not.
+_TAG_ABBREV = {
+    "si": "Self-Insert",
+    "oc": "Original Character(s)",
+    "ocs": "Original Character(s)",
+    "si-oc": "Self-Insert",
+    "poc": None,          # deliberately NOT expanded: it is people of colour
+    "wbwl": "Boy-Who-Lived Sibling",
+    "bamf": "BAMF",
+    "hea": "Happy Ending",
+    "hurt/comfort": "Hurt/Comfort",
+}
+
+# What a reader means by "good", "worth reading", "best". No tag expresses
+# quality, so it becomes a SORT — the works other readers actually read.
+_QUALITY_WORDS = re.compile(
+    r"\b(?:good|best|worth\s+reading|quality|well[-\s]written|favourite|"
+    r"favorite|recommend\w*|top|great|excellent)\b", re.I)
+
+# Status, in the words readers write rather than the ones the filter uses.
+_STATUS_WORDS = [
+    (re.compile(r"\b(?:ongoing|in[-\s]progress|wip|unfinished|updating|"
+                r"still\s+(?:being\s+)?updat\w+)\b", re.I), "ongoing"),
+    (re.compile(r"\b(?:complete[d]?|finished|abandoned\s+is\s+fine)\b", re.I),
+     "complete"),
+]
+
+
+def _is_status_word(value: str) -> bool:
+    return any(rx.fullmatch(value.strip()) for rx, _ in _STATUS_WORDS)
 
 
 def _canonical_character(db, name: str) -> Optional[str]:
@@ -3889,6 +3943,48 @@ def extract(
     # where the loose names found nothing worth ranking.
     pair_term = _resolve_pair(db, raw)
 
+    # STATUS, QUALITY and the FANDOM a reader abbreviated — three things that
+    # are not words to search for and were being treated as though they were.
+    #
+    # On "any good TWD fics... preferably ongoing with SI main character" the
+    # extractor returned `or something` (471 works), `ongoing` as a TAG (450),
+    # `tbh` (332) and `twd` as a tag (163) — while The Walking Dead is a fandom
+    # on 20,498 works, "ongoing" is a status filter, and SI means Self-Insert.
+    # Every one of those IS a real tag somebody has used; that is exactly why
+    # the n-gram lookup finds them and why they have to be recognised first.
+    status = None
+    for rx, value in _STATUS_WORDS:
+        if rx.search(raw):
+            status = value
+            break
+    sort = "popular" if _QUALITY_WORDS.search(raw) else None
+
+    # The fandom, from the abbreviation table the search path already mines.
+    # See fandom_aliases.py — derived from the naming convention, not listed,
+    # so this works for fandoms nobody has heard of.
+    fandom_term = None
+    try:
+        _alias = _fandom_aliases(db)
+        for w in re.findall(r"[A-Za-z0-9']+", raw):
+            hit = _alias.get(w.lower())
+            if hit:
+                cnt = db.execute(sql_text(
+                    "SELECT count FROM facets WHERE kind='fandom' AND value=:v"),
+                    {"v": hit}).scalar()
+                fandom_term = ExtractedTerm(kind="fandom", value=hit,
+                                            count=int(cnt or 0), matched=w,
+                                            from_line=True)
+                break
+    except Exception:
+        log.debug("fandom alias lookup failed in extract", exc_info=True)
+
+    # Tag abbreviations, expanded before the n-gram lookup so "SI" can be found
+    # at all — two letters match nothing on their own.
+    for w in re.findall(r"[A-Za-z0-9'/-]+", raw):
+        full = _TAG_ABBREV.get(w.lower())
+        if full:
+            words.extend(full.replace("(s)", "").split())
+
     grams: dict[str, tuple[int, int]] = {}
     for n in range(1, 5):
         for i in range(len(words) - n + 1):
@@ -3911,6 +4007,14 @@ def extract(
         if span is None:
             continue
         if _is_grammar(value):
+            continue
+        # Already handled as a FILTER, so it is not a word to search for.
+        # "ongoing" is a real tag on 450 works and it is also the status this
+        # reader asked for; returning it as a subject spends a slot saying
+        # something the status filter already says, and says it worse.
+        if status and _is_status_word(value):
+            continue
+        if sort and _QUALITY_WORDS.fullmatch(value.strip()):
             continue
         cands.append({"count": count, "rank": RANK.get(kind, 9),
                       "n": span[1] - span[0], "kind": kind,
@@ -4004,6 +4108,9 @@ def extract(
     swapped.sort(key=lambda t: (not t.from_line, -t.count))
     terms = swapped
 
+    if fandom_term and not pair_term:
+        terms = [fandom_term] + [t for t in terms if t.value != fandom_term.value]
+
     if pair_term:
         # The pairing FIRST, and the fandom it implies second. This is the
         # exception to ranking by frequency and it is not arbitrary: a resolved
@@ -4069,7 +4176,7 @@ def extract(
     return ExtractResponse(terms=terms, query=" ".join(parts),
                            ignored_words=max(len(words) - len(used), 0),
                            word_count_min=wc_min, word_count_max=wc_max,
-                           already_read=already_read)
+                           already_read=already_read, status=status, sort=sort)
 
 
 @router.get("/taste", response_model=TasteResponse)
