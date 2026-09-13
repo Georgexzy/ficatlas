@@ -776,6 +776,32 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     failure this endpoint exists to prevent.
   - Measured end to end: the Harry/Daphne post → 64 works; the lordship post →
     `tag:"Albus Dumbledore Bashing" words:>150k` → 160 works, all 150k+.
+- **Three more rules from the same twelve-fandom battery, each a word spent
+  twice or weighed wrong.**
+  - **"longfics and one-shots welcome" is a reader saying they do not care.**
+    It read as `word_count_min = 50,000` from one phrase and
+    `word_count_max = 10,000` from another, and together that is
+    `words:50k-10k` — a range no work can satisfy, from a post that said in as
+    many words that any length was fine. A contradiction is not a narrow
+    request, so BOTH ends are dropped. It was invisible until the word count
+    went into the query string: a filter nothing applies cannot be seen to be
+    wrong. Measured on the Harry/Daphne post: **76 works → 181**.
+  - **The words that asked for a length are spent.** `Words` is a real tag on
+    254 works and `at least` on 186, both straight out of "at least 150k
+    words", both saying nothing about any story, and both competing for one of
+    three slots. Same rule as the status words and the fandom abbreviation,
+    checked at the same single point.
+  - **A bare first name ranks behind what the post spelled out.** "harry is
+    lord of at least 2 houses" names a concept AND, from the single word
+    "harry", a character on 152,287 works. On frequency the character wins, so
+    the query spent two of three slots on `char:"Harry Potter"` and
+    `char:"Hermione Granger"` — the name the reader wanted BASHED — and had
+    none left for lordship or politics. Measured: 77 works against 127. Two
+    parts to the fix, and both were needed: a canonicalised name is ranked on
+    the BARE name's count (the swap fixes a spelling, it is not new evidence),
+    and a bare name sorts behind every concept resolved from the same line.
+    Same asymmetry as the rejected "characters outrank tags" rule, one level
+    down.
 - **The series length ADD-ON: three 60k works the author filed as one story are
   a 180k read.** Asked for directly — "for word count we could maybe include
   series if all works in series add up to 150k+ … could be an 'add on'".
