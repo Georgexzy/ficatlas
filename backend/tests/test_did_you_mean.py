@@ -86,3 +86,32 @@ def test_rare_facets_are_never_suggested(vocab):
     out = _did_you_mean(vocab, "steve rogets")
     assert all(s.count >= _DYM_MIN_COUNT for s in out)
     assert "Steve Roger" not in [s.value for s in out]
+
+
+# ── A near miss is worse than a miss ─────────────────────────────────────────
+
+def test_a_typo_that_returns_a_few_wrong_works_is_still_corrected(vocab):
+    """`romoine` is how a real reader spelled Romione in a fic-finder post.
+
+    It returns EIGHT works, none about the pairing, so the rescue never ran and
+    the reader saw a short page of noise instead of `romione` (206 tagged
+    works). Zero results announce themselves; a handful of wrong ones do not.
+    """
+    from sqlalchemy import text as t
+    t_ = t
+    vocab.execute(t_("INSERT INTO facets (kind, value, count) VALUES ('tag','romione',206)"))
+    vocab.commit()
+    out = _did_you_mean(vocab, "romoine", min_sim=0.30)
+    assert "romione" in [s.value for s in out]
+
+
+def test_the_near_miss_floor_is_lower_than_the_empty_one(vocab):
+    """A transposed letter barely moves trigram similarity — "romoine" against
+    "romione" is 0.333, under the 0.35 the empty-result path uses. The looser
+    floor is only safe because the near-miss path also demands a short query, a
+    small result set and a term 200+ works carry."""
+    from sqlalchemy import text as t
+    vocab.execute(t("INSERT INTO facets (kind, value, count) VALUES ('tag','romione',206)"))
+    vocab.commit()
+    assert _did_you_mean(vocab, "romoine") == []              # 0.35 — misses
+    assert _did_you_mean(vocab, "romoine", min_sim=0.30)      # 0.30 — catches
