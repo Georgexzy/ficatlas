@@ -1572,6 +1572,7 @@ def search(          # NOT async — see below
     # FTS predicate, the ship resolution and the category test, all three of
     # which are the things it exists to improve.
     trope_tags: list[str] = []
+    trope_extra_groups: list[list[str]] = []
     trope_works = 0
     trope_leftover = ""
     trope_branch_ok = False
@@ -1612,6 +1613,7 @@ def search(          # NOT async — see below
                 active_sites = [intent.site]
             parsed_tokens.extend(intent.tokens)
             trope_tags, trope_leftover = intent.tags, intent.tag_leftover
+            trope_extra_groups = intent.extra_tag_groups
             # The resolution always votes in the ranking; it only joins the
             # PREDICATE when it can actually narrow something. See
             # TROPE_BRANCH_MAX_WORKS — an unbounded branch over a 577,244-work
@@ -1689,10 +1691,27 @@ def search(          # NOT async — see below
         # same index every tag filter uses.
         if trope_tags and trope_branch_ok:
             trope_pred = Story.tags.op("&&")(cast(trope_tags, PG_ARRAY(Text)))
-            # Words the tag did not account for still have to hold, exactly as
-            # they do on the ship branch: `Time Travel` is 45,960 works and
-            # "time travel naruto" must not return the 44,000 that are not
-            # Naruto.
+            # EVERY other trope the request named, AND-ed on.
+            #
+            # A fic-finder post lists conditions, and they are conjunctive: the
+            # reader wants a powerful Harry AND Dumbledore bashing, not either.
+            # Each group is the spellings of one concept, so it is OR within a
+            # group and AND between them.
+            #
+            # This branch used to carry one tag and throw everything else at
+            # the text index, where `websearch_to_tsquery` ANDs each word
+            # against title+summary+author+tags as one flat document. So
+            # "powerful harry dumbledore bashing" asked for works tagged
+            # `Powerful Harry Potter` that ALSO contain the literal words
+            # "dumbledore" and "bashing" — and returned nothing, though 3,481
+            # works carry `Albus Dumbledore Bashing` and the reader would have
+            # been happy with any of them.
+            for group in (trope_extra_groups or []):
+                trope_pred = and_(trope_pred,
+                                  Story.tags.op("&&")(cast(group, PG_ARRAY(Text))))
+            # Words no tag accounted for still have to hold, exactly as they do
+            # on the ship branch: `Time Travel` is 45,960 works and "time travel
+            # naruto" must not return the 44,000 that are not Naruto.
             if trope_leftover.strip():
                 trope_pred = and_(trope_pred, _story_tsv().op("@@")(
                     func.websearch_to_tsquery(_REGCONFIG, trope_leftover)))

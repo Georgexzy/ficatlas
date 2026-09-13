@@ -414,6 +414,38 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   fresh visitor hash, so a single test script reads as several new visitors.
   Treat same-second bursts of identical queries as what they are.
 
+- **A fic-finder post names several tropes and only one of them was resolved.**
+  `resolve_trope_tags` finds the single longest window that IS a tag and hands
+  the rest back as words — right for "time travel naruto", where the leftover
+  bounds the trope, and wrong for the query shape this site exists to serve.
+  Reported from a real r/FanFiction post; the reduced case:
+
+      powerful harry dumbledore bashing     →  0 results
+
+  It resolved `Powerful Harry Potter` (653 works) and threw "dumbledore
+  bashing" at the text index, where `websearch_to_tsquery` ANDs every word
+  against title+summary+author+tags as one flat document. So it asked for works
+  tagged `Powerful Harry Potter` that ALSO literally contain "dumbledore" and
+  "bashing" — while 3,481 works carry `Albus Dumbledore Bashing` and the reader
+  would have taken any of them.
+  - `resolve_intent` now keeps resolving the leftover into `extra_tag_groups`,
+    OR within a group and AND between them, because a fic-finder post is a list
+    of conditions and they are conjunctive. Bounded at three: four separate
+    tropes is rare and each pass is another vocabulary lookup.
+  - **Measured: 0 → 1,031 works**, top hit *Harry Potter and the Prince of
+    Slytherin* — which the original poster had listed as one they had read and
+    enjoyed. `dumbledore bashing time travel` 0 → 750,
+    `weasley bashing independent harry` → 118 across all three archives.
+  - The bounding case is asserted separately so the chain cannot eat it:
+    "time travel naruto" must keep "naruto" as a word, or `Time Travel` returns
+    the 44,000 works that are not Naruto.
+  - **OR was measured and rejected as the fix.** Relaxing AND to OR on the same
+    query matched 20,000+ rows in 4.4s against 62ms — it matches anything
+    containing "harry" or "power", which is slower AND worse.
+  - Still open: explicit word counts in English. "at least 150k words" is not
+    parsed — `read_request` gives `word_count_min=50000` from the word "long"
+    and ignores the number.
+
 - **Zero-result searches now suggest a spelling.** A real visitor searched
   `hsrry potter wandcrafter` and got nothing, with `Harry Potter` — 686,558
   works — one transposed letter away. `_did_you_mean` trigram-matches the WHOLE
