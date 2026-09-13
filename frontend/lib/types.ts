@@ -85,6 +85,10 @@ export interface Suggestion {
 export interface SearchParams {
   /** Only works on a community recommendation list. See _ANY_RECS_MARKER. */
   recs_only?: boolean
+  /** Include works flagged for underage content. Separate from `explicit` on
+   *  purpose: that one is about taste, this one is about what a shared link
+   *  shows a stranger. Nothing that generates a link ever sets it. */
+  include_underage?: boolean
   q?: string
   sites?: string             // "ao3,ffnet"
   /** FictionAlley sections, comma-separated. */
