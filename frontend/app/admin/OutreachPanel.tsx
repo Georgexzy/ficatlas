@@ -46,6 +46,17 @@ interface Extracted {
   terms: { kind: string; value: string; count: number; matched: string }[]
   query: string
   ignored_words: number
+  // Read from the post as FILTERS rather than as words to search for. The
+  // status and the word count are already inside `query` as the search bar's
+  // own shorthand (`wip`, `words:>150k`), so they are visible in the box and
+  // travel with any link. `sort` cannot be written in the bar at all, so it is
+  // passed as a parameter and shown here — otherwise the one thing the reader
+  // asked for most plainly ("any GOOD fics") would be invisible and silently
+  // dropped.
+  status?: string | null
+  sort?: string | null
+  word_count_min?: number | null
+  word_count_max?: number | null
 }
 
 interface Taste {
@@ -84,10 +95,16 @@ function readTitles(raw: string): string[] {
 // text and an operator typed into it would otherwise ride along.
 const UNSAFE_IN_A_LINK = /\b(?:include_underage|explicit)\s*[:=]\s*(?:true|1|yes)\b/gi
 
-/** The search as a reader would link to it — always in the safe default. */
-const publicLink = (q: string) => {
+/** The search as a reader would link to it — always in the safe default.
+ *
+ *  The SORT rides along, because it is the only part of an extracted request
+ *  the search bar cannot express. A post saying "any good fics" is asking for
+ *  the works other readers actually read, and a link without `sort` answers a
+ *  different question from the one on screen. */
+const publicLink = (q: string, sort?: string | null) => {
   const safe = q.replace(UNSAFE_IN_A_LINK, "").replace(/\s+/g, " ").trim()
-  return `${PUBLIC}/?q=${encodeURIComponent(safe).replace(/%20/g, "+")}`
+  const base = `${PUBLIC}/?q=${encodeURIComponent(safe).replace(/%20/g, "+")}`
+  return sort ? `${base}&sort=${encodeURIComponent(sort)}` : base
 }
 
 /** Did the operator ask for something a shared link must not carry? */
@@ -153,7 +170,7 @@ export default function OutreachPanel() {
   const [taste, setTaste] = useState<Taste | null>(null)
   const [ext, setExt] = useState<Extracted | null>(null)
 
-  const run = useCallback(async (query: string) => {
+  const run = useCallback(async (query: string, sort?: string | null) => {
     const term = query.trim()
     if (!term) return
     setBusy(true); setErr(null)
@@ -161,8 +178,16 @@ export default function OutreachPanel() {
       // The public endpoint, so what is shown here is exactly what a reader
       // following the link will see. Anything else would be a demo of a
       // different site.
+      //
+      // `sort` is passed because /api/search/extract derives it and nothing
+      // else can carry it: the status and the word count go into the query
+      // string as the bar's own shorthand, but quality is not expressible
+      // there. This panel used to read `query` alone and drop every other
+      // field the endpoint returned, so a post asking for "good ongoing fics,
+      // at least 150k words" was searched with none of the three.
       const r = await fetch(
-        `/api/search?q=${encodeURIComponent(term)}&per_page=8`,
+        `/api/search?q=${encodeURIComponent(term)}&per_page=8` +
+        (sort ? `&sort=${encodeURIComponent(sort)}` : ""),
         { credentials: "include" })
       if (!r.ok) throw new Error(`Search failed (${r.status})`)
       setRes(await r.json())
@@ -200,8 +225,8 @@ export default function OutreachPanel() {
   // from the search that was run.
   const unsafeQuery = asksForUnsafe(q)
   const reply = (!foundSomething || unsafeQuery) ? null : found.trim()
-    ? `I think this is ${found.trim()}.\n\nFound it here if you want to check: ${publicLink(q)}\n(searches AO3, FanFiction.net and FictionAlley together)`
-    : `Try this: ${publicLink(q)}\n\nIt searches AO3, FanFiction.net and FictionAlley at once — worth a look if it might not be on AO3.`
+    ? `I think this is ${found.trim()}.\n\nFound it here if you want to check: ${publicLink(q, ext?.sort)}\n(searches AO3, FanFiction.net and FictionAlley together)`
+    : `Try this: ${publicLink(q, ext?.sort)}\n\nIt searches AO3, FanFiction.net and FictionAlley at once — worth a look if it might not be on AO3.`
 
   const copy = async (text: string | null, what: string) => {
     if (!text) return
@@ -247,7 +272,7 @@ export default function OutreachPanel() {
               if (!r.ok) throw new Error(`Could not read the post (${r.status})`)
               const e: Extracted = await r.json()
               setExt(e)
-              if (e.query) { setQ(e.query); run(e.query) }
+              if (e.query) { setQ(e.query); run(e.query, e.sort) }
               else setErr("Nothing in that post matches a tag, character or fandom the index knows.")
             } catch (e: any) { setErr(e.message) }
           }}>
@@ -262,6 +287,13 @@ export default function OutreachPanel() {
       {/* Offered, not applied. Extraction from prose is genuinely ambiguous —
           "for the love of God" really does contain a character this index
           knows — so the shortlist is shown and a person decides. */}
+      {ext?.sort && (
+        <p className="outreach__hint">
+          The post asked for good fics, so this is sorted by what readers
+          actually read. The status and length it named are in the box.
+        </p>
+      )}
+
       {ext && ext.terms.length > 0 && (
         <div className="outreach__row outreach__negs">
           <span className="outreach__hint">In the post:</span>
@@ -301,7 +333,7 @@ export default function OutreachPanel() {
               if (!r.ok) throw new Error(`Could not read their list (${r.status})`)
               const t: Taste = await r.json()
               setTaste(t)
-              if (t.query) { setQ(t.query); run(t.query) }
+              if (t.query) { setQ(t.query); run(t.query, ext?.sort) }
             } catch (e: any) { setErr(e.message) }
           }}>
             Use the {readTitles(raw).length} fics they&rsquo;ve read →
@@ -350,11 +382,11 @@ export default function OutreachPanel() {
         <input id="outreach-q" className="outreach__q" value={q}
           placeholder="powerful harry dumbledore bashing"
           onChange={e => setQ(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") run(q) }} />
-        <button className="btn btn--primary" onClick={() => run(q)} disabled={busy || !q.trim()}>
+          onKeyDown={e => { if (e.key === "Enter") run(q, ext?.sort) }} />
+        <button className="btn btn--primary" onClick={() => run(q, ext?.sort)} disabled={busy || !q.trim()}>
           {busy ? "Searching…" : "Search"}
         </button>
-        <a className="btn" href={publicLink(q)} target="_blank" rel="noopener noreferrer">
+        <a className="btn" href={publicLink(q, ext?.sort)} target="_blank" rel="noopener noreferrer">
           Open on site
         </a>
       </div>
@@ -391,7 +423,7 @@ export default function OutreachPanel() {
               <span className="outreach__hint">Did you mean:</span>
               {res.suggestions.map(s => (
                 <button key={s.value} className="btn"
-                  onClick={() => { setQ(s.query); run(s.query) }}>
+                  onClick={() => { setQ(s.query); run(s.query, ext?.sort) }}>
                   {s.value} <small>{formatNumber(s.count)}</small>
                 </button>
               ))}
@@ -443,7 +475,7 @@ export default function OutreachPanel() {
             <button className="btn btn--primary" onClick={() => copy(reply, "reply")}>
               Copy reply
             </button>
-            <button className="btn" onClick={() => copy(publicLink(q), "link")}>
+            <button className="btn" onClick={() => copy(publicLink(q, ext?.sort), "link")}>
               Copy link only
             </button>
             {copied && <span className="outreach__copied">Copied {copied}</span>}

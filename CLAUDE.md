@@ -630,6 +630,70 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     is a prefix-extension of `Dark Lord Harry` and NOT the inheritance-lordship
     concept a reader means by "lord of two houses".
 
+- **`status=ongoing` filtered NOTHING, and the extractor had been emitting it
+  for weeks.** The API coerced its `status` parameter through
+  `StatusEnum.__members__` — the storage spellings `complete`, `in_progress`,
+  `abandoned`, `unknown` — so every reader-facing synonym the search bar
+  documents and parses (`ongoing`, `wip`, `incomplete`, `completed`) failed the
+  membership test, the list came out empty, and the filter was DROPPED. Silent,
+  and in the direction that looks like it worked: a request for unfinished
+  works got every work, ordered plausibly. Measured on one AOT search:
+  `ongoing` 21 results, `in_progress` 5.
+  - Two vocabularies for one concept, and the one nobody tested was the one
+    every caller used. `/api/search/extract` reads the word out of a post
+    ("preferably ongoing") and hands it straight back, so the status half of
+    every extracted request had never once been applied. Both now go through
+    `query_parser.STATUS_WORDS`, and a test asserts the two modules share the
+    same object rather than the same contents.
+  - An unrecognised value still filters nothing rather than 422ing. A stray
+    word in a shared link should not break the link.
+  - **The probe had the same disagreement in miniature.** `_probe_count`
+    approximated the filter as `status <> 'complete'`, which also admits
+    `unknown` and `abandoned` — 7 works where the search returns 5. A probe
+    that does not run the predicate the search will run is guessing, however
+    close the guess looks.
+- **The query STRING is the request; a field beside it is a field somebody has
+  to remember to pass.** `/api/search/extract` returned `status`,
+  `word_count_min` and `word_count_max` as fields, and `OutreachPanel` — the
+  one caller written for it — read `query` and dropped all three. A post saying
+  "ongoing, at least 150k words" was searched with neither constraint.
+  - Both now go INTO the query string as the search bar's own shorthand (`wip`,
+    `words:>150k`), which `parse_query` reads back and `/api/search` re-parses
+    from `q`. One string carries the whole request to any client at all, the
+    operator can see the filters in the box, and a pasted link keeps them.
+  - **k/m suffixes are required and plain integers parse to nothing.**
+    `words:>150000` yields `word_count_min = None` with no error — the same
+    shape of bug as the status one, one layer down. `_k()` formats it.
+  - `sort` is the exception and stays a parameter: quality is not expressible
+    in the bar. The panel passes it on every run and the generated link carries
+    it, or the link answers a different question from the screen.
+- **A fandom abbreviation belongs to the fandom and to nothing else.** `asoiaf`
+  and `tvd` are initialisms AND real freeform tags, so the n-gram lookup found
+  each a second time and the query came out
+  `fandom:"The Vampire Diaries (TV)" tag:"tvd"` — the tag narrowing to the few
+  works carrying the abbreviation, inside the fandom it had already selected.
+  Measured: **23 works against 2,742**. Same rule as the status words: a word
+  consumed by one mechanism must not be spent again by another, checked once
+  over the merged term list rather than in each path that builds it.
+- **A bare first name is not the character the archives file.** `Damon` is a
+  character on 76 works and `Damon Salvatore` on 9,134, so "damon centric tvd
+  fics" was narrowed to the handful whose character list says only "Damon".
+  `_resolve_pair` has canonicalised each half of a PAIRING this way since it
+  was written; the rule was simply never applied to a character found loose in
+  the prose, which is how most of them arrive. Measured: **23 → 1,409**.
+  - Only ever UP. A "canonical" spelling with fewer works than the bare name is
+    not the canonical spelling — it is a different person who happens to share
+    a first name.
+- **These four were found by running one request SHAPE across twelve fandoms**
+  (TWD, MCU, ASOIAF, ATLA, MHA, PJO, AOT, HXH, TVD, Naruto, Star Wars,
+  Supernatural), not by fixing the post that was reported. A rule derived from
+  one post is a patch; a rule that holds across twelve unrelated vocabularies
+  is an extraction rule. All twelve now resolve their fandom, and none returns
+  zero.
+  - Still open, and visible in that battery: a post whose only narrowing term
+    fails the probe falls back to `fandom:"X" complete` sorted by popularity,
+    which on Star Wars is a 41,513-work browse measured at **19.6s** — right at
+    the statement timeout. A weak extraction is also a slow search.
 - **A request names a FANDOM, a STATUS and a QUALITY, not only tags.** Ground
   truth from a real post: "any good TWD fics… preferably ongoing with SI main
   character". The extractor returned `or something` (471 works), `ongoing` as a

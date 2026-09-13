@@ -310,3 +310,113 @@ def test_conversational_filler_is_not_a_subject(filler):
     works — which is exactly why the n-gram lookup keeps finding them."""
     from api.search import _is_grammar
     assert _is_grammar(filler)
+
+
+# ---------------------------------------------------------------------------
+# Generalising the ground truth across the index.
+#
+# Each of these was found by running the SAME request shape against twelve
+# fandoms — TWD, MCU, ASOIAF, ATLA, MHA, PJO, AOT, HXH, TVD, Naruto, Star Wars,
+# Supernatural — rather than by fixing the one post that was reported. A rule
+# derived from a single post is a patch; a rule that holds across twelve
+# unrelated vocabularies is an extraction rule.
+# ---------------------------------------------------------------------------
+
+def test_the_query_string_carries_the_status_and_the_length(bulleted):
+    """Every filter that the search bar can express goes INTO the query string.
+
+    The endpoint returned `status` and `word_count_min` as fields beside
+    `query`, and the outreach panel — the one caller written for it — read
+    `query` and dropped both. So a post saying "ongoing, at least 150k words"
+    was searched with neither constraint, and nothing anywhere said so.
+
+    The query string is what a caller runs and what a reader pastes, so it has
+    to be the whole request. `parse_query` reads these back and `/api/search`
+    re-parses `q`, which is what makes one string enough.
+    """
+    out = extract(text="any fics, preferably ongoing, at least 150k words",
+                  db=bulleted)
+    assert out.status == "ongoing"
+    assert out.word_count_min == 150000
+    assert "wip" in out.query.split()
+    assert "words:>150k" in out.query
+
+    from query_parser import parse_query
+    back = parse_query(out.query)
+    assert back.status == "in_progress"
+    assert back.word_count_min == 150000
+
+
+def test_a_word_count_is_written_in_the_shorthand_the_bar_parses(bulleted):
+    """k/m suffixes are REQUIRED. `words:>150000` parses to nothing at all —
+    silently — which is the same shape of bug as the status one."""
+    from api.search import _k
+    from query_parser import parse_query
+    for n in (1000, 50000, 150000, 1500000):
+        assert parse_query(f'tag:"x" words:>{_k(n)}').word_count_min == n
+
+
+def test_the_abbreviation_belongs_to_the_fandom_and_nothing_else(bulleted):
+    """`asoiaf` and `tvd` are fandom initialisms AND real freeform tags, so the
+    n-gram lookup found them a second time and the query came out
+    `fandom:"A Song of Ice and Fire…" tag:"ASoIaF"` — the tag narrowing to the
+    few works that carry the abbreviation, inside the fandom it had already
+    selected. A word consumed by one mechanism must not be spent again by
+    another. Measured: TVD 23 works against 2,742."""
+    bulleted.execute(text("""
+        CREATE TABLE IF NOT EXISTS fandom_aliases (
+            alias text PRIMARY KEY, fandom text NOT NULL,
+            works integer, built_at timestamp DEFAULT now())
+    """))
+    bulleted.execute(text("DELETE FROM fandom_aliases"))
+    bulleted.execute(text("INSERT INTO fandom_aliases (alias, fandom, works) "
+                          "VALUES ('tvd','The Vampire Diaries (TV)',10309)"))
+    bulleted.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('fandom','The Vampire Diaries (TV)',10309),
+          ('tag','tvd',1200)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    bulleted.commit()
+    import query_intent
+    query_intent._FANDOM_ALIASES, query_intent._FANDOM_ALIASES_AT = {}, 0.0
+    out = extract(text="good tvd fics", db=bulleted)
+    assert [t.value for t in out.terms if t.kind == "fandom"] == \
+        ["The Vampire Diaries (TV)"]
+    assert "tvd" not in [t.value.lower() for t in out.terms if t.kind != "fandom"]
+    assert 'tag:"tvd"' not in out.query
+
+
+def test_a_bare_first_name_resolves_to_the_character_archives_file(ships):
+    """A reader writes the name they say out loud and the archives file the
+    full one. `Damon` is a character on 76 works and `Damon Salvatore` on
+    thousands, so "damon centric tvd fics" was narrowed to the handful whose
+    character list says only "Damon".
+
+    `_resolve_pair` has canonicalised each half of a PAIRING this way since it
+    was written. The rule was simply never applied to a character found loose
+    in the prose, which is how most of them arrive."""
+    ships.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('character','Damon',76), ('character','Damon Salvatore',9134)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    ships.commit()
+    out = extract(text="good fics, damon centric", db=ships)
+    chars = [t for t in out.terms if t.kind == "character"]
+    assert chars and chars[0].value == "Damon Salvatore"
+
+
+def test_a_rarer_full_name_is_not_the_canonical_spelling(ships):
+    """Only ever UP. A "canonical" spelling with fewer works than the bare name
+    is not the canonical spelling — it is a different person who happens to
+    share a first name."""
+    ships.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('character','Damon',760), ('character','Damon Nobody',80)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    ships.commit()
+    out = extract(text="good fics, damon centric", db=ships)
+    chars = [t.value for t in out.terms if t.kind == "character"]
+    assert "Damon Nobody" not in chars and "Damon" in chars
