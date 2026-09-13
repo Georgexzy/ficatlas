@@ -396,6 +396,17 @@ CREATE INDEX IF NOT EXISTS ix_stories_repair_queue ON stories (
 -- NOT the same as unpopular. The partial index matches the sort's own
 -- `popularity IS NOT NULL` predicate so an unranked work costs nothing to skip.
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS popularity REAL;
+
+-- Content gates. Set by a DATABASE TRIGGER on every insert and on any update
+-- touching tags or warnings — never by application code, because the crawler
+-- adds ~15,000 works a day and a column maintained by a periodic job would be
+-- stale by construction AND stale in the worst direction: the default is
+-- false, and false reads as safe. See backend/content_gates.py, which owns the
+-- term lists and regenerates the trigger from them.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS gate_underage boolean NOT NULL DEFAULT false;
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS gate_adult boolean NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS ix_stories_gate_underage ON stories (gate_underage) WHERE gate_underage;
+CREATE INDEX IF NOT EXISTS ix_stories_gate_adult ON stories (gate_adult) WHERE gate_adult;
 CREATE INDEX IF NOT EXISTS ix_stories_popularity ON stories (popularity DESC)
     WHERE popularity IS NOT NULL;
 
