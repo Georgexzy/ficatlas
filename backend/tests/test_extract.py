@@ -205,3 +205,33 @@ def test_a_line_concept_beats_a_word_that_merely_appeared(bulleted):
     matched `House` — the television programme."""
     out = extract(text="harry is lord of at least 2 houses", db=bulleted)
     assert out.terms[0].value != "House"
+
+
+def test_the_concept_is_a_GROUP_of_spellings_not_one_of_them(bulleted):
+    """The reported failure: a reader who had demonstrably read fics with
+    lordship AND magical power AND politics was told there were none.
+
+    `resolve_trope_tags` works from windows of the reader's own words, so it
+    found `Magically Powerful Harry` — 48 works — and never saw
+    `Magically Powerful Harry Potter`, the same concept on 1,719. Every step
+    after that used the rare spelling: the probe found no co-occurrence and
+    dropped a concept the post had asked for in as many words.
+    """
+    out = extract(text="harry is magically powerful", db=bulleted)
+    t = out.terms[0]
+    assert t.spellings, "a concept carries every spelling, not just its label"
+    assert t.value in t.spellings
+
+
+def test_a_longer_spelling_of_the_same_concept_is_found(bulleted):
+    """`Powerful Harry` and `Powerful Harry Potter` are one concept written two
+    ways; the archives' own usage decides which a search should carry."""
+    from api.search import _biggest_spelling
+    bulleted.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag','Magically Powerful Harry',48),
+          ('tag','Magically Powerful Harry Potter',1719)
+    """))
+    bulleted.commit()
+    best = _biggest_spelling(bulleted, ["Magically Powerful Harry"])
+    assert best == ("Magically Powerful Harry Potter", 1719)
