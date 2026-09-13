@@ -1278,6 +1278,46 @@ async def _stats_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _curation_loop() -> None:
+    """The three jobs nothing was running, on one schedule.
+
+    They were each written, each committed, and each left as a command somebody
+    had to remember to type. That is the failure mode this loop exists to
+    close, and they share a loop rather than getting three of their own because
+    they are one job in three parts: two sources of community recommendations
+    that write the SAME marker, and the content-gate repair that has to follow
+    any bulk change to tags.
+
+    Order matters. The recommendation imports rewrite `tags`, which fires the
+    content-gate trigger per row — so the gates are already correct for
+    anything they touched by the time the repair runs. The repair is there for
+    the other case: a change to the TERM LISTS in content_gates.py, which no
+    trigger can retrofit onto rows written before it.
+
+    Weekly. A rec list that took years to form does not move in a day, and the
+    gate repair is a near-no-op once the backfill has run — it asks an indexed
+    question and updates nothing when the answer has not changed.
+    """
+    import content_gates
+    import reddit_recs_import
+    import tropedia_recs_import
+
+    interval = _num("CURATION_INTERVAL_HOURS", 168) * 3600
+    await asyncio.sleep(_num("CURATION_START_DELAY_SEC", 3600))
+    while True:
+        for name, fn in (("reddit recs", reddit_recs_import.run),
+                         ("tropedia recs", tropedia_recs_import.run),
+                         ("content gates", content_gates.run)):
+            try:
+                stats = await asyncio.to_thread(fn)
+                log.info("%s: %s", name, stats)
+            except Exception as e:
+                # One source failing must not stop the others, and must not
+                # stop the gate repair — which is the safety-relevant half.
+                log.warning("%s failed: %s: %s", name, type(e).__name__, e)
+        await asyncio.sleep(interval)
+
+
 async def _indexnow_loop() -> None:
     """Submit changed hub pages to the IndexNow engines.
 
@@ -1587,6 +1627,11 @@ async def main() -> None:
     if _flag("REBUILD_SHIP_ALIASES", "true"):
         tasks.append(asyncio.create_task(_ship_alias_loop()))
         log.info("ship alias mining enabled (nicknames resolve to pairings)")
+
+    # Community recommendations and the content-gate repair. See the loop.
+    if _flag("RUN_CURATION", "true"):
+        tasks.append(asyncio.create_task(_curation_loop()))
+        log.info("curation loop enabled (recs imports + content gate repair)")
 
     # On by default. Without it the scan lands on a visitor's request instead,
     # and it is a 17-21 second read of the whole table.
