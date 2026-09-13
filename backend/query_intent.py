@@ -75,6 +75,10 @@ from typing import Optional
 
 from sqlalchemy import text as sql_text
 
+import logging
+
+log = logging.getLogger(__name__)
+
 # ── Framing ──────────────────────────────────────────────────────────────────
 #
 # Removed wherever they appear. Longest-first: `\bfics?\b` would otherwise eat
@@ -129,7 +133,13 @@ _FRAME_PATTERNS = [
     # the number is how many answers are wanted, never a word in any of them.
     r"\b(?:(?:\d+|a\s+few|one|two|three|four|five|several|multiple)\s+)?"
     r"(?:fan\s?)?fic(?:s|tions?)?\b"
-    r"(?:\s+(?:where|in\s+which|about|with|featuring|involving|that|in))?",
+    # `\b` after the alternation, or "with" matches the first four letters of
+    # "without" and turns "looking for a fic without character death" into
+    # "a out character death" — which then searches for the word "out" and
+    # loses the negation entirely. Each connective needs its own boundary;
+    # "in" needs one for the same reason ("in which" is listed, but bare "in"
+    # would otherwise eat the start of "involving" or "into").
+    r"(?:\s+(?:where|in\s+which|about|with|featuring|involving|that|in)\b)?",
     r"\bstor(?:y|ies)\b\s+(?:where|in\s+which|about|with|featuring|involving|that)\b",
     r"^\s*(?:a|any|some)\s+stor(?:y|ies)\b",
     r"\b(?:please|pls|plz|thanks|thank\s+you|thx|ty|etc\.?)\s*$",
@@ -536,6 +546,9 @@ class Intent:
     # one window; see resolve_intent for why the rest were being thrown at the
     # text index instead, and what that cost.
     extra_tag_groups: list[list[str]] = field(default_factory=list)
+    # Tropes the reader asked NOT to see. Each group is the spellings of one
+    # concept; a work carrying any spelling of any group is out.
+    exclude_tag_groups: list[list[str]] = field(default_factory=list)
     text_variants: list[str] = field(default_factory=list)  # same query, archive's words
     is_shorthand: bool = False          # the reader used a coined word, so: a category
     tokens: list[dict] = field(default_factory=list)  # chips for the UI
@@ -917,11 +930,155 @@ def _windows(db, text: str, tokens: list[str], aliased: bool):
     return None
 
 
+# "No harems." "Without character death." "Not looking for time travel."
+#
+# A fic-finder post is as much about what the reader does NOT want as what they
+# do — one request in the sample corpus listed nine negative conditions against
+# six positive ones — and none of it was parsed. The words went into the
+# positive query, so the search looked for stories CONTAINING them:
+#
+#     harry potter no harem   ->  "The Harem War" first, and a work tagged
+#                                 `Harry Potter Has a Harem` third
+#     no character death      ->  works tagged `Character Death`
+#
+# That is worse than returning nothing. A reader who asked for no harems and is
+# handed harems has been told the index does not understand them, in the one
+# way that looks like it worked.
+#
+# `without` and `excluding` are unambiguous. `no` and `not` are gated on the
+# query reading as a request, because "No Way Home" and "The Boy Who Had No
+# Name" are titles.
+_NEG_HARD_RE = re.compile(
+    r"\b(?:without|excluding|except\s+for|other\s+than|anything\s+but|"
+    r"no\s+more)\s+", re.I)
+_NEG_SOFT_RE = re.compile(
+    r"\b(?:no|not|don'?t\s+want|nothing\s+with|avoid|please\s+no)\s+", re.I)
+
+
+def _extract_negations(db, text: str, gated: bool) -> tuple[str, list[list[str]]]:
+    """Pull "no X" out of a request, as (remaining text, tag groups to exclude).
+
+    X is resolved against the tag vocabulary by the SAME window logic the
+    positive path uses, which is what makes this general rather than a list of
+    tropes somebody thought of. It also settles where the negation stops:
+
+        no character death fluff
+
+    resolves `Character Death` as the longest window that IS a tag, excludes
+    it, and leaves "fluff" behind as a positive want — which is what the reader
+    meant and what no amount of punctuation-guessing would have told us.
+
+    A negation whose subject resolves to nothing is left alone rather than
+    guessed at. Dropping the words would silently widen the search, and
+    excluding an unresolved phrase would exclude nothing while looking as
+    though it had worked.
+    """
+    groups: list[list[str]] = []
+    # `without` and `excluding` always run; `no` and `not` only when the query
+    # reads as a request. Resolution alone is NOT a sufficient guard and this
+    # was measured rather than assumed: with the gate off,
+    #
+    #     no country for old men   ->  excluded `Grumpy Old Men`
+    #     no way home peter parker ->  excluded `Homeless Peter Parker`
+    #     the boy who had no name  ->  excluded `Names`
+    #
+    # The tag vocabulary is 1.57M freeform strings and the window match is
+    # fuzzy by design, so almost any phrase resolves to SOMETHING. Three titles
+    # became exclusions nobody asked for.
+    #
+    # The cost of the gate is real and worth stating: "harry potter no harem"
+    # typed bare is not recognised as a request, so its negation is missed and
+    # the reader sees harems. That is the same failure this function exists to
+    # fix — but it fails by doing nothing rather than by excluding the wrong
+    # thing, and a fic-finder post (the case this came from) carries framing
+    # and is recognised. Wrong exclusions are invisible; missed ones are not.
+    for rx in (_NEG_HARD_RE, _NEG_SOFT_RE):
+        if rx is _NEG_SOFT_RE and gated:
+            continue
+        guard = 0
+        while len(groups) < 4 and guard < 6:
+            guard += 1
+            m = rx.search(text)
+            if not m:
+                break
+            after = text[m.end():].strip()
+            if not after:
+                break
+            tags, leftover = _negated_subject(db, after)
+            if not tags:
+                # Nothing in the vocabulary answers to it. Leave the phrase
+                # exactly as it was — dropping the words would silently widen
+                # the search, and excluding an unresolved phrase would exclude
+                # nothing while looking as though it had worked.
+                break
+            groups.append(tags)
+            # Everything the tag did not consume stays as ordinary words:
+            # "no character death fluff" keeps "fluff".
+            text = (text[:m.start()] + " " + leftover).strip()
+    return re.sub(r"\s+", " ", text).strip(), groups
+
+
+# How many works a tag needs before a single word may name it. A negation is
+# unambiguous in a way a positive term is not — "no harem" can only mean one
+# thing, while searching "harem" might be after a title — so one-word subjects
+# are allowed here where resolve_trope_tags rejects them. The floor keeps that
+# from firing on a coincidence.
+_NEG_MIN_WORKS = 200
+
+
+def _negated_subject(db, phrase: str) -> tuple[list[str], str]:
+    """The tag a negation refers to, and the words left over.
+
+    Tries the shared window logic first, which handles "no character death
+    fluff" by taking `Character Death` and returning "fluff". Falls back to a
+    single leading word, which that logic deliberately refuses — an unbounded
+    one-word window would fire on any query — but which is exactly what "no
+    harems" and "without bashing" are.
+    """
+    tags, _works, leftover, _whole = resolve_trope_tags(db, phrase)
+    if tags:
+        return tags, leftover
+
+    words = phrase.split()
+    if not words:
+        return [], phrase
+    head = words[0].rstrip(",.;:!?")
+    if len(head) < 4:
+        return [], phrase
+    # The tag must BE the word, not merely contain it. A substring match here
+    # was actively wrong: "no way home peter parker" matched
+    # `Homeless Peter Parker` and excluded it, and "the no name" matched
+    # `Pet Names` — two titles turned into exclusions nobody asked for.
+    # Singular and plural both, because readers write "no harems" and the
+    # archive files `Harems`.
+    stem = head[:-1] if head.endswith("s") and len(head) > 4 else head
+    try:
+        rows = db.execute(sql_text("""
+            SELECT value FROM facets
+             WHERE kind = 'tag' AND count >= :floor
+               AND lower(value) IN (lower(:a), lower(:b))
+             ORDER BY count DESC
+             LIMIT 4
+        """), {"a": stem, "b": stem + "s", "floor": _NEG_MIN_WORKS}).fetchall()
+    except Exception:
+        log.debug("negation lookup failed", exc_info=True)
+        return [], phrase
+    if not rows:
+        return [], phrase
+    return [r[0] for r in rows], " ".join(words[1:])
+
+
 def resolve_intent(db, raw: str) -> Intent:
     """Everything above, in order. `db` is the request's own session."""
     if not QUERY_INTENT_ON:
         return Intent(text=raw)
     intent = read_request(raw)
+    if intent.text:
+        # Negations FIRST. They have to come out before the positive path sees
+        # the text, or "no harem" is searched for as the words "no" and "harem"
+        # and returns the harems.
+        intent.text, intent.exclude_tag_groups = _extract_negations(
+            db, intent.text, gated=not _is_request(raw))
     if intent.text:
         intent.text_variants, intent.is_shorthand = _alias_expand(intent.text)
         (intent.tags, intent.tag_works,
