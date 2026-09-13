@@ -1631,6 +1631,14 @@ def search(          # NOT async — see below
             # the per-archive `site_counts` breakdown, and `sites_searched` in
             # the response, which would otherwise claim three archives were
             # searched when one was.
+            # An abbreviated fandom is a FILTER, not a word. `twd` is not in
+            # any story's text; "The Walking Dead" is in thousands of fandom
+            # arrays. An explicit ?fandoms= still wins, exactly as an explicit
+            # ?sites= wins over "…on AO3" below.
+            if not fandoms and intent.fandom:
+                fandoms = intent.fandom
+                parsed_tokens.append({"key": "fandoms", "value": intent.fandom,
+                                      "exclude": False, "raw": intent.fandom})
             if not sites and intent.site:
                 site_enums = [SiteEnum(intent.site)]
                 filters.append(Story.site.in_(site_enums))

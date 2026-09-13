@@ -470,6 +470,41 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     and the reader picks, rather than the ranker guessing. Verified it does not
     nag: correct spellings and legitimately narrow searches get nothing.
 
+- **Fandom abbreviations are derived, not listed.** Readers type `twd`, not
+  "The Walking Dead (TV)", and every term in a search is a requirement — so
+  `twd self insert` returned **9 works**: `Self-Insert` resolved perfectly and
+  "twd" was left over as a word no story about zombies contains.
+  `fandom_aliases.py` mines 927 abbreviations from the 1,500 largest fandoms.
+  - **The convention is not one rule, so several candidates are generated per
+    fandom.** "the" is load-bearing in `The Walking Dead` → twd (dropping it
+    gives `wd`, which nobody types), silent in `Percy Jackson and the
+    Olympians` → pjo, and every word counts in `A Song of Ice and Fire` →
+    asoiaf. Both halves of an AO3 name are tried, so
+    `僕のヒーローアカデミア | … | My Hero Academia` yields **both** `bnha` and
+    `mha`, which are the two things readers actually say.
+  - **What it cannot reach, and does not guess at:** `spn` for Supernatural and
+    `jjk` for Jujutsu Kaisen are NICKNAMES, not initialisms — one word cannot
+    produce three letters. Those need a different source.
+  - A STOPLIST refuses abbreviations that are ordinary words. `It`, `Us` and
+    `She` are real fandoms whose initialisms would hijack any query containing
+    them.
+  - Applied only when other words remain: a bare "twd" is a fine text search
+    (925 works) and the reader may have meant it literally. Measured after:
+    `twd self insert` 9 → **74**, `asoiaf time travel` 138 → **1,159**.
+  - **A missing table must not poison the caller's transaction.** The lookup is
+    wrapped in `db.begin_nested()`, because the table is built offline and
+    genuinely does not exist on a fresh install — without the savepoint the
+    failed SELECT aborted the whole transaction and every later query in the
+    session raised "current transaction is aborted", including a test's own
+    teardown. A feature that is merely OFF cannot take the request down.
+- **Everything derived from the fic-finder corpus lives in the SEARCH, not the
+  outreach panel.** Negations, written word counts, multi-trope resolution and
+  fandom abbreviations are all in `query_intent.py`, which `api/search.py` calls
+  for every query on the public endpoint; `taste` and `exclude_ids` are public
+  API routes. The panel is a client of the same endpoints and adds only paste,
+  condense and a reply template — it can demonstrate nothing a visitor cannot
+  do by typing.
+
 - **The "I have already read" list is the richest signal in a fic-finder post,
   and it was being thrown away.** `/api/search/taste` resolves the titles,
   reduces them to the tags those works have IN COMMON, and hands back a runnable

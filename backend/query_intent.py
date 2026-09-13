@@ -536,6 +536,9 @@ class Intent:
     word_count_max: Optional[int] = None
     status: Optional[str] = None
     site: Optional[str] = None          # "…on AO3" named an archive, not a word
+    # A fandom the reader abbreviated: "twd", "asoiaf", "mha". Applied as a
+    # FILTER, because that is what they named. See fandom_aliases.py.
+    fandom: Optional[str] = None
     tags: list[str] = field(default_factory=list)   # tag spellings to OR in
     tag_works: int = 0                  # works behind the best of them
     tag_leftover: str = ""              # words the tag did NOT account for
@@ -1096,6 +1099,65 @@ def _negated_subject(db, phrase: str) -> tuple[list[str], str]:
     return [r[0] for r in rows], " ".join(words[1:])
 
 
+# Fandom abbreviations, read once and refreshed on a timer.
+#
+# Readers type `twd`, not "The Walking Dead (TV)". Every term in a search is a
+# requirement, so an abbreviation the index has never seen is a filter matching
+# almost nothing: `twd self insert` returned NINE works, because `Self-Insert`
+# resolved and "twd" was left over as a word that appears in no story about
+# zombies. Derived rather than listed — see fandom_aliases.py for why, and for
+# what the rule cannot reach.
+_FANDOM_ALIASES: dict[str, str] = {}
+_FANDOM_ALIASES_AT = 0.0
+_FANDOM_ALIAS_TTL = float(os.getenv("FANDOM_ALIAS_TTL_S", "3600"))
+
+
+def _fandom_aliases(db) -> dict[str, str]:
+    global _FANDOM_ALIASES, _FANDOM_ALIASES_AT
+    now = time.monotonic()
+    if _FANDOM_ALIASES and now - _FANDOM_ALIASES_AT < _FANDOM_ALIAS_TTL:
+        return _FANDOM_ALIASES
+    try:
+        # SAVEPOINT, because a failed statement aborts the whole transaction and
+        # this one is genuinely expected to fail: the table is built offline and
+        # does not exist on a fresh install or in the test database. Without
+        # the nested block the caller's transaction was poisoned — every later
+        # query in the same session raised "current transaction is aborted",
+        # including a test's own teardown. A feature that is merely OFF must not
+        # take the request down with it.
+        with db.begin_nested():
+            rows = db.execute(sql_text(
+                "SELECT alias, fandom FROM fandom_aliases")).fetchall()
+        _FANDOM_ALIASES = {r[0]: r[1] for r in rows}
+        _FANDOM_ALIASES_AT = now
+    except Exception:
+        log.debug("fandom alias table unavailable", exc_info=True)
+        _FANDOM_ALIASES_AT = now
+    return _FANDOM_ALIASES
+
+
+def _take_fandom_alias(db, text_in: str) -> tuple[str, Optional[str]]:
+    """Pull a fandom abbreviation out of the query, if one is there.
+
+    Only when OTHER words remain. A bare "twd" is already a perfectly good text
+    search — it finds 924 works whose text says so — and turning it into a
+    fandom filter would be a bigger change to a query the reader may have meant
+    literally. The abbreviation is worth expanding precisely when it is
+    qualifying something else, which is the case that was broken.
+    """
+    aliases = _fandom_aliases(db)
+    if not aliases:
+        return text_in, None
+    words = text_in.split()
+    if len(words) < 2:
+        return text_in, None
+    for i, w in enumerate(words):
+        hit = aliases.get(w.strip(",.;:!?").lower())
+        if hit:
+            return " ".join(words[:i] + words[i + 1:]).strip(), hit
+    return text_in, None
+
+
 def resolve_intent(db, raw: str) -> Intent:
     """Everything above, in order. `db` is the request's own session."""
     if not QUERY_INTENT_ON:
@@ -1107,6 +1169,11 @@ def resolve_intent(db, raw: str) -> Intent:
         # and returns the harems.
         intent.text, intent.exclude_tag_groups = _extract_negations(
             db, intent.text, gated=not _is_request(raw))
+    if intent.text:
+        # Before anything else reads the words: an abbreviation is a fandom
+        # wearing a word's clothes, and leaving it in the text makes it a
+        # requirement no story can meet.
+        intent.text, intent.fandom = _take_fandom_alias(db, intent.text)
     if intent.text:
         intent.text_variants, intent.is_shorthand = _alias_expand(intent.text)
         (intent.tags, intent.tag_works,
