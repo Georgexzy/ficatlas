@@ -505,6 +505,46 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   otherwise says so and tells you to narrow or close the tab. Verified the
   search was never at fault: `harry potter daphne greengrass fluff` returns
   1,058 works.
+- **A bulleted fic-finder post is a LIST of constraints, one per line, and
+  reading it as one bag of words threw that structure away.** "harry is lord of
+  at least 2 houses" became the word "houses", which matched `House`, the
+  television programme. Per line through `read_request` + `resolve_trope_tags`
+  it resolves to `Harry is Lord Potter`. The extractor now does both: lines
+  first, loose n-grams after, and `from_line` marks the difference so a later
+  sort cannot flatten it — a flat sort by count put `Plot` (5,367, a stray noun
+  in "decent plot/characters") above `Albus Dumbledore Bashing` (3,481), which
+  the reader had asked for in as many words.
+  - **The "I have read" list is split off first.** Read as wants it is actively
+    misleading: a post listing "sarcasm and slytherin" as a fic already
+    finished returned `Sarcasm` and `Slytherin` as things it was asking for.
+    Handed back as `already_read` for /api/search/taste.
+  - **Punctuation and caveats block resolution.** "bashing
+    (dumbles/weasleys/hermione)- but not WAAAYYY TOOOO much" resolved to
+    NOTHING; the same words spaced out and cut at "but" give
+    `Albus Dumbledore Bashing`. Readers group alternatives with brackets and
+    slashes and qualify their own asks, and both defeat a window match.
+  - **The BIGGEST spelling, not the first.** `resolve_trope_tags` returns every
+    way the archives write a concept and the search path ORs them; a single
+    `tag:"…"` cannot, so `tags[0]` silently picked one variant — the bashing set
+    spans six spellings and 3,481 works, and the first is not the largest.
+  - **Three right answers make a wrong query.** `Harry is Lord Potter` (82),
+    `Magically Powerful Harry` (48) and `Politically Powerful Character` (24)
+    are each exactly what the post asked for, and together they return **zero**.
+    The query is now built one term at a time and PROBED — capped count, GIN
+    containment, word-count constraint included — keeping a term only if at
+    least 3 works survive it. If nothing survives, it falls back to the single
+    best term: the probe is a refinement, not a gate, and an empty query is the
+    failure this endpoint exists to prevent.
+  - Measured end to end: the Harry/Daphne post → 64 works; the lordship post →
+    `tag:"Albus Dumbledore Bashing" words:>150k` → 160 works, all 150k+.
+- **The series maker is not broken, and the 75,849 one-work series are real.**
+  Checked before building anything on it. 99.8% are `source='explicit'`, 100% of
+  those carry an AO3 series id, and **AO3's own `work_count` says 75,622 of them
+  contain exactly one work**. Authors genuinely create one-work series — to
+  group a standalone, or intending to add more. Nothing to fix; a series
+  word-count feature would simply need to ignore singletons, where the total is
+  just that one work anyway.
+
 - **A pairing is the SUBJECT of a request and has to beat a million-work tag.**
   On the Harry/Daphne post, looking each half up as a loose character was not
   enough: bare "Harry" is on 541 works and bare "Daphne" on 79, so both sank
