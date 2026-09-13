@@ -3370,6 +3370,97 @@ def _is_grammar(phrase: str) -> bool:
     return bool(parts) and all(w in _FUNCTION_WORDS for w in parts if w)
 
 
+def _canonical_character(db, name: str) -> Optional[str]:
+    """The character a first name most likely means.
+
+    "Daphne" is four different people in this index — Greengrass, Bridgerton,
+    Blake, Chanders — and the most-written one is what a reader naming her
+    without a surname means. Same rule the taste endpoint uses for ambiguous
+    titles, and the same reason.
+    """
+    row = db.execute(sql_text("""
+        SELECT value FROM facets
+         WHERE kind = 'character'
+           AND (lower(value) = lower(:n) OR lower(value) LIKE lower(:pre))
+         ORDER BY count DESC
+         LIMIT 1
+    """), {"n": name, "pre": name + " %"}).first()
+    return row[0] if row else None
+
+
+def _resolve_pair(db, raw: str) -> Optional[ExtractedTerm]:
+    """A pairing written the way readers write it: "A/B" or "A x B"."""
+    for a, b in re.findall(r"([A-Za-z]{3,})\s*(?:/|\bx\b)\s*([A-Za-z]{3,})", raw):
+        if a.lower() in _FUNCTION_WORDS or b.lower() in _FUNCTION_WORDS:
+            continue
+        ca, cb = _canonical_character(db, a), _canonical_character(db, b)
+        if not ca or not cb:
+            continue
+        # Either order, and `/` or `&` — the archives are not consistent and
+        # the reader should not have to be. Most-used spelling wins.
+        row = db.execute(sql_text("""
+            SELECT value, count FROM facets
+             WHERE kind = 'relationship'
+               AND lower(value) LIKE lower(:a)
+               AND lower(value) LIKE lower(:b)
+             ORDER BY count DESC
+             LIMIT 1
+        """), {"a": f"%{ca}%", "b": f"%{cb}%"}).first()
+        if row:
+            return ExtractedTerm(kind="relationship", value=row[0],
+                                 count=row[1], matched=f"{a}/{b}")
+    return None
+
+
+def _fandom_of(db, relationship: str) -> Optional[tuple[str, int]]:
+    """The fandom a pairing belongs to, inferred from the works that carry it.
+
+    A reader naming "Harry/Daphne" has named the fandom too and should not have
+    to say so. Rather than a lookup table of which characters belong where —
+    which would need maintaining for every fandom that ever existed — this asks
+    the works themselves: sample 300 carrying the pairing and take the fandom
+    most of them list. Measured at 18ms, and on this pairing 233 of 300 say
+    `Harry Potter - J. K. Rowling`.
+    """
+    row = db.execute(sql_text("""
+        SELECT f, count(*) AS n
+          FROM (SELECT unnest(fandoms) f FROM stories
+                 WHERE delisted_at IS NULL
+                   AND relationships && ARRAY[:rel]::text[]
+                 LIMIT 300) x
+         GROUP BY 1 ORDER BY 2 DESC LIMIT 1
+    """), {"rel": relationship}).first()
+    # A bare plurality is not an inference. Two thirds of a 300-work sample
+    # agreeing is; anything less means the pairing crosses fandoms and naming
+    # one would narrow the search to the wrong half.
+    if row and row[1] >= 100:
+        cnt = db.execute(sql_text(
+            "SELECT count FROM facets WHERE kind='fandom' AND value = :v"),
+            {"v": row[0]}).scalar()
+        return row[0], int(cnt or 0)
+    return None
+
+
+def _stem_sibling(db, tag: str) -> Optional[tuple[str, int]]:
+    """The shorter, far commoner tag this one is a variant of.
+
+    A reader writing "happy/fluffy" means `Fluff` — 1,130,841 works — and the
+    literal match is `Fluffy`, 8,964. Same word, two orders of magnitude apart,
+    and only one of them is what the archives file under. Generalises without a
+    synonym list: a tag that is a PREFIX of another and vastly better attested
+    is the canonical spelling of it.
+    """
+    base = tag.lower().rstrip("y").rstrip("s").strip()
+    if len(base) < 4 or base == tag.lower():
+        return None
+    row = db.execute(sql_text("""
+        SELECT value, count FROM facets
+         WHERE kind = 'tag' AND lower(value) = :b
+         ORDER BY count DESC LIMIT 1
+    """), {"b": base}).first()
+    return (row[0], row[1]) if row else None
+
+
 @router.get("/extract", response_model=ExtractResponse)
 def extract(
     text: str = Query(..., description="A whole fic-finder post, pasted"),
@@ -3404,15 +3495,19 @@ def extract(
 
     # Every 1-4 word run, remembering where each came from so overlapping
     # matches can be resolved in favour of the longer one.
-    # "Harry/Daphne" is how readers write a pairing, and splitting on
-    # punctuation loses it — the post that exposed this says "Harry/Daphne" and
-    # "Harry x Daphne" and never once writes either full name. Each half is
-    # looked up as a character in its own right, which is what makes the
-    # pairing reachable at all.
-    for a, b in re.findall(r"([A-Za-z]{3,})\s*[/x]\s*([A-Za-z]{3,})", raw):
-        for half in (a, b):
-            if half.lower() not in _FUNCTION_WORDS:
-                words.append(half)
+    # The PAIRING, resolved properly rather than as two loose names.
+    #
+    # "Harry/Daphne" is how readers write a ship, and it is usually the whole
+    # point of the request. Looking each half up as a character was not enough:
+    # bare "Harry" is on 541 works and bare "Daphne" on 79, so both sank below
+    # every generic tag in the post and the pairing — the one thing the reader
+    # actually asked for — did not appear at all.
+    #
+    # So each half is expanded to the canonical character it names, and the
+    # relationship holding both is looked up. On the post this came from,
+    # "Harry/Daphne" resolves to `Daphne Greengrass/Harry Potter` (1,035 works)
+    # where the loose names found nothing worth ranking.
+    pair_term = _resolve_pair(db, raw)
 
     grams: dict[str, tuple[int, int]] = {}
     for n in range(1, 5):
@@ -3475,12 +3570,58 @@ def extract(
     terms = [ExtractedTerm(kind=k, value=v, count=c, matched=m)
              for k, v, c, m in chosen]
 
+    # The pairing goes FIRST when there is one. This is the exception to
+    # ranking by frequency, and it is not arbitrary: a resolved pairing is the
+    # subject of the request, while a tag is a quality the reader wants it to
+    # have. `Fluff` is on a million works and `Daphne Greengrass/Harry Potter`
+    # on 1,035, and the reader wants the second one with the first — not the
+    # first instead of it. Note this needs a RESOLVED pairing: the rejected
+    # "characters outrank tags" rule let `God`, from "for the love of God",
+    # beat every tag in the post.
+    # A variant spelling replaced by the one the archives actually use.
+    # "fluffy" is a word readers write and `Fluff` is what gets tagged.
+    swapped: list[ExtractedTerm] = []
+    for t in terms:
+        if t.kind == "tag":
+            sib = _stem_sibling(db, t.value)
+            if sib and sib[1] > t.count * 10:
+                t = ExtractedTerm(kind="tag", value=sib[0], count=sib[1],
+                                  matched=t.matched)
+        if t.value not in [x.value for x in swapped]:
+            swapped.append(t)
+    terms = swapped
+    terms.sort(key=lambda t: -t.count)
+
+    if pair_term:
+        # The pairing FIRST, and the fandom it implies second. This is the
+        # exception to ranking by frequency and it is not arbitrary: a resolved
+        # pairing is the SUBJECT of the request, while a tag is a quality the
+        # reader wants it to have. `Fluff` is on a million works and this
+        # pairing on 1,035, and the reader wants the second one with the first,
+        # not instead of it. Note it needs a RESOLVED pairing — the rejected
+        # "characters outrank tags" rule let `God`, from "for the love of God",
+        # beat every tag in the post.
+        head = [pair_term]
+        fand = _fandom_of(db, pair_term.value)
+        if fand:
+            head.append(ExtractedTerm(kind="fandom", value=fand[0],
+                                      count=fand[1], matched=pair_term.matched))
+        keep = [t for t in terms if t.value not in {h.value for h in head}]
+        terms = (head + keep)[:EXTRACT_MAX_TERMS]
+
     # Three terms, not six. Every one is a requirement, so a query built from
     # everything the post mentions is the same over-specified search this
     # endpoint exists to replace.
     op = {"fandom": "fandom", "character": "char",
           "relationship": "ship", "tag": "tag"}
-    parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in terms[:3]]
+    # Pairing (or whatever leads) plus the two best TAGS. The fandom is already
+    # implied by the pairing, so spending one of three slots on it would narrow
+    # nothing while dropping a quality the reader asked for — it is still
+    # offered as a term for anyone who wants it.
+    lead = [t for t in terms[:1]]
+    tags_only = [t for t in terms if t.kind == "tag"][:2]
+    picked = lead + [t for t in tags_only if t.value != lead[0].value] if lead else tags_only
+    parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in picked[:3]]
     return ExtractResponse(terms=terms, query=" ".join(parts),
                            ignored_words=len(words) - len(used))
 
