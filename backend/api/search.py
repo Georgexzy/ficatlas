@@ -3323,6 +3323,10 @@ class ExtractedTerm(BaseModel):
     # in the prose. The line SAID what it wanted; a bare word merely appeared
     # in it, so this outranks frequency and must survive any later sort.
     from_line: bool = False
+    # Every way the archives write this concept. The search ORs them; one
+    # `tag:"…"` operator cannot, which is why the probe below tests the whole
+    # group rather than a single spelling.
+    spellings: list[str] = []
 
 
 class ExtractResponse(BaseModel):
@@ -3512,31 +3516,51 @@ _PROBE_MIN_KEEP = 3
 
 
 def _biggest_spelling(db, tags: list[str]) -> Optional[tuple[str, int]]:
-    """Of several ways to write one concept, the one most works actually use."""
+    """Of several ways to write one concept, the one most works actually use.
+
+    Looks BEYOND the spellings the resolver returned, and that is the whole
+    point. resolve_trope_tags works from windows of the reader's own words, so
+    it found `Magically Powerful Harry` — 48 works — and never saw
+    `Magically Powerful Harry Potter`, which is the same concept on **1,719**.
+    Taking the best of what it returned still meant building a query out of the
+    rarest phrasing of everything, and a reader who had demonstrably read such
+    fics was told there were none.
+
+    So each candidate is also matched as a PREFIX. A tag that begins with
+    another is the same concept spelled longer — `Powerful Harry` /
+    `Powerful Harry Potter`, `Harry is Lord Potter` /
+    `Harry is Lord Potter-Black` — and the archives' own usage decides which
+    one a search should carry.
+    """
     if not tags:
         return None
     row = db.execute(sql_text("""
         SELECT value, count FROM facets
-         WHERE kind = 'tag' AND value = ANY(CAST(:t AS text[]))
+         WHERE kind = 'tag'
+           AND (value = ANY(CAST(:t AS text[]))
+                OR EXISTS (SELECT 1 FROM unnest(CAST(:t AS text[])) a
+                            WHERE lower(value) LIKE lower(a) || '%'))
          ORDER BY count DESC LIMIT 1
     """), {"t": tags}).first()
     return (row[0], int(row[1])) if row else None
 
 
-def _probe_count(db, parts: list[str], word_count_min: Optional[int] = None) -> int:
-    """Would this combination of terms find anything at all?"""
+def _probe_count(db, terms: list, word_count_min: Optional[int] = None) -> int:
+    """Would this combination of concepts find anything at all?"""
+    # OR within a concept, AND between them — the shape the search itself
+    # builds. Probing ONE spelling per concept is why good combinations were
+    # thrown away: `Magically Powerful Harry` is on 48 works while the concept
+    # across its spellings is on 1,719, so the probe reported nothing where the
+    # real search finds hundreds, and the term was dropped.
     clauses, params = [], {}
-    for i, part in enumerate(parts):
-        m = re.match(r'(\w+):"(.+)"$', part)
-        if not m:
-            continue
-        op_name, value = m.group(1), m.group(2)
-        col = {"tag": "tags", "char": "characters", "ship": "relationships",
-               "fandom": "fandoms"}.get(op_name)
+    COL = {"tag": "tags", "character": "characters",
+           "relationship": "relationships", "fandom": "fandoms"}
+    for i, t in enumerate(terms):
+        col = COL.get(t.kind)
         if not col:
             continue
-        clauses.append(f"{col} && ARRAY[:v{i}]::text[]")
-        params[f"v{i}"] = value
+        clauses.append(f"{col} && CAST(:v{i} AS text[])")
+        params[f"v{i}"] = list(t.spellings or [t.value])
     if not clauses:
         return 1
     # The length constraint counts too. Without it the probe passed a pair of
@@ -3641,9 +3665,17 @@ def extract(
             # spellings and 3,481 works. A query built from the rarest of them
             # finds almost nothing and looks like the index is empty.
             best = _biggest_spelling(db, tags) or (tags[0], works)
+            # The bigger spelling belongs in the GROUP as well as being the
+            # label. Without this the probe tested the resolver's list — which
+            # is exactly the list that missed `Magically Powerful Harry Potter`
+            # (1,719 works) in favour of `Magically Powerful Harry` (48) — and
+            # then dropped a concept the reader had plainly asked for because
+            # the rare spelling co-occurred with nothing.
+            if best[0] not in tags:
+                tags = [best[0]] + tags
             line_terms.append(ExtractedTerm(kind="tag", value=best[0],
                                             count=best[1], matched=line[:60],
-                                            from_line=True))
+                                            from_line=True, spellings=tags))
             if leftover.strip() == probe.strip():
                 break
             probe = leftover
@@ -3826,9 +3858,9 @@ def extract(
     # So each term is added only if the result set survives it. The count is
     # capped and the predicate is GIN containment, so this is a few tens of
     # milliseconds per candidate on an endpoint that is not the search path.
-    parts: list[str] = []
+    kept: list[ExtractedTerm] = []
     for t in terms[:5]:
-        cand = parts + [f'{op.get(t.kind, "tag")}:"{t.value}"']
+        cand = kept + [t]
         if len(cand) > 3:
             break
         try:
@@ -3840,7 +3872,9 @@ def extract(
         # result set to a single work has answered the request too precisely to
         # be useful, and the reader said "at least", not "exactly".
         if n >= _PROBE_MIN_KEEP:
-            parts = cand
+            kept = cand
+
+    parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in kept]
 
     # If nothing survived, fall back to the single best term rather than
     # returning nothing. The probe is a refinement, not a gate: a one-term
