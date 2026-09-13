@@ -1588,6 +1588,9 @@ def search(          # NOT async — see below
     trope_tags: list[str] = []
     trope_extra_groups: list[list[str]] = []
     trope_whole = False
+    # Set below, once the trope is known: this query is a tag browse wearing a
+    # text query's clothes. See the note where it is used.
+    _trope_browse = False
     trope_works = 0
     trope_leftover = ""
     trope_branch_ok = False
@@ -1630,6 +1633,9 @@ def search(          # NOT async — see below
             trope_tags, trope_leftover = intent.tags, intent.tag_leftover
             trope_extra_groups = intent.extra_tag_groups
             trope_whole = intent.tag_is_whole
+            _trope_browse = bool(
+                trope_tags and trope_whole and not trope_leftover.strip()
+                and not intent.tag_branch_ok)
             # "No harems." Applied as a filter on the WHOLE query, not inside
             # the trope branch, because a negation is unconditional: the reader
             # does not want it however the work was found.
@@ -1739,14 +1745,33 @@ def search(          # NOT async — see below
                     func.websearch_to_tsquery(_REGCONFIG, trope_leftover)))
             branches.append(trope_pred)
 
-        # NOTE: replacing this OR with the tag branch alone was tried and
-        # reverted. It fixed `fluff` (503 -> 10.3s) and REGRESSED
-        # `hurt comfort` (7.4s -> 503), because the cost of these queries is
-        # the candidate pull and ranking over a huge match set rather than the
-        # predicate that selects it — so changing the predicate moves the
-        # problem without solving it. `angst` (868,737 works) and
-        # `hurt comfort` (577,244) still time out; see CLAUDE.md.
-        filters.append(or_(*branches) if len(branches) > 1 else text_pred)
+        # A whole-query trope too big for the OR branch becomes a BROWSE.
+        #
+        # `angst` (868,737 works), `fluff` (1,130,841) and `hurt comfort`
+        # (577,244) each returned a 503 after twenty seconds. The tag branch is
+        # gated off above TROPE_BRANCH_MAX_WORKS, so these fell to a full-text
+        # scan and then relevance-ranked every matching row.
+        #
+        # Swapping the predicate alone was tried first and reverted: it fixed
+        # `fluff` and regressed `hurt comfort`, which is the evidence that the
+        # cost is the RANKING over a huge match set and not the predicate that
+        # selects it. So this changes both — containment against
+        # ix_stories_tags to select, and `_trope_browse` below to send the
+        # query down the popularity ordering the `else` arm already uses for a
+        # filter-only browse.
+        #
+        # Which is also the better answer. "angst" names a kind of story, not a
+        # work: there is no title to match and no phrase to rank against, so
+        # the most-read works carrying the tag is exactly what the reader
+        # means. Relevance over a million rows was computing a number that
+        # could not distinguish them anyway.
+        #
+        # Narrow on purpose — the whole query, nothing left over, and only when
+        # the tag is too large for the ordinary branch.
+        if _trope_browse:
+            filters.append(Story.tags.op("&&")(cast(trope_tags, PG_ARRAY(Text))))
+        else:
+            filters.append(or_(*branches) if len(branches) > 1 else text_pred)
 
     if recs_only:
         # Containment against the GIN index on tags, NOT an ILIKE over
@@ -2199,7 +2224,19 @@ def search(          # NOT async — see below
     #
     # So title matches are fetched separately and unioned in. With the
     # lower(title) index that lookup is 0.33ms, against 24s before it existed.
-    if q and q.strip():
+    # A trope browse skips the TEXT candidate machinery entirely.
+    #
+    # Everything below this line exists to find works by what they say — a
+    # title arm, a fuzzy-title arm, and a "best read" arm that intersects the
+    # match set with ix_stories_kudos. For `angst` that last one intersects
+    # 868,737 rows and is where the twenty seconds went; the tag filter alone
+    # selects its 5,001 candidates in 434ms.
+    #
+    # There is nothing here for a trope browse to do. "angst" names no work, so
+    # there is no title to match and no near-miss to rescue, and the popularity
+    # arm further down already supplies the well-read works from an index built
+    # for it. This is a filtered browse and takes the filtered-browse path.
+    if q and q.strip() and not _trope_browse:
         q_norm = q.strip().lower()
         words = q_norm.split()
         title_pred = or_(
@@ -2521,7 +2558,7 @@ def search(          # NOT async — see below
     sort_expr = _sort_expr(S, sort)
     if sort_expr is not None:
         ordered = ordered.order_by(sort_expr)
-    elif q:
+    elif q and not _trope_browse:
         # "Relevance" means text relevance — it used to mean kudos, which is
         # meaningless here because 99.99% of indexed rows have kudos 0.
         #
