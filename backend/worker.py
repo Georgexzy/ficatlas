@@ -1215,6 +1215,7 @@ async def _ship_alias_loop() -> None:
     a vocabulary that took years to form does not move in a day.
     """
     import ship_aliases
+    import fandom_aliases
 
     interval = _num("SHIP_ALIAS_INTERVAL_HOURS", 168) * 3600
     await asyncio.sleep(_num("SHIP_ALIAS_START_DELAY_SEC", 1800))
@@ -1224,6 +1225,16 @@ async def _ship_alias_loop() -> None:
             log.info(f"ship aliases rebuilt: {n:,} nicknames")
         except Exception as e:
             log.warning(f"ship alias rebuild failed: {type(e).__name__}: {e}")
+        # Fandom abbreviations ride the same schedule and for the same reason:
+        # both are derived wholly from the current vocabulary, so a rebuild is a
+        # replacement with nothing to lose. It is cheap next to the ship miner —
+        # one read of the 1,500 largest fandoms, no sampling.
+        try:
+            stats = await asyncio.to_thread(fandom_aliases.run)
+            log.info("fandom aliases rebuilt: %s abbreviations",
+                     f"{stats['aliases']:,}")
+        except Exception as e:
+            log.warning(f"fandom alias rebuild failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
 
 
