@@ -3314,6 +3314,177 @@ _TASTE_IGNORE = {_RECS_MARKER, _ANY_RECS_MARKER, "tropedia_recs"}
 TASTE_TAG_LIMIT = 8
 
 
+class ExtractedTerm(BaseModel):
+    kind: str          # fandom | character | relationship | tag
+    value: str
+    count: int
+    matched: str       # the words in the post it came from
+
+
+class ExtractResponse(BaseModel):
+    terms: list[ExtractedTerm]
+    query: str
+    ignored_words: int
+
+
+# A term nobody would be narrowing by. `Fluff` is on 1.13M works and is still
+# worth offering — a reader asking for fluff means it — but anything under this
+# is a coincidence of wording rather than a subject.
+EXTRACT_MIN_WORKS = 50
+# How many words of a post to look at. Four n-grams per word, so this bounds the
+# lookup; nobody's actual request is in the two-hundredth word.
+EXTRACT_MAX_WORDS = 120
+# Offered, not applied. Extraction from prose is genuinely ambiguous — "for
+# the love of God" really does contain a character this index knows — so the
+# endpoint returns a shortlist and a person decides. Eight is what fits on a
+# line without becoming a wall.
+EXTRACT_MAX_TERMS = 8
+
+# English function words. A run made only of these is grammar, not a subject —
+# and the tag vocabulary is freeform enough that plenty of them ARE tags:
+# `i just` is on 113 works and `I don't` on 60, and both beat `Fluff` in the
+# first version of this because they were two words long and it ranked by
+# length. People tag strange things; that does not make them requests.
+_FUNCTION_WORDS = {
+    "i", "me", "my", "we", "us", "you", "your", "it", "its", "he", "she",
+    "they", "them", "this", "that", "these", "those", "a", "an", "the",
+    "and", "or", "but", "if", "so", "as", "of", "to", "in", "on", "at",
+    "for", "with", "from", "by", "is", "are", "was", "were", "be", "been",
+    "am", "do", "don", "does", "did", "will", "would", "can", "could",
+    "just", "really", "very", "any", "some", "all", "not", "no", "please",
+    "about", "like", "want", "need", "get", "got", "have", "has", "had",
+    "there", "here", "what", "who", "when", "where", "how", "why", "one",
+    "two", "even", "also", "still", "back", "out", "up", "down", "over",
+    "long", "short", "care", "take", "give", "make", "read", "reading",
+}
+
+
+def _is_grammar(phrase: str) -> bool:
+    """Is this run of words entirely grammar? Then it is not a subject.
+
+    Contractions are cut at the apostrophe, so "don't" is tested as "don" and
+    "I'll" as "i". Without that, `I don't` — a real tag, on 60 works — passed
+    for a subject because "don't" was not in the list while "don" was.
+    """
+    parts = [w.split("'")[0] for w in phrase.lower().split()]
+    return bool(parts) and all(w in _FUNCTION_WORDS for w in parts if w)
+
+
+@router.get("/extract", response_model=ExtractResponse)
+def extract(
+    text: str = Query(..., description="A whole fic-finder post, pasted"),
+    db: Session = Depends(get_db),
+):
+    """The searchable terms inside a request, found by asking the vocabulary.
+
+    A fic-finder post is mostly prose — apology, context, the fic that broke
+    their heart, emoji. Condensing it by STRIPPING framing was the wrong shape:
+    a two-hundred-word post minus its framing is a hundred-and-eighty-word
+    query, and every term in a search is a requirement, so it matched nothing.
+    Observed on a real post asking for happy Harry/Daphne, which returned zero
+    while `harry potter daphne greengrass fluff` returns 1,058.
+
+    So this EXTRACTS instead. Every 1-to-4 word run in the post is looked up
+    against `facets` in one indexed query — 6ms for a whole post — and what
+    comes back is what the index actually knows how to search for. The reader's
+    vocabulary and the archive's are the same vocabulary; there is no need to
+    guess which words mattered when the tag table can say.
+
+    Longer matches win over the words inside them, so "Daphne Greengrass" is
+    taken and "Daphne" is not, and a character or pairing outranks a generic
+    tag of the same length.
+    """
+    raw = (text or "")[:4000]
+    # Strip URLs and anything that is not a letter, digit or apostrophe. Emoji
+    # are common in these posts and are not vocabulary.
+    raw = re.sub(r"https?://\S+", " ", raw)
+    words = re.findall(r"[A-Za-z0-9']+", raw)[:EXTRACT_MAX_WORDS]
+    if not words:
+        return ExtractResponse(terms=[], query="", ignored_words=0)
+
+    # Every 1-4 word run, remembering where each came from so overlapping
+    # matches can be resolved in favour of the longer one.
+    # "Harry/Daphne" is how readers write a pairing, and splitting on
+    # punctuation loses it — the post that exposed this says "Harry/Daphne" and
+    # "Harry x Daphne" and never once writes either full name. Each half is
+    # looked up as a character in its own right, which is what makes the
+    # pairing reachable at all.
+    for a, b in re.findall(r"([A-Za-z]{3,})\s*[/x]\s*([A-Za-z]{3,})", raw):
+        for half in (a, b):
+            if half.lower() not in _FUNCTION_WORDS:
+                words.append(half)
+
+    grams: dict[str, tuple[int, int]] = {}
+    for n in range(1, 5):
+        for i in range(len(words) - n + 1):
+            g = " ".join(words[i:i + n]).lower()
+            if len(g) >= 3 and g not in grams:
+                grams[g] = (i, i + n)
+    if not grams:
+        return ExtractResponse(terms=[], query="", ignored_words=len(words))
+
+    rows = db.execute(sql_text("""
+        SELECT kind, value, count FROM facets
+         WHERE lower(value) = ANY(CAST(:g AS text[]))
+           AND count >= :min
+    """), {"g": list(grams.keys()), "min": EXTRACT_MIN_WORKS}).fetchall()
+
+    RANK = {"relationship": 0, "character": 1, "fandom": 2, "tag": 3}
+    cands = []
+    for kind, value, count in rows:
+        span = grams.get(value.lower())
+        if span is None:
+            continue
+        if _is_grammar(value):
+            continue
+        cands.append({"count": count, "rank": RANK.get(kind, 9),
+                      "n": span[1] - span[0], "kind": kind,
+                      "value": value, "span": span})
+    # By HOW MUCH THE ARCHIVE USES IT, then by what kind of thing it is.
+    #
+    # Two orderings were tried and both were wrong, in instructive ways. By
+    # LENGTH first: `one shots` (1,561 works) and `i just` (113) outranked
+    # `Fluff` (1,130,841) on a post asking for fluff, because two words beat
+    # one. By KIND first: `God` — from "for the love of God" — outranked every
+    # tag in the post, because a 1,113-work character beat a million-work
+    # subject purely for being a character.
+    #
+    # Frequency is the honest signal. A term the archive has used a million
+    # times is a term readers and authors share; one used a thousand times,
+    # matched from a turn of phrase, is a coincidence. Kind still breaks ties,
+    # so a pairing beats a tag of equal standing.
+    # A dict rather than a tuple, because reordering the sort key silently
+    # broke the unpacking below twice — once showing every count as 1 and once
+    # as -3. Positional tuples and a changing sort order do not mix.
+    cands.sort(key=lambda c: (-c["count"], c["rank"], -c["n"]))
+
+    chosen: list[tuple] = []
+    used: set[int] = set()
+    for c in cands:
+        span = c["span"]
+        # One term per stretch of the post: "Daphne Greengrass" wins and
+        # "Daphne" and "Greengrass" are then already spoken for.
+        if any(i in used for i in range(span[0], span[1])):
+            continue
+        used.update(range(span[0], span[1]))
+        chosen.append((c["kind"], c["value"], c["count"],
+                       " ".join(words[span[0]:span[1]])))
+        if len(chosen) >= EXTRACT_MAX_TERMS:
+            break
+
+    terms = [ExtractedTerm(kind=k, value=v, count=c, matched=m)
+             for k, v, c, m in chosen]
+
+    # Three terms, not six. Every one is a requirement, so a query built from
+    # everything the post mentions is the same over-specified search this
+    # endpoint exists to replace.
+    op = {"fandom": "fandom", "character": "char",
+          "relationship": "ship", "tag": "tag"}
+    parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in terms[:3]]
+    return ExtractResponse(terms=terms, query=" ".join(parts),
+                           ignored_words=len(words) - len(used))
+
+
 @router.get("/taste", response_model=TasteResponse)
 def taste(
     titles: str = Query(..., description="Titles the reader named, one per line "

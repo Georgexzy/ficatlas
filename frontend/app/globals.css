@@ -5952,3 +5952,19 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    term. See _extract_negations in backend/query_intent.py. */
 .outreach__negs { padding-bottom: 2px; }
 .outreach__negs .btn { font-size: 12px; }
+
+/* Shown where the reply would be, when there is no reply worth sending. Styled
+   as a refusal rather than an error: nothing has gone wrong, the search simply
+   did not find the fic and posting a link to an empty page would be an advert.
+   See OutreachPanel. */
+.outreach__blocked {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: var(--surface2);
+  border: 1px dashed var(--border2);
+  border-left: 3px solid var(--amber, var(--accent));
+  border-radius: 6px;
+  padding: 12px;
+  margin: 0;
+}

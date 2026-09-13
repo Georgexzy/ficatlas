@@ -497,6 +497,40 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     failed SELECT aborted the whole transaction and every later query in the
     session raised "current transaction is aborted", including a test's own
     teardown. A feature that is merely OFF cannot take the request down.
+- **The outreach panel shipped a reply linking to an EMPTY results page.** A
+  real post asking for happy Harry/Daphne fics was condensed to a forty-word
+  query, matched nothing, and the panel produced "Try this: <link>" anyway —
+  the exact thing the posting rules on that same screen call an advert. A reply
+  is now built only when a search has been RUN and has FOUND something; the box
+  otherwise says so and tells you to narrow or close the tab. Verified the
+  search was never at fault: `harry potter daphne greengrass fluff` returns
+  1,058 works.
+- **Condensing prose is the wrong shape; EXTRACT instead.** Stripping framing
+  from a 200-word post leaves a 180-word query, and every term in a search is a
+  requirement. `/api/search/extract` matches every 1–4 word run in the post
+  against `facets` in one indexed query — **6ms for a whole post** — so the
+  index says which words are searchable rather than the frontend guessing which
+  were framing.
+  - **Rank by how much the ARCHIVE uses a term.** Two orderings were tried and
+    both were wrong in instructive ways. By LENGTH: `one shots` (1,561 works)
+    and `i just` (113) outranked `Fluff` (1,130,841), because two words beat
+    one. By KIND: `God` — from "for the love of God" — outranked every tag in
+    the post, because a 1,113-work character beat a million-work subject just
+    for being a character.
+  - Runs made only of function words are rejected; contractions are cut at the
+    apostrophe, so "don't" tests as "don". Without that, `I don't` (a real tag,
+    60 works) passed as a subject.
+  - **"Harry/Daphne" is how readers write a pairing.** Splitting on punctuation
+    lost the only mention of the second character in that entire post — it
+    never writes either full name. Each half of an `A/B` or `A x B` run is now
+    looked up as a character.
+  - Offered, not applied: eight candidates come back as clickable chips because
+    extraction from prose is genuinely ambiguous, and a person is better placed
+    than the ranker to know that "God" was a figure of speech.
+  - **Use a dict, not a positional tuple, when the sort key changes.**
+    Reordering it silently broke the unpacking twice — once reporting every
+    count as 1, once as -3.
+
 - **Everything derived from the fic-finder corpus lives in the SEARCH, not the
   outreach panel.** Negations, written word counts, multi-trope resolution and
   fandom abbreviations are all in `query_intent.py`, which `api/search.py` calls
