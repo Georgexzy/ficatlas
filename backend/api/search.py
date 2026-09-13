@@ -3702,6 +3702,21 @@ _STATUS_WORDS = [
 ]
 
 
+# The words a reader uses to ask about LENGTH. Once the length has been read as
+# a filter these are spent, exactly like the status words above — "at least 150k
+# words" left `Words` (254 works) and `at least` (186) in the term list, both
+# real freeform tags somebody has used, both saying nothing about any story, and
+# both competing for one of three slots with the concepts the post was about.
+_LENGTH_WORDS = re.compile(
+    r"^(?:words?|word\s*count|at\s*least|more\s*than|no\s*less\s*than|over|"
+    r"under|above|below|plus|long|longer|longfics?|long\s*fics?|short|"
+    r"one[-\s]?shots?|novel[- ]?length|epic)$", re.I)
+
+
+def _is_length_word(value: str) -> bool:
+    return bool(_LENGTH_WORDS.match(value.strip()))
+
+
 def _implies(specific: str, general: str) -> bool:
     """Does carrying `specific` already mean carrying `general`?
 
@@ -4055,6 +4070,23 @@ def extract(
     # on 20,498 works, "ongoing" is a status filter, and SI means Self-Insert.
     # Every one of those IS a real tag somebody has used; that is exactly why
     # the n-gram lookup finds them and why they have to be recognised first.
+    # Both ends of the spectrum means NO length filter.
+    #
+    # "longfics and one-shots welcome" reads as `word_count_min = 50,000` from
+    # one line and `word_count_max = 10,000` from another, and put together
+    # that is `words:50k-10k` — a range no work can satisfy, from a reader who
+    # said in as many words that any length was fine. A contradiction is not a
+    # narrow request; it is the reader telling you they do not care, so both
+    # ends are dropped rather than one of them arbitrarily kept.
+    #
+    # It was invisible until the word count went INTO the query string, because
+    # the only caller read `query` and ignored the fields. A filter nothing
+    # applies cannot be seen to be wrong.
+    if wc_min and wc_max and wc_max <= wc_min:
+        log.debug("extract: contradictory length %s..%s, reading as any length",
+                  wc_min, wc_max)
+        wc_min = wc_max = None
+
     status = None
     for rx, value in _STATUS_WORDS:
         if rx.search(raw):
@@ -4189,6 +4221,8 @@ def extract(
         if (_alias_word and t.kind != "fandom"
                 and t.value.strip().lower() == _alias_word):
             return True
+        if (wc_min or wc_max) and _is_length_word(t.value):
+            return True
         return False
 
     line_terms = [t for t in line_terms if not _already_a_filter(t)]
@@ -4212,6 +4246,11 @@ def extract(
     # beat every tag in the post.
     # A variant spelling replaced by the one the archives actually use.
     # "fluffy" is a word readers write and `Fluff` is what gets tagged.
+    # How well attested a term is FOR RANKING, which is not always its count.
+    # See the character branch below.
+    rank_count: dict[str, int] = {}
+    # Characters that arrived as ONE bare first name. See the sort below.
+    bare_name: set[str] = set()
     swapped: list[ExtractedTerm] = []
     for t in terms:
         if t.kind == "tag":
@@ -4237,6 +4276,20 @@ def extract(
                 # name is not the canonical spelling; it is a different person
                 # who happens to share a first name.
                 if int(cnt or 0) > t.count:
+                    # Ranked on the BARE name's count, not the full one's.
+                    #
+                    # The swap fixes a spelling; it is not new evidence about
+                    # what the post asked for. Inheriting the canonical count
+                    # let one word of prose outrank a concept the reader had
+                    # spelled out: on the lordship post, "bashing
+                    # (dumbles/weasleys/hermione)" produced `Hermione Granger`
+                    # (102,007 works) and `Harry Potter` (152,287) above
+                    # `Albus Dumbledore Bashing` (3,481) — so the query asked
+                    # for works ABOUT the character the reader wanted bashed.
+                    # This is the same trap as `God` from "for the love of
+                    # God", which is why characters do not outrank tags here.
+                    rank_count[full] = t.count
+                    bare_name.add(full)
                     t = ExtractedTerm(kind="character", value=full,
                                       count=int(cnt), matched=t.matched,
                                       from_line=t.from_line)
@@ -4250,7 +4303,23 @@ def extract(
     # group. A flat sort by count put `Plot` (5,367 works, a stray noun in
     # "decent plot/characters") above `Albus Dumbledore Bashing` (3,481), which
     # the reader had asked for in as many words.
-    swapped.sort(key=lambda t: (not t.from_line, -t.count))
+    # A bare first name goes last, behind everything the post SPELLED OUT.
+    #
+    # "harry is lord of at least 2 houses" resolves to `Harry is Lord Potter`
+    # (82 works) and also, from the single word "harry", to the character
+    # `Harry Potter`. The second is technically true of the request and says
+    # almost nothing about it, and on frequency alone it wins — so the query
+    # spent two of its three slots on `char:"Harry Potter"` and
+    # `char:"Hermione Granger"` (the name the reader wanted BASHED) and had
+    # none left for lordship or politics, which is what the post was about.
+    # Measured on that post: 77 works against 160 before, and the 160 were the
+    # better answer.
+    #
+    # This is the same asymmetry as the rejected "characters outrank tags"
+    # rule, one level down: a name that merely APPEARS in a sentence is weaker
+    # evidence than a concept the sentence was written to express.
+    swapped.sort(key=lambda t: (not t.from_line, t.value in bare_name,
+                                -rank_count.get(t.value, t.count)))
     terms = swapped
 
     # The fandom leads, whether it came from the abbreviation table or from the

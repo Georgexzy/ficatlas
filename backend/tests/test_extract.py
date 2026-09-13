@@ -420,3 +420,64 @@ def test_a_rarer_full_name_is_not_the_canonical_spelling(ships):
     out = extract(text="good fics, damon centric", db=ships)
     chars = [t.value for t in out.terms if t.kind == "character"]
     assert "Damon Nobody" not in chars and "Damon" in chars
+
+
+def test_both_ends_of_the_spectrum_means_no_length_filter(bulleted):
+    """"longfics and one-shots welcome" is a reader saying they do not care.
+
+    It reads as `word_count_min = 50,000` from one phrase and
+    `word_count_max = 10,000` from another, and together that is
+    `words:50k-10k` — a range no work can satisfy. A contradiction is not a
+    narrow request, so both ends are dropped rather than one kept arbitrarily.
+
+    Invisible until the word count went INTO the query string, because the only
+    caller read `query` and ignored the fields. A filter nothing applies cannot
+    be seen to be wrong."""
+    out = extract(text="recommend me some fluffy fics, "
+                       "longfics and one-shots welcome", db=bulleted)
+    assert out.word_count_min is None and out.word_count_max is None
+    assert "words:" not in out.query
+
+
+def test_the_words_that_asked_for_a_length_are_spent(bulleted):
+    """`Words` is a real tag on 254 works and `at least` on 186. Both come
+    straight out of "at least 150k words", both say nothing about any story,
+    and both were competing for one of three slots with what the post was
+    actually about."""
+    from api.search import _is_length_word
+    assert _is_length_word("Words") and _is_length_word("at least")
+    assert not _is_length_word("Albus Dumbledore Bashing")
+
+    bulleted.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag','Words',254), ('tag','at least',186)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    bulleted.commit()
+    out = extract(text="- at least 150k words - very long", db=bulleted)
+    assert out.word_count_min == 150000
+    assert "Words" not in [t.value for t in out.terms]
+    assert "at least" not in [t.value for t in out.terms]
+
+
+def test_a_bare_first_name_ranks_behind_what_the_post_spelled_out(ships):
+    """"harry is lord of at least 2 houses" names a concept AND, from the
+    single word "harry", a character on 152,287 works. The second is
+    technically true of the request and says almost nothing about it, and on
+    frequency alone it won — so the query spent two of three slots on
+    `char:"Harry Potter"` and `char:"Hermione Granger"` (the name the reader
+    wanted BASHED) and had none left for lordship or politics.
+
+    Same asymmetry as the rejected "characters outrank tags" rule, one level
+    down: a name that merely APPEARS in a sentence is weaker evidence than a
+    concept the sentence was written to express."""
+    ships.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag','Harry is Lord Potter',82)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    ships.commit()
+    out = extract(text="harry is lord potter", db=ships)
+    values = [t.value for t in out.terms]
+    if "Harry Potter" in values and "Harry is Lord Potter" in values:
+        assert values.index("Harry is Lord Potter") < values.index("Harry Potter")
