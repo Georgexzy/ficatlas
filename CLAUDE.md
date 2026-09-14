@@ -776,6 +776,35 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     failure this endpoint exists to prevent.
   - Measured end to end: the Harry/Daphne post → 64 works; the lordship post →
     `tag:"Albus Dumbledore Bashing" words:>150k` → 160 works, all 150k+.
+- **A maintenance pass must re-assert `statement_timeout = 0` EVERY BATCH, and
+  setting it once at the top is a thirty-minute time bomb.** `statement_timeout`
+  is a CONNECT-TIME parameter here — `db/session.py` puts it in `connect_args` —
+  so `SET statement_timeout = 0` lasts exactly as long as the connection does,
+  and `pool_recycle` is **1800s**. Half an hour into a pass the pool hands back
+  a fresh connection carrying the default, and the next batch dies with
+  "canceling statement due to statement timeout" having done nothing wrong.
+  - Measured on the same night: the content-gate backfill died at **exactly 30
+    minutes** and the series word-count fill at ~40, both having set the
+    timeout correctly at the top of the run. The 30:00 is the tell.
+  - `popularity_rank.py` had already recorded this trap from the other end — a
+    pass that had just spent 3h45m writing 2.4M rows could not afterwards run a
+    60-second count — and the note there ("nothing after the write may assume
+    statement_timeout = 0") was right about the symptom and wrong about the
+    cause: it is not the WRITE that ends the setting, it is the connection
+    being recycled underneath it.
+  - `db.session.lift_statement_timeout(db)` is the one helper, called inside
+    each batch loop. `tests/test_maintenance_timeouts.py` asserts all three
+    jobs call it at a deeper indent than a `while`, because the failure needs a
+    thirty-minute run to reproduce and no unit test will wait for one.
+  - Both jobs resumed from where they stopped and lost only the in-flight
+    batch, which is the batching from two commits earlier paying for itself.
+- **Chain background jobs from ONE shell inside the container.** Re-arming a
+  waiter left two chain shells running, so `content_gates` was launched twice
+  and `chain.log` recorded the same step from both. Nothing corrupted — the
+  advisory lock did its job — but the log became unreadable, which is the thing
+  standing between you and noticing a 30-minute crash pattern. One `chain.sh`
+  running the three jobs in sequence, safety first.
+
 - **Three faults a dry run of the verification script found, none of which any
   test was asking about.**
   - **`tests/check-robots.py` had been failing since the commit that rewrote

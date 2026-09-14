@@ -150,7 +150,7 @@ def run(dry_run: bool = False) -> dict:
     """
     from sqlalchemy import text as _text
 
-    from db.session import db_session
+    from db.session import db_session, lift_statement_timeout
 
     with db_session() as db:
         if not dry_run and not db.execute(
@@ -172,6 +172,7 @@ def run(dry_run: bool = False) -> dict:
 
         cleared = 0
         while True:
+            lift_statement_timeout(db)
             n = db.execute(_text(_REPAIR_DOWN_SQL), {"batch": BATCH}).rowcount
             db.commit()
             if not n:
@@ -184,6 +185,7 @@ def run(dry_run: bool = False) -> dict:
         changed, seen = 0, 0
         after = "00000000-0000-0000-0000-000000000000"
         while True:
+            lift_statement_timeout(db)
             ids = db.execute(_text(_CURSOR_SQL),
                              {"after": after, "batch": BATCH}).scalars().all()
             if not ids:
