@@ -544,3 +544,39 @@ def test_a_post_that_never_mentions_crossovers_gets_no_filter(xover):
     out = extract(text="any good self-insert fics", db=xover)
     assert out.crossovers is None
     assert "xover:" not in out.query
+
+
+def test_two_spellings_of_one_concept_do_not_both_become_requirements(xover):
+    """"self-insert" came out as `tag:"Self-Insert" tag:"Self Insert"`.
+
+    Different facet values, the same concept, AND-ed — so the query demanded a
+    work carrying BOTH spellings, which is the narrowest possible reading of a
+    reader who wrote the concept once. `_implies` cannot see it: word-boundary
+    containment compares characters, and a hyphen is not a space. The loser is
+    not discarded, it joins the winner's spellings so the probe still ORs
+    them."""
+    xover.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES ('tag','Self Insert',9000)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    xover.commit()
+    out = extract(text="looking for a self-insert fic", db=xover)
+    assert out.query.count("tag:") <= 1, out.query
+    tags = [t for t in out.terms if t.kind == "tag"]
+    assert tags
+    assert "Self-Insert" == tags[0].value
+    assert any("self insert" in sp.lower() for sp in tags[0].spellings)
+
+
+def test_a_tag_that_negates_the_concept_is_not_a_spelling_of_it():
+    """`resolve_trope_tags` matches on the reader's words, so asking for
+    self-inserts put `Not a self insert` in the same group — and the group is
+    what the probe ORs, so a concept could be kept on the strength of works
+    saying the opposite of what was asked."""
+    from api.search import _NEGATED_TAG
+    for neg in ("Not a self insert", "No Beta", "Non-Canon", "Anti Dumbledore",
+                "not a crossover"):
+        assert _NEGATED_TAG.match(neg), neg
+    for real in ("Self-Insert", "Nobody Dies", "Nonbinary Character",
+                 "Note Passing"):
+        assert not _NEGATED_TAG.match(real), real

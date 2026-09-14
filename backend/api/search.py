@@ -3733,6 +3733,12 @@ _LENGTH_WORDS = re.compile(
     r"one[-\s]?shots?|novel[- ]?length|epic)$", re.I)
 
 
+# A tag that says the opposite of the concept it was matched from.
+# `Not a self insert`, `No Beta We Die Like Men` style constructions turn up in
+# a resolver group because the words line up; the meaning does not.
+_NEGATED_TAG = re.compile(r"^\s*(?:not\s+a?\s*|no\s+|non[-\s]|anti[-\s])", re.I)
+
+
 def _is_length_word(value: str) -> bool:
     return bool(_LENGTH_WORDS.match(value.strip()))
 
@@ -4047,6 +4053,12 @@ def extract(
             # the rare spelling co-occurred with nothing.
             if best[0] not in tags:
                 tags = [best[0]] + tags
+            # A tag that NEGATES the concept is not a spelling of it.
+            # `resolve_trope_tags` matches on the reader's words, so asking for
+            # self-inserts returned `Not a self insert` in the same group — and
+            # the group is what the probe ORs, so a concept could be kept on
+            # the strength of works that say the opposite of what was asked.
+            tags = [t for t in tags if not _NEGATED_TAG.match(t)] or tags
             line_terms.append(ExtractedTerm(kind="tag", value=best[0],
                                             count=best[1], matched=line[:60],
                                             from_line=True, spellings=tags))
@@ -4370,6 +4382,36 @@ def extract(
     # evidence than a concept the sentence was written to express.
     swapped.sort(key=lambda t: (not t.from_line, t.value in bare_name,
                                 -rank_count.get(t.value, t.count)))
+
+    # One concept, one slot — even when the archives punctuate it two ways.
+    #
+    # "no crossovers please, self-insert" came out as
+    # `tag:"Self-Insert" tag:"Self Insert"`, which are different facet values
+    # and the same concept, AND-ed: the query demanded a work carrying BOTH
+    # spellings, which is the narrowest possible reading of a reader who wrote
+    # the concept once. `_implies` cannot see it — word-boundary containment
+    # compares the characters, and a hyphen is not a space.
+    #
+    # The loser is not thrown away: it joins the winner's spellings, so the
+    # probe still ORs them, which is the shape the search itself builds.
+    def _concept_key(v: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", v.lower())
+
+    by_concept: dict[str, ExtractedTerm] = {}
+    deduped: list[ExtractedTerm] = []
+    for t in swapped:
+        k = _concept_key(t.value)
+        prior = by_concept.get(k)
+        if prior is not None:
+            for sp in (t.spellings or [t.value]):
+                if sp not in prior.spellings:
+                    prior.spellings.append(sp)
+            continue
+        if not t.spellings:
+            t.spellings = [t.value]
+        by_concept[k] = t
+        deduped.append(t)
+    swapped = deduped
     terms = swapped
 
     # The fandom leads, whether it came from the abbreviation table or from the
