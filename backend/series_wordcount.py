@@ -50,7 +50,7 @@ os.environ.setdefault("DATABASE_URL", default_database_url())
 
 from sqlalchemy import text  # noqa: E402
 
-from db.session import db_session  # noqa: E402
+from db.session import db_session, lift_statement_timeout  # noqa: E402
 
 log = logging.getLogger("series_wordcount")
 
@@ -152,6 +152,7 @@ def run(dry_run: bool = False) -> dict:
         # The zero UUID, so the first window starts before every story id.
         after = "00000000-0000-0000-0000-000000000000"
         while True:
+            lift_statement_timeout(db)
             row = db.execute(text(_FILL_SQL),
                              {"after": after, "batch": BATCH}).first()
             db.commit()
@@ -167,6 +168,7 @@ def run(dry_run: bool = False) -> dict:
 
         cleared = 0
         while True:
+            lift_statement_timeout(db)
             n = db.execute(text(_CLEAR_SQL), {"batch": BATCH}).rowcount
             db.commit()
             if not n:

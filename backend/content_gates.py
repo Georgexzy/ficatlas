@@ -59,7 +59,7 @@ os.environ.setdefault("DATABASE_URL", default_database_url())
 
 from sqlalchemy import text  # noqa: E402
 
-from db.session import db_session  # noqa: E402
+from db.session import db_session, lift_statement_timeout  # noqa: E402
 
 log = logging.getLogger("content_gates")
 
@@ -266,6 +266,7 @@ def run(dry_run: bool = False) -> dict:
         def _pass(sql: str, params: dict, what: str) -> int:
             done = 0
             while True:
+                lift_statement_timeout(db)
                 n = db.execute(text(sql), {**params, "batch": BATCH}).rowcount
                 db.commit()
                 if not n:

@@ -59,6 +59,31 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+def lift_statement_timeout(db) -> None:
+    """Disable the statement timeout for the NEXT statement on this session.
+
+    Call it inside the loop, before every batch — not once at the top.
+
+    `statement_timeout` is a connect-time parameter here (see `connect_args`
+    above), so `SET statement_timeout = 0` lasts exactly as long as the
+    connection does. `pool_recycle` is 1800s, so half an hour into a
+    maintenance pass the pool hands back a fresh connection carrying the
+    DEFAULT timeout, and the next batch dies with "canceling statement due to
+    statement timeout" having done nothing wrong.
+
+    Measured, and it is not subtle once you know to look: the content-gate
+    backfill died at exactly 30 minutes and the series word-count fill at
+    ~40. `popularity_rank.py` recorded the same trap from the other end — a
+    pass that had just spent 3h45m writing 2.4M rows could not afterwards run
+    a 60-second count.
+
+    Cheap enough to call every time: a `SET` on an already-open connection is
+    a round trip and nothing else.
+    """
+    from sqlalchemy import text as _text
+    db.execute(_text("SET statement_timeout = 0"))
+
+
 
 def get_db():
     """FastAPI dependency"""
