@@ -238,6 +238,19 @@ CREATE INDEX IF NOT EXISTS ix_series_works_order ON series_works (series_id, pos
 -- Partial unique index: inferred/stated series have no AO3 id, and many rows
 -- share NULL. ON CONFLICT in ao3_series.record MUST repeat the WHERE clause.
 ALTER TABLE series ADD COLUMN IF NOT EXISTS ao3_id TEXT;
+-- How long the whole series is, and how many of its works this index holds.
+-- Added to production by hand and left out of here, so a fresh install had
+-- neither — and `series_wordcount.py`, which reads both, died with "column
+-- se.member_count does not exist". Exactly the same omission the gate columns
+-- made: if a column is worth adding to the live database it is worth adding
+-- here, or the test database and every new install disagree with production.
+ALTER TABLE series ADD COLUMN IF NOT EXISTS total_words BIGINT;
+ALTER TABLE series ADD COLUMN IF NOT EXISTS member_count INT;
+-- The partial predicate is the one-work guard: a series of one is its own
+-- word count, so counting it would apply the same filter twice. See
+-- backend/series_wordcount.py.
+CREATE INDEX IF NOT EXISTS ix_series_total_words
+    ON series (total_words DESC) WHERE member_count > 1;
 CREATE UNIQUE INDEX IF NOT EXISTS ix_series_ao3 ON series (ao3_id) WHERE ao3_id IS NOT NULL;
 
 -- Denormalised membership flag for the in_series search filter. See Story.has_series.

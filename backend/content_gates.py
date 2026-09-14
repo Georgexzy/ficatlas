@@ -63,6 +63,12 @@ os.environ.setdefault("DATABASE_URL", default_database_url())
 # 31 terms apart, with the search copy the laxer one — see gate_terms.py.
 from gate_terms import (ADULT_TAGS, ADULT_WARNINGS,  # noqa: E402
                         UNDERAGE_TAGS, UNDERAGE_WARNINGS)
+from sqlalchemy import text  # noqa: E402
+
+from db.session import db_session, lift_statement_timeout  # noqa: E402
+
+log = logging.getLogger("content_gates")
+
 # ── The trigger: why a batch job alone is not enough ────────────────────────
 #
 # The crawler adds ~15,000 works a day. A precomputed column populated by a
