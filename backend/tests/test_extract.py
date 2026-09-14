@@ -580,3 +580,70 @@ def test_a_tag_that_negates_the_concept_is_not_a_spelling_of_it():
     for real in ("Self-Insert", "Nobody Dies", "Nonbinary Character",
                  "Note Passing"):
         assert not _NEGATED_TAG.match(real), real
+
+
+# ---------------------------------------------------------------------------
+# Measured against a corpus of fifteen REAL fic-finder posts rather than
+# invented ones. Before this pass: three returned nothing at all, and six ran
+# in the wrong fandom — which is worse, because a search in the wrong fandom
+# still returns thousands of works and nothing about it looks broken.
+# ---------------------------------------------------------------------------
+
+def test_a_sign_off_is_not_the_subject(bulleted):
+    """"Thanks a lot!" produced `tag:"Thanksgiving"` on three separate posts,
+    and "Please can you recommend" produced `tag:"Please Don't Hate Me"`.
+
+    Two mechanisms, both fixed: `_biggest_spelling` matched a prefix of a WORD
+    rather than of a word SEQUENCE, so `Thanks` reached `Thanksgiving` and
+    `Close` reached `Closeted Character`; and framing was left in the line the
+    trope resolver saw."""
+    from api.search import _is_framing, _strip_framing
+    assert _is_framing("Thanks")
+    assert _is_framing("Thanksgiving", matched="thanks")
+    assert not _is_framing("Time Travel")
+    assert _strip_framing("Thanks a lot") == ""
+    assert "Snape" in _strip_framing("Please can you recommend me good Snape fics")
+
+
+def test_framing_is_stripped_before_the_trope_resolver_sees_the_line():
+    """The resolver matches a WINDOW of the reader's words, so framing does not
+    merely add noise — it changes which window wins. "I like the idea of Time
+    travel" resolved to `it seemed like a good idea at the time`, with "travel"
+    left over as a bare word."""
+    from api.search import _strip_framing
+    assert _strip_framing("I like the idea of Time travel").lower() == "time travel"
+
+
+def test_typographic_apostrophes_are_normalised(bulleted):
+    """`’` is not the ASCII `'` every character class here is written with, so
+    "I’ll" tokenised as "I" + "ll" — and `ll` is the mined initialism for
+    `League of Legends`, which then led the query on a hurt/comfort post."""
+    out = extract(text="I’ll read anything, I’ve loved fluff for years", db=bulleted)
+    assert "League of Legends" not in [t.value for t in out.terms]
+    assert "Fluff" in [t.value for t in out.terms]
+
+
+def test_a_name_that_identifies_nobody_is_not_a_character(ships):
+    """`None` is a character facet on 6,314 works, from "none the wiser". So
+    are `The Author`, `Main Character` and `Myself`. Their size made them
+    outrank the characters a post was actually about."""
+    from api.search import _is_non_entity, _is_generic_entity
+    for junk in ("None", "The Author", "Main Character", "Myself", "Reader"):
+        assert _is_non_entity(junk), junk
+    # An OC is a real want and a useless fandom hint — both must be true.
+    assert not _is_non_entity("Original Characters")
+    assert _is_generic_entity("Original Characters")
+
+
+def test_the_probe_runs_the_predicate_the_search_runs():
+    """Third time this bit: word count, then status, now the content gates.
+
+    `Regulus Black/James Potter` with `Sounding` is 14 works to a probe that
+    ignores the gates and **0** once they are applied — so the probe kept a
+    junk tag that reduced the reader's search to nothing."""
+    import inspect
+    from api.search import _probe_count
+    src = inspect.getsource(_probe_count)
+    for predicate in ("gate_underage", "gate_adult", "is_crossover",
+                      "word_count", "status"):
+        assert predicate in src, predicate

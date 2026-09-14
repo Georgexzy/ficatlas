@@ -146,7 +146,7 @@ def _cost_ttl(elapsed_ms: float) -> int:
                min(SEARCH_CACHE_MAX_SECONDS, int(elapsed_ms * SEARCH_CACHE_COST_FACTOR)))
 from query_parser import STATUS_WORDS, parse_query, parsed_to_search_params
 from query_intent import (resolve_intent, read_request, resolve_trope_tags,
-                          _fandom_aliases)
+                          _extract_negations, _fandom_aliases)
 import re
 from character_aliases import character_variants, relationship_variants
 from language_aliases import language_variants
@@ -3559,6 +3559,10 @@ class ExtractResponse(BaseModel):
     # Titles under an "I have read" heading. NOT wants — see the note in
     # extract() — and handed back for /api/search/taste to resolve.
     already_read: list[str] = []
+    # "no harems", "not a crossover", "no character death" — resolved against
+    # the same tag vocabulary the positive path uses. Already inside `query` as
+    # `-tag:"…"`; listed so a caller can show them.
+    exclude_tags: list[str] = []
     # "ongoing", "complete", "WIP" — a filter, not a word to search for.
     status: Optional[str] = None
     # "no crossovers" / "naruto x bleach crossover" — read from the post, never
@@ -3720,6 +3724,110 @@ _LENGTH_WORDS = re.compile(
 _NEGATED_TAG = re.compile(r"^\s*(?:not\s+a?\s*|no\s+|non[-\s]|anti[-\s])", re.I)
 
 
+# Words that belong to the REQUEST rather than to any story. Every one of these
+# is a real tag somebody has used — which is exactly why an n-gram lookup over
+# 1.57M freeform tags keeps finding them — and none of them says anything about
+# what the reader wants to read. Measured on a corpus of fifteen real posts:
+# "Thanks a lot!" produced `tag:"Thanksgiving"` on three separate posts, and
+# "Please can you recommend" produced `tag:"Please Don't Hate Me"`.
+#
+# The existing `_is_grammar` rejects runs made only of FUNCTION words, which
+# these are not — they are ordinary content words doing framing work. The
+# distinction cannot be made from the vocabulary, because the vocabulary
+# contains them; it has to be made from what a fic-finder post is.
+_FRAMING_TERMS = {
+    # Politeness and sign-offs.
+    "thanks", "thank you", "thanks a lot", "please", "thanks in advance",
+    "cheers", "hi", "hello", "hey", "sorry", "edit",
+    # Words for the request or the artefact, not for any story in it.
+    "fic", "fics", "fanfic", "fanfics", "fanfiction", "story", "stories",
+    "request", "requests", "rec", "recs", "recommendation", "recommendations",
+    "suggestion", "suggestions", "list", "reading", "read", "writing",
+    "author", "authors", "chapter", "chapters", "words", "title", "titles",
+    "link", "links", "comment", "comments", "post",
+    # Conversational filler that happens to be tagged.
+    "again", "stuff", "kind of", "sort of", "something", "anything",
+    "everything", "or something", "or otherwise", "otherwise", "enjoy",
+    "look", "looking", "talking", "idea", "ideas", "preference",
+    "preferences", "requirement", "requirements", "example", "examples",
+    "plot", "premise", "dynamic", "vibes", "bonus", "welcome", "fine",
+    "personal", "opinion", "myself", "y'all", "guys", "everyone",
+}
+
+
+# The single-word half, for stripping framing out of a LINE before the trope
+# resolver sees it. Kept separate from the phrase set above because this list
+# is applied token by token and a false member here damages real requests.
+#
+# Deliberately NOT here: `good`, `best`, `long`, `short`, `complete` and the
+# other quality/length/status words. They are framing in one sense and the
+# reader's actual constraint in another — "recommend me good Snape fics"
+# resolves to `Good Severus Snape`, a real tag on 2,306 works — and they are
+# already read as a sort or a filter before this runs.
+_FRAMING_WORDS = {
+    "thanks", "thank", "please", "cheers", "hi", "hello", "hey", "sorry",
+    "edit", "fic", "fics", "fanfic", "fanfics", "fanfiction", "story",
+    "stories", "request", "requests", "rec", "recs", "recommend",
+    "recommendation", "recommendations", "recommended", "suggest",
+    "suggestion", "suggestions", "looking", "look", "searching", "search",
+    "want", "wanted", "wanting", "need", "needed", "anyone", "anybody",
+    "everyone", "guys", "y'all", "yall", "advance", "lot", "much",
+    "idea", "ideas", "preference", "preferences", "requirement",
+    "requirements", "example", "examples", "welcome", "appreciate",
+    "appreciated", "know", "think", "feel", "guess", "maybe", "really",
+    "basically", "honestly", "tbh", "imo", "pls", "plz",
+}
+
+
+def _strip_framing(text: str) -> str:
+    """A line with the reader's throat-clearing removed.
+
+    The trope resolver matches a WINDOW of the reader's words against 1.57M
+    freeform tags, so framing left in the line does not merely add noise — it
+    changes which window wins. Measured on real posts:
+
+        "I like the idea of Time travel"  ->  `it seemed like a good idea at
+                                              the time`, with "travel" left
+                                              over as a word
+        "Thanks a lot"                    ->  `Thanksgiving`
+        "Please can you recommend me good Snape fics"
+                                          ->  `Good Severus Snape`, but ranked
+                                              under `Please Don't Hate Me`
+
+    Stripped first, the same three lines give `Time Travel`, nothing at all,
+    and `Good Severus Snape`.
+    """
+    # Function words go too, and that is not merely tidying. The resolver
+    # matches a WINDOW of the reader's words against the vocabulary, so the
+    # connective tissue of a sentence is available to be matched — and a tag
+    # made mostly of common words will win a window it has no business
+    # winning. "I like the of Time travel" resolved to `LIKE ALL THE TIME`;
+    # "Time travel" resolves to `Time Travel`.
+    #
+    # Safe because the match is order-insensitive and scored on how much of the
+    # TAG the reader's words cover: dropping the reader's function words can
+    # only lower a tag's coverage, never raise it, so this removes false
+    # matches rather than inventing new ones. Verified on the cases the tests
+    # already lock — `Harry is Lord Potter` from "harry is lord of at least 2
+    # houses" and `Albus Dumbledore Bashing` from "bashing (dumbles/weasleys/
+    # hermione)" both survive unchanged.
+    kept = [w for w in re.findall(r"[A-Za-z0-9'\-]+", text)
+            if w.lower() not in _FRAMING_WORDS
+            and w.lower() not in _FUNCTION_WORDS]
+    out = " ".join(kept).strip()
+    # A line that was ONLY framing has nothing to say about any story.
+    return "" if len(out) < 3 else out
+
+
+def _is_framing(value: str, matched: str = "") -> bool:
+    """Is this the reader talking about their request rather than a story?"""
+    v = value.strip().lower()
+    if v in _FRAMING_TERMS:
+        return True
+    # Matched FROM a framing word, however the vocabulary spells the result.
+    return bool(matched) and matched.strip().lower() in _FRAMING_TERMS
+
+
 def _is_length_word(value: str) -> bool:
     return bool(_LENGTH_WORDS.match(value.strip()))
 
@@ -3758,6 +3866,44 @@ def _canonical_character(db, name: str) -> Optional[str]:
          LIMIT 1
     """), {"n": name, "pre": name + " %"}).first()
     return row[0] if row else None
+
+
+def _ship_nickname_in_post(db, raw: str) -> Optional[ExtractedTerm]:
+    """A pairing named by its fandom nickname, anywhere in a whole post.
+
+    Distinct from `_ship_nickname` above, which answers the same question for a
+    SEARCH BAR query and refuses anything longer than eight words — a sentence
+    is not a ship name plus qualifiers, and that guard is what stops "Harry
+    Potter and the Philosopher's Stone" resolving to a pairing. A fic-finder
+    post is a sentence by construction, so it needs the scan without the guard;
+    both read the same `_alias_table`, so there is one alias vocabulary and two
+    rules about where it may be applied.
+
+    "Dramione", "Jegulus", "Drarry", "Wolfstar", "Romione" — 592 of them in
+    `ship_aliases`, mined rather than listed. The search path has resolved
+    these since the alias table was built; the extractor never looked, so a
+    post whose entire subject was "Dramione fics" produced nothing about the
+    pairing at all — and, worse, the leftover word was free to match something
+    else: "trying to get into Dramione fics again" came back as
+    `fandom:"Good Omens (TV)"`, from the "go" in "get".
+
+    Checked BEFORE the n-gram lookup, because a nickname is a single token that
+    means a whole pairing and is the most specific thing a post can contain.
+    """
+    seen = _alias_table(db)
+    if not seen:
+        return None
+    for w in re.findall(r"[A-Za-z]{4,}", raw):
+        rel = seen.get(w.lower())
+        if not rel:
+            continue
+        cnt = db.execute(sql_text(
+            "SELECT count FROM facets WHERE kind='relationship' AND value=:v"),
+            {"v": rel}).scalar()
+        return ExtractedTerm(kind="relationship", value=rel,
+                             count=int(cnt or 0), matched=w, from_line=True,
+                             spellings=[rel])
+    return None
 
 
 def _resolve_pair(db, raw: str) -> Optional[ExtractedTerm]:
@@ -3813,6 +3959,99 @@ def _fandom_of(db, relationship: str) -> Optional[tuple[str, int]]:
     return None
 
 
+# Names the vocabulary holds that identify no one. They are real facet values
+# with real counts, so the n-gram lookup finds them and their size makes them
+# outrank the characters a post is actually about — `None` (6,314 works, from
+# "none the wiser"), `The Author`, `Main Character`, `Myself`, `Reader`.
+_NON_ENTITIES = {
+    "none", "the author", "author", "main character", "main characters",
+    "myself", "me", "you", "reader", "the reader", "everyone", "others",
+    "various", "all", "unknown", "nobody", "no one", "someone", "character",
+    "characters", "protagonist", "narrator", "mc",
+}
+
+# Real wants that identify no FANDOM. "an oc or a character that is different
+# in some sort of way" is one of the commonest things a fic-finder post asks
+# for, so `Original Character` must stay a usable subject — it simply cannot
+# tell you which fandom the post is about, since every fandom has them.
+#
+# Keeping these two ideas in one set was a bug: suppressing `Original
+# Characters` as a subject dropped the only thing two posts in the corpus were
+# asking for.
+_GENERIC_ENTITIES = _NON_ENTITIES | {
+    "original character", "original characters", "original female character",
+    "original male character", "oc", "ocs", "si", "self-insert",
+}
+
+
+def _is_non_entity(value: str) -> bool:
+    """Not a character at all — suppress it as a subject."""
+    return value.strip().lower() in _NON_ENTITIES
+
+
+def _is_generic_entity(value: str) -> bool:
+    """A real want, but useless for inferring which fandom this is."""
+    return value.strip().lower() in _GENERIC_ENTITIES
+
+
+def _fandom_from_evidence(db, names: list[str], kind: str) -> Optional[tuple[str, int]]:
+    """Which fandom do these characters or pairings actually belong to?
+
+    The same question `_fandom_of` asks of one relationship, asked of whatever
+    the post resolved. Sample the works carrying any of them and take the
+    fandom most of them list.
+
+    This is what makes an abbreviation safe. `fandom_aliases` maps two- and
+    three-letter words to fandoms, and in running prose those words are
+    ordinary English — measured on a corpus of fifteen real fic-finder posts,
+    **"OP Harry" resolved to One Piece, "go" to Good Omens, "Sirius' son" to
+    South of Nowhere and "re" to Resident Evil**, each of them beating the
+    fandom the post was plainly about. An alias is a guess; the characters are
+    evidence, and evidence outranks a guess.
+
+    Deliberately not a lookup table of character-to-fandom: that would need
+    maintaining for every fandom that ever existed, and this asks the index.
+    """
+    vals = [n for n in names if n and not _is_generic_entity(n)]
+    if not vals:
+        return None
+    # ONE name is not evidence unless it is a full name.
+    #
+    # "fics with original characters during the HP school time" matched the
+    # word "time" to the character `Time (Linked Universe)`, which is a real
+    # facet on real works — and a single junk character was then enough to
+    # overrule `Harry Potter` and send the whole search to The Legend of
+    # Zelda. A search in the wrong fandom still returns thousands of works, so
+    # nothing about the result looks wrong.
+    #
+    # Two independent names agreeing is evidence; so is one name the archives
+    # write in full, because a surname is not something a sentence produces by
+    # accident. A lone single-word name is neither.
+    def _full_name(n: str) -> bool:
+        return len(re.sub(r"\s*\(.*", "", n).split()) >= 2
+    if len(set(vals)) < 2 and not any(_full_name(n) for n in vals):
+        return None
+    col = "relationships" if kind == "relationship" else "characters"
+    row = db.execute(sql_text(f"""
+        SELECT f, count(*) AS n
+          FROM (SELECT unnest(fandoms) f FROM stories
+                 WHERE delisted_at IS NULL
+                   AND {col} && CAST(:v AS text[])
+                 LIMIT 400) x
+         GROUP BY 1 ORDER BY 2 DESC LIMIT 1
+    """), {"v": vals}).first()
+    # Half a 400-work sample, the same shape of guard as _fandom_of's two
+    # thirds of 300 — loose enough that a character written across a franchise's
+    # several AO3 spellings still clears it, strict enough that a name shared by
+    # two fandoms names neither.
+    if row and row[1] >= 160:
+        cnt = db.execute(sql_text(
+            "SELECT count FROM facets WHERE kind='fandom' AND value = :v"),
+            {"v": row[0]}).scalar()
+        return row[0], int(cnt or 0)
+    return None
+
+
 def _stem_sibling(db, tag: str) -> Optional[tuple[str, int]]:
     """The shorter, far commoner tag this one is a variant of.
 
@@ -3850,6 +4089,10 @@ _PROBE_CAP = 20
 # the intersection of every word they used. The extra terms are still returned
 # for them to add by hand.
 _PROBE_MIN_KEEP = int(os.getenv("SEARCH_EXTRACT_MIN_KEEP", "10"))
+# How many refusals a query will carry. Every exclusion is a predicate, and a
+# post listing nine of them — the corpus has one — would otherwise build a
+# query mostly made of things nobody is looking for.
+_MAX_EXCLUDES = int(os.getenv("SEARCH_EXTRACT_MAX_EXCLUDES", "4"))
 
 
 def _biggest_spelling(db, tags: list[str]) -> Optional[tuple[str, int]]:
@@ -3875,8 +4118,15 @@ def _biggest_spelling(db, tags: list[str]) -> Optional[tuple[str, int]]:
         SELECT value, count FROM facets
          WHERE kind = 'tag'
            AND (value = ANY(CAST(:t AS text[]))
+                -- A prefix of the word SEQUENCE, not of a word. `LIKE a || '%'`
+                -- matched `Thanks` to `Thanksgiving` and `Close` to
+                -- `Closeted Character`, so a sign-off ("Thanks a lot!") and a
+                -- verb ("he becomes close with them") became the subject of
+                -- the search. Requiring a space after the prefix keeps the
+                -- case this rule exists for — `Magically Powerful Harry` ->
+                -- `Magically Powerful Harry Potter` — and drops the rest.
                 OR EXISTS (SELECT 1 FROM unnest(CAST(:t AS text[])) a
-                            WHERE lower(value) LIKE lower(a) || '%'))
+                            WHERE lower(value) LIKE lower(a) || ' %'))
          ORDER BY count DESC LIMIT 1
     """), {"t": tags}).first()
     return (row[0], int(row[1])) if row else None
@@ -3893,7 +4143,8 @@ def _k(n: Optional[int]) -> str:
 
 
 def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
-                 status: Optional[str] = None) -> int:
+                 status: Optional[str] = None,
+                 crossovers: Optional[str] = None) -> int:
     """Would this combination of concepts find anything at all?"""
     # OR within a concept, AND between them — the shape the search itself
     # builds. Probing ONE spelling per concept is why good combinations were
@@ -3930,6 +4181,21 @@ def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
     if _st in StatusEnum.__members__:
         clauses.append("status = :st")
         params["st"] = _st
+    # THE CONTENT GATES COUNT TOO, and they are the biggest filter of the lot.
+    #
+    # They remove ~1.9M works, and they do not remove them evenly — a pairing
+    # whose corner of fandom writes explicitly loses almost all of it.
+    # Measured: `Regulus Black/James Potter` with `Sounding` is 14 works to
+    # this probe and **0** once the gates are applied, so the probe kept a junk
+    # tag that reduced the reader's search to nothing. Third time this has bitten
+    # (word count, then status, now the gates): a probe that does not run the
+    # predicate the search runs is guessing, and it guesses high.
+    if crossovers == "exclude":
+        clauses.append("NOT is_crossover")
+    elif crossovers == "only":
+        clauses.append("is_crossover")
+    clauses.append("NOT gate_underage")
+    clauses.append("NOT gate_adult")
     params["cap"] = _PROBE_CAP
     return int(db.execute(sql_text(
         "SELECT count(*) FROM (SELECT 1 FROM stories WHERE delisted_at IS NULL "
@@ -3969,6 +4235,22 @@ def extract(
     # slytherin" as fics already read, the extractor returned `Sarcasm` and
     # `Slytherin` as things the reader was asking for. They are the opposite —
     # works to exclude, and a taste signal. /api/search/taste resolves them.
+    # TYPOGRAPHIC PUNCTUATION FIRST, and this is not cosmetic.
+    #
+    # Reddit and every phone keyboard produce curly quotes, and `’` is not the
+    # ASCII `'` that every character class in this file is written with. So
+    # "I’ll" is not one token, it is "I" and "ll" — and `ll` is the mined
+    # initialism for `League of Legends`, which duly led the query on a post
+    # about hurt/comfort fic. Same for "don’t" -> "don" + "t" and "I’ve" ->
+    # "I" + "ve".
+    #
+    # Normalising once, here, fixes it for the alias scan, the n-gram lookup,
+    # the contraction test in `_is_grammar` and everything else downstream,
+    # rather than widening one regex and leaving the rest wrong.
+    raw_full = (raw_full.replace("\u2019", "'").replace("\u2018", "'")
+                        .replace("\u201c", '"').replace("\u201d", '"')
+                        .replace("\u2013", "-").replace("\u2014", "-")
+                        .replace("\u2026", "..."))
     raw, already_read = _split_read_list(raw_full)
 
     # LINE BY LINE through the existing intent machinery, before falling back
@@ -3981,6 +4263,7 @@ def extract(
     # houses" became the word "houses", which matched `House`, the television
     # programme. Per line it resolves to `Harry is Lord Potter`.
     line_terms: list[ExtractedTerm] = []
+    exclude_tags: list[str] = []
     wc_min = wc_max = None
     for line in raw.splitlines():
         line = re.sub(r"^\s*[-*\u2022\d.)\s]+", "", line).strip()
@@ -4002,6 +4285,35 @@ def extract(
         line = re.sub(r"[()\[\]{}/,;:]+", " ", line)
         line = re.sub(r"\s+-\s+|\s*-\s*$", " ", line)
         line = re.sub(r"\s+", " ", line).strip()
+        # WHAT THE READER DOES NOT WANT, before anything reads what they do.
+        #
+        # Post [9] of the corpus lists "No system or if it does have a system
+        # it should be made well" and "No harems or just like 2 lovers", and
+        # the extractor returned `tag:"Harems" tag:"System"` — a search FOR
+        # the two things the reader had ruled out, which returned 0 works and
+        # would have been worse if it had returned any. Exactly the failure
+        # `_extract_negations` was written for on the search path; the
+        # extractor simply never called it.
+        #
+        # Gated on `is_request=True` rather than sniffed: a fic-finder post is
+        # a request by construction, which is the condition the search path
+        # has to infer and this one knows.
+        try:
+            # `gated=False`, and the parameter reads backwards: it gates the
+            # SOFT forms (`no`, `not`) OFF, and `resolve_intent` passes
+            # `not _is_request(raw)` — so False means "this is a request, run
+            # them". A fic-finder post is a request by construction, which is
+            # the thing the search path has to infer and this one knows.
+            line, _neg = _extract_negations(db, line, False)
+            for grp in _neg:
+                for v in grp:
+                    if v not in exclude_tags:
+                        exclude_tags.append(v)
+        except Exception:
+            log.debug("extract negation failed", exc_info=True)
+        if len(line.strip()) < 4:
+            continue
+
         req = read_request(line)
         if wc_min is None and req.word_count_min is not None:
             wc_min = req.word_count_min
@@ -4009,7 +4321,7 @@ def extract(
             wc_max = req.word_count_max
         # Every concept on the line, not just the first: a line like
         # "bashing (dumbles/weasleys/hermione)" names three.
-        probe, guard = req.text, 0
+        probe, guard = _strip_framing(req.text), 0
         while probe.strip() and guard < 4:
             guard += 1
             tags, works, leftover, _whole = resolve_trope_tags(db, probe)
@@ -4072,7 +4384,9 @@ def extract(
     # relationship holding both is looked up. On the post this came from,
     # "Harry/Daphne" resolves to `Daphne Greengrass/Harry Potter` (1,035 works)
     # where the loose names found nothing worth ranking.
-    pair_term = _resolve_pair(db, raw)
+    # A nickname first: it is one token that names a whole pairing, so it is
+    # the most specific thing a post can carry. Slash notation second.
+    pair_term = _ship_nickname_in_post(db, raw) or _resolve_pair(db, raw)
 
     # STATUS, QUALITY and the FANDOM a reader abbreviated — three things that
     # are not words to search for and were being treated as though they were.
@@ -4150,6 +4464,11 @@ def extract(
                 fandom_term = ExtractedTerm(kind="fandom", value=hit,
                                             count=int(cnt or 0), matched=w,
                                             from_line=True)
+                # Readers capitalise a fandom initialism — "any good TWD fics",
+                # "looking for MCU recs". Prose does not capitalise "go" or
+                # "son". Weak on its own (a post shouting "OP Harry" is caps
+                # too), which is why it is only ever the tiebreak when the
+                # characters say nothing at all.
                 break
     except Exception:
         log.debug("fandom alias lookup failed in extract", exc_info=True)
@@ -4265,6 +4584,10 @@ def extract(
         if (wc_min or wc_max) and _is_length_word(t.value):
             return True
         if crossovers and _is_crossover_word(t.value):
+            return True
+        if _is_framing(t.value, t.matched):
+            return True
+        if t.kind in ("character", "relationship") and _is_non_entity(t.value):
             return True
         return False
 
@@ -4400,6 +4723,56 @@ def extract(
     # narrows within it — and on "looking for naruto fics, ongoing, time
     # travel" it ranked third behind `Time Travel`, so the query went out
     # without it and returned nine works from every fandom at once.
+    # AN ALIAS IS A GUESS; THE CHARACTERS ARE EVIDENCE.
+    #
+    # `fandom_aliases` maps two- and three-letter words to fandoms, and in
+    # running prose those words are ordinary English. Measured over fifteen
+    # real posts: "OP Harry" gave One Piece, "go" gave Good Omens, "Sirius'
+    # son" gave South of Nowhere, "re" gave Resident Evil — each beating the
+    # fandom the post was obviously about, and each producing a search in
+    # entirely the wrong fandom that still returned thousands of works, so it
+    # looked like it had worked.
+    #
+    # So the alias has to agree with what the post actually resolved. Where it
+    # does not, the evidence replaces it; where there is no evidence at all,
+    # capitalisation is the only signal left and a lowercase word in prose is
+    # not an abbreviation.
+    # Applies to ANY fandom candidate, not only one from the alias table.
+    #
+    # Stoplisting the aliases that were English words just moved the problem:
+    # the n-gram lookup then matched `Merlin` out of "the second coming of
+    # Merlin" on a Dumbledore post, `League of Legends` and `Professor Layton`
+    # out of other prose. A fandom NAMED in passing is the same kind of guess
+    # as a two-letter abbreviation, and the characters are evidence either way.
+    _fandom_candidate = fandom_term or next(
+        (t for t in terms if t.kind == "fandom"), None)
+    if _fandom_candidate:
+        fandom_term = _fandom_candidate
+        _ev = (_fandom_from_evidence(
+                   db, [t.value for t in terms if t.kind == "relationship"],
+                   "relationship")
+               or _fandom_from_evidence(
+                   db, [t.value for t in terms if t.kind == "character"],
+                   "character"))
+        if _ev and _ev[0] != fandom_term.value:
+            log.debug("extract: alias %r -> %r overruled by evidence %r",
+                      fandom_term.matched, fandom_term.value, _ev[0])
+            fandom_term = ExtractedTerm(kind="fandom", value=_ev[0],
+                                        count=_ev[1],
+                                        matched=fandom_term.matched,
+                                        from_line=True)
+        # No "drop it if it was lowercase" rule. That was tried and it is
+        # wrong: readers write `twd` and `tvd` in lower case all the time, and
+        # a post about one fandom often resolves no character at all, so the
+        # rule threw away good aliases to catch bad ones. The bad ones are bad
+        # because they are ENGLISH WORDS, which is what the miner's STOPLIST
+        # is for — see fandom_aliases.py.
+        terms = [t for t in terms
+                 if t.kind != "fandom" or not fandom_term
+                 or t.value == fandom_term.value]
+        if fandom_term and fandom_term.value not in [t.value for t in terms]:
+            terms = [fandom_term] + terms
+
     if not pair_term:
         lead = fandom_term or next(
             (t for t in terms if t.kind == "fandom"), None)
@@ -4442,30 +4815,12 @@ def extract(
     # So each term is added only if the result set survives it. The count is
     # capped and the predicate is GIN containment, so this is a few tens of
     # milliseconds per candidate on an endpoint that is not the search path.
-    kept: list[ExtractedTerm] = []
-    for t in terms[:6]:
-        # A term already IMPLIED by one that is kept adds no information and
-        # costs a slot. `Levi Ackerman Whump` and `Whump` were both going into
-        # the same query: every work carrying the first carries the second, so
-        # the AND narrowed nothing and the third slot was spent saying the
-        # second thing twice. The more specific term wins, because it is the
-        # one the reader was more nearly asking for.
-        if any(_implies(k.value, t.value) for k in kept):
-            continue
-        cand = kept + [t]
-        if len(cand) > 3:
-            break
-        try:
-            n = _probe_count(db, cand, wc_min, status)
-        except Exception:
-            log.debug("extract probe failed", exc_info=True)
-            n = 1
-        # Not merely non-empty — still WORTH READING. A term that cuts the
-        # result set to a single work has answered the request too precisely to
-        # be useful, and the reader said "at least", not "exactly".
-        if n >= _PROBE_MIN_KEEP:
-            kept = cand
-
+    # Decided BEFORE the probe, not after. The probe has to run the
+    # predicate the search will run, and `xover:exclude` is one — deciding
+    # it afterwards meant probing a filter set the reader never gets.
+    # Keyed on the candidate terms rather than the kept ones because the
+    # fandom leads the list and is kept first when it is kept at all.
+    #
     # A post that NAMES a fandom and never mentions a crossover is asking for
     # that fandom, so crossovers come out.
     #
@@ -4483,8 +4838,33 @@ def extract(
     # keeps returning them, because "TWD fics" typed into the box is not the
     # same statement as a fic-finder post naming one fandom and asking for
     # stories in it. An explicit mention still wins in both directions.
-    if crossovers is None and any(t.kind == "fandom" for t in kept):
+    if crossovers is None and any(t.kind == "fandom" for t in terms[:6]):
         crossovers = "exclude"
+
+
+    kept: list[ExtractedTerm] = []
+    for t in terms[:6]:
+        # A term already IMPLIED by one that is kept adds no information and
+        # costs a slot. `Levi Ackerman Whump` and `Whump` were both going into
+        # the same query: every work carrying the first carries the second, so
+        # the AND narrowed nothing and the third slot was spent saying the
+        # second thing twice. The more specific term wins, because it is the
+        # one the reader was more nearly asking for.
+        if any(_implies(k.value, t.value) for k in kept):
+            continue
+        cand = kept + [t]
+        if len(cand) > 3:
+            break
+        try:
+            n = _probe_count(db, cand, wc_min, status, crossovers)
+        except Exception:
+            log.debug("extract probe failed", exc_info=True)
+            n = 1
+        # Not merely non-empty — still WORTH READING. A term that cuts the
+        # result set to a single work has answered the request too precisely to
+        # be useful, and the reader said "at least", not "exactly".
+        if n >= _PROBE_MIN_KEEP:
+            kept = cand
 
     parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in kept]
 
@@ -4513,6 +4893,12 @@ def extract(
         parts.append("complete" if status == "complete" else "wip")
     if crossovers:
         parts.append(f"xover:{crossovers}")
+    # What the reader ruled out, in the bar's own syntax so it travels with the
+    # query like everything else. Bounded: a post listing nine refusals would
+    # otherwise build a query of nine hard filters, and an exclusion that
+    # matches nothing still costs a predicate.
+    for v in exclude_tags[:_MAX_EXCLUDES]:
+        parts.append(f'-tag:"{v}"')
     if wc_min:
         # The SERIES add-on, turned on whenever the post named a length.
         #
@@ -4540,7 +4926,8 @@ def extract(
                            ignored_words=max(len(words) - len(used), 0),
                            word_count_min=wc_min, word_count_max=wc_max,
                            already_read=already_read, status=status, sort=sort,
-                           crossovers=crossovers)
+                           crossovers=crossovers,
+                           exclude_tags=exclude_tags[:_MAX_EXCLUDES])
 
 
 @router.get("/taste", response_model=TasteResponse)

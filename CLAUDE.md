@@ -1012,6 +1012,70 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   the underage toggle to reveal. Confirmed at the row level too: zero
   underage-gated works pass the predicate an `explicit=true` search applies.
 
+- **The extractor was measured against fifteen REAL fic-finder posts, and it
+  was much worse than the single-post checks had suggested.** Before: **three
+  posts returned nothing at all and six ran in the WRONG FANDOM** — the worse
+  failure, because a search in the wrong fandom returns thousands of works and
+  nothing about the result looks broken. After: no zeroes and no wrong fandoms.
+  A corpus is the only thing that finds this; every fix in this file before it
+  was driven by one post at a time.
+  - **An alias is a guess; the characters are evidence.** `fandom_aliases` maps
+    two- and three-letter words to fandoms, and in prose those words are
+    ordinary English: **"OP Harry" gave One Piece, "go" gave Good Omens,
+    "Sirius' son" gave South of Nowhere, "re" gave Resident Evil.**
+    `_fandom_from_evidence` samples the works carrying whatever characters and
+    pairings the post resolved and takes the modal fandom; where that disagrees
+    with the alias, the evidence wins. It applies to a fandom matched by NAME
+    too — stoplisting the word-aliases only moved the problem to the n-gram
+    lookup, which then matched `Merlin` out of "the second coming of Merlin" on
+    a Dumbledore post.
+    - ONE name is not evidence unless it is a full name. A lone
+      `Time (Linked Universe)`, matched from the word "time", was enough to
+      overrule `Harry Potter` and send a whole search to Zelda.
+  - **Chat shorthand is a whole class, not a handful of accidents.** `pls` is
+    the mined initialism for `Professor Layton` and `lol` for
+    `League of Legends`, and both led queries. Stoplisted with `lmao`, `idk`,
+    `tbh`, `imo`, `btw` and the rest.
+  - **`’` is not `'`.** Reddit and every phone keyboard produce curly quotes,
+    so "I'll" tokenised as "I" + "ll" — and `ll` is the initialism for
+    `League of Legends`. Normalised once at the top of `extract()`, which fixes
+    the alias scan, the n-gram lookup and the contraction test in `_is_grammar`
+    together rather than widening one regex and leaving the rest wrong.
+  - **`_biggest_spelling` matched a prefix of a WORD, not of a word SEQUENCE.**
+    `Thanks` -> `Thanksgiving` (on three separate posts), `Close` ->
+    `Closeted Character`. Requiring a space after the prefix keeps the case the
+    rule exists for, `Magically Powerful Harry` -> `…Harry Potter`.
+  - **Framing has to come out BEFORE the trope resolver sees the line**, not
+    after. The resolver matches a WINDOW of the reader's words, so framing does
+    not merely add noise — it changes which window wins. "I like the idea of
+    Time travel" resolved to `it seemed like a good idea at the time` with
+    "travel" left over; stripped, it resolves to `Time Travel`. Function words
+    go too, and that is safe because coverage is scored over the TAG: dropping
+    the reader's words can only lower a tag's score, never raise it.
+  - **The extractor never called `_extract_negations`.** A post reading "No
+    system… No harems" produced `tag:"Harems" tag:"System"` — a search FOR the
+    two things ruled out. The parameter reads backwards (`gated=True` turns the
+    soft forms OFF), which is how it was got wrong the first time.
+  - **Ship nicknames were resolved by the search and not by the extractor.**
+    592 of them in `ship_aliases`. A post whose whole subject was "Dramione
+    fics" produced nothing about the pairing — and the leftover words were free
+    to match something else, which is where `Good Omens` came from.
+    `_ship_nickname_in_post` is separate from `_ship_nickname` because the
+    latter refuses anything over eight words, and that guard is what stops
+    "Harry Potter and the Philosopher's Stone" resolving to a pairing.
+  - **`None` is a character on 6,314 works**, from "none the wiser", and so are
+    `The Author`, `Main Character` and `Myself`. Size made them outrank the
+    characters a post was about. `Original Character` is the opposite case and
+    the two were briefly conflated: it is a real want — one of the commonest
+    things a post asks for — and useless for inferring a fandom, so it is
+    suppressed from EVIDENCE and never from the query.
+  - **The probe must run the predicate the search runs — third instance.**
+    Word count, then status, now the content gates.
+    `Regulus Black/James Potter` with `Sounding` is 14 works to a probe that
+    ignores the gates and **0** once they apply, so the probe kept a junk tag
+    that reduced the reader's search to nothing. The crossover default moved
+    ahead of the probe loop for the same reason.
+
 - **A crossover is more than one FRANCHISE, not more than one fandom tag — and
   the first six results on a real post were all crossovers.** Reported from the
   live site on the TWD fic-finder post: Avengers, Supernatural, Lord of the
