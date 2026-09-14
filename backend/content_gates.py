@@ -57,60 +57,12 @@ sys.path.insert(0, "/app")
 from db.dsn import default_database_url  # noqa: E402
 os.environ.setdefault("DATABASE_URL", default_database_url())
 
-from sqlalchemy import text  # noqa: E402
-
-from db.session import db_session, lift_statement_timeout  # noqa: E402
-
-log = logging.getLogger("content_gates")
-
-# ── Tier 1: sexual content involving minors ─────────────────────────────────
-UNDERAGE_WARNINGS = ["Underage Sex", "Underage"]
-
-UNDERAGE_TAGS = [
-    "Underage Sex - Freeform", "Consensual Underage Sex",
-    "Underage Rape/Non-con", "Implied/Referenced Underage Sex",
-    "Underage - Freeform", "Extremely Underage", "Underage",
-    "Underage Sex", "Underage Sexual Activity", "Underage Masturbation",
-    "Underage Prostitution", "Underage Pregnancy", "Underage Smut",
-    "Minor/Adult Relationship", "Adult/Minor Relationship",
-    "Teenage Sexuality", "Underage Drinking and Sex",
-    "Pedophilia", "Implied/Referenced Pedophilia", "Pedophile",
-    "Grooming", "Child Grooming", "Child Abuse - Sexual",
-    "Child Sexual Abuse", "Childhood Sexual Abuse",
-    "Shotacon", "Lolicon", "Chan", "Ephebophilia",
-    "Statutory Rape", "Underage Non-Consensual",
-]
-
-# ── Tier 2: explicit sex, and the deliberately disturbing ───────────────────
-ADULT_WARNINGS = ["Rape/Non-Con", "Rape/Non-con"]
-
-ADULT_TAGS = [
-    # Explicit sexual content, by its usual names.
-    "Smut", "PWP", "Plot What Plot/Porn Without Plot", "Porn With Plot",
-    "Porn with Feelings", "Porn", "Pornography", "Explicit Sexual Content",
-    "Graphic Depictions of Sex", "Explicit Language and Sexual Content",
-    "Rough Sex", "Anal Sex", "Oral Sex", "Vaginal Sex", "Threesome - M/M/F",
-    "Threesome - F/F/M", "Orgy", "Gangbang", "Sex Toys", "BDSM",
-    "Dubious Consent", "Dub-Con", "Dubcon",
-    # AO3's own marker for "this is as unpleasant as it says on the tin".
-    "Dead Dove: Do Not Eat", "Dead Dove Do Not Eat",
-    # Non-consent.
-    "Rape/Non-con Elements", "Rape", "Non-Con", "Noncon", "Non-con",
-    "Implied/Referenced Rape/Non-con", "Past Rape/Non-con",
-    "Attempted Rape/Non-Con", "Rape/Non-con", "Rape Aftermath",
-    "Non-Consensual", "Forced Orgasm", "Sexual Assault",
-    "Implied/Referenced Sexual Assault",
-    # Incest.
-    "Incest", "Sibling Incest", "Parent/Child Incest",
-    "Brother/Brother Incest", "Brother/Sister Incest",
-    "Sister/Sister Incest", "Twincest", "Implied/Referenced Incest",
-    "Parent/Child Relationship", "Family Incest",
-    # The rest of the obvious.
-    "Bestiality", "Necrophilia", "Cannibalism", "Snuff",
-    "Torture", "Graphic Torture", "Mutilation", "Self-Harm",
-    "Suicide", "Suicidal Thoughts", "Eating Disorders",
-]
-
+# The lists themselves live in gate_terms.py, which is imported by BOTH this
+# module (which owns the trigger) and api/search.py (which owns the query
+# filters). They used to be written out in both places and had drifted 15 and
+# 31 terms apart, with the search copy the laxer one — see gate_terms.py.
+from gate_terms import (ADULT_TAGS, ADULT_WARNINGS,  # noqa: E402
+                        UNDERAGE_TAGS, UNDERAGE_WARNINGS)
 # ── The trigger: why a batch job alone is not enough ────────────────────────
 #
 # The crawler adds ~15,000 works a day. A precomputed column populated by a

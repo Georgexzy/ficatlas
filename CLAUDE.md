@@ -53,6 +53,58 @@ asks for something the archives themselves label is entitled to find it. What
 the site will not do is put it in front of somebody who did not ask, or bake it
 into a link they then share.
 
+### The term lists had drifted, and the laxer copy was the one doing the work
+
+They were written out TWICE — in `content_gates.py`, which owns the database
+trigger, and again in `api/search.py`, which owns the query filters:
+
+    UNDERAGE_TAGS   content_gates 31   api/search 16   (15 missing)
+    ADULT_TAGS      content_gates 60   api/search 29   (31 missing)
+
+`api/search.py` was the short copy, and it was missing the most serious terms
+in the set: `Child Sexual Abuse`, `Child Grooming`, `Statutory Rape`,
+`Adult/Minor Relationship`, `Ephebophilia`, `Dubious Consent`, `Family Incest`.
+
+The gate COLUMNS were still computed from the fuller list, so the trigger and
+the backfill were right. What was checking the short list was every
+belt-and-braces array check in the search path — which exists **precisely for
+the rows a backfill has not reached**, i.e. exactly when the short list is all
+there is.
+
+This file already had the rule, written about `api/hubs.py`, which does import
+rather than copy: *"two lists of what counts as this content would drift, and
+the one that drifts laxer is the bug."* The copy nobody noticed was one level
+up. `gate_terms.py` now holds them and nothing else — no database, no imports,
+no side effects — and `tests/test_gate_terms_one_source.py` asserts every
+consumer shares the same list OBJECT (identity, not equality: equal contents
+today is how the drift started) and that nothing redefines them anywhere.
+
+### Two no-toggle surfaces trusted the column alone
+
+Found by sampling the crawlable surface rather than by reading the code. Of
+works returned mid-backfill:
+
+| surface | underage | adult | of |
+|---|---:|---:|---:|
+| fandom hub | 0 | **9** | 141 |
+| ship hub | 0 | **10** | 93 |
+| random (landing page) | 0 | **3** | 45 |
+
+- **The hubs' "not affordable" note was a cost inherited from the wrong
+  query.** A negated array containment IS expensive on the search path, where
+  it spans 20.5M rows. A hub work list is bounded by the hub's own `top_ids` —
+  a few hundred rows already fetched by primary key. Measured on that exact
+  query: **54.9ms without the array check, 4.9ms with**. Check which query a
+  cost applies to before inheriting it.
+- **`/api/search/random`'s FALLBACK path had no content gate of any kind.**
+  Only the `TABLESAMPLE` path carried it, so a fandom rare enough to miss a 3%
+  sample fell through to a branch with no gate at all — on the landing page,
+  for a reader who asked for nothing. A second code path answering the same
+  question is a second place the rule has to be written, which is the whole
+  argument for four gate checks rather than one.
+- After both fixes plus the unified lists: **0 gated works on every surface** —
+  fandom hub 0/132, ship hub 0/83, random 0/45, search 0/100.
+
 ### Tier 1 — sexualised minors (`include_underage`, default off)
 
 - **Its own parameter, separate from `explicit`.** That toggle is about taste

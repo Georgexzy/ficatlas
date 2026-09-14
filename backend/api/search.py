@@ -795,64 +795,22 @@ RECS_BONUS = float(os.getenv("SEARCH_RECS_BONUS", "1.5"))
 # WARNINGS and TAGS both, because the same fact is recorded in two places:
 # 10,037 works carry the `Underage Sex` archive warning and 22,968 carry an
 # `Underage Sex - Freeform` tag, and neither implies the other.
-_UNDERAGE_WARNINGS = ["Underage Sex", "Underage"]
-
-# Matched as EXACT tag values, never as a substring, and the reason is in the
-# vocabulary: `Underage Drinking` (25,321 works), `Underage Smoking` (7,655),
-# `Underage Drug Use` (3,567) and `Underage Kissing` (3,686) are not
-# sexualisation of minors and must not be swept up — nor must `Chance
-# Meetings`, which a `chan%` pattern matches. Over-blocking would hide tens of
-# thousands of ordinary stories and teach people the filter is broken.
-_UNDERAGE_TAGS = [
-    "Underage Sex - Freeform", "Consensual Underage Sex",
-    "Underage Rape/Non-con", "Implied/Referenced Underage Sex",
-    "Underage - Freeform", "Extremely Underage", "Underage",
-    "Underage Sex", "Underage Sexual Activity", "Underage Masturbation",
-    "Pedophilia", "Implied/Referenced Pedophilia", "Pedophile",
-    "Shotacon", "Lolicon", "Chan",
-]
-
-
-# ── Tier 2: adult and deliberately disturbing content ───────────────────────
+# ── The gate term lists ──────────────────────────────────────────────────────
 #
-# Not blocked, but not served by DEFAULT either — these are what the Explicit
-# toggle should always have controlled, and did not.
+# Imported, not defined. They were written out here AND in content_gates.py and
+# had drifted 15 and 31 terms apart, with this copy the laxer one — missing
+# `Child Sexual Abuse`, `Child Grooming`, `Statutory Rape`, `Adult/Minor
+# Relationship`, `Dubious Consent` and `Family Incest` among others. The gate
+# COLUMNS were still computed from the fuller list, so the trigger and the
+# backfill were right; what was checking the short list was every
+# belt-and-braces array check in this file, which exists precisely for the rows
+# the backfill has not reached yet.
 #
-# The toggle filtered on RATING alone, so a work rated Teen or Not Rated and
-# tagged `Rape/Non-con Elements`, `Incest` or `Dead Dove: Do Not Eat` came back
-# on a default search. The rating is the author's summary judgement and the
-# tags are the specifics; on this index the tags are far better populated, and
-# a reader pasting a search link in public is relying on the default being
-# safe.
-#
-# The bar is "could this get the link removed, or the person posting it
-# banned". r/HPFanfiction rule 6 is about minors specifically, but a link
-# surfacing incest or rape content is a problem in most fandom spaces and in
-# none of them is it what the searcher asked for.
-#
-# Exact values again, for the same reason as the underage list: substring
-# matching turns `Non-Consensual Drug Use` (18,580 works, not sexual) and
-# `Implied Sexual Content` into casualties, and a filter people find
-# capricious is one they turn off.
-_ADULT_WARNINGS = ["Rape/Non-Con", "Rape/Non-con"]
-
-_ADULT_TAGS = [
-    # Explicit sexual content, by its usual names.
-    "Smut", "PWP", "Plot What Plot/Porn Without Plot", "Porn With Plot",
-    "Porn with Feelings", "Porn", "Explicit Sexual Content",
-    "Graphic Depictions of Sex", "Pornography",
-    # AO3's own marker for "this is as unpleasant as it says on the tin".
-    "Dead Dove: Do Not Eat", "Dead Dove Do Not Eat",
-    # Non-consent.
-    "Rape/Non-con Elements", "Rape", "Non-Con", "Noncon", "Non-con",
-    "Implied/Referenced Rape/Non-con", "Past Rape/Non-con",
-    "Attempted Rape/Non-Con", "Rape/Non-con",
-    # Incest.
-    "Incest", "Sibling Incest", "Parent/Child Incest",
-    "Brother/Brother Incest", "Brother/Sister Incest", "Twincest",
-    # The rest of the obvious.
-    "Bestiality", "Necrophilia", "Cannibalism",
-]
+# The underscore names are kept because api/hubs.py and the tests import them.
+from gate_terms import ADULT_TAGS as _ADULT_TAGS          # noqa: E402
+from gate_terms import ADULT_WARNINGS as _ADULT_WARNINGS  # noqa: E402
+from gate_terms import UNDERAGE_TAGS as _UNDERAGE_TAGS    # noqa: E402
+from gate_terms import UNDERAGE_WARNINGS as _UNDERAGE_WARNINGS  # noqa: E402
 
 
 def _adult_filter():
@@ -4694,12 +4652,25 @@ def random_stories(
     # Raw SQL, so the ORM filter cannot reach it — and "Surprise me" is on the
     # landing page, which makes it the likeliest place for this content to be
     # put in front of somebody who did not ask for anything at all.
+    # COLUMNS AND ARRAYS. The booleans are set by a trigger, so they are right
+    # for everything written since it existed and only as right as the BACKFILL
+    # for everything older — and `false` is the default, which reads as safe.
+    # Measured mid-backfill: 3 of 45 works sampled from this endpoint carried
+    # adult-tier terms and were not yet flagged, on the LANDING page.
     if UNDERAGE_FILTER_ON:
         where.append("NOT gate_underage")
+        where.append("NOT (COALESCE(warnings,'{}') && CAST(:g_uw AS text[]))")
+        where.append("NOT (COALESCE(tags,'{}')     && CAST(:g_ut AS text[]))")
+        params["g_uw"] = _UNDERAGE_WARNINGS
+        params["g_ut"] = _UNDERAGE_TAGS
     if not explicit:
         where.append("(rating <> 'explicit' OR rating IS NULL)")
         if ADULT_FILTER_ON:
             where.append("NOT gate_adult")
+            where.append("NOT (COALESCE(warnings,'{}') && CAST(:g_aw AS text[]))")
+            where.append("NOT (COALESCE(tags,'{}')     && CAST(:g_at AS text[]))")
+            params["g_aw"] = _ADULT_WARNINGS
+            params["g_at"] = _ADULT_TAGS
     if fandom_pat:
         where.append("fic_arr(fandoms) ILIKE :fandom_pat")
         params["fandom_pat"] = fandom_pat
@@ -4721,10 +4692,25 @@ def random_stories(
 
     # Fallback: whole-table scan. Only reached for filters too rare to show up in a
     # 3% page sample, where correctness matters more than the latency.
+    #
+    # THE GATES BELONG HERE TOO, and for a long time they did not. Only the
+    # sampled path above carried them, so a fandom rare enough to miss a 3%
+    # sample fell through to a branch with no content gate of any kind — on the
+    # landing page, for a reader who asked for nothing. A second code path that
+    # answers the same question is a second place the rule has to be written,
+    # which is the whole argument for four gate checks rather than one.
     q = db.query(Story).filter(Story.word_count > min_w,
                                Story.delisted_at.is_(None))
+    if UNDERAGE_FILTER_ON:
+        q = q.filter(Story.gate_underage.is_(False),
+                     not_(Story.warnings.op("&&")(cast(_UNDERAGE_WARNINGS, PG_ARRAY(Text)))),
+                     not_(Story.tags.op("&&")(cast(_UNDERAGE_TAGS, PG_ARRAY(Text)))))
     if not explicit:
         q = q.filter(or_(Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
+        if ADULT_FILTER_ON:
+            q = q.filter(Story.gate_adult.is_(False),
+                         not_(Story.warnings.op("&&")(cast(_ADULT_WARNINGS, PG_ARRAY(Text)))),
+                         not_(Story.tags.op("&&")(cast(_ADULT_TAGS, PG_ARRAY(Text)))))
     if fandom_pat:
         q = q.filter(_arr_text(Story.fandoms).ilike(fandom_pat))
     return [_to_card(s, author_permission.verified_authors(db))

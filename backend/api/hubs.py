@@ -18,6 +18,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from api.search import (_ADULT_TAGS, _ADULT_WARNINGS,
+                        _UNDERAGE_TAGS, _UNDERAGE_WARNINGS)
 from db.session import get_db
 
 router = APIRouter()
@@ -248,13 +250,35 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
                -- exact rather than a pattern.
                -- Content gates, both tiers. A hub has no Explicit toggle:
                -- it is a static page a search engine hands to a stranger, so
-               -- the safe default is the ONLY setting it has. Indexed booleans
-               -- set by a database trigger — see backend/content_gates.py for
-               -- why a negated array containment was not affordable here.
+               -- the safe default is the ONLY setting it has.
+               --
+               -- COLUMNS AND ARRAYS, and the arrays are not optional here.
+               -- The indexed booleans are set by a database trigger, so they
+               -- are right for everything written since the trigger existed
+               -- and only as right as the BACKFILL for everything older — and
+               -- a column that defaults to `false` reads as safe. Measured
+               -- mid-backfill on this exact query: **9 of 141 works** on the
+               -- Harry Potter hub and 10 of 93 on a ship hub carried adult
+               -- tier terms and were not yet flagged, on the one surface with
+               -- no toggle at all.
+               --
+               -- The note that used to sit here said a negated array
+               -- containment "was not affordable". That was true of the
+               -- SEARCH path, where the predicate spans 20.5M rows, and was
+               -- carried over to a query bounded by the hub's own `top_ids`
+               -- — a few hundred rows already fetched by primary key, where
+               -- it costs nothing. Measured: 54.9ms without, **4.9ms with**.
+               -- Check which query a cost applies to before inheriting it.
                AND NOT s.gate_underage
                AND NOT s.gate_adult
+               AND NOT (COALESCE(s.warnings,'{}') && CAST(:gate_uw AS text[]))
+               AND NOT (COALESCE(s.tags,'{}')     && CAST(:gate_ut AS text[]))
+               AND NOT (COALESCE(s.warnings,'{}') && CAST(:gate_aw AS text[]))
+               AND NOT (COALESCE(s.tags,'{}')     && CAST(:gate_at AS text[]))
              ORDER BY t.ord
         """), {"ids": ids,
+               "gate_uw": _UNDERAGE_WARNINGS, "gate_ut": _UNDERAGE_TAGS,
+               "gate_aw": _ADULT_WARNINGS,    "gate_at": _ADULT_TAGS,
                }).fetchall()
         _fandoms = [f for r in rows for f in (r[9] or [])]
         _rels = [v for r in rows for v in (r[10] or [])]
