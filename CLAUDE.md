@@ -79,6 +79,44 @@ no side effects — and `tests/test_gate_terms_one_source.py` asserts every
 consumer shares the same list OBJECT (identity, not equality: equal contents
 today is how the drift started) and that nothing redefines them anywhere.
 
+### Mental-health themes are NOT tier 2, and the toggle's name is the argument
+
+`Self-Harm`, `Suicidal Thoughts`, `Suicide` and `Eating Disorders` were in
+`ADULT_TAGS` and hid **130,581 works** from every default search that carried
+no other adult-tier reason — behind a toggle labelled "Show explicit & adult
+content", which does not describe them. Measured: `Suicidal Thoughts` returned
+**2,003 works by default against 5,000** with the toggle on, `Eating Disorders`
+**594 against 5,000**.
+
+The tier answers one question: could this link get removed, or the person who
+pasted it banned. A fic tagged `Suicidal Thoughts` is not that. None of the
+community rules this was built from — sexualised minors, pedophilia, underage,
+extreme or encouraged violence and rape — reaches mental-health themes, and the
+body of work affected is largely hurt/comfort and recovery fic, among the most
+recommended writing in fandom.
+
+**The archives already do the right thing.** AO3 shows its own warnings on the
+work page, so a reader meets the warning before the text either way. Hiding the
+work from search adds no warning; it removes the story. Same principle as
+*"minors should be able to be found, just not linked to without the toggle —
+let's not burn books here."*
+
+`Torture`, `Graphic Torture` and `Mutilation` STAY, because "extreme or
+encouraged violence/rape fic must be linked with a clear warning" is an
+explicit rule and they serve it. A test asserts both directions, so removing
+one more is a deliberate act with a failing test in front of it.
+
+Rejected: a third tier with its own toggle. More honest labelling, and a new
+column, backfill, settings row and another thing to keep from drifting, for a
+category the posting rules never asked to gate.
+
+**The column change needed a second `content_gates` pass**, and the direction
+is worth noting: with the term removed, the cache was stale in the RESTRICTIVE
+direction — 130,581 rows still carrying `gate_adult` for a term no longer in
+the list, so the works stayed hidden until `_UNFLAG_SQL` ran. That is the safe
+direction to be stale in, and it is exactly why `_UNFLAG_SQL` exists: without
+it the lists could only ever get stricter.
+
 ### Belt and braces is permanent, and the reason changed
 
 The array containment beside the gate columns was written as a temporary
