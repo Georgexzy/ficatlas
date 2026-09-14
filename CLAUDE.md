@@ -79,6 +79,36 @@ no side effects — and `tests/test_gate_terms_one_source.py` asserts every
 consumer shares the same list OBJECT (identity, not equality: equal contents
 today is how the drift started) and that nothing redefines them anywhere.
 
+### Importing a module proves nothing about whether its main function runs
+
+`content_gates.py` shipped with `from db.session import db_session` and
+`log = logging.getLogger(...)` DELETED. Both had been sitting inside the block
+that was replaced wholesale when the term lists moved to `gate_terms.py`. The
+module still imported cleanly, because nothing at module level referenced
+either name — so the whole suite passed, including a test that imports
+`content_gates` and asserts things about its lists, and the failure waited
+until the job ran unattended at 07:49:
+
+    NameError: name 'db_session' is not defined
+
+`tests/test_maintenance_timeouts.py` now calls `run(dry_run=True)` for all
+three maintenance jobs. A dry run is the cheapest possible proof that an entry
+point is wired up: it takes the same path through imports, session, logging and
+SQL as the real thing and writes nothing. Verified it fails when the import is
+removed again.
+
+**It immediately found a second, older bug.** `series.total_words` and
+`series.member_count` were added to production BY HAND and never added to
+`init_db.py`, so the test database and every fresh install lacked them and
+`series_wordcount.py` died with "column se.member_count does not exist". That
+is the same omission the gate columns made. If a column is worth adding to the
+live database it is worth adding to `init_db.py` in the same commit, or
+production and every new install quietly disagree.
+
+**Cutting a block by line number is what did it.** The edit that moved the
+lists took lines 59-113, and those lines held two imports and a logger as well
+as the lists. Replace by matching the text you mean to replace.
+
 ### Mental-health themes are NOT tier 2, and the toggle's name is the argument
 
 `Self-Harm`, `Suicidal Thoughts`, `Suicide` and `Eating Disorders` were in

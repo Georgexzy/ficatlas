@@ -50,3 +50,27 @@ def test_the_helper_exists_and_is_shared():
     home already settles."""
     from db.session import lift_statement_timeout
     assert callable(lift_statement_timeout)
+
+
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("job", ["content_gates", "series_wordcount", "crossover"])
+def test_the_job_actually_runs(job, db):
+    """IMPORTING a module proves nothing about whether its main function runs.
+
+    `content_gates.py` shipped with `from db.session import db_session` and
+    `log = logging.getLogger(...)` deleted — both had been sitting inside a
+    block that was replaced wholesale when the term lists moved to
+    `gate_terms.py`. The module still imported cleanly, because nothing at
+    module level referenced either name, so every test passed and the failure
+    waited until the job ran unattended at 07:00:
+
+        NameError: name 'db_session' is not defined
+
+    A dry run is the cheapest possible proof that the entry point is wired up:
+    it takes the same path through imports, session, logging and SQL as the
+    real thing and writes nothing.
+    """
+    mod = __import__(job)
+    result = mod.run(dry_run=True)
+    assert isinstance(result, dict) and result, f"{job}.run(dry_run=True) returned {result!r}"
