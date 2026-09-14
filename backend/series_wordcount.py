@@ -56,6 +56,8 @@ log = logging.getLogger("series_wordcount")
 
 BATCH = int(os.getenv("SERIES_WC_BATCH", "50000"))
 PAUSE_S = float(os.getenv("SERIES_WC_PAUSE_S", "5"))
+# How many times to re-walk before accepting the drift. See run().
+MAX_SWEEPS = int(os.getenv("SERIES_WC_MAX_SWEEPS", "3"))
 
 # One run at a time, for the same reason as content_gates.py: two passes
 # rewriting the same rows in different orders is the textbook deadlock, and it
@@ -148,23 +150,45 @@ def run(dry_run: bool = False) -> dict:
                      f"{row[0]:,}")
             return {"eligible": row[0]}
 
+        # A walk converges to "correct as of when the walk STARTED", which is
+        # not the same as correct. `member_count` and `total_words` are
+        # maintained by other jobs — `_series_fill_loop` fetches missing works
+        # every fifteen minutes — so a series can become eligible while the
+        # cursor is already past its members, and those rows are never
+        # revisited. Measured after one clean pass: **437 of 847,463 eligible
+        # works** still had no total, scattered across the whole id range
+        # rather than sitting in a contiguous gap, every one in a series whose
+        # counts had moved mid-walk.
+        #
+        # So walk again until a walk writes nothing. A re-walk is cheap because
+        # `IS DISTINCT FROM` means it reads and writes nothing where the answer
+        # already holds. Bounded, because a series churning faster than a pass
+        # takes would otherwise loop for ever — three is plenty for drift and
+        # small enough to notice in a log.
         filled, seen_total = 0, 0
-        # The zero UUID, so the first window starts before every story id.
-        after = "00000000-0000-0000-0000-000000000000"
-        while True:
-            lift_statement_timeout(db)
-            row = db.execute(text(_FILL_SQL),
-                             {"after": after, "batch": BATCH}).first()
-            db.commit()
-            next_after, seen, changed = row[0], int(row[1]), int(row[2])
-            if not seen:
+        for sweep in range(1, MAX_SWEEPS + 1):
+            swept = 0
+            # The zero UUID, so the first window starts before every story id.
+            after = "00000000-0000-0000-0000-000000000000"
+            while True:
+                lift_statement_timeout(db)
+                row = db.execute(text(_FILL_SQL),
+                                 {"after": after, "batch": BATCH}).first()
+                db.commit()
+                next_after, seen, changed = row[0], int(row[1]), int(row[2])
+                if not seen:
+                    break
+                after = str(next_after)
+                swept += changed
+                seen_total += seen
+                log.info("series_wordcount: sweep %s — %s seen, %s written "
+                         "(%s / %s)", sweep, f"{seen:,}", f"{changed:,}",
+                         f"{seen_total:,}", f"{filled + swept:,}")
+                time.sleep(PAUSE_S)
+            filled += swept
+            log.info("series_wordcount: sweep %s wrote %s", sweep, f"{swept:,}")
+            if not swept:
                 break
-            after = str(next_after)
-            filled += changed
-            seen_total += seen
-            log.info("series_wordcount: %s seen, %s written (%s / %s)",
-                     f"{seen:,}", f"{changed:,}", f"{seen_total:,}", f"{filled:,}")
-            time.sleep(PAUSE_S)
 
         cleared = 0
         while True:

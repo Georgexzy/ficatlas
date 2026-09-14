@@ -1113,6 +1113,22 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     extractor appends it whenever a post named a length. There is a sidebar
     checkbox too, shown only when a minimum is set, because a control that
     changes nothing teaches readers the filters are decorative.
+  - **One walk is only correct as of when the walk STARTED, and that is not
+    the same as correct.** `series.member_count` and `series.total_words` are
+    maintained by other jobs — `_series_fill_loop` fetches missing works every
+    fifteen minutes — so a series can become eligible while the cursor is
+    already past its members, and a keyset walk never revisits them. Measured
+    after one clean pass: **437 of 847,463 eligible works** still had no total.
+    - The shape of the miss is what identified the cause. They were scattered
+      across the whole id range rather than sitting in a contiguous gap at the
+      end, which rules out an interrupted walk; and their series were weeks
+      old, which rules out rows created during it. What had moved was
+      `member_count`, on series whose `work_count` said 27 while only 2 works
+      were indexed.
+    - `run()` now sweeps until a sweep writes nothing, bounded at three. A
+      re-walk is cheap precisely because `IS DISTINCT FROM` means it reads and
+      writes nothing where the answer already holds. Any job that walks a live
+      table by cursor has this property; the fix is the same everywhere.
   - **The fill walks the index once.** The first draft drew each batch from
     "rows that are currently wrong", which terminates and resumes — and the
     planner satisfies the LIMIT by walking `ix_series_works_story` from the
