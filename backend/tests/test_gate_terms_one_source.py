@@ -80,3 +80,36 @@ def test_the_lists_stay_exact_values_not_patterns():
     for lst in (g.UNDERAGE_TAGS, g.ADULT_TAGS):
         for t in lst:
             assert "%" not in t and "*" not in t, t
+
+
+def test_mental_health_themes_are_not_gated():
+    """`Self-Harm`, `Suicidal Thoughts`, `Suicide` and `Eating Disorders` hid
+    **130,581 works** from every default search that carried no other
+    adult-tier reason — behind a toggle labelled "Show explicit & adult
+    content", which does not describe them. Measured: `Suicidal Thoughts`
+    returned 2,003 works by default against 5,000 with the toggle on, and
+    `Eating Disorders` 594 against 5,000.
+
+    The tier answers one question: could this link get removed, or the person
+    who pasted it banned. A fic tagged `Suicidal Thoughts` is not that, and
+    none of the community rules this was built from reaches mental-health
+    themes. The archives already show their own warnings on the work page, so
+    hiding the work from search adds no warning — it removes the story.
+
+    Asserted so that re-adding one is a deliberate act with a failing test in
+    front of it, not a tidy-up."""
+    import gate_terms as g
+    for t in ("Self-Harm", "Suicide", "Suicidal Thoughts", "Eating Disorders"):
+        assert t not in g.ADULT_TAGS, t
+        assert t not in g.UNDERAGE_TAGS, t
+
+
+def test_violence_and_non_con_are_still_gated():
+    """The other direction, so the removal above cannot widen. "Extreme or
+    encouraged violence/rape fic must be linked with a clear warning" is an
+    explicit rule, and these serve it."""
+    import gate_terms as g
+    for t in ("Torture", "Graphic Torture", "Mutilation", "Snuff",
+              "Rape/Non-con Elements", "Dead Dove: Do Not Eat", "Incest",
+              "Bestiality", "Dubious Consent"):
+        assert t in g.ADULT_TAGS, t

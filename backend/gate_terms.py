@@ -69,6 +69,35 @@ ADULT_TAGS = [
     "Parent/Child Relationship", "Family Incest",
     # The rest of the obvious.
     "Bestiality", "Necrophilia", "Cannibalism", "Snuff",
-    "Torture", "Graphic Torture", "Mutilation", "Self-Harm",
-    "Suicide", "Suicidal Thoughts", "Eating Disorders",
+    # Extreme violence. The rule this serves is "extreme or encouraged
+    # violence/rape fic must be linked with a clear warning", so these stay.
+    "Torture", "Graphic Torture", "Mutilation",
+]
+
+# NOT in the list, deliberately: `Self-Harm`, `Suicidal Thoughts`, `Suicide`
+# and `Eating Disorders`.
+#
+# They were here, and they hid **130,581 works** from every default search that
+# carried no other adult-tier reason — behind a toggle labelled "Show explicit
+# & adult content", which does not describe them. Measured: `Suicidal Thoughts`
+# returned 2,003 works by default against 5,000 with the toggle on, and
+# `Eating Disorders` 594 against 5,000.
+#
+# The tier exists to answer one question: could this link get removed, or the
+# person who pasted it banned. A fic tagged `Suicidal Thoughts` is not that.
+# None of the community rules this was built from — sexualised minors,
+# pedophilia, underage, extreme or encouraged violence and rape — reaches
+# mental-health themes, and the body of work affected is largely hurt/comfort
+# and recovery fic, which is among the most recommended writing in fandom.
+#
+# The archives already do the right thing here: AO3 shows its own warnings on
+# the work page, so a reader meets the warning before the text either way.
+# Hiding the work from search does not add a warning; it removes the story.
+#
+# Decided deliberately, and the alternative considered and rejected was a third
+# tier with its own toggle — more honest labelling, and a new column, backfill,
+# settings row and another thing to keep from drifting, for a category the
+# operator's own posting rules never asked to gate.
+_NOT_GATED_MENTAL_HEALTH = [
+    "Self-Harm", "Suicide", "Suicidal Thoughts", "Eating Disorders",
 ]
