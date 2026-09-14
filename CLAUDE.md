@@ -79,6 +79,36 @@ no side effects — and `tests/test_gate_terms_one_source.py` asserts every
 consumer shares the same list OBJECT (identity, not equality: equal contents
 today is how the drift started) and that nothing redefines them anywhere.
 
+### Belt and braces is permanent, and the reason changed
+
+The array containment beside the gate columns was written as a temporary
+measure, to come out once the backfill finished. The backfill has finished —
+verified exactly right in BOTH directions, zero rows unflagged that should be
+and zero flagged that should not be — and the array half stays.
+
+- **The columns are a CACHE of the term lists.** They are set by a trigger on
+  write and corrected by `content_gates.run`, so they are right for what the
+  lists said when those last ran. Change `gate_terms.py` and every column is
+  stale until the weekly repair catches up, while the array check is correct on
+  the next query. Not hypothetical: the lists existed in two copies and
+  `api/search.py` held the laxer one, 15 and 31 terms short.
+- **It is no longer expensive, and the old measurement has an explanation.**
+  This file said the array half "is what made `harry potter` take 11.4s". True
+  when it was four predicates with nothing narrowing ahead of them. With the
+  indexed gate columns applied first, the containment only tests what survives
+  them. Measured, median of three:
+
+  | filter | columns | + arrays |
+  |---|---:|---:|
+  | `tags=Fluff` | 305.5ms | 363.3ms |
+  | `fandoms=Harry Potter` | 135.6ms | 176.6ms |
+  | `relationships=drarry` | 23.9ms | 64.4ms |
+
+  Forty to sixty milliseconds, against being immune to a stale cache on the one
+  filter where stale means showing somebody what they did not ask for. **When a
+  cost is quoted from before a structural change, re-measure it before acting
+  on it** — that is twice in this session, here and on the hub work lists.
+
 ### Sample the surface; do not reason about it
 
 The list of gated code paths was written down in this file as if it were

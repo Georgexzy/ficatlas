@@ -1552,18 +1552,41 @@ def search(          # NOT async — see below
     # is a 503 and a reader who sees nothing at all. A negated containment
     # cannot use the GIN index, so each one is a per-row test; merging the
     # arrays makes it two tests over one array apiece instead of four.
-    # BELT AND BRACES while the backfill runs.
+    # BELT AND BRACES, PERMANENTLY. This was written as a temporary measure to
+    # be removed once the backfill completed; the backfill has now completed
+    # and the array half stays, for two reasons that only became clear after
+    # it did.
     #
-    # The gate columns are the fast path — indexed booleans set by a database
-    # trigger, see backend/content_gates.py — but they are only as good as the
-    # backfill that populated them, and a column defaulting to `false` reads as
-    # SAFE. Until every row has been visited, trusting the column alone would
-    # be strictly less safe than the array check it replaced.
+    # 1. The columns are a CACHE of the term lists. They are set by a trigger
+    #    on write and corrected by `content_gates.run`, so they are right for
+    #    what the lists said WHEN THOSE LAST RAN. Change `gate_terms.py` and
+    #    every column is stale until the weekly repair catches up, while the
+    #    array check is correct on the next query. That is not hypothetical:
+    #    the lists used to exist in two copies and this file held the laxer
+    #    one, 15 underage and 31 adult terms short — see gate_terms.py.
     #
-    # So both, for now: the column is checked first and costs nothing, and the
-    # array containment catches anything the backfill has not reached. The
-    # array half comes out once `content_gates.py` has completed a clean run —
-    # it is what made `harry potter` take 11.4s.
+    # 2. It is no longer expensive. The note here used to say the array half
+    #    "is what made `harry potter` take 11.4s", and that was true when it
+    #    was FOUR predicates with nothing narrowing ahead of them. With the
+    #    indexed gate columns applied first, the containment only tests what
+    #    survives them. Measured, median of three, columns alone against
+    #    columns plus arrays:
+    #
+    #        tags=Fluff      305.5ms -> 363.3ms
+    #        fandoms=HP      135.6ms -> 176.6ms
+    #        ship=drarry      23.9ms ->  64.4ms
+    #
+    #    Forty to sixty milliseconds, against being immune to a stale cache on
+    #    the one filter where staleness means showing somebody content they
+    #    did not ask for.
+    #
+    # Verified after the backfill: the columns are exactly right in BOTH
+    # directions — zero rows unflagged that should be, zero flagged that should
+    # not be — so the arrays currently remove nothing. That is the point. They
+    # are there for the day the lists change.
+    # ONE predicate per column, not one per tier: four separate `NOT (col &&
+    # ARRAY[…])` checks cost more than the search they protect, and merging
+    # the arrays makes it two tests over one array apiece instead of four.
     _gates = []
     _gate_w: list[str] = []
     _gate_t: list[str] = []
