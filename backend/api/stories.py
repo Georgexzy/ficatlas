@@ -17,6 +17,8 @@ from models.user import User, ROLE_ADMIN
 from api.auth import get_current_user
 from html_sanitize import sanitize_html, strip_chapter_heading, tidy_chapter_html
 from provenance import content_tags, source_labels
+from gate_terms import (ADULT_TAGS, ADULT_WARNINGS,
+                        UNDERAGE_TAGS, UNDERAGE_WARNINGS)
 
 router = APIRouter()
 
@@ -538,6 +540,31 @@ def similar_stories(
             FROM stories
             WHERE id <> :sid
               AND delisted_at IS NULL
+              -- Content gates, both tiers, columns AND arrays.
+              --
+              -- "If you like this, try…" is rendered on every story page, and
+              -- a story page is a crawlable surface a search engine hands to a
+              -- stranger — the same argument the hub work lists rest on. Like
+              -- a hub it has NO toggle, so the safe default is the only
+              -- setting it has.
+              --
+              -- This was the FIFTH gated code path and the list of four was
+              -- written down as if it were complete. Measured before the fix:
+              -- **13 of 240 works** returned by this endpoint across a dozen
+              -- popular stories carried adult-tier terms. Every time a new
+              -- surface has been sampled rather than reasoned about, it has
+              -- had a hole — random's fallback, the two hub lists, and now
+              -- this. Sample the surface.
+              --
+              -- Cheap here: the candidate set is bounded at 4,000 rows drawn
+              -- through the GIN indexes, so the negated containment is a
+              -- per-candidate test over a small set, not over 20.5M rows.
+              AND NOT gate_underage
+              AND NOT gate_adult
+              AND NOT (COALESCE(warnings,'{}') && CAST(:g_uw AS text[]))
+              AND NOT (COALESCE(tags,'{}')     && CAST(:g_ut AS text[]))
+              AND NOT (COALESCE(warnings,'{}') && CAST(:g_aw AS text[]))
+              AND NOT (COALESCE(tags,'{}')     && CAST(:g_at AS text[]))
               AND (
                     (:has_ships   AND relationships && :ships)
                  OR (:has_fandoms AND fandoms       && :fandoms)
@@ -560,6 +587,12 @@ def similar_stories(
         bindparam("ships", value=ships, type_=PG_ARRAY(Text)),
         bindparam("fandoms", value=fandoms, type_=PG_ARRAY(Text)),
         bindparam("tags", value=tags, type_=PG_ARRAY(Text)),
+        # Imported from gate_terms, the one place these live — see the note in
+        # gate_terms.py about the two copies that drifted 15 and 31 terms apart.
+        bindparam("g_uw", value=UNDERAGE_WARNINGS, type_=PG_ARRAY(Text)),
+        bindparam("g_ut", value=UNDERAGE_TAGS, type_=PG_ARRAY(Text)),
+        bindparam("g_aw", value=ADULT_WARNINGS, type_=PG_ARRAY(Text)),
+        bindparam("g_at", value=ADULT_TAGS, type_=PG_ARRAY(Text)),
         sid=story.id,
         has_ships=bool(ships), has_fandoms=bool(fandoms), has_tags=bool(tags),
         lim=count,

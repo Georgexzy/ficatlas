@@ -79,6 +79,33 @@ no side effects — and `tests/test_gate_terms_one_source.py` asserts every
 consumer shares the same list OBJECT (identity, not equality: equal contents
 today is how the drift started) and that nothing redefines them anywhere.
 
+### Sample the surface; do not reason about it
+
+The list of gated code paths was written down in this file as if it were
+complete — "Four separate code paths needed it, and missing any one would have
+left the hole open" — and it was wrong twice over. Every surface that has since
+been SAMPLED rather than reasoned about has had a hole:
+
+| surface | gated works found | of |
+|---|---:|---:|
+| fandom hub | 9 | 141 |
+| ship hub | 10 | 93 |
+| `/api/search/random` | 3 | 45 |
+| **`/api/stories/{id}/similar`** | **13** | **240** |
+
+`/similar` — "If you like this, try…", rendered on every story page — was never
+on the list at all. A story page is a crawlable surface a search engine hands
+to a stranger, and like a hub it has no toggle, so the safe default is the only
+setting it has. Cheap to gate: the candidate set is bounded at 4,000 rows drawn
+through the GIN indexes, so the negated containment is a per-candidate test
+over a small set rather than over 20.5M rows. Measured after: 330ms a call.
+
+`tests/gate_check.py` is the probe — hand it a file of story ids and it counts
+how many carry gated terms, checked against `gate_terms.py`'s lists and NOT the
+gate columns, because during a backfill the columns are exactly what cannot be
+trusted and "no row is flagged" would pass on a table where nothing had been
+flagged yet.
+
 ### Two no-toggle surfaces trusted the column alone
 
 Found by sampling the crawlable surface rather than by reading the code. Of
