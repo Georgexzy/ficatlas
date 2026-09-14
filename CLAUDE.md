@@ -776,6 +776,36 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     failure this endpoint exists to prevent.
   - Measured end to end: the Harry/Daphne post → 64 works; the lordship post →
     `tag:"Albus Dumbledore Bashing" words:>150k` → 160 works, all 150k+.
+- **Three faults a dry run of the verification script found, none of which any
+  test was asking about.**
+  - **`tests/check-robots.py` had been failing since the commit that rewrote
+    the crawler groups.** It still asserted `/story/` was ALLOWED for Applebot,
+    which was true until Applebot was deliberately held to the hubs and false
+    from that commit onward. A check that is permanently red is a check nobody
+    reads. It now asserts BOTH halves of that decision — story tail refused,
+    hubs and sitemap allowed — because getting only the first half is how the
+    policy quietly comes undone.
+  - **Two spellings of one concept became two requirements.** "self-insert"
+    produced `tag:"Self-Insert" tag:"Self Insert"` — different facet values,
+    same concept, AND-ed, so the query demanded a work carrying both. Neither
+    `_implies` nor the value dedup can see it: one compares characters with
+    word boundaries and a hyphen is not a space, the other compares values
+    exactly. Terms are now deduped on a punctuation-stripped key, and the loser
+    joins the winner's spellings so the probe still ORs them.
+  - **A tag that NEGATES a concept was being treated as a spelling of it.**
+    Asking for self-inserts put `Not a self insert` in the resolver group, and
+    the group is what the probe ORs — so a concept could survive on the
+    strength of works saying the opposite of what was asked.
+- **Comparing totals is the wrong way to test the two content tiers, and the
+  first version of the check failed on a healthy system.** `explicit=true`
+  legitimately admits far more works than `include_underage` does (1,466
+  against 1,075 on the Harry/Daphne search), so `explicit <= underage` is not
+  the invariant. The property that matters is INDEPENDENCE: turning underage on
+  must still add works when explicit is already on — 1,466 to 1,647 — because
+  if explicit had been quietly unlocking tier 1 there would be nothing left for
+  the underage toggle to reveal. Confirmed at the row level too: zero
+  underage-gated works pass the predicate an `explicit=true` search applies.
+
 - **A crossover is more than one FRANCHISE, not more than one fandom tag — and
   the first six results on a real post were all crossovers.** Reported from the
   live site on the TWD fic-finder post: Avengers, Supernatural, Lord of the

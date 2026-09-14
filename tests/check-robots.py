@@ -89,8 +89,20 @@ EXPECTED = [
     ("SemrushBot", "/story/abc", False),
     ("AhrefsBot", "/", False),
     ("MJ12bot", "/ship/x", False),
-    # Search crawlers that are deliberately NOT blocked.
-    ("Applebot", "/story/abc", True),
+    # Search crawlers that are deliberately NOT blocked — but which are held
+    # to the HUBS and kept out of the 20.5M-page story tail. This pair of
+    # expectations is the whole shape of that decision, and getting only the
+    # first half is how the policy would quietly come undone.
+    #
+    # This entry used to assert `/story/` was ALLOWED for Applebot, which was
+    # true until the groups were rewritten and false from that commit onward —
+    # so the checker had been failing ever since, on a repo that runs it by
+    # hand. A check that is permanently red is a check nobody reads.
+    ("Applebot", "/story/abc", False),
+    ("Applebot", "/fandom/harry-potter", True),
+    ("Applebot", "/ship/draco-malfoy-harry-potter", True),
+    ("Applebot", "/sitemap.xml", True),
+    ("Amzn-SearchBot", "/story/abc", False),
     ("Amzn-SearchBot", "/fandom/harry-potter", True),
 ]
 
