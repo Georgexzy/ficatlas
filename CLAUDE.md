@@ -1012,6 +1012,40 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   the underage toggle to reveal. Confirmed at the row level too: zero
   underage-gated works pass the predicate an `explicit=true` search applies.
 
+- **A derived column either has a TRIGGER or it drifts, and thirteen hours of
+  running showed exactly which is which.** After the backfills finished clean,
+  re-verified half a day later:
+
+  | column | drift after 13h | why |
+  |---|---:|---|
+  | `gate_underage` / `gate_adult` | **0** | BEFORE trigger on tags/warnings |
+  | `is_crossover` | 1 in 5,000 sampled | no trigger |
+  | `series_total_words` | **3,296** of 848,013 | no trigger, and cannot have one |
+
+  - **`is_crossover` now has a trigger**, because it is a pure function of the
+    row's own `fandoms` — exactly the argument `content_gates.py` already makes.
+    The importers and the crawler call `crossover.is_crossover` so they write
+    it correctly; the trigger covers everything that does not go through them,
+    which is any bulk UPDATE to `fandoms`.
+  - **`series_total_words` cannot have one.** It depends on the `series` table,
+    which `_series_fill_loop` changes every fifteen minutes by fetching missing
+    works, and no trigger on `stories` can see that. So it gets its own
+    six-hourly `_series_wordcount_loop` instead of a weekly slot — at weekly
+    the error reaches 5% of the population before anything corrects it.
+    - Running it often is cheap, and that is what makes frequency the right
+      answer rather than a bigger tolerance: the fill is predicated on
+      `IS DISTINCT FROM`, so a sweep that finds nothing writes nothing.
+    - The staleness is in the safe direction either way — the column only ever
+      WIDENS a length filter, so a stale row fails to admit a work it should,
+      rather than admitting one it should not.
+  - The curation loop keeps only the two jobs that correct a RULE rather than
+    data: a gate list changing, or the crossover definition changing. Neither
+    happens on its own, so weekly is right for those and wrong for a column
+    that decays continuously.
+  - **`drarry` measured 11.5s once and 2.6s median over five runs.** A single
+    timing on a loaded box is not a measurement; the verification script's
+    10-second gate had caught a cold outlier, not a regression.
+
 - **The extractor was measured against fifteen REAL fic-finder posts, and it
   was much worse than the single-post checks had suggested.** Before: **three
   posts returned nothing at all and six ran in the WRONG FANDOM** — the worse

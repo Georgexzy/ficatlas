@@ -1278,6 +1278,42 @@ async def _stats_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _series_wordcount_loop() -> None:
+    """Series totals, on their own and much more often than weekly.
+
+    The gate columns and `is_crossover` are pure functions of a row's own
+    fields, so a BEFORE trigger keeps them exact and the periodic repair only
+    has to cover a change to the RULES. `series_total_words` cannot work that
+    way: it depends on the `series` table, which `_series_fill_loop` changes
+    every fifteen minutes by fetching missing works, and no trigger on
+    `stories` can see that.
+
+    So it drifts, and the rate is measured rather than guessed: **3,296 of
+    848,013 works** were wrong or missing thirteen hours after a clean
+    converged pass, about 250 an hour. At a weekly interval that reaches 5% of
+    the population before anything corrects it.
+
+    Cheap to run often, which is what makes this the right answer rather than a
+    bigger tolerance: a sweep that finds nothing writes nothing, because the
+    fill is predicated on `IS DISTINCT FROM`. Six-hourly keeps the error inside
+    a couple of thousand rows, and the column only ever WIDENS a length filter
+    — so a stale row fails to admit a work it should, rather than admitting one
+    it should not.
+    """
+    import series_wordcount
+
+    interval = _num("SERIES_WC_INTERVAL_HOURS", 6) * 3600
+    await asyncio.sleep(_num("SERIES_WC_START_DELAY_SEC", 900))
+    while True:
+        try:
+            stats = await asyncio.to_thread(series_wordcount.run)
+            if stats.get("filled") or stats.get("cleared"):
+                log.info("series word counts: %s", stats)
+        except Exception:
+            log.exception("series word count pass failed")
+        await asyncio.sleep(interval)
+
+
 async def _curation_loop() -> None:
     """The three jobs nothing was running, on one schedule.
 
@@ -1300,13 +1336,13 @@ async def _curation_loop() -> None:
     the definition changed and wrong for everything written before it. No
     trigger can retrofit a definition onto rows that predate it.
 
-    The series word counts are the fourth part and belong here for the same
-    reason as the gate repair: both are a denormalised column that has to be
-    rebuilt after a BULK change to what it was derived from. `_series_fill_loop`
-    adds a few works to existing series every fifteen minutes, so a series total
-    goes stale slowly and in the direction that is safe — the add-on widens a
-    length filter, so a total that has not caught up simply fails to admit a
-    work yet, rather than admitting one that does not qualify.
+    The series word counts used to be here and are NOT any more. They drift far
+    faster than weekly — 3,296 of 848,013 works were wrong thirteen hours after
+    a converged pass, because `_series_fill_loop` changes the `series` table
+    every fifteen minutes — so they have their own six-hourly loop above. The
+    two jobs that remain here are both corrections to a RULE rather than to
+    data: a gate list changing, or a crossover definition changing, neither of
+    which happens on its own.
 
     Weekly. A rec list that took years to form does not move in a day, and the
     gate repair is a near-no-op once the backfill has run — it asks an indexed
@@ -1317,7 +1353,6 @@ async def _curation_loop() -> None:
     import content_gates
     import crossover
     import reddit_recs_import
-    import series_wordcount
     import tropedia_recs_import
 
     interval = _num("CURATION_INTERVAL_HOURS", 168) * 3600
@@ -1326,7 +1361,6 @@ async def _curation_loop() -> None:
         for name, fn in (("reddit recs", reddit_recs_import.run),
                          ("tropedia recs", tropedia_recs_import.run),
                          ("content gates", content_gates.run),
-                         ("series word counts", series_wordcount.run),
                          ("crossover flags", crossover.run)):
             try:
                 stats = await asyncio.to_thread(fn)
@@ -1658,6 +1692,10 @@ async def main() -> None:
     if _flag("REFRESH_STATS", "true"):
         tasks.append(asyncio.create_task(_stats_loop()))
         log.info("index totals refresh enabled (keeps the scan off the API)")
+
+    if _flag("RUN_SERIES_WORDCOUNT", "true"):
+        tasks.append(asyncio.create_task(_series_wordcount_loop()))
+        log.info("series word count refresh enabled (six-hourly)")
 
     if _flag("RUN_SERIES_FILL", "true"):
         tasks.append(asyncio.create_task(_series_fill_loop()))
