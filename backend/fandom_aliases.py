@@ -110,6 +110,33 @@ STOPLIST = {
     "out", "man", "day", "fic", "fics", "au", "ao", "ff", "wip", "ish",
     "ask", "any", "got", "get", "see", "say", "way", "set", "run", "top",
     "bit", "lot", "big", "few", "far", "yet", "now", "off", "per", "via",
+    # Found by running the miner's output against a corpus of real fic-finder
+    # posts rather than by thinking of them. Each resolved a fandom from an
+    # ordinary English word in running prose, and each produced a search in
+    # entirely the wrong fandom that still returned thousands of works — so
+    # nothing about the result looked wrong:
+    #   "I'm bored of OP Harry stories"     -> One Piece
+    #   "trying to get into Dramione fics"  -> Good Omens        (the "go")
+    #   "pretends to be Sirius' son"        -> South of Nowhere
+    #   "re-read", "mc", "id"               -> Resident Evil, Misc. Cartoons,
+    #                                          Infernal Devices
+    "op", "go", "son", "re", "mc", "id", "dc", "din", "sue", "ran", "gon",
+    "mad", "pet", "ship", "tag", "arc", "bay", "cap", "con", "den", "eve",
+    # CHAT SHORTHAND. A whole class, not a handful of accidents: these are
+    # what people type in a forum post, and several of them are also perfectly
+    # good fandom initialisms. Measured on real posts — "Marvel or dc pls"
+    # resolved to `Professor Layton` via `pls`, and a post containing "lol"
+    # resolved to `League of Legends`. Both then led the query.
+    "lol", "lmao", "rofl", "pls", "plz", "thx", "ty", "np", "idk", "idc",
+    "imo", "imho", "tbh", "btw", "omg", "wtf", "ngl", "iirc", "afaik", "rn",
+    "tho", "fyi", "aka", "etc", "ie", "eg", "ffs", "smh", "irl", "dm", "pm",
+    "ppl", "ur", "nvm", "ikr", "obv", "def", "rec", "recs", "req", "ish",
+    "ofc", "atm", "ymmv", "op",
+    # Contraction tails. Typographic apostrophes are normalised before the
+    # scan now, but a mined alias that can only ever match the back half of
+    # "I'll" or "I've" has no legitimate use and should not exist to be
+    # matched by accident.
+    "ll", "ve", "nt", "im", "ive", "dont", "didnt",
     # Abbreviations that mean a TAG rather than a fandom. `si` is Self-Insert
     # to every reader who types it; that it is also SK8 the Infinity's
     # initialism is a coincidence the reader will never have in mind.
