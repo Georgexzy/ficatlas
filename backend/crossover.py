@@ -100,6 +100,34 @@ CREATE OR REPLACE FUNCTION fic_franchise(f text) RETURNS text AS $fn$
 $fn$ LANGUAGE sql IMMUTABLE;
 """
 
+# ── The trigger: the same argument content_gates.py makes ───────────────────
+#
+# `is_crossover` is a pure function of `fandoms`, exactly as the content gates
+# are of `tags` and `warnings` — so a column maintained only by a periodic job
+# is stale by construction. Measured thirteen hours after a clean repair: one
+# disagreement in a 5,000-row sample, from rows the crawler had written since.
+#
+# The importers and the crawler all call `crossover.is_crossover` now, so they
+# write it correctly. The trigger is for everything that does NOT go through
+# them — a bulk UPDATE to `fandoms`, a repair script, a hand-run backfill —
+# which is exactly the case the gate trigger exists to cover.
+_TRIGGER_SQL = """
+CREATE OR REPLACE FUNCTION fic_set_is_crossover() RETURNS trigger AS $t$
+BEGIN
+  NEW.is_crossover := (
+    SELECT count(DISTINCT fic_franchise(f)) > 1
+      FROM unnest(COALESCE(NEW.fandoms, '{}')) f
+     WHERE btrim(f) <> ''
+  );
+  RETURN NEW;
+END $t$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_fic_set_is_crossover ON stories;
+CREATE TRIGGER trg_fic_set_is_crossover
+  BEFORE INSERT OR UPDATE OF fandoms ON stories
+  FOR EACH ROW EXECUTE FUNCTION fic_set_is_crossover();
+"""
+
 # A single-fandom row can never be a crossover, and needs no function call —
 # kept separate so the cheap half of the repair is an index-friendly predicate.
 _REPAIR_DOWN_SQL = """
@@ -159,6 +187,11 @@ def run(dry_run: bool = False) -> dict:
             return {"skipped": True}
         db.execute(_text("SET statement_timeout = 0"))
         db.execute(_text(_SQL_FRANCHISE))
+        # The trigger FIRST, so anything written while the repair below runs is
+        # already correct. The other way round leaves a window the length of
+        # the repair — the same ordering content_gates.py uses and for the same
+        # reason.
+        db.execute(_text(_TRIGGER_SQL))
         db.commit()
 
         if dry_run:
