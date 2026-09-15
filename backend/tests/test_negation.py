@@ -100,3 +100,40 @@ def test_the_framing_stripper_no_longer_eats_without(vocab):
     i = resolve_intent(vocab, "looking for a fic without character death")
     assert "out" not in i.text.split()
     assert "Character Death" in _excluded(i)
+
+
+@pytest.mark.parametrize("phrase,expect", [
+    ("smut please", "Smut"),
+    ("smut thanks", "Smut"),
+    ("harems pls", "Harems"),
+    ("character death tho", "Character Death"),
+])
+def test_trailing_politeness_is_not_the_thing_being_refused(db, phrase, expect):
+    """Every politeness word is also a real tag, and the window matcher takes
+    it — leaving the ACTUAL subject as leftover, which the positive path then
+    searches FOR:
+
+        "no smut please"  ->  excluded `please`,       "smut" left as a want
+        "no smut thanks"  ->  excluded `Thanksgiving`, "smut" left as a want
+
+    The second shows how bad it gets: the reader refused smut, and the search
+    went looking for it having excluded a holiday instead. Same shape as "no
+    harems" searching FOR harems, one layer down.
+    """
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag','Smut',325862), ('tag','Harems',5180), ('tag','Harem',9000),
+          ('tag','Character Death',88000), ('tag','please',3000),
+          ('tag','Thanksgiving',3102), ('tag','Thanks',900)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    db.commit()
+    from query_intent import _negated_subject
+    tags, _ = _negated_subject(db, phrase)
+    # The subject is present and the politeness is not. Asserting which
+    # SPELLING leads would be asserting the resolver's ordering, which is a
+    # separate rule with its own tests — "harems" legitimately returns both
+    # `Harems` and `Harem`.
+    assert expect in tags, tags
+    for polite in ("please", "Thanksgiving", "Thanks", "thank you"):
+        assert polite not in tags, tags

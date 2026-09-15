@@ -1057,6 +1057,21 @@ def _extract_negations(db, text: str, gated: bool) -> tuple[str, list[list[str]]
 _NEG_MIN_WORKS = 200
 
 
+# Politeness that trails a refusal. Stripped BEFORE the subject is resolved,
+# because every one of these is a real tag and the window matcher will take it:
+#
+#     "no smut please"  ->  excluded `please`,      "smut" left as a WANT
+#     "no smut thanks"  ->  excluded `Thanksgiving`, "smut" left as a WANT
+#
+# The second is the one that shows how bad it is — the reader refused smut and
+# the search went looking for it, having excluded a holiday instead.
+_NEG_TRAILING = {
+    "please", "pls", "plz", "thanks", "thank", "thankyou", "ty", "cheers",
+    "tho", "though", "okay", "ok", "anyway", "lol", "tbh", "imo", "btw",
+    "ideally", "hopefully", "sorry", "obviously",
+}
+
+
 def _negated_subject(db, phrase: str) -> tuple[list[str], str]:
     """The tag a negation refers to, and the words left over.
 
@@ -1066,6 +1081,12 @@ def _negated_subject(db, phrase: str) -> tuple[list[str], str]:
     one-word window would fire on any query — but which is exactly what "no
     harems" and "without bashing" are.
     """
+    # Trailing politeness off first — see `_NEG_TRAILING`.
+    _w = phrase.split()
+    while _w and _w[-1].strip(",.;:!?").lower() in _NEG_TRAILING:
+        _w.pop()
+    phrase = " ".join(_w) if _w else phrase
+
     tags, _works, leftover, _whole = resolve_trope_tags(db, phrase)
     if tags:
         return tags, leftover
