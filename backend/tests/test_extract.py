@@ -925,3 +925,66 @@ def test_the_query_may_hold_four_terms_when_four_survive():
     from api.search import _MAX_QUERY_TERMS, _PROBE_MIN_KEEP
     assert _MAX_QUERY_TERMS >= 4
     assert _PROBE_MIN_KEEP >= 1
+
+
+@pytest.mark.parametrize("line,band", [
+    ("drarry is my no.1", -1),
+    ("i need harry centric fics badly", -1),
+    ("pleaseeee let them be completed", -1),
+    ("if theres a resorting, please DROP THAT FICCCCC", -1),
+    ("i am a sucker for gringotts vault fics", -1),
+    ("preferably little to no smut", 1),
+    ("creature inheritance is accepted so long as its well written", 1),
+    ("this does not have to be included or excluded", 1),
+    ("bonus if there is time travel", 1),
+    ("50k+ words", 0),
+    ("harry goes to gringotts", 0),
+])
+def test_how_hard_the_reader_pushed_is_read_from_their_own_words(line, band):
+    """Ranking was corpus frequency and little else — "what surfaces the most
+    fics" — so a want the reader shouted for lost to one they mentioned in
+    passing, purely because the archives tag the second more often.
+
+    A fic-finder post is not a flat list: it says which parts matter, in
+    drawn-out vowels ("pleaseeee"), shouting ("DROP THAT FICCCCC"), rankings
+    ("my no.1") and hedges ("preferably", "so long as", "does not have to").
+    Frequency still orders WITHIN a band, because between two things wanted
+    equally the better-attested one builds a better query."""
+    from api.search import _emphasis
+    assert _emphasis(line) == band, line
+
+
+def test_a_hedge_beats_an_insistence_on_the_same_line():
+    """"preferably little to no smut" hedges and "pleaseeee" insists. The hedge
+    is the more specific statement about THIS want, so it wins."""
+    from api.search import _emphasis
+    assert _emphasis("pleaseeee preferably little to no smut") == 1
+
+
+def test_a_leftover_never_outranks_something_the_reader_said():
+    """Emphasis above the leftover penalty was tried and is wrong: it let
+    `Therapy` — a second-pass leftover, in no sentence of the post — outrank
+    `Top Draco Malfoy`, which the reader asked for and merely hedged. A thing
+    the reader hedged is still a thing they said; a leftover is not."""
+    import inspect
+    from api.search import extract
+    src = inspect.getsource(extract)
+    key = src[src.index("swapped.sort(key="):]
+    key = key[:key.index("))") + 2]
+    assert key.index("leftover_values") < key.index("emphasis.get"), key
+
+
+def test_what_the_reader_ruled_out_is_not_offered_back(bulleted):
+    """The negation path resolved "preferably little to no smut" to `Smut` and
+    excluded it; the n-gram path then found the same word and OFFERED `Smut`
+    (325,862 works) as a want, one click from adding the exact thing the post
+    refused. Two paths over one post and nothing reconciled them."""
+    bulleted.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES ('tag','Smut',325862)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    bulleted.commit()
+    out = extract(text="looking for fluffy fics, preferably little to no smut",
+                  db=bulleted)
+    if "Smut" in out.exclude_tags:
+        assert "Smut" not in [t.value for t in out.terms]
