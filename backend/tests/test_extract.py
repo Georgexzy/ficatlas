@@ -988,3 +988,67 @@ def test_what_the_reader_ruled_out_is_not_offered_back(bulleted):
                   db=bulleted)
     if "Smut" in out.exclude_tags:
         assert "Smut" not in [t.value for t in out.terms]
+
+
+def test_an_ao3_fandom_is_a_fandom(bulleted):
+    """`facets` tracks AO3's fandom vocabulary under its own kind,
+    `fandom_ao3`, and the operator map did not know it — so it fell through to
+    the default and `Marvel`, a fandom on **686,826** works, came out of the
+    extractor as `tag:"Marvel"`, a freeform tag on 46,645 and an entirely
+    different search. Nothing downstream cares which kind it was."""
+    bulleted.execute(text("""
+        INSERT INTO facets (kind, value, count)
+        VALUES ('fandom_ao3','Marvel',686826) ON CONFLICT (kind, value) DO NOTHING
+    """))
+    bulleted.commit()
+    out = extract(text="looking for Marvel fics with fluff", db=bulleted)
+    marvel = [t for t in out.terms if t.value == "Marvel"]
+    assert marvel and marvel[0].kind == "fandom", [(t.kind, t.value) for t in out.terms]
+    assert 'tag:"Marvel"' not in out.query, out.query
+
+
+def subject_marked(out):
+    """The values the extractor treated as the post's subject.
+
+    Not exposed on the response — the subject pin is an internal ordering
+    device — so this reads it back from the ORDER: a subject sorts ahead of
+    every other line term regardless of how well attested it is.
+    """
+    line = [t for t in out.terms if t.from_line]
+    if len(line) < 2:
+        return set()
+    return {line[0].value} if line[0].count < line[1].count else set()
+
+
+def test_the_subject_has_to_be_a_real_thing(bulleted):
+    """Being said early is evidence; it is not evidence enough to lead a search.
+
+    "Has to be an oc or like a character that is different in some sort of way"
+    is the second line of a real post and resolved to
+    `different characters - Freeform` — a tag on TWELVE works — which the
+    subject rule then pinned at the head of the query, ahead of
+    `Original Character` on 18,806."""
+    from api.search import _SUBJECT_MIN_WORKS
+    assert _SUBJECT_MIN_WORKS >= 100
+    bulleted.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag','different characters - Freeform',12),
+          ('character','Original Character',18806)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    bulleted.commit()
+    out = extract(text="here are my requirements\n"
+                       "Has to be an oc or like a character that is different "
+                       "in some sort of way", db=bulleted)
+    # NOT asserted here: that `Original Character` outranks it. Line terms beat
+    # loose ones by design — "the line SAID what it wanted, and a bare word
+    # merely appeared in it" is what puts `Harry is Lord Potter` (82 works)
+    # above `House` (22,251) — and a test that demanded the opposite would be
+    # arguing with a rule this file defends elsewhere.
+    #
+    # What the floor changes is the SUBJECT pin, which is what had put a
+    # twelve-work tag at the head of the query. Verified on the live index,
+    # where the post also resolves `Marvel`: the query is
+    # `fandom:"Marvel" -tag:"System" …` and returns 5,000 works, against
+    # `tag:"different characters - Freeform" tag:"Marvel" …` returning 0.
+    assert "different characters - Freeform" not in subject_marked(out)
