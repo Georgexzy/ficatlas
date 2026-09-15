@@ -3572,6 +3572,10 @@ class ExtractResponse(BaseModel):
     # whether or not it lists anything. A reader's own consent does not reach
     # the people they paste a link to.
     gated_terms: list[str] = []
+    # Whether the QUERY TEXT is safe to paste, which is not the same question
+    # as whether the works are gated — see `_link_is_unsafe`. A caller that
+    # builds a link must refuse on this, not on `gated_terms` alone.
+    link_unsafe: bool = False
     # "on AO3", "I only read on ff.net" — already inside `query` as `site:`.
     site: Optional[str] = None
     # "I do not mind nsfw". PERMISSION, not a want, and deliberately NOT in the
@@ -3747,6 +3751,48 @@ def _reads_nsfw(raw: str) -> Optional[bool]:
     if _NSFW_NO.search(raw):
         return False
     return True if _NSFW_OK.search(raw) else None
+
+
+# IS THIS QUERY TEXT SAFE TO PASTE IN PUBLIC? A different question from "should
+# this work be hidden", and it needs a different rule.
+#
+# The gate lists are deliberately EXACT, because over-blocking hides tens of
+# thousands of ordinary works — `Underage Drinking`, `Bang Chan (Stray Kids)`.
+# That exactness is right for deciding what a search RETURNS and wrong for
+# deciding what a URL may SAY. Measured: "harry potter explicit language and
+# sexual content fics" produced `tag:"Sexual Content" tag:"Explicit Language…"`
+# and an exact-match check flagged NEITHER, because the gate list holds
+# `Explicit Sexual Content` and not those neighbours. The works were gated; the
+# text was not, and the text is what gets pasted.
+#
+# So the asymmetry inverts. Refusing to build a link costs the operator a link
+# — they write a reply in words instead — while a bad link costs a ban. A
+# pattern that over-matches is the correct shape HERE and only here.
+_UNSAFE_LINK_RE = re.compile(
+    r"under[\s-]?age|minor\s*/\s*adult|adult\s*/\s*minor|\bminors?\b"
+    r"|p[ae]edo|shota|\bloli\b|lolicon|statutory|ephebo|jail\s*bait"
+    r"|groom(?:ing|er)|molest|\bincest|twincest"
+    r"|\brape\b|non[\s-]?con|noncon|dub[\s-]?con|dubcon|consent issues"
+    r"|\bsmut|\bporn|\bpwp\b|\bnsfw\b|explicit|\bkink|\bbdsm\b"
+    r"|bestial|necroph|snuff|\borgy\b|gangbang|\bsex\b|sexual"
+    r"|dead\s*dove|dead\s*doves",
+    re.I)
+
+# Words that merely CONTAIN a trigger and are not the thing. An identity tag is
+# not a content warning, and refusing to link a search for asexual characters
+# would be both wrong and insulting.
+_UNSAFE_FALSE_FRIENDS = re.compile(
+    r"\b(?:a|demi|bi|homo|hetero|pan|poly|allo|gray|grey)[\s-]?sexual"
+    r"|\bsexuality\b|\bsexism\b|\bsexist\b|\btransexual\b"
+    r"|\bunderage\s+(?:drinking|smoking|drug\s*use|kissing)\b"
+    r"|\bno\s+(?:underage|pedophilia|smut|rape|incest)\b",
+    re.I)
+
+
+def _link_is_unsafe(query: str) -> bool:
+    """Would this query text be a problem in a public thread?"""
+    scrubbed = _UNSAFE_FALSE_FRIENDS.sub(" ", query or "")
+    return bool(_UNSAFE_LINK_RE.search(scrubbed))
 
 
 # Crossovers, in the reader's own words. NEGATIVE first and deliberately so:
@@ -5243,17 +5289,29 @@ def extract(
     _gated_lists = {t.lower() for t in
                     (_UNDERAGE_TAGS + _UNDERAGE_WARNINGS
                      + _ADULT_TAGS + _ADULT_WARNINGS)}
-    gated_terms = sorted({t.value for t in kept + terms
-                          if t.value.lower() in _gated_lists}
-                         | {v for v in exclude_tags
+    # From what reaches the QUERY, not from every candidate.
+    #
+    # `terms` is the shortlist offered as chips; `kept` and `exclude_tags` are
+    # what the query actually says, and a link carries the query. Including the
+    # whole shortlist made "harry potter underage drinking fics" refuse a
+    # link — the query is `tag:"Drinking"`, which is fine, but `Underage` had
+    # been a candidate. Underage drinking is one of the cases this codebase is
+    # on record about NOT over-blocking, and refusing to link it is the same
+    # error one layer up.
+    gated_terms = sorted({t.value for t in kept if t.value.lower() in _gated_lists}
+                         | {v for v in exclude_tags[:_MAX_EXCLUDES]
                             if v.lower() in _gated_lists})
 
-    return ExtractResponse(terms=terms, query=" ".join(parts),
+    _query_text = " ".join(parts)
+    link_unsafe = bool(gated_terms) or _link_is_unsafe(_query_text)
+
+    return ExtractResponse(terms=terms, query=_query_text,
                            ignored_words=max(len(words) - len(used), 0),
                            word_count_min=wc_min, word_count_max=wc_max,
                            already_read=already_read, status=status, sort=sort,
                            crossovers=crossovers, site=site,
                            explicit_ok=nsfw_ok, gated_terms=gated_terms,
+                           link_unsafe=link_unsafe,
                            exclude_tags=exclude_tags[:_MAX_EXCLUDES])
 
 

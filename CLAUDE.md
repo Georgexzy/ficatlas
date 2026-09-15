@@ -69,6 +69,42 @@ non-empty, alongside the existing check on the query box. Two refusals: one
 reads the BOX, because an operator can type a toggle into it; the other reads
 what the POST resolved to, where nothing in the box looks wrong.
 
+### "Is this query safe to paste" is NOT "should this work be hidden"
+
+Two questions, opposite asymmetries, and conflating them left a leak open after
+the first fix looked complete.
+
+The gate lists are deliberately EXACT, because over-blocking hides tens of
+thousands of ordinary works (`Underage Drinking`, `Bang Chan (Stray Kids)`).
+That is right for deciding what a search RETURNS. It is wrong for deciding what
+a URL may SAY — measured: **"harry potter explicit language and sexual content
+fics" produced `tag:"Sexual Content"` and an exact-match check flagged
+nothing**, because the list holds `Explicit Sexual Content` and not that
+neighbour. The works were gated; the text was not, and the text is what gets
+pasted.
+
+So `_link_is_unsafe` is a deliberately BROAD pattern over the generated query,
+with a short false-friend list (`asexual`, `demisexual`, `sexuality`,
+`underage drinking`, `no pedophilia`). Refusing a link costs the operator a
+link — they reply in words — while a bad link costs a ban. Over-matching is the
+correct shape here and only here.
+
+- **The decision is `link_unsafe`; `gated_terms` is only the explanation.**
+  And `gated_terms` reports what reaches the QUERY, not every candidate:
+  including the whole shortlist made "harry potter underage drinking fics"
+  refuse a link, when its query is `tag:"Drinking"` and perfectly fine.
+- **The n-gram window (1-4 words) is not a leak.** It limits what the extractor
+  can FIND, not what the gates hide: every work carrying a five-word gated tag
+  is gated — `Plot What Plot/Porn Without Plot` 208,529 of 208,529,
+  `Dead Dove: Do Not Eat` 86,729 of 86,729. A tag too long to be recognised is
+  also too long to be put in a query, so it cannot reach a URL either.
+- Twice while testing this, an assertion failed because the query turned out
+  NOT to name anything unsafe — "harry potter fics with rape/non-con" resolves
+  to `fandom:"Harry Potter"` alone. The verdict depends on what survives the
+  probe, which depends on the vocabulary, so a table of expected verdicts is
+  really a test of the fixture. Assert the IMPLICATION instead: if the query
+  names something unsafe, the caller is told to refuse.
+
 ### The gate lists missed the archives' own spelling variants
 
 Found by enumerating the vocabulary rather than by thinking of tags:

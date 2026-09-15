@@ -71,6 +71,12 @@ interface Extracted {
   // URL, and `?q=tag:"Underage Sex"` pasted into a public thread is the thing
   // that got a reader banned, whether or not it lists anything.
   gated_terms?: string[]
+  // Whether the QUERY TEXT is safe to paste, which is a different question
+  // from whether the works are gated. The gate lists are exact, so a query can
+  // name a neighbouring tag they do not hold — "explicit language and sexual
+  // content" produced `tag:"Sexual Content"` and flagged nothing. Refuse on
+  // this, not on `gated_terms` alone.
+  link_unsafe?: boolean
   sort?: string | null
   word_count_min?: number | null
   word_count_max?: number | null
@@ -249,7 +255,8 @@ export default function OutreachPanel() {
   // do not mind is not consent from the people they paste a link to, so
   // `explicit_ok` deliberately does not enter this decision — it cannot make a
   // link safer, only the operator better informed.
-  const unsafeQuery = asksForUnsafe(q) || (ext?.gated_terms?.length ?? 0) > 0
+  const unsafeQuery = asksForUnsafe(q) || !!ext?.link_unsafe
+                      || (ext?.gated_terms?.length ?? 0) > 0
   const reply = (!foundSomething || unsafeQuery) ? null : found.trim()
     ? `I think this is ${found.trim()}.\n\nFound it here if you want to check: ${publicLink(q, ext?.sort)}\n(searches AO3, FanFiction.net and FictionAlley together)`
     : `Try this: ${publicLink(q, ext?.sort)}\n\nIt searches AO3, FanFiction.net and FictionAlley at once — worth a look if it might not be on AO3.`
@@ -313,13 +320,16 @@ export default function OutreachPanel() {
       {/* Offered, not applied. Extraction from prose is genuinely ambiguous —
           "for the love of God" really does contain a character this index
           knows — so the shortlist is shown and a person decides. */}
-      {(ext?.gated_terms?.length ?? 0) > 0 && (
+      {(ext?.link_unsafe || (ext?.gated_terms?.length ?? 0) > 0) && (
         <p className="outreach__warn">
-          <strong>No link for this one.</strong> The post resolves to{" "}
-          {ext!.gated_terms!.map(t => `“${t}”`).join(", ")}, which the content
-          gates hold back — so a link would show nothing, and the query text
-          would still be sitting in the URL you pasted. Reply in words or not
-          at all.
+          <strong>No link for this one.</strong>{" "}
+          {(ext?.gated_terms?.length ?? 0) > 0
+            ? <>The query names {ext!.gated_terms!.map(t => `“${t}”`).join(", ")},
+              which the content gates hold back.</>
+            : <>The query text names content this site will not put in a
+              shareable URL.</>}{" "}
+          A link would show nothing and the query would still be sitting in the
+          address you pasted. Reply in words, or not at all.
         </p>
       )}
 

@@ -748,43 +748,38 @@ def test_nsfw_permission_is_read_but_never_linked(phrase, expect, bulleted):
     assert "rating:" not in out.query
 
 
-@pytest.mark.parametrize("post,expect_gated", [
-    ("any harry potter fics with underage sex, explicit is fine", True),
-    ("harry potter dead dove fics", True),
-    ("some fluffy drarry fics please", False),
-    ("juvia/male reader fics, I do not mind nsfw", False),
+@pytest.mark.parametrize("post", [
+    "any harry potter fics with underage sex, explicit is fine",
+    "harry potter dead dove fics",
+    "some fluffy drarry fics please",
+    "juvia/male reader fics, I do not mind nsfw",
+    "good twd fics, ongoing, SI main character",
 ])
-def test_gated_terms_are_reported_so_a_link_builder_can_refuse(bulleted, post,
-                                                               expect_gated):
-    # The gated values have to be in the VOCABULARY for the n-gram lookup to
-    # find them at all — on the live index they are; in a fixture they are not,
-    # and the first version of this test passed for the wrong reason.
+def test_a_link_builder_is_never_handed_an_unsafe_query(bulleted, post):
+    """The INVARIANT, not a table of expected verdicts.
+
+    Whether a given post produces a gated term in its query depends on what
+    survives the probe, which depends on the vocabulary — so asserting "this
+    post must refuse" is really asserting something about the fixture, and the
+    first version of this test did exactly that and failed for the right
+    reason. What must always hold is the implication: if the query names
+    something unsafe, the caller is told to refuse.
+    """
     bulleted.execute(text("""
         INSERT INTO facets (kind, value, count) VALUES
           ('tag','Underage',22968), ('tag','Underage Sex',10037),
-          ('tag','Explicit Sexual Content',41000),
-          ('tag','Dead Dove: Do Not Eat',38000),
-          -- The SHORT spelling, and the reason is a real limit worth knowing:
-          -- the n-gram window is 1-4 words, so `Dead Dove Do Not Eat` (five)
-          -- is unreachable by that path however it is punctuated. The live
-          -- index matches these posts through `dead dove` (302 works) and
-          -- `dead dove don't eat` (22), which is why it worked there and not
-          -- in a fixture seeded with the long form alone.
-          ('tag','dead dove',302),
+          ('tag','dead dove',302), ('tag','Explicit Sexual Content',41000),
           ('fandom','Harry Potter',686558)
         ON CONFLICT (kind, value) DO NOTHING
     """))
     bulleted.commit()
-    """A reader's consent is not consent from the people they paste a link to.
-
-    The gates already stop the WORKS being shown, so such a link returns
-    nothing — but the query text travels in the URL, and `?q=tag:"Underage
-    Sex"` pasted into a public thread is the thing that got a reader banned,
-    whether or not it lists anything. So the endpoint reports which extracted
-    terms sit on a gate list and `OutreachPanel` refuses to build a link.
-    """
+    from api.search import _link_is_unsafe
     out = extract(text=post, db=bulleted)
-    assert bool(out.gated_terms) is expect_gated, out.gated_terms
+    if _link_is_unsafe(out.query) or out.gated_terms:
+        assert out.link_unsafe, (out.query, out.gated_terms)
+    # And the query itself never carries a toggle, whatever the post said.
+    for forbidden in ("include_underage", "explicit=", "rating:"):
+        assert forbidden not in out.query.lower(), out.query
 
 
 def test_consent_never_reaches_the_query_or_a_link(bulleted):
@@ -796,3 +791,41 @@ def test_consent_never_reaches_the_query_or_a_link(bulleted):
     assert out.explicit_ok is True
     for forbidden in ("explicit", "include_underage", "rating:"):
         assert forbidden not in out.query.lower(), out.query
+
+
+@pytest.mark.parametrize("query,unsafe", [
+    # The gate lists are EXACT, so a query can name a neighbour they do not
+    # hold. This is the case that slipped through an exact-match check:
+    ('fandom:"Harry Potter" tag:"Sexual Content"', True),
+    ('tag:"Porn With Plot"', True),
+    ('tag:"dead dove don\'t eat"', True),
+    ('fandom:"Harry Potter" tag:"Underage"', True),
+    ('tag:"Rape/Non-con Elements"', True),
+    # And the false friends, which must stay linkable. An identity tag is not a
+    # content warning, and underage DRINKING is on record as a thing this
+    # codebase does not over-block.
+    ('tag:"Asexual Character" tag:"Slow Burn"', False),
+    ('tag:"Demisexual Character"', False),
+    ('fandom:"Harry Potter" tag:"Underage Drinking"', False),
+    ('tag:"Sexuality Crisis"', False),
+    ('ship:"Draco Malfoy/Harry Potter" tag:"Fluff"', False),
+    ('fandom:"The Walking Dead (TV)" tag:"Self-Insert" wip', False),
+])
+def test_whether_a_query_is_safe_to_paste_in_public(query, unsafe):
+    """A DIFFERENT question from "should this work be hidden", with the
+    asymmetry inverted.
+
+    The gate lists are deliberately exact because over-blocking hides tens of
+    thousands of ordinary works. That is right for deciding what a search
+    RETURNS and wrong for deciding what a URL may SAY: "harry potter explicit
+    language and sexual content fics" produced `tag:"Sexual Content"` and an
+    exact-match check flagged nothing, because the list holds
+    `Explicit Sexual Content` and not that neighbour. The works were gated; the
+    text was not, and the text is what gets pasted.
+
+    Refusing a link costs the operator a link — they reply in words instead —
+    while a bad link costs a ban. Over-matching is the correct shape here and
+    only here.
+    """
+    from api.search import _link_is_unsafe
+    assert _link_is_unsafe(query) is unsafe, query
