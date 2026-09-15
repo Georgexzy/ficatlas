@@ -4551,6 +4551,9 @@ _MAX_EXCLUDES = int(os.getenv("SEARCH_EXTRACT_MAX_EXCLUDES", "4"))
 # results is a fourth thing the reader asked for, and refusing it on a count
 # is refusing it for no reason. The probe is the limit; this is the ceiling.
 _MAX_QUERY_TERMS = int(os.getenv("SEARCH_EXTRACT_MAX_TERMS", "4"))
+# How well attested a concept must be before being early in the post is enough
+# to make it the SUBJECT. See the note where it is used.
+_SUBJECT_MIN_WORKS = int(os.getenv("SEARCH_EXTRACT_SUBJECT_MIN", "100"))
 
 
 def _biggest_spelling(db, tags: list[str]) -> Optional[tuple[str, int]]:
@@ -4878,7 +4881,15 @@ def extract(
             tags = [t for t in tags if not _NEGATED_TAG.match(t)] or tags
             emphasis[best[0]] = min(emphasis.get(best[0], 0), _emph) \
                 if best[0] in emphasis else _emph
-            if _content_line <= 2 and guard <= 1:
+            # The subject also has to be a real thing. "Has to be an oc or
+            # like a character that is different in some sort of way" is the
+            # second line of a post, and it resolved to
+            # `different characters - Freeform` — a tag on TWELVE works — which
+            # the subject flag then pinned at the head of the query ahead of
+            # `Original Character` (18,806). Being said early is evidence; it
+            # is not evidence enough to lead a search on its own.
+            if (_content_line <= 2 and guard <= 1
+                    and best[1] >= _SUBJECT_MIN_WORKS):
                 subject_values.add(best[0])
             if guard > 1:
                 leftover_values.add(best[0])
@@ -5036,7 +5047,15 @@ def extract(
         return ExtractResponse(terms=[], query="", ignored_words=len(words))
 
     rows = db.execute(sql_text("""
-        SELECT kind, value, count FROM facets
+        -- `fandom_ao3` IS a fandom, and not normalising it here meant the
+        -- operator map fell through to its default: `Marvel` — a fandom on
+        -- 686,826 works — came out of the extractor as `tag:"Marvel"`, which
+        -- is a freeform tag on 46,645 and an entirely different search. The
+        -- two kinds exist because AO3's fandom vocabulary is tracked apart
+        -- from the merged one; nothing downstream of here cares which.
+        SELECT CASE WHEN kind = 'fandom_ao3' THEN 'fandom' ELSE kind END AS kind,
+               value, count
+          FROM facets
          WHERE lower(value) = ANY(CAST(:g AS text[]))
            AND count >= :min
     """), {"g": list(grams.keys()), "min": EXTRACT_MIN_WORKS}).fetchall()

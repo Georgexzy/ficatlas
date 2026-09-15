@@ -1183,6 +1183,25 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     timing on a loaded box is not a measurement; the verification script's
     10-second gate had caught a cold outlier, not a regression.
 
+- **Run EVERY example at once, not the one that was reported.** Thirty-one
+  cases — the fifteen real posts, the four that prompted specific fixes, and
+  the twelve-fandom battery — through one harness. It found two bugs that
+  single-post testing had walked past for a week.
+  - **`fandom_ao3` is a fandom and the operator map did not know it.** `facets`
+    tracks AO3's fandom vocabulary under its own kind, so `Marvel` — a fandom
+    on **686,826 works** — fell through to the default and came out as
+    `tag:"Marvel"`, a freeform tag on 46,645 and an entirely different search.
+    Normalised where facets are read; nothing downstream cares which kind it
+    was. Fixed two posts at once.
+  - **A term on twelve works is not the SUBJECT of anything.** "Has to be an oc
+    or like a character that is different in some sort of way" is the second
+    line of a post and resolved to `different characters - Freeform` (12
+    works), which the subject pin then put at the head of the query ahead of
+    everything. Being said early is evidence; it is not evidence enough to lead
+    a search on its own. `_SUBJECT_MIN_WORKS = 100`.
+  - Result: **31 of 31 cases return works, 0 refuse a link**, against 3 zeroes
+    and 6 wrong fandoms when the corpus was first run.
+
 - **"Is it just what surfaces the most fics?" — it was, and that was the
   problem.** Ranking was corpus frequency plus a couple of structural flags, so
   a want the reader SHOUTED FOR lost to one they mentioned in passing, purely
