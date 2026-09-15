@@ -1183,6 +1183,45 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     timing on a loaded box is not a measurement; the verification script's
     10-second gate had caught a cold outlier, not a regression.
 
+- **The 3-term cap was not what was limiting the query, and measuring it
+  properly needed the SPELLING GROUPS.** Asked whether a fourth slot would
+  surface more of what a reader asked for. It would not, and the measurement is
+  the answer rather than the reasoning:
+
+  | added to `drarry + complete + 50k` (1,186 works) | works |
+  |---|---:|
+  | `Slytherin Harry Potter` + 2 more spellings | **62** |
+  | `Top Draco Malfoy` + 3 more spellings | **0** |
+  | `Creature Inheritance` | **0** |
+  | `Harry-centric` + 5 more spellings | 1 |
+  | `Top Draco` alone, without Slytherin | 19 |
+
+  Any TWO of the reader's extra wants give zero, so a fourth slot has nothing
+  to put in it, and the greedy pick already took the best single one.
+  - **The first version of this measurement used ONE spelling per concept and
+    was wrong.** `Slytherin Harry Potter` alone is 46 works; with
+    `Slytherin Harry` and `Slytherin!Harry` ORed it is 62. The probe had been
+    doing this correctly all along — it ORs `t.spellings` — so the code was
+    right and the check of it was not. This file already records the same
+    error made the other way round ("a concept is a GROUP of spellings, and
+    using the rarest one told a reader their fics did not exist"); measuring a
+    concept by one spelling is that error wearing a different hat.
+  - The cap is now `_MAX_QUERY_TERMS = 4` anyway. It was a bare `3` from when
+    the probe could not tell whether a term would empty the search; the probe
+    now runs the predicate the search runs, so it is the limit and the cap is
+    only a ceiling. On the fifteen-post corpus no post reaches four — the probe
+    binds everywhere.
+  - **What was actually worth fixing is that rejected terms vanished
+    silently.** Every offered term now carries `with_query`: how many works it
+    would leave if added to the query that was built. `Top Draco Malfoy → 0`
+    and `Harry-centric → 1` are useful things for a reader to see before
+    clicking, and the alternative — one reader's wants being mutually
+    exclusive — is a fact about the archives, not something to hide.
+  - A one-spelling `tag:"…"` in the built query still cannot express the group
+    (46 against 62 here). That is the known limit already recorded under "a
+    bare natural-language query beats explicit tag operators", and the reason
+    `with_query` is measured on the group rather than on the emitted spelling.
+
 - **A query that EXCLUDES smut was being refused as unsafe.** Reported from a
   post reading "preferably little to no smut": it produced `-tag:"Smut"`, and
   both halves of the link check counted it — `gated_terms` folded the

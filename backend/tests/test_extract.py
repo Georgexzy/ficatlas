@@ -7,6 +7,8 @@ exact thing its own posting rules forbid. Meanwhile
 `harry potter daphne greengrass fluff` returns 1,058 works, so the search was
 never the problem.
 """
+import re
+
 import pytest
 from sqlalchemy import text
 
@@ -889,3 +891,37 @@ def test_a_caveat_only_retracts_when_the_subject_comes_back(line, retracted):
                if w not in ("prefer", "because", "there", "then", "your")}
     tail_words = set(_re.findall(r"[a-z]{3,}", tail.lower()))
     assert bool(subject & tail_words) is retracted, (subject, tail_words)
+
+
+def test_a_rejected_term_says_what_it_would_cost(ships):
+    """A reader lists several wants and they routinely cannot all hold at once.
+
+    Measured on a real post: drarry + complete + 50k is 1,196 works, and each
+    of `Slytherin Harry Potter` (46), `Top Draco Malfoy` (18) and
+    `Creature Inheritance` (3) narrows it usefully on its own while ANY TWO
+    together give **zero**. The query can hold one; dropping the rest silently
+    is the part worth fixing, so every offered term carries the count it would
+    leave if clicked.
+    """
+    out = extract(text="recommend me some fluffy Harry/Daphne fics", db=ships)
+    in_query = [t for t in out.terms if t.with_query is None]
+    offered = [t for t in out.terms if t.with_query is not None]
+    assert in_query, "terms in the query must report None, not a number"
+    for t in offered:
+        assert t.with_query >= 0
+    # Every term named in the query reports None; every one that is not
+    # reports a number. The two sets must not overlap.
+    named = {v for v in re.findall(r'"([^"]+)"', out.query)}
+    for t in out.terms:
+        if t.value in named:
+            assert t.with_query is None, t.value
+
+
+def test_the_query_may_hold_four_terms_when_four_survive():
+    """The cap was a bare 3, from when the probe could not tell whether a term
+    would empty the search. The probe now runs the predicate the search runs,
+    so a fourth term that leaves a page of results is a fourth thing the reader
+    asked for — the probe is the limit and the cap is only a ceiling."""
+    from api.search import _MAX_QUERY_TERMS, _PROBE_MIN_KEEP
+    assert _MAX_QUERY_TERMS >= 4
+    assert _PROBE_MIN_KEEP >= 1

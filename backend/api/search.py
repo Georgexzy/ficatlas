@@ -3608,6 +3608,18 @@ class ExtractedTerm(BaseModel):
     # `tag:"…"` operator cannot, which is why the probe below tests the whole
     # group rather than a single spelling.
     spellings: list[str] = []
+    # How many works this term would leave if ADDED to the query that was
+    # built. `None` for the terms already in it.
+    #
+    # A reader lists several wants and they routinely cannot all hold at once:
+    # on one real post, drarry + complete + 50k is 1,196 works, and each of
+    # `Slytherin Harry Potter` (46), `Top Draco Malfoy` (18) and
+    # `Creature Inheritance` (3) narrows it usefully while ANY TWO of them
+    # together give **zero**. The query can only take one, and dropping the
+    # rest silently is the part worth fixing — this is what makes the offered
+    # chips honest: click that one and you get eighteen works, click the other
+    # and you get three.
+    with_query: Optional[int] = None
 
 
 class ExtractResponse(BaseModel):
@@ -4470,6 +4482,20 @@ _PROBE_MIN_KEEP = int(os.getenv("SEARCH_EXTRACT_MIN_KEEP", "10"))
 # post listing nine of them — the corpus has one — would otherwise build a
 # query mostly made of things nobody is looking for.
 _MAX_EXCLUDES = int(os.getenv("SEARCH_EXTRACT_MAX_EXCLUDES", "4"))
+# How many terms a built query may name.
+#
+# Was a bare `3`, from when the probe could not tell whether a term would empty
+# the search: every term is a requirement, so a query built from everything a
+# post mentions is the over-specified search this endpoint exists to replace,
+# and three was the safe guess.
+#
+# The probe now runs the predicate the search runs — word count, status, the
+# content gates, the crossover filter — and a term is kept only if at least
+# `_PROBE_MIN_KEEP` works survive it. That makes the cap the binding
+# constraint rather than the safeguard: a fourth term that leaves a page of
+# results is a fourth thing the reader asked for, and refusing it on a count
+# is refusing it for no reason. The probe is the limit; this is the ceiling.
+_MAX_QUERY_TERMS = int(os.getenv("SEARCH_EXTRACT_MAX_TERMS", "4"))
 
 
 def _biggest_spelling(db, tags: list[str]) -> Optional[tuple[str, int]]:
@@ -5391,7 +5417,7 @@ def extract(
         if any(_implies(k.value, t.value) for k in kept):
             continue
         cand = kept + [t]
-        if len(cand) > 3:
+        if len(cand) > _MAX_QUERY_TERMS:
             break
         try:
             n = _probe_count(db, cand, wc_min, status, crossovers)
@@ -5482,6 +5508,20 @@ def extract(
     # the thing out. What a query REFUSES can never be what it shows.
     gated_terms = sorted({t.value for t in kept
                           if t.value.lower() in _gated_lists})
+
+    # What each REJECTED term would cost, measured against the query actually
+    # built. A handful of capped GIN probes on an endpoint that is not the
+    # search path — the same probe the selection above used, asked of the
+    # terms it turned down.
+    _kept_values = {t.value for t in kept}
+    for t in terms:
+        if t.value in _kept_values:
+            continue
+        try:
+            t.with_query = _probe_count(db, kept + [t], wc_min, status,
+                                        crossovers)
+        except Exception:
+            log.debug("with_query probe failed", exc_info=True)
 
     _query_text = " ".join(parts)
     link_unsafe = bool(gated_terms) or _link_is_unsafe(_query_text)
