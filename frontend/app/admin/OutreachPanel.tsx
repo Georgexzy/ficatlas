@@ -58,6 +58,19 @@ interface Extracted {
   // assumed, and already inside `query` as `xover:`. Listed so the type says
   // what the endpoint returns.
   crossovers?: string | null
+  // "on AO3", "I only read on ff.net" — already inside `query` as `site:`.
+  site?: string | null
+  // "I do not mind nsfw". PERMISSION the poster gave for themselves, and NOT
+  // consent for whoever they paste a link to — so it never reaches `query` or
+  // a generated link. Surfaced here so the operator knows the gate is holding
+  // something back rather than silently seeing a short answer.
+  explicit_ok?: boolean | null
+  // Extracted terms that sit on a content-gate list. Almost always empty; when
+  // it is not, NO LINK may be built. The gates already stop the works being
+  // shown, so such a link returns nothing — but the query text travels in the
+  // URL, and `?q=tag:"Underage Sex"` pasted into a public thread is the thing
+  // that got a reader banned, whether or not it lists anything.
+  gated_terms?: string[]
   sort?: string | null
   word_count_min?: number | null
   word_count_max?: number | null
@@ -227,7 +240,16 @@ export default function OutreachPanel() {
   // asking for gated content would produce a link that does not match what is
   // on screen. Better to say so than to hand over a link quietly different
   // from the search that was run.
-  const unsafeQuery = asksForUnsafe(q)
+  // Two independent refusals, and both are needed.
+  //
+  // `asksForUnsafe` reads the BOX, because the box is free text and an
+  // operator can type a toggle into it. `gated_terms` comes from the endpoint
+  // and covers the other direction: a post whose own words resolve to gated
+  // terms, where nothing in the box looks wrong at all. The poster saying they
+  // do not mind is not consent from the people they paste a link to, so
+  // `explicit_ok` deliberately does not enter this decision — it cannot make a
+  // link safer, only the operator better informed.
+  const unsafeQuery = asksForUnsafe(q) || (ext?.gated_terms?.length ?? 0) > 0
   const reply = (!foundSomething || unsafeQuery) ? null : found.trim()
     ? `I think this is ${found.trim()}.\n\nFound it here if you want to check: ${publicLink(q, ext?.sort)}\n(searches AO3, FanFiction.net and FictionAlley together)`
     : `Try this: ${publicLink(q, ext?.sort)}\n\nIt searches AO3, FanFiction.net and FictionAlley at once — worth a look if it might not be on AO3.`
@@ -291,6 +313,36 @@ export default function OutreachPanel() {
       {/* Offered, not applied. Extraction from prose is genuinely ambiguous —
           "for the love of God" really does contain a character this index
           knows — so the shortlist is shown and a person decides. */}
+      {(ext?.gated_terms?.length ?? 0) > 0 && (
+        <p className="outreach__warn">
+          <strong>No link for this one.</strong> The post resolves to{" "}
+          {ext!.gated_terms!.map(t => `“${t}”`).join(", ")}, which the content
+          gates hold back — so a link would show nothing, and the query text
+          would still be sitting in the URL you pasted. Reply in words or not
+          at all.
+        </p>
+      )}
+
+      {ext?.explicit_ok && (
+        <p className="outreach__hint">
+          The poster said they don&rsquo;t mind explicit work. The search and
+          the link below stay in the safe default either way &mdash; a link is
+          read by whoever it is pasted to, not only by the person who asked.
+          Say so in the reply if it matters; don&rsquo;t send a link that
+          carries it.
+        </p>
+      )}
+
+      {ext?.site && (
+        <p className="outreach__hint">
+          They read on <strong>{ext.site === "ffnet" ? "FanFiction.net"
+            : ext.site === "ao3" ? "AO3" : ext.site}</strong>, so the search is
+          limited to it. That narrows the archive split this site is worth
+          linking for &mdash; check it still spans more than one before
+          replying.
+        </p>
+      )}
+
       {ext?.sort && (
         <p className="outreach__hint">
           The post asked for good fics, so this is sorted by what readers

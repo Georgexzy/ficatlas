@@ -113,3 +113,40 @@ def test_violence_and_non_con_are_still_gated():
               "Rape/Non-con Elements", "Dead Dove: Do Not Eat", "Incest",
               "Bestiality", "Dubious Consent"):
         assert t in g.ADULT_TAGS, t
+
+
+def test_the_spelling_variants_are_covered():
+    """The list was written from the tags somebody thought of, and the archives
+    spell the same thing a dozen ways. Enumerating the vocabulary found about
+    1,900 works carrying an underage-sex or pedophilia tag that were NOT
+    gated — `Past Underage Sex`, `Mentions of Pedophilia`, `Underaged Sex`,
+    `Adult/Minor` and a dozen more."""
+    import gate_terms as g
+    for t in ("Past Underage Sex", "Mentions of Underage Sex",
+              "Implied Underage Sex", "Underaged Sex", "Adult/Minor",
+              "Mentions of Pedophilia", "Paedophilia", "Straight Shotacon"):
+        assert t in g.UNDERAGE_TAGS, t
+
+
+def test_a_negation_is_never_gated():
+    """`No Underage Sex` is on 1,284 works and is the OPPOSITE of the tag. So
+    is `No Pedophilia`, and `Mori Ougai is Not a Pedophile` hides its negation
+    in the middle of the value where a leading-negation check cannot see it."""
+    import gate_terms as g
+    for t in ("No Underage Sex", "No Pedophilia",
+              "Mori Ougai is Not a Pedophile (Bungou Stray Dogs)"):
+        assert t not in g.UNDERAGE_TAGS, t
+        assert t not in g.ADULT_TAGS, t
+
+
+def test_bang_chan_is_not_a_content_warning():
+    """`Chan` is on the list as an exact value. A `%chan%` pattern would take
+    `Bang Chan (Stray Kids)` and ~60 relatives with it — thousands of works
+    about a real person, hidden from every default search. This is the reason
+    the exact-value rule is not negotiable, and a sharper example than the
+    `Chance Meetings` one already on record."""
+    import gate_terms as g
+    for t in ("Bang Chan (Stray Kids)", "Top Bang Chan (Stray Kids)",
+              "Chance Meetings", "Underage Drinking", "Underage Smoking"):
+        assert t not in g.UNDERAGE_TAGS, t
+    assert "Chan" in g.UNDERAGE_TAGS

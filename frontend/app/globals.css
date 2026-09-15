@@ -5894,6 +5894,17 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .outreach__row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .outreach__hint { font-size: 12px; color: var(--text-faint); line-height: 1.5; }
 
+/* A refusal, not a hint: the panel will not build a link for this post. Styled
+   to be read rather than skimmed past, because the cost of missing it is a
+   link in a public thread. */
+.outreach__warn {
+  margin: 8px 0; padding: 10px 12px; font-size: 13px; line-height: 1.5;
+  border-left: 3px solid var(--danger, #c0392b);
+  background: color-mix(in srgb, var(--danger, #c0392b) 8%, transparent);
+  color: var(--text);
+}
+.outreach__warn strong { color: var(--danger, #c0392b); }
+
 /* The verdict line: how many, from where, and whether it is worth linking. */
 .outreach__verdict {
   display: flex;
