@@ -1183,6 +1183,49 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     timing on a loaded box is not a measurement; the verification script's
     10-second gate had caught a cold outlier, not a regression.
 
+- **What actually blocks works from surfacing: TAGS, by an order of
+  magnitude.** Ablated every component of every built query across 24 posts —
+  drop one part, re-count, see what comes back:
+
+  | component | appears | median works recovered by dropping it |
+  |---|---:|---:|
+  | **tag** | 18 | **3,829** (11 hit the 5,000 cap, so higher) |
+  | word count | 3 | 972 |
+  | character | 8 | 352 |
+  | status | 8 | 148 |
+  | ship | 6 | 129 |
+  | site | 2 | 17 |
+  | crossover filter | 19 | **8** |
+  | fandom | 17 | **1** |
+  | exclusion (`-tag`) | 8 | **0** |
+  | series add-on | 3 | **−19** (it ADDS, as designed) |
+
+  - **The fandom costs almost nothing** (median 1 work), because by the time it
+    is added the other terms already imply it. That settles the old worry about
+    spending a slot on it — it is nearly free and it protects against the
+    wrong-fandom failures recorded above.
+  - **The crossover default costs 8 works.** The instinct that it might
+    over-narrow was worth checking and was wrong.
+  - **Exclusions cost nothing.** They are not what empties a search.
+  - So the lever that matters is WHICH TAG gets chosen, which is what the
+    ranking work above is for. A single tag routinely cuts a result set by
+    thousands, and the archives spell most concepts several ways: the search
+    does NOT expand a tag operator to its spelling group, so
+    `tag:"Slytherin Harry Potter"` returns 2,247 where the three-spelling group
+    holds 2,918 — about 20% lost to the choice of spelling alone.
+
+- **"no smut thanks" excluded THANKSGIVING and searched FOR smut.** Found by
+  probing every capability rather than by a report. Every politeness word is
+  also a real tag, so the window matcher takes it and the actual subject falls
+  through as leftover — into the POSITIVE path:
+
+      "no smut please"  ->  excluded `please`,       "smut" left as a want
+      "no smut thanks"  ->  excluded `Thanksgiving`, "smut" left as a want
+
+  Same shape as "no harems" searching for harems, one layer down and worse,
+  because it also excluded something absurd. Trailing politeness is stripped
+  before the negated subject is resolved.
+
 - **Run EVERY example at once, not the one that was reported.** Thirty-one
   cases — the fifteen real posts, the four that prompted specific fixes, and
   the twelve-fandom battery — through one harness. It found two bugs that
