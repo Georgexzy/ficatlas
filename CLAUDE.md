@@ -1183,6 +1183,52 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     timing on a loaded box is not a measurement; the verification script's
     10-second gate had caught a cold outlier, not a regression.
 
+- **"Is it just what surfaces the most fics?" — it was, and that was the
+  problem.** Ranking was corpus frequency plus a couple of structural flags, so
+  a want the reader SHOUTED FOR lost to one they mentioned in passing, purely
+  because the archives tag the second more often. A fic-finder post is not a
+  flat list; it says which parts matter, and in the reader's own punctuation:
+
+  | what the post says | band |
+  |---|---|
+  | "drarry is my **no.1**", "i need harry centric fics **badly**" | insist |
+  | "**pleaseeee** let them be completed" (the drawn-out vowel) | insist |
+  | "please **DROP THAT FICCCCC**" (the shouting) | insist |
+  | "**preferably** little to no smut" | hedge |
+  | "creature inheritance is **accepted so long as** its well written" | hedge |
+  | "this **does not have to be** included or excluded" | hedge |
+
+  Read on the raw line, BEFORE framing is stripped — "pleaseeee" is framing by
+  every other measure in this file and is exactly where the emphasis lives.
+  Frequency still orders WITHIN a band, because between two things wanted
+  equally the better-attested one builds a better query.
+  - **A hedge beats an insistence on the same line.** "pleaseeee preferably
+    little to no smut" does both, and the hedge is the more specific statement
+    about THIS want.
+  - **Order of precedence, pinned by getting it wrong once:** subject, then
+    said-on-a-line, then not-a-leftover, then emphasis, then not-a-bare-name,
+    then frequency. Putting emphasis above the leftover penalty let `Therapy`
+    — a second-pass leftover appearing in no sentence of the post — outrank
+    `Top Draco Malfoy`, which the reader asked for and merely hedged. **A thing
+    the reader hedged is still a thing they said; a leftover is not.**
+- **What the reader ruled OUT was being offered back.** The negation path
+  resolved "preferably little to no smut" to `Smut` and excluded it; the n-gram
+  path then found the same word and offered `Smut` (325,862 works) as a want,
+  one click from adding the exact thing the post refused. Two paths over one
+  post and nothing reconciled them.
+- **"You're telling me there are no results for these 4 tags?" — no, and the
+  answer is a better one.** The tags co-occur; the reader's own other
+  constraints are what empty it, and saying "0" hid that:
+
+      drarry + slytherin + top draco          25 works
+        surviving the content gates           13
+        not a crossover                       12
+        complete                               3
+        and 50k+ words                         0
+
+  Three complete works carry all three tags and none reaches 50k. Worth
+  knowing, and worth saying, before concluding the index is empty.
+
 - **The 3-term cap was not what was limiting the query, and measuring it
   properly needed the SPELLING GROUPS.** Asked whether a fourth slot would
   surface more of what a reader asked for. It would not, and the measurement is

@@ -3955,6 +3955,61 @@ _FRAMING_TERMS = {
 }
 
 
+# HOW BADLY THE READER WANTS IT, in their own words.
+#
+# Ranking was corpus frequency and little else — "what surfaces the most fics"
+# — so a want the reader shouted for lost to one they mentioned in passing,
+# purely because the archives tag the second more often. A fic-finder post is
+# not a flat list: it says which parts matter.
+#
+#   "drarry is my no.1"                        -> insist
+#   "i need harry centric fics badly"          -> insist
+#   "pleaseeee let them be completed"          -> insist (the drawn-out vowel)
+#   "if theres a resorting, please DROP THAT
+#    FICCCCC"                                  -> insist (the shouting)
+#   "preferably little to no smut"             -> hedge
+#   "creature inheritance is accepted so long
+#    as its well written"                      -> hedge
+#   "this does not have to be included or
+#    excluded"                                 -> hedge
+#
+# Frequency still orders WITHIN each band, because it is the right tiebreak:
+# between two things a reader wants equally, the better-attested one builds a
+# better query. This only says which band they are in.
+_INSIST_RE = re.compile(
+    r"\b(?:badly|desperate(?:ly)?|really|very|must|need(?:ed)?|craving|dying)\b"
+    r"|\bno\.?\s*1\b|\bnumber\s+one\b|\bfavou?rite\b|\bespecially\b"
+    r"|\ba\s+sucker\s+for\b|\bobsessed\b|\blove\b"
+    r"|[!?]{2,}"                      # "please!!!"
+    r"|\b\w*([a-z])\1{2,}\w*\b",   # "pleaseeee", "FICCCCC"
+    re.I)
+
+# Shouting, measured separately because a regex for repeated letters misses it:
+# a run of capitals is emphasis in a way ordinary words are not.
+_SHOUT_RE = re.compile(r"\b[A-Z]{4,}\b")
+
+_HEDGE_RE = re.compile(
+    r"\bpreferab(?:ly|le)\b|\bprefer\b|\bideally\b|\bif\s+possible\b"
+    r"|\bwould\s+be\s+(?:nice|great|a\s+bonus)\b|\bbonus\b|\boptional\b"
+    r"|\bdoes\s*n[o']?t\s+have\s+to\b|\bnot\s+necessary\b|\bno\s+need\b"
+    r"|\bso\s+long\s+as\b|\bas\s+long\s+as\b|\bif\s+(?:there\s+is|its|it\s+is)\b"
+    r"|\baccepted\b|\bopen\s+to\b|\bdon'?t\s+mind\b|\bwouldn'?t\s+mind\b"
+    r"|\bmaybe\b|\bi\s+guess\b|\bor\s+not\b",
+    re.I)
+
+
+def _emphasis(line: str) -> int:
+    """-1 insisted on, 0 plain, 1 hedged. Lower sorts first."""
+    hedged = bool(_HEDGE_RE.search(line))
+    insisted = bool(_INSIST_RE.search(line)) or bool(_SHOUT_RE.search(line))
+    # Both at once is common — "preferably little to no smut" hedges while
+    # "pleaseeee" insists — and the hedge is the more specific statement about
+    # THIS want, so it wins.
+    if hedged:
+        return 1
+    return -1 if insisted else 0
+
+
 # The single-word half, for stripping framing out of a LINE before the trope
 # resolver sees it. Kept separate from the phrase set above because this list
 # is applied token by token and a false member here damages real requests.
@@ -4678,6 +4733,8 @@ def extract(
     # gives `Creature Inheritance` and then `Acceptance` (4,478 works) out of
     # the remains.
     leftover_values: set[str] = set()
+    # value -> -1 insisted on / 0 plain / 1 hedged, from the line it came from.
+    emphasis: dict[str, int] = {}
     exclude_tags: list[str] = []
     wc_min = wc_max = None
     _content_line = 0
@@ -4767,6 +4824,10 @@ def extract(
             continue
 
         _content_line += 1
+        # Read on the line BEFORE framing is stripped: "pleaseeee" and
+        # "DROP THAT FICCCCC" are framing by every other measure in this file,
+        # and they are exactly where the emphasis lives.
+        _emph = _emphasis(line)
         req = read_request(line)
         if wc_min is None and req.word_count_min is not None:
             wc_min = req.word_count_min
@@ -4815,6 +4876,8 @@ def extract(
             # the group is what the probe ORs, so a concept could be kept on
             # the strength of works that say the opposite of what was asked.
             tags = [t for t in tags if not _NEGATED_TAG.match(t)] or tags
+            emphasis[best[0]] = min(emphasis.get(best[0], 0), _emph) \
+                if best[0] in emphasis else _emph
             if _content_line <= 2 and guard <= 1:
                 subject_values.add(best[0])
             if guard > 1:
@@ -5052,6 +5115,7 @@ def extract(
     # lists its constraints in no particular order and the broadest is the best
     # thing to build a query from.
     line_terms.sort(key=lambda t: (t.value not in subject_values,
+                                   emphasis.get(t.value, 0),
                                    t.value in leftover_values, -t.count))
     # AFTER the frequency sort, not before it. Two characters either side of a
     # slash are the SUBJECT of the request, exactly as a resolved pairing is,
@@ -5092,6 +5156,15 @@ def extract(
         if _is_framing(t.value, t.matched):
             return True
         if t.kind in ("character", "relationship") and _is_non_entity(t.value):
+            return True
+        # WHAT THE READER RULED OUT IS NOT A THING TO OFFER THEM.
+        #
+        # The negation path resolves "preferably little to no smut" to `Smut`
+        # and puts it in `exclude_tags`; the n-gram path then found the same
+        # word and offered `Smut` (325,862 works) as a want, one click from
+        # adding the exact thing the post refused. Same for `Slash`. Two paths
+        # over one post, and nothing reconciled them.
+        if t.value in exclude_tags:
             return True
         return False
 
@@ -5205,8 +5278,28 @@ def extract(
     # has to be IN THIS KEY. Ordering `line_terms` earlier is undone here, the
     # same way prepending the pair characters was: this sort is the last word
     # on order and anything not represented in its key does not survive it.
+    # Subject, then how hard the reader pushed for it, then line-vs-loose, then
+    # frequency. Frequency is the TIEBREAK and no longer the whole answer:
+    # between two things wanted equally the better-attested one builds a better
+    # query, but a want the reader shouted for should not lose to one they
+    # mentioned in passing just because the archives tag it more often.
+    # ORDER OF PRECEDENCE, and it took getting wrong once to pin down:
+    #
+    #   1. the subject          — what the post is titled about
+    #   2. said on a LINE       — a line stated it; a loose word appeared
+    #   3. not a LEFTOVER       — junk by construction, whatever else is true
+    #   4. the reader's EMPHASIS — how hard they pushed for it
+    #   5. not a bare NAME      — weakest kind of match
+    #   6. frequency            — the tiebreak, not the answer
+    #
+    # Emphasis above leftover was tried and is wrong: it let `Therapy` (a
+    # second-pass leftover, mentioned in no sentence of the post) outrank
+    # `Top Draco Malfoy`, which the reader asked for and merely hedged. A thing
+    # the reader hedged is still a thing they said; a leftover is not.
     swapped.sort(key=lambda t: (t.value not in subject_values,
-                                not t.from_line, t.value in leftover_values,
+                                not t.from_line,
+                                t.value in leftover_values,
+                                emphasis.get(t.value, 0),
                                 t.value in bare_name,
                                 -rank_count.get(t.value, t.count)))
 
