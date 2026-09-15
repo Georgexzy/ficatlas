@@ -3563,6 +3563,15 @@ class ExtractResponse(BaseModel):
     # the same tag vocabulary the positive path uses. Already inside `query` as
     # `-tag:"…"`; listed so a caller can show them.
     exclude_tags: list[str] = []
+    # Any extracted term that is on a content-gate list. Empty for almost every
+    # post; when it is not, a caller that BUILDS A LINK must refuse.
+    #
+    # The gates already stop the works being shown, so such a link returns
+    # nothing — but the query text travels in the URL, and `?q=tag:"Underage
+    # Sex"` pasted into a public thread is the thing that got a reader banned,
+    # whether or not it lists anything. A reader's own consent does not reach
+    # the people they paste a link to.
+    gated_terms: list[str] = []
     # "on AO3", "I only read on ff.net" — already inside `query` as `site:`.
     site: Optional[str] = None
     # "I do not mind nsfw". PERMISSION, not a want, and deliberately NOT in the
@@ -4076,7 +4085,12 @@ def _collapse_reader(db, name: str, count: int) -> Optional[tuple[str, int]]:
     row = db.execute(sql_text(
         "SELECT value, count FROM facets WHERE kind='character' "
         "AND lower(value) = 'reader'")).first()
-    if row and row[1] > max(count, 1) * 10:
+    if not row:
+        return None
+    # `count = 10**9` is how `_resolve_pair` asks for the MAPPING without the
+    # attestation test: it is not swapping a term, it is trying both spellings
+    # against the relationship vocabulary and letting the archives decide.
+    if count >= 10 ** 9 or row[1] > max(count, 1) * 10:
         return row[0], int(row[1])
     return None
 
@@ -4126,19 +4140,38 @@ def _resolve_pair(db, raw: str) -> Optional[ExtractedTerm]:
         ca, cb = _resolve_half(db, a, True), _resolve_half(db, b, False)
         if not ca or not cb:
             continue
-        # Either order, and `/` or `&` — the archives are not consistent and
-        # the reader should not have to be. Most-used spelling wins.
-        row = db.execute(sql_text("""
-            SELECT value, count FROM facets
-             WHERE kind = 'relationship'
-               AND lower(value) LIKE lower(:a)
-               AND lower(value) LIKE lower(:b)
-             ORDER BY count DESC
-             LIMIT 1
-        """), {"a": f"%{ca}%", "b": f"%{cb}%"}).first()
-        if row:
-            return ExtractedTerm(kind="relationship", value=row[0],
-                                 count=row[1], matched=f"{a}/{b}")
+        # EACH HALF MAY BE FILED UNDER A SHORTER NAME than the one the reader
+        # wrote, and the pairing is filed under whichever the archives chose.
+        #
+        # "Juvia Locker/male reader" resolves its halves to `Juvia Lockser` and
+        # `Male Reader`, and the pairing that exists is `Juvia Lockser/Reader`
+        # — so a lookup for a value containing "Male Reader" found nothing and
+        # the whole thing fell through to two separate character filters. The
+        # collapse was already written; it just ran later than this.
+        def _forms(name: str) -> list[str]:
+            gen = _collapse_reader(db, name, 10 ** 9)
+            return [name] + ([gen[0]] if gen and gen[0] != name else [])
+
+        best = None
+        for fa in _forms(ca):
+            for fb in _forms(cb):
+                # Either order, and `/` or `&` — the archives are not
+                # consistent and the reader should not have to be. Most-used
+                # spelling wins.
+                row = db.execute(sql_text("""
+                    SELECT value, count FROM facets
+                     WHERE kind = 'relationship'
+                       AND lower(value) LIKE lower(:a)
+                       AND lower(value) LIKE lower(:b)
+                     ORDER BY count DESC
+                     LIMIT 1
+                """), {"a": f"%{fa}%", "b": f"%{fb}%"}).first()
+                if row and (best is None or row[1] > best[1]):
+                    best = row
+        if best:
+            return ExtractedTerm(kind="relationship", value=best[0],
+                                 count=best[1], matched=f"{a}/{b}",
+                                 spellings=[best[0]])
     return None
 
 
@@ -5102,8 +5135,29 @@ def extract(
         crossovers = "exclude"
 
 
+    # THE SUBJECT IS NEVER PROBED AWAY.
+    #
+    # `_PROBE_MIN_KEEP` asks "is this still worth reading" — a fair question of
+    # a QUALITY the reader wants the story to have, and the wrong question
+    # entirely of the thing they asked for. On "Juvia Locker/male reader" the
+    # pairing `Juvia Lockser/Reader` is on four works, so the probe dropped it
+    # and the query went out as `tag:"Fairy Tale Elements"` — eleven works
+    # about fairy-tale elements, which is not a smaller answer to the reader's
+    # question, it is an answer to a different one. Four works about the
+    # pairing they named is the honest result.
+    #
+    # Only a RESOLVED pairing, or the two characters either side of a slash.
+    # Not a tag, not a fandom — those are qualities and scope, and the probe is
+    # right about them.
     kept: list[ExtractedTerm] = []
+    if pair_term is not None:
+        kept = [pair_term]
+    elif pair_chars:
+        kept = [t for t in terms if t in pair_chars][:2]
+
     for t in terms[:6]:
+        if t in kept:
+            continue
         # A term already IMPLIED by one that is kept adds no information and
         # costs a slot. `Levi Ackerman Whump` and `Whump` were both going into
         # the same query: every work carrying the first carries the second, so
@@ -5184,12 +5238,22 @@ def extract(
                                  else f">{_k(wc_min)}" if wc_min
                                  else f"<{_k(wc_max)}"))
 
+    # Which of the terms we are about to hand back are gated. Checked against
+    # `gate_terms.py`, the one place those lists live.
+    _gated_lists = {t.lower() for t in
+                    (_UNDERAGE_TAGS + _UNDERAGE_WARNINGS
+                     + _ADULT_TAGS + _ADULT_WARNINGS)}
+    gated_terms = sorted({t.value for t in kept + terms
+                          if t.value.lower() in _gated_lists}
+                         | {v for v in exclude_tags
+                            if v.lower() in _gated_lists})
+
     return ExtractResponse(terms=terms, query=" ".join(parts),
                            ignored_words=max(len(words) - len(used), 0),
                            word_count_min=wc_min, word_count_max=wc_max,
                            already_read=already_read, status=status, sort=sort,
                            crossovers=crossovers, site=site,
-                           explicit_ok=nsfw_ok,
+                           explicit_ok=nsfw_ok, gated_terms=gated_terms,
                            exclude_tags=exclude_tags[:_MAX_EXCLUDES])
 
 

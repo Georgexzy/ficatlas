@@ -53,6 +53,59 @@ asks for something the archives themselves label is entitled to find it. What
 the site will not do is put it in front of somebody who did not ask, or bake it
 into a link they then share.
 
+### Consent is not consent from whoever the link is pasted to
+
+A post can say "I do not mind nsfw". That is permission the poster gave for
+themselves, and it reaches no further — so `explicit_ok` is a FIELD on the
+extract response and never enters the query string or a generated link.
+
+There is a SECOND leak the gates alone do not close, and it is the one that
+caused the ban: **the query text travels in the URL.** `?q=tag:"Underage Sex"`
+pasted into a public thread is a rule breach whether or not the page lists
+anything, and the gates guarantee only that it lists nothing. So
+`/api/search/extract` reports `gated_terms` — any extracted term sitting on a
+gate list — and `OutreachPanel` refuses to build a link at all when it is
+non-empty, alongside the existing check on the query box. Two refusals: one
+reads the BOX, because an operator can type a toggle into it; the other reads
+what the POST resolved to, where nothing in the box looks wrong.
+
+### The gate lists missed the archives' own spelling variants
+
+Found by enumerating the vocabulary rather than by thinking of tags:
+
+    SELECT value, count FROM facets WHERE kind='tag'
+     AND (lower(value) LIKE '%underage sex%' OR lower(value) LIKE '%pedophil%'
+          OR lower(value) LIKE '%dead dove%') AND count >= 20
+
+**About 1,900 works** carried an underage-sex or pedophilia tag and were not
+gated — `Past Underage Sex` (630), `Mentions of Underage Sex` (153),
+`Adult/Minor` (142), `Mentions of Pedophilia` (130), `Underaged Sex`,
+`Paedophilia`, and a dozen more. Another ~800 carried AO3's own dead-dove
+marker in lower case; array containment is case-SENSITIVE, so `dead dove do not
+eat` (494) and `dead dove` (302) sailed through.
+
+**Re-run that query after any bulk import.** The vocabulary grows, and a list
+written from memory will always lag it.
+
+What is deliberately NOT gated, and each one is why the exact-value rule is not
+negotiable:
+
+- `No Underage Sex` (1,284 works) and `No Pedophilia` — the opposite of the tag.
+- `Mori Ougai is Not a Pedophile` — a negation in the MIDDLE of the value,
+  which a leading-negation check cannot see.
+- **`Bang Chan (Stray Kids)` and ~60 relatives.** `Chan` is on the list as an
+  exact value; a `%chan%` pattern would hide a K-pop idol's entire tag family,
+  thousands of works about a real person. `Chance Meetings` was the example
+  already on record — this is a far sharper one.
+- `Underage Drinking` (25,321), `Underage Smoking`, `Underage Drug Use`,
+  `Underage Kissing`.
+- `Dead Dove Sapphic Week 2023` and other event tags that NAME the warning
+  without carrying it.
+
+**A known limit, found while testing this:** the n-gram window is 1-4 words, so
+a five-word tag like `Dead Dove Do Not Eat` is unreachable by that path however
+it is punctuated. Those posts match through the shorter variants instead.
+
 ### The term lists had drifted, and the laxer copy was the one doing the work
 
 They were written out TWICE — in `content_gates.py`, which owns the database

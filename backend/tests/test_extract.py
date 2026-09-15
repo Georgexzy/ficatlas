@@ -746,3 +746,53 @@ def test_nsfw_permission_is_read_but_never_linked(phrase, expect, bulleted):
     out = extract(text=f"looking for fluff fics, {phrase}", db=bulleted)
     assert "explicit" not in out.query
     assert "rating:" not in out.query
+
+
+@pytest.mark.parametrize("post,expect_gated", [
+    ("any harry potter fics with underage sex, explicit is fine", True),
+    ("harry potter dead dove fics", True),
+    ("some fluffy drarry fics please", False),
+    ("juvia/male reader fics, I do not mind nsfw", False),
+])
+def test_gated_terms_are_reported_so_a_link_builder_can_refuse(bulleted, post,
+                                                               expect_gated):
+    # The gated values have to be in the VOCABULARY for the n-gram lookup to
+    # find them at all — on the live index they are; in a fixture they are not,
+    # and the first version of this test passed for the wrong reason.
+    bulleted.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag','Underage',22968), ('tag','Underage Sex',10037),
+          ('tag','Explicit Sexual Content',41000),
+          ('tag','Dead Dove: Do Not Eat',38000),
+          -- The SHORT spelling, and the reason is a real limit worth knowing:
+          -- the n-gram window is 1-4 words, so `Dead Dove Do Not Eat` (five)
+          -- is unreachable by that path however it is punctuated. The live
+          -- index matches these posts through `dead dove` (302 works) and
+          -- `dead dove don't eat` (22), which is why it worked there and not
+          -- in a fixture seeded with the long form alone.
+          ('tag','dead dove',302),
+          ('fandom','Harry Potter',686558)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    bulleted.commit()
+    """A reader's consent is not consent from the people they paste a link to.
+
+    The gates already stop the WORKS being shown, so such a link returns
+    nothing — but the query text travels in the URL, and `?q=tag:"Underage
+    Sex"` pasted into a public thread is the thing that got a reader banned,
+    whether or not it lists anything. So the endpoint reports which extracted
+    terms sit on a gate list and `OutreachPanel` refuses to build a link.
+    """
+    out = extract(text=post, db=bulleted)
+    assert bool(out.gated_terms) is expect_gated, out.gated_terms
+
+
+def test_consent_never_reaches_the_query_or_a_link(bulleted):
+    """`explicit_ok` is information for the operator and nothing else. It must
+    not appear in the query string, and it must not be able to make a link
+    safer — only the operator better informed."""
+    out = extract(text="juvia/male reader fics, I do not mind nsfw",
+                  db=bulleted)
+    assert out.explicit_ok is True
+    for forbidden in ("explicit", "include_underage", "rating:"):
+        assert forbidden not in out.query.lower(), out.query

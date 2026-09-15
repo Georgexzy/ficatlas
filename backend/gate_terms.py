@@ -41,6 +41,39 @@ UNDERAGE_TAGS = [
     "Child Sexual Abuse", "Childhood Sexual Abuse",
     "Shotacon", "Lolicon", "Chan", "Ephebophilia",
     "Statutory Rape", "Underage Non-Consensual",
+    # ── Spelling variants found by enumerating the vocabulary ──────────────
+    #
+    # The list was written from the tags somebody thought of, and the archives
+    # spell the same thing a dozen ways. Enumerated with
+    #   SELECT value, count FROM facets WHERE kind='tag'
+    #    AND (lower(value) LIKE '%underage sex%' OR lower(value) LIKE
+    #         '%pedophil%' OR …) AND count >= 20
+    # and every result read by hand. About **1,900 works** were carrying an
+    # underage-sex or pedophilia tag and were NOT gated.
+    #
+    # Re-run that query after any bulk import; the vocabulary grows.
+    "Past Underage Sex", "Mentions of Underage Sex", "Implied Underage Sex",
+    "References to Underage Sex", "Mention of Underage Sex",
+    "Underaged Sex", "Underage sexual content", "Underage - Adult/Minor",
+    "Adult/Minor", "Mentions of Pedophilia", "Implied pedophilia",
+    "Mentioned Pedophilia", "Pedophilia mention", "mention of pedophilia",
+    "Paedophilia", "pedophile - Freeform", "Straight Shotacon",
+    # A character written AS a pedophile. Named individually rather than by a
+    # `Pedophile %` pattern, because the pattern's mirror image is right below.
+    "Pedophile Mori Ougai (Bungou Stray Dogs)",
+    "Pedophile Connor (Fundamental Paper Education)",
+    "Pedophile Wilbur Soot", "Pedophile David (Camp Camp)", "pedophile!David",
+    # NOT gated, deliberately, and each one is why a substring rule is refused:
+    #   `No Underage Sex` (1,284 works)  — the opposite of the tag
+    #   `No Pedophilia`                  — likewise
+    #   `Mori Ougai is Not a Pedophile`  — a negation in the MIDDLE of a value,
+    #                                      which a leading-negation check misses
+    #   `Bang Chan (Stray Kids)` and ~60 relatives — a `%chan%` pattern hides a
+    #      K-pop idol's entire tag family, thousands of works about a real
+    #      person. `Chance Meetings` was the example already on record; this is
+    #      far worse, and it is why the exact-value rule is not negotiable.
+    #   `Underage Drinking` (25,321), `Underage Smoking`, `Underage Drug Use`,
+    #      `Underage Kissing` — not sexualisation of minors.
 ]
 
 # ── Tier 2: explicit sex, and the deliberately disturbing ───────────────────
@@ -56,6 +89,16 @@ ADULT_TAGS = [
     "Dubious Consent", "Dub-Con", "Dubcon",
     # AO3's own marker for "this is as unpleasant as it says on the tin".
     "Dead Dove: Do Not Eat", "Dead Dove Do Not Eat",
+    # The same warning, lower-cased and re-punctuated by the people writing it.
+    # Array containment is case-SENSITIVE, so these were ungated: 494 + 302 +
+    # 22 works carrying AO3's own "this is as unpleasant as it says on the tin"
+    # marker, on a default search.
+    "dead dove do not eat", "dead dove", "dead dove don't eat",
+    "Dead Dove: Do Not Eat - Freeform", "dead dove: do not eat",
+    # NOT gated: `Dead Dove Sapphic Week 2023`, `bungo dead dove week 2023`,
+    # `Call of Duty New Year New Dead Doves Exchange` and
+    # `Does this count as Dead Dove?` — event and challenge tags that name the
+    # warning without carrying it.
     # Non-consent.
     "Rape/Non-con Elements", "Rape", "Non-Con", "Noncon", "Non-con",
     "Implied/Referenced Rape/Non-con", "Past Rape/Non-con",
