@@ -1183,6 +1183,51 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     timing on a loaded box is not a measurement; the verification script's
     10-second gate had caught a cold outlier, not a regression.
 
+- **A query that EXCLUDES smut was being refused as unsafe.** Reported from a
+  post reading "preferably little to no smut": it produced `-tag:"Smut"`, and
+  both halves of the link check counted it — `gated_terms` folded the
+  exclusions in, and `_link_is_unsafe` scanned the whole query text including
+  the `-tag:` clauses. So the reader's own caution was the thing that blocked
+  the link. **What a query REFUSES can never be what it shows**: negated
+  clauses come out before the scan, and exclusions are no longer gated terms.
+- **Five more from that same post, each general.**
+  - **The bullet strip ate the NUMBER.** `[-*•\d.)\s]+` is greedy from the
+    start of a line, so the very common bullet "-50k+ words" became "k+ words"
+    and the length constraint vanished before `read_request` saw it. A bullet
+    marker is `[-*•]` plus an optional `\d+[.)]`, not "any leading punctuation
+    and digits".
+  - **The archives hyphenate what readers space out.** `Harry-centric` is a tag
+    on 186 works and the reader typed "harry centric"; the lookup is an indexed
+    equality, so they never met. The hyphen-joined variant of every multi-word
+    run is generated — normalising the column instead would seq-scan 1.57M
+    rows.
+  - **A caveat only retracts when the SUBJECT COMES BACK.** "id prefer no
+    slash, but if there is SLASH then drarry is my no.1" takes it back; "NOT
+    because someone dies but because you just feel SO SORRY" contrasts two
+    reasons and means every word. Treating every "but" as a retraction dropped
+    another post's exclusions wholesale, which is how the first version was
+    caught. Compared on the READER's words, because that is what reappears.
+  - **The first line of a fic-finder post is its SUBJECT.** Those communities
+    require the ask in the title, and ranking line concepts by attestation
+    buries it: on a post titled "Harry-centric fics", `Harry-centric` (186
+    works) lost its slot to `Therapy` (12,062), which the post never mentions.
+  - **A concept found on a SECOND pass over a line is weaker evidence**, and
+    was being ranked as though it were stronger. Each pass re-resolves what the
+    last did not consume, so "creature inheritance is accepted so long as its
+    well written" gave `Creature Inheritance` and then `Acceptance` (4,478) out
+    of the remains — better attested than the real want, and it took the slot.
+    Bounded at two passes, and leftovers sort below first-pass concepts.
+  - Result on that post: `ship:"Draco Malfoy/Harry Potter"
+    fandom:"Harry Potter…" tag:"Slytherin Harry Potter" complete words:>50k
+    -tag:"Smut"` — 41 works, against a query that had been three junk tags and
+    a self-contradicting `-tag:"Slash"` beside the drarry ship it asked for.
+- **A test that passes alone and fails in a suite is telling you about a
+  CACHE.** `query_intent` memoises resolved phrases per process, so what a
+  phrase resolves to depends on what earlier tests resolved. The fix is not to
+  reorder the suite: assert the rule at the unit that implements it
+  (`_concept_key_for_test`) and assert only the INVARIANT end-to-end — here,
+  that no two terms in a query are the same concept modulo punctuation.
+
 - **"Juvia Locker/male reader" — one post, four separate misses.** Reported
   as "not extracting ship or some other detail", and all four were general:
   - **A pairing half may be more than one word.** The pattern captured

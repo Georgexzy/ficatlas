@@ -3850,9 +3850,22 @@ _UNSAFE_FALSE_FRIENDS = re.compile(
     re.I)
 
 
+# A NEGATED term is the reader ruling something out, and a link carrying it
+# shows nothing of the sort — it says so. `-tag:"Smut"` is the safest query
+# this endpoint can produce and it was being refused as unsafe, which is both
+# wrong and the exact opposite of what the reader asked for.
+_NEGATED_CLAUSE = re.compile(r'-\w+:"[^"]*"|-\w+:\S+')
+
+
 def _link_is_unsafe(query: str) -> bool:
-    """Would this query text be a problem in a public thread?"""
-    scrubbed = _UNSAFE_FALSE_FRIENDS.sub(" ", query or "")
+    """Would this query text be a problem in a public thread?
+
+    Exclusions come out first. "preferably little to no smut" produces
+    `-tag:"Smut"`, and refusing to link that is refusing the reader's own
+    caution — the link shows no smut and the query says as much.
+    """
+    positive = _NEGATED_CLAUSE.sub(" ", query or "")
+    scrubbed = _UNSAFE_FALSE_FRIENDS.sub(" ", positive)
     return bool(_UNSAFE_LINK_RE.search(scrubbed))
 
 
@@ -4001,6 +4014,18 @@ def _is_framing(value: str, matched: str = "") -> bool:
         return True
     # Matched FROM a framing word, however the vocabulary spells the result.
     return bool(matched) and matched.strip().lower() in _FRAMING_TERMS
+
+
+def _concept_key_for_test(v: str) -> str:
+    """Two spellings of one concept collapse to one key.
+
+    `Self-Insert` and `Self Insert` are different facet values and the same
+    thing, and AND-ing both demands a work carrying each. Module level so a
+    test can check the rule without running the endpoint — the endpoint's
+    answer depends on `query_intent`'s per-process phrase cache, which makes an
+    end-to-end assertion order-dependent.
+    """
+    return re.sub(r"[^a-z0-9]+", "", v.lower())
 
 
 def _is_length_word(value: str) -> bool:
@@ -4615,10 +4640,32 @@ def extract(
     # houses" became the word "houses", which matched `House`, the television
     # programme. Per line it resolves to `Harry is Lord Potter`.
     line_terms: list[ExtractedTerm] = []
+    # Values resolved from the post's opening lines — its subject. Collected as
+    # the loop runs rather than string-matched afterwards, which was tried and
+    # is unreliable: `matched` holds the CLEANED line, not the raw one.
+    subject_values: set[str] = set()
+    # Concepts found on a SECOND pass over a line, after the first match took
+    # its words. Weaker evidence by construction — the first match consumed the
+    # most salient part of the sentence — and they are often better attested
+    # than the real want, so on frequency alone they win a slot they have no
+    # claim to. "creature inheritance is accepted so long as its well written"
+    # gives `Creature Inheritance` and then `Acceptance` (4,478 works) out of
+    # the remains.
+    leftover_values: set[str] = set()
     exclude_tags: list[str] = []
     wc_min = wc_max = None
+    _content_line = 0
     for line in raw.splitlines():
-        line = re.sub(r"^\s*[-*\u2022\d.)\s]+", "", line).strip()
+        # A bullet marker, not "any leading punctuation and digits".
+        #
+        # The old class `[-*•\d.)\s]+` was greedy over digits, so the very
+        # common bullet "-50k+ words" lost its number and became "k+ words" —
+        # the word count was destroyed before `read_request` could read it, and
+        # the reader's length constraint silently vanished. A numbered marker
+        # still goes ("1.", "2)", "3 ."), because the digits there are the
+        # marker rather than the content.
+        line = re.sub(r"^\s*(?:[-*\u2022]+\s*)?(?:\d+\s*[.)]\s*)?", "",
+                      line).strip()
         if len(line) < 4:
             continue
         # Punctuation to spaces before anything reads it. Readers group
@@ -4633,7 +4680,23 @@ def extract(
         # to `Albus Dumbledore Bashing`, with it to nothing. The qualifier is
         # dropped rather than parsed; "not too much bashing" is a matter of
         # degree the tag vocabulary cannot express anyway.
-        line = re.split(r"\b(?:but|though|although|however)\b", line, 1, re.I)[0]
+        # Does the reader take it back? "id prefer no slash, BUT if there is
+        # slash then drarry is my no.1" — the caveat is cut here so the trope
+        # resolver can work, and the negation in front of it would otherwise
+        # survive as a hard exclusion of the very thing the rest of the line
+        # asks for. The query came out with `ship:"Draco Malfoy/Harry Potter"`
+        # AND `-tag:"Slash"`, which is a contradiction the reader never wrote.
+        # ...only when the SUBJECT COMES BACK.
+        #
+        # "id prefer no slash, but if there is SLASH then drarry is my no.1"
+        # takes it back — the word returns after the caveat. "NOT because
+        # someone dies but because you just feel so sorry for them" does not;
+        # the `but` contrasts two reasons and the negation stands. Treating
+        # every caveat as a retraction dropped the second post's exclusions
+        # entirely, which is how this was caught.
+        _parts = re.split(r"\b(?:but|though|although|however)\b", line, 1, re.I)
+        _tail = _parts[1] if len(_parts) > 1 else ""
+        line = _parts[0]
         line = re.sub(r"[()\[\]{}/,;:]+", " ", line)
         line = re.sub(r"\s+-\s+|\s*-\s*$", " ", line)
         line = re.sub(r"\s+", " ", line).strip()
@@ -4657,7 +4720,18 @@ def extract(
             # them". A fic-finder post is a request by construction, which is
             # the thing the search path has to infer and this one knows.
             line, _neg = _extract_negations(db, line, False)
+            _tail_words = set(re.findall(r"[a-z]{3,}", _tail.lower()))
             for grp in _neg:
+                # Does the caveat name this again? Compare on the SUBJECT's own
+                # words, not the resolved tag's: the reader wrote "slash" and
+                # the tag is `Slash`, but they wrote "someone dies" and the tag
+                # is `Someone dies` — either way it is the reader's words that
+                # have to reappear for the retraction to be real.
+                _grp_words = {w for v in grp
+                              for w in re.findall(r"[a-z]{3,}", v.lower())}
+                if _tail_words and _grp_words & _tail_words:
+                    log.debug("extract: negation %r retracted after 'but'", grp)
+                    continue
                 for v in grp:
                     if v not in exclude_tags:
                         exclude_tags.append(v)
@@ -4666,15 +4740,26 @@ def extract(
         if len(line.strip()) < 4:
             continue
 
+        _content_line += 1
         req = read_request(line)
         if wc_min is None and req.word_count_min is not None:
             wc_min = req.word_count_min
         if wc_max is None and req.word_count_max is not None:
             wc_max = req.word_count_max
-        # Every concept on the line, not just the first: a line like
-        # "bashing (dumbles/weasleys/hermione)" names three.
+        # Every concept on the line, not just the first — a line like
+        # "bashing (dumbles/weasleys/hermione)" names three — but TWO, not
+        # four.
+        #
+        # Each pass re-resolves what the last one did not consume, and by the
+        # third pass the leftover is the line's connective tissue rather than
+        # anything the reader asked for. Measured on a real post: "creature
+        # inheritance is accepted so long as its well written" gave
+        # `Creature Inheritance` and then `Acceptance` (4,478 works) and
+        # `Therapy` (12,062) out of the remains — and because they are far
+        # better attested than the real want, they outranked it and took its
+        # slot in the query.
         probe, guard = _strip_framing(req.text), 0
-        while probe.strip() and guard < 4:
+        while probe.strip() and guard < 2:
             guard += 1
             tags, works, leftover, _whole = resolve_trope_tags(db, probe)
             if not tags:
@@ -4704,6 +4789,10 @@ def extract(
             # the group is what the probe ORs, so a concept could be kept on
             # the strength of works that say the opposite of what was asked.
             tags = [t for t in tags if not _NEGATED_TAG.match(t)] or tags
+            if _content_line <= 2 and guard <= 1:
+                subject_values.add(best[0])
+            if guard > 1:
+                leftover_values.add(best[0])
             line_terms.append(ExtractedTerm(kind="tag", value=best[0],
                                             count=best[1], matched=line[:60],
                                             from_line=True, spellings=tags))
@@ -4844,6 +4933,16 @@ def extract(
             g = " ".join(words[i:i + n]).lower()
             if len(g) >= 3 and g not in grams:
                 grams[g] = (i, i + n)
+            # The archives hyphenate what readers space out. `Harry-centric`
+            # is a tag on 186 works and `Zuko-centric (Avatar)` on thousands,
+            # while a reader types "harry centric" — and the lookup is an
+            # indexed equality, so the two never met. Generating the
+            # hyphen-joined variant keeps the equality (and the index) rather
+            # than normalising the column, which would seq-scan 1.57M rows.
+            if n > 1:
+                h = "-".join(words[i:i + n]).lower()
+                if h not in grams:
+                    grams[h] = (i, i + n)
     if not grams:
         return ExtractResponse(terms=[], query="", ignored_words=len(words))
 
@@ -4914,7 +5013,20 @@ def extract(
     # from the broadest. `Albus Dumbledore Bashing` is on 3,481 works and
     # `Harry is Lord Potter` on 82 — leading with the rare one narrows to
     # almost nothing before the useful terms are even tried.
-    line_terms.sort(key=lambda t: -t.count)
+    # THE FIRST LINE IS THE SUBJECT, and frequency is the wrong order for it.
+    #
+    # Fic-finder posts put the ask in the title — the two long-running HP
+    # communities this codebase took its framing patterns from require it — and
+    # ranking line concepts by how well attested they are buries it. Measured
+    # on a post titled "Harry-centric fics" whose first line repeats it:
+    # `Harry-centric` is on 186 works and lost its slot to `Therapy` (12,062),
+    # which the post never asks for at all.
+    #
+    # The rest still sorts by frequency, which is right for the body: a post
+    # lists its constraints in no particular order and the broadest is the best
+    # thing to build a query from.
+    line_terms.sort(key=lambda t: (t.value not in subject_values,
+                                   t.value in leftover_values, -t.count))
     # AFTER the frequency sort, not before it. Two characters either side of a
     # slash are the SUBJECT of the request, exactly as a resolved pairing is,
     # and the same exception to ranking-by-frequency applies: on "Juvia
@@ -5063,7 +5175,13 @@ def extract(
     # This is the same asymmetry as the rejected "characters outrank tags"
     # rule, one level down: a name that merely APPEARS in a sentence is weaker
     # evidence than a concept the sentence was written to express.
-    swapped.sort(key=lambda t: (not t.from_line, t.value in bare_name,
+    # The subject first, then line concepts, then loose words — and the subject
+    # has to be IN THIS KEY. Ordering `line_terms` earlier is undone here, the
+    # same way prepending the pair characters was: this sort is the last word
+    # on order and anything not represented in its key does not survive it.
+    swapped.sort(key=lambda t: (t.value not in subject_values,
+                                not t.from_line, t.value in leftover_values,
+                                t.value in bare_name,
                                 -rank_count.get(t.value, t.count)))
 
     # One concept, one slot — even when the archives punctuate it two ways.
@@ -5077,8 +5195,7 @@ def extract(
     #
     # The loser is not thrown away: it joins the winner's spellings, so the
     # probe still ORs them, which is the shape the search itself builds.
-    def _concept_key(v: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "", v.lower())
+    _concept_key = _concept_key_for_test
 
     by_concept: dict[str, ExtractedTerm] = {}
     deduped: list[ExtractedTerm] = []
@@ -5359,9 +5476,12 @@ def extract(
     # been a candidate. Underage drinking is one of the cases this codebase is
     # on record about NOT over-blocking, and refusing to link it is the same
     # error one layer up.
-    gated_terms = sorted({t.value for t in kept if t.value.lower() in _gated_lists}
-                         | {v for v in exclude_tags[:_MAX_EXCLUDES]
-                            if v.lower() in _gated_lists})
+    # EXCLUSIONS ARE NOT GATED TERMS. They were folded in here, so a post
+    # saying "preferably little to no smut" reported `gated_terms: ['Smut']`
+    # and the panel refused to build a link — punishing the reader for ruling
+    # the thing out. What a query REFUSES can never be what it shows.
+    gated_terms = sorted({t.value for t in kept
+                          if t.value.lower() in _gated_lists})
 
     _query_text = " ".join(parts)
     link_unsafe = bool(gated_terms) or _link_is_unsafe(_query_text)
