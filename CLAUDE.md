@@ -1046,6 +1046,50 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     timing on a loaded box is not a measurement; the verification script's
     10-second gate had caught a cold outlier, not a regression.
 
+- **"Juvia Locker/male reader" — one post, four separate misses.** Reported
+  as "not extracting ship or some other detail", and all four were general:
+  - **A pairing half may be more than one word.** The pattern captured
+    `[A-Za-z]{3,}` a side, so this gave ("Locker", "male") — a surname without
+    its given name, and an adjective. Most characters are not called one word.
+  - **Either half may be MISSPELT, so neither end can be assumed correct.**
+    "Juvia Locker" has the surname wrong (the reader corrects themselves two
+    lines later). `_resolve_half` tries every contiguous run, longest first,
+    with the ones touching the slash first — so `Juvia` prefix-matches
+    `Juvia Lockser`. Shrinking from one end only was tried and reached
+    "Locker", never "Juvia".
+    - It needs a FLOOR, `_PAIR_MIN_WORKS = 200`. Without one the sub-phrase
+      search finds something for almost any words: "ppl think he/she is bad"
+      resolved to `Think Tank (Fallout: New Vegas)` (13 works) and `she is only
+      mentioned` (2), and a line from a reader's EXCLUSION list resolved to
+      `manipulative Dumbledore - Character` (2 works). A character somebody
+      writes a pairing about is not on two works.
+  - **A pairing the archives do not file is still a request for both
+    characters.** There is no `Juvia Lockser/Reader` among the 1,568 Juvia
+    pairings, and returning nothing because the pairing is unattested throws
+    away a request the index CAN answer. `_pair_characters` emits both, pinned
+    ahead of frequency exactly as a resolved pairing is — and it has to be
+    pinned in the head block, not before the sort, because the final sort
+    otherwise undoes it and put `Fairy Tale Elements` (4,974 — the fandom's own
+    name misread, not a want at all) above both characters.
+  - **Reader-inserts collapse to `Reader`.** "X/male reader" is how a whole
+    genre is written and the archives do not file it that way: `Reader` is a
+    character on **188,474** works, `Male Reader` on 1,958. So the specific
+    spelling is the one that co-occurs with nothing — `Juvia Lockser` with
+    `Male Reader` is **0 works**, with `Reader` **26**.
+  - Also read from that post: **`site:ao3`** from "my medium of choice is AO3"
+    (negative forms say nothing, because pinning the wrong archive returns a
+    full page from the one place the reader said they cannot use), and
+    **`explicit_ok`** from "I do not mind nsfw".
+  - **`explicit_ok` is a FIELD and never enters the query string.** The adult
+    gate is what keeps a shared link safe and `OutreachPanel` strips `explicit`
+    from every link it builds. A reader saying this on their own post has
+    consented for themselves, not for whoever they paste a link to.
+  - **An `if/elif` chain is a structure, not a list of independent checks.**
+    Inserting the reader collapse in the middle of the character branch turned
+    the single-word canonicalisation `elif` into a branch of the wrong `if`, so
+    `Damon` silently stopped becoming `Damon Salvatore`. Caught by a test that
+    already existed.
+
 - **The extractor was measured against fifteen REAL fic-finder posts, and it
   was much worse than the single-post checks had suggested.** Before: **three
   posts returned nothing at all and six ran in the WRONG FANDOM** — the worse

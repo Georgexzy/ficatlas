@@ -3563,6 +3563,13 @@ class ExtractResponse(BaseModel):
     # the same tag vocabulary the positive path uses. Already inside `query` as
     # `-tag:"…"`; listed so a caller can show them.
     exclude_tags: list[str] = []
+    # "on AO3", "I only read on ff.net" — already inside `query` as `site:`.
+    site: Optional[str] = None
+    # "I do not mind nsfw". PERMISSION, not a want, and deliberately NOT in the
+    # query string: the adult gate is what keeps a shared link safe, and a
+    # reader consenting on their own post has not consented for whoever they
+    # paste a link to. Reported so a caller can decide; links do not carry it.
+    explicit_ok: Optional[bool] = None
     # "ongoing", "complete", "WIP" — a filter, not a word to search for.
     status: Optional[str] = None
     # "no crossovers" / "naruto x bleach crossover" — read from the post, never
@@ -3680,6 +3687,58 @@ _TAG_ABBREV = {
 _QUALITY_WORDS = re.compile(
     r"\b(?:good|best|worth\s+reading|quality|well[-\s]written|favourite|"
     r"favorite|recommend\w*|top|great|excellent)\b", re.I)
+
+# WHICH ARCHIVE the reader reads on. "My medium of choice is AO3", "I only
+# read on ff.net", "preferably on AO3". A real constraint and one this site is
+# unusually able to honour, since it is the only one searching all three.
+#
+# Affirmative forms only. "not on AO3" and "anywhere but AO3" mean the
+# opposite, and a filter that pins the wrong archive is worse than no filter —
+# it returns a full page of results from the one place the reader said they
+# could not use.
+_SITE_WORDS = [
+    (re.compile(r"\b(?:not|never|except|but|besides)\s+(?:on\s+)?"
+                r"(?:ao3|archive\s*of\s*our\s*own)\b", re.I), None),
+    (re.compile(r"\b(?:ao3|archive\s*of\s*our\s*own)\b", re.I), "ao3"),
+    (re.compile(r"\b(?:ff\.?net|fanfiction\.net|fanfiction\s*net)\b", re.I),
+     "ffnet"),
+    (re.compile(r"\bfictionalley\b", re.I), "fictionalley"),
+]
+
+
+def _read_site(raw: str) -> Optional[str]:
+    for rx, value in _SITE_WORDS:
+        if rx.search(raw):
+            return value          # None for the negative form: say nothing
+    return None
+
+
+# "I do not mind nsfw", "smut is fine", "18+ welcome" — PERMISSION, not a want.
+#
+# Reported as a field and deliberately NOT written into the query string. The
+# adult gate is what keeps a shared link safe, and `OutreachPanel` strips
+# `explicit` from every link it builds precisely so a link cannot carry it —
+# see the content-safety notes in CLAUDE.md. A reader who says this on their
+# own post has consented for themselves and not for whoever they paste a link
+# to, so the caller is told and the link is not changed.
+_NSFW_OK = re.compile(
+    r"\b(?:(?:do\s*n[o']?t|don't|dont)\s+mind|okay\s+with|ok\s+with|fine\s+with|"
+    r"open\s+to|happy\s+with|welcome|love)\s+(?:some\s+)?"
+    r"(?:nsfw|smut|explicit|lemon|mature\s+content)\b"
+    r"|\b(?:nsfw|smut|explicit|lemons?)\s+(?:is\s+|are\s+)?"
+    r"(?:fine|ok|okay|welcome|encouraged|good|great|preferred)\b"
+    r"|\b18\s*\+\s*(?:is\s+)?(?:fine|ok|okay|welcome)\b", re.I)
+
+_NSFW_NO = re.compile(
+    r"\b(?:no|not|without|avoid|rather\s+not|prefer\s+no)\s+(?:any\s+)?"
+    r"(?:nsfw|smut|explicit|lemons?)\b|\bsfw\s+only\b", re.I)
+
+
+def _reads_nsfw(raw: str) -> Optional[bool]:
+    if _NSFW_NO.search(raw):
+        return False
+    return True if _NSFW_OK.search(raw) else None
+
 
 # Crossovers, in the reader's own words. NEGATIVE first and deliberately so:
 # "no crossovers" contains the word "crossover", so testing for the want before
@@ -3906,12 +3965,165 @@ def _ship_nickname_in_post(db, raw: str) -> Optional[ExtractedTerm]:
     return None
 
 
+# Each half of an "A/B" may be up to three words, because most characters are
+# not called one word. The pattern used to capture `[A-Za-z]{3,}` a side, so
+# "Juvia Locker/male reader" gave ("Locker", "male") — the surname without the
+# given name, and an adjective — and resolved to nothing. Readers write
+# "Hermione Granger/Draco Malfoy", "Female Reader", "Bucky Barnes/Steve
+# Rogers"; one word a side is the exception.
+#
+# Bounded at three words and anchored on the slash so it cannot run away across
+# a sentence, and the halves are trimmed of the connective words that collect
+# around a slash ("and", "or", "with", "any").
+_PAIR_RE = re.compile(
+    r"([A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,2})"
+    r"\s*(?:/|\bx\b)\s*"
+    r"([A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,2})")
+
+# Words that pile up next to a slash and belong to neither name.
+_PAIR_EDGE = {"any", "some", "a", "an", "the", "and", "or", "with", "for",
+              "have", "has", "anyone", "does", "do", "looking", "want",
+              "recommendations", "recs", "fic", "fics", "please", "of", "to"}
+
+
+def _trim_pair_half(part: str) -> str:
+    """The name inside a phrase like "any Juvia Locker" or "male reader recs"."""
+    words = [w for w in part.split() if w]
+    while words and words[0].lower() in _PAIR_EDGE:
+        words.pop(0)
+    while words and words[-1].lower() in _PAIR_EDGE:
+        words.pop()
+    return " ".join(words[-3:])
+
+
+# How well attested a character must be to count as half of a pairing.
+#
+# Without a floor, the sub-phrase search finds SOMETHING for almost any words —
+# and the vocabulary is 1.57M freeform strings, so what it finds is junk with a
+# handful of works. Measured on real posts: "ppl think he/she is bad" resolved
+# to `Think Tank (Fallout: New Vegas)` (13 works) and `she is only mentioned`
+# (2), and "Generic manipulative Dumbledore/Voldemort bashing" — a line from
+# the reader's EXCLUSION list — resolved to `manipulative Dumbledore -
+# Character` (2 works).
+#
+# A character somebody writes a pairing about is not on two works. The floor is
+# what separates a name from a coincidence, and it is the same argument
+# `_DYM_MIN_COUNT` makes for spelling suggestions.
+_PAIR_MIN_WORKS = int(os.getenv("SEARCH_PAIR_MIN_WORKS", "200"))
+
+
+def _resolve_half(db, phrase: str, left: bool) -> Optional[str]:
+    """The character a half of an "A/B" names, from the words around it.
+
+    Tries the whole phrase, then progressively less of it — dropping from the
+    far end, because the name sits AGAINST the slash: "me some Harry" is
+    "Harry" and "male reader recs" is "male reader". An edge-word list gets the
+    common cases and cannot get them all, and asking the vocabulary is both
+    shorter and more general.
+
+    The shrinking also buys misspelling tolerance for free, which is what the
+    post that prompted it needed. "Juvia Locker/male reader" has the surname
+    wrong — the reader corrects themselves two lines later — and `Juvia Locker`
+    resolves to nothing, while `Juvia` prefix-matches `Juvia Lockser`. The
+    first word of a name is the half people get right.
+    """
+    words = [w for w in phrase.split() if w]
+    # EVERY contiguous run, longest first, and the ones touching the slash
+    # tried before the ones that do not — the name sits against the slash, but
+    # not always ending at it.
+    #
+    # Shrinking from one end only was not enough, and the post that prompted
+    # this is why: "Juvia Locker/male reader" has the SURNAME wrong, so
+    # dropping words from the left gave "Locker" (nothing) and never tried
+    # "Juvia", which prefix-matches `Juvia Lockser`. Readers misspell either
+    # half of a name, so neither end can be assumed correct.
+    spans = [(i, j) for n in range(len(words), 0, -1)
+             for i in range(0, len(words) - n + 1)
+             for j in [i + n]]
+    edge = len(words) if left else 0
+    spans.sort(key=lambda ij: (-(ij[1] - ij[0]),
+                               0 if (ij[1] if left else ij[0]) == edge else 1))
+    for i, j in spans:
+        cand = " ".join(words[i:j])
+        if len(cand) < 3 or cand.lower() in _FUNCTION_WORDS:
+            continue
+        hit = _canonical_character(db, cand)
+        if not hit:
+            continue
+        cnt = db.execute(sql_text(
+            "SELECT count FROM facets WHERE kind='character' AND value=:v"),
+            {"v": hit}).scalar()
+        if int(cnt or 0) >= _PAIR_MIN_WORKS:
+            return hit
+    return None
+
+
+def _collapse_reader(db, name: str, count: int) -> Optional[tuple[str, int]]:
+    """`Male Reader` -> `Reader`, when the specific spelling finds nothing.
+
+    "X/male reader" is how a whole genre is written and the archives do not
+    file it that way: `Reader` is a character on 188,474 works, `Male Reader`
+    on 1,958, `Female Reader - Character` on 6,255. So the specific spelling is
+    the one that co-occurs with nothing — measured on the post this came from,
+    `Juvia Lockser` with `Male Reader` is **0 works** and with `Reader` is 26.
+
+    Same swap and same argument as `_stem_sibling` makes for tags: a name that
+    ends in the general one and is vastly worse attested is a spelling of it,
+    not a different character.
+    """
+    if " " not in name.strip() or not re.search(r"\breaders?\b", name, re.I):
+        return None
+    row = db.execute(sql_text(
+        "SELECT value, count FROM facets WHERE kind='character' "
+        "AND lower(value) = 'reader'")).first()
+    if row and row[1] > max(count, 1) * 10:
+        return row[0], int(row[1])
+    return None
+
+
+def _pair_characters(db, raw: str) -> list[ExtractedTerm]:
+    """Both halves of an "A/B" as characters, when the archives file no pairing.
+
+    A reader asking for "Juvia Locker/male reader" has named two characters and
+    a relationship between them. The relationship does not exist here — there
+    is no `Juvia Lockser/Reader` among the 1,568 Juvia pairings — but the
+    characters both do, and works carrying both are exactly what was asked for.
+    Returning nothing because the pairing is unattested throws away a request
+    the index CAN answer.
+
+    Reader-inserts are most of why this matters: `Reader` is a character on
+    188,474 works and `Male Reader` on 1,958, and the "X/Reader" form is how a
+    whole genre is written.
+    """
+    out: list[ExtractedTerm] = []
+    for m in _PAIR_RE.finditer(raw):
+        a = _resolve_half(db, _trim_pair_half(m.group(1)), True)
+        b = _resolve_half(db, _trim_pair_half(m.group(2)), False)
+        if not a or not b or a == b:
+            continue
+        for name in (a, b):
+            cnt = int(db.execute(sql_text(
+                "SELECT count FROM facets WHERE kind='character' AND value=:v"),
+                {"v": name}).scalar() or 0)
+            spell = [name]
+            gen = _collapse_reader(db, name, cnt)
+            if gen:
+                spell = [gen[0], name]
+                name, cnt = gen
+            out.append(ExtractedTerm(kind="character", value=name,
+                                     count=cnt, matched=m.group(0)[:60],
+                                     from_line=True, spellings=spell))
+        return out
+    return []
+
+
 def _resolve_pair(db, raw: str) -> Optional[ExtractedTerm]:
     """A pairing written the way readers write it: "A/B" or "A x B"."""
-    for a, b in re.findall(r"([A-Za-z]{3,})\s*(?:/|\bx\b)\s*([A-Za-z]{3,})", raw):
-        if a.lower() in _FUNCTION_WORDS or b.lower() in _FUNCTION_WORDS:
+    for a, b in ((_trim_pair_half(m.group(1)), _trim_pair_half(m.group(2)))
+                 for m in _PAIR_RE.finditer(raw)):
+        if len(a) < 3 or len(b) < 3:
             continue
-        ca, cb = _canonical_character(db, a), _canonical_character(db, b)
+        ca, cb = _resolve_half(db, a, True), _resolve_half(db, b, False)
         if not ca or not cb:
             continue
         # Either order, and `/` or `&` — the archives are not consistent and
@@ -4387,6 +4599,9 @@ def extract(
     # A nickname first: it is one token that names a whole pairing, so it is
     # the most specific thing a post can carry. Slash notation second.
     pair_term = _ship_nickname_in_post(db, raw) or _resolve_pair(db, raw)
+    # No pairing in the vocabulary, but two real characters either side of the
+    # slash: ask for works carrying both rather than returning nothing.
+    pair_chars = [] if pair_term else _pair_characters(db, raw)
 
     # STATUS, QUALITY and the FANDOM a reader abbreviated — three things that
     # are not words to search for and were being treated as though they were.
@@ -4442,6 +4657,9 @@ def extract(
     # to get right: AO3 is 16.19% flagged and FF.net 5.33%, and that gap is
     # coverage rather than fact — the FF.net bulk dumps carry one fandom per
     # row, so `false` there means "unknown", the same trap as `status`.
+    site = _read_site(raw)
+    nsfw_ok = _reads_nsfw(raw)
+
     crossovers = None
     for rx, value in _CROSSOVER_WORDS:
         if rx.search(raw):
@@ -4557,6 +4775,14 @@ def extract(
     # `Harry is Lord Potter` on 82 — leading with the rare one narrows to
     # almost nothing before the useful terms are even tried.
     line_terms.sort(key=lambda t: -t.count)
+    # AFTER the frequency sort, not before it. Two characters either side of a
+    # slash are the SUBJECT of the request, exactly as a resolved pairing is,
+    # and the same exception to ranking-by-frequency applies: on "Juvia
+    # Locker/male reader", `Juvia Lockser` (2,479) and `Male Reader` (1,958)
+    # both sort under `Fairy Tale Elements` (4,974) — which is not even a want,
+    # it is the fandom's own name misread — and the query went out with the
+    # junk tag and neither character.
+
 
     # Anything already handled as a FILTER is not also a word to search for,
     # and this is checked ONCE over the merged list rather than in each path.
@@ -4659,6 +4885,19 @@ def extract(
                     t = ExtractedTerm(kind="character", value=full,
                                       count=int(cnt), matched=t.matched,
                                       from_line=t.from_line)
+        # Reader-inserts collapse to `Reader`, AFTER the chain above and not
+        # inside it. Putting it in the middle turned the single-word
+        # canonicalisation `elif` into a branch of the wrong `if`, so `Damon`
+        # stopped becoming `Damon Salvatore` and a passing test caught it.
+        # An `if/elif` chain is a structure, not a list of independent checks.
+        if t.kind == "character":
+            _gen = _collapse_reader(db, t.value, t.count)
+            if _gen:
+                t = ExtractedTerm(kind="character", value=_gen[0],
+                                  count=_gen[1], matched=t.matched,
+                                  from_line=t.from_line,
+                                  spellings=[_gen[0], t.value])
+
         if t.value not in [x.value for x in swapped]:
             swapped.append(t)
     # Frequency orders the LOOSE words only. Concepts resolved from a line are
@@ -4795,6 +5034,27 @@ def extract(
                                       count=fand[1], matched=pair_term.matched))
         keep = [t for t in terms if t.value not in {h.value for h in head}]
         terms = (head + keep)[:EXTRACT_MAX_TERMS]
+    elif pair_chars:
+        # Two characters either side of a slash, where the archives file no
+        # pairing between them. Pinned here for the same reason a resolved
+        # pairing is, and it has to be HERE rather than at the earlier sort:
+        # the final ordering sorts line terms by frequency, and on "Juvia
+        # Locker/male reader" that put `Fairy Tale Elements` (4,974 works — the
+        # fandom's own name misread, and not a want at all) above
+        # `Juvia Lockser` (2,479) and `Male Reader` (1,958). Prepending before
+        # that sort was simply undone by it.
+        #
+        # The fandom the characters imply comes second, as it does for a
+        # pairing — it is inferred from the works, not from a lookup table.
+        head = list(pair_chars)
+        fand = _fandom_from_evidence(db, [t.value for t in pair_chars],
+                                     "character")
+        if fand:
+            head.append(ExtractedTerm(kind="fandom", value=fand[0],
+                                      count=fand[1],
+                                      matched=pair_chars[0].matched))
+        keep = [t for t in terms if t.value not in {h.value for h in head}]
+        terms = (head + keep)[:EXTRACT_MAX_TERMS]
     else:
         terms = terms[:EXTRACT_MAX_TERMS]
 
@@ -4893,6 +5153,8 @@ def extract(
         parts.append("complete" if status == "complete" else "wip")
     if crossovers:
         parts.append(f"xover:{crossovers}")
+    if site:
+        parts.append(f"site:{site}")
     # What the reader ruled out, in the bar's own syntax so it travels with the
     # query like everything else. Bounded: a post listing nine refusals would
     # otherwise build a query of nine hard filters, and an exclusion that
@@ -4926,7 +5188,8 @@ def extract(
                            ignored_words=max(len(words) - len(used), 0),
                            word_count_min=wc_min, word_count_max=wc_max,
                            already_read=already_read, status=status, sort=sort,
-                           crossovers=crossovers,
+                           crossovers=crossovers, site=site,
+                           explicit_ok=nsfw_ok,
                            exclude_tags=exclude_tags[:_MAX_EXCLUDES])
 
 

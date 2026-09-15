@@ -647,3 +647,102 @@ def test_the_probe_runs_the_predicate_the_search_runs():
     for predicate in ("gate_underage", "gate_adult", "is_crossover",
                       "word_count", "status"):
         assert predicate in src, predicate
+
+
+# ---------------------------------------------------------------------------
+# From a real post: "Does anyone have any Juvia Locker/male reader
+# recommendations. My medium of choice is AO3 and I do not mind nsfw. Btw
+# Juvia Lockser is from the anime Fairy Tail". Four separate things missed.
+# ---------------------------------------------------------------------------
+
+def test_a_pairing_half_may_be_more_than_one_word():
+    """The pattern captured `[A-Za-z]{3,}` a side, so "Juvia Locker/male
+    reader" gave ("Locker", "male") — a surname without its given name, and an
+    adjective. Most characters are not called one word."""
+    from api.search import _PAIR_RE, _trim_pair_half
+    m = _PAIR_RE.search("Does anyone have any Juvia Locker/male reader recs")
+    assert m
+    assert _trim_pair_half(m.group(1)) == "Juvia Locker"
+    assert _trim_pair_half(m.group(2)) == "male reader"
+
+
+def test_a_misspelt_half_still_resolves(ships):
+    """"Juvia Locker" has the surname wrong — the reader corrects themselves
+    two lines later. Every contiguous run is tried, longest first, so `Juvia`
+    prefix-matches `Juvia Lockser`. Shrinking from one end only was not enough:
+    the error can be in either half of a name."""
+    ships.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('character','Juvia Lockser',2479), ('character','Reader',188474),
+          ('character','Male Reader',1958)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    ships.commit()
+    from api.search import _resolve_half
+    assert _resolve_half(ships, "Juvia Locker", True) == "Juvia Lockser"
+    assert _resolve_half(ships, "me some Harry", True) == "Harry Potter"
+
+
+def test_a_reader_insert_collapses_to_the_general_reader(ships):
+    """`Reader` is a character on 188,474 works, `Male Reader` on 1,958 — so
+    the specific spelling is the one that co-occurs with nothing. Measured:
+    `Juvia Lockser` with `Male Reader` is 0 works and with `Reader` is 26."""
+    ships.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('character','Reader',188474), ('character','Male Reader',1958)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    ships.commit()
+    from api.search import _collapse_reader
+    assert _collapse_reader(ships, "Male Reader", 1958) == ("Reader", 188474)
+    # Not every two-word name is a spelling of something shorter.
+    assert _collapse_reader(ships, "Harry Potter", 152287) is None
+
+
+def test_both_halves_become_characters_when_no_pairing_exists(ships):
+    """There is no `Juvia Lockser/Reader` among the 1,568 Juvia pairings, and
+    returning nothing because the pairing is unattested throws away a request
+    the index can answer — works carrying both characters."""
+    ships.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('character','Juvia Lockser',2479), ('character','Reader',188474),
+          ('character','Male Reader',1958)
+        ON CONFLICT (kind, value) DO NOTHING
+    """))
+    ships.commit()
+    from api.search import _pair_characters
+    got = {t.value for t in _pair_characters(ships, "any Juvia Locker/male reader recs")}
+    assert got == {"Juvia Lockser", "Reader"}
+
+
+@pytest.mark.parametrize("phrase,expect", [
+    ("My medium of choice is AO3", "ao3"),
+    ("preferably on ao3", "ao3"),
+    ("I only read on ff.net", "ffnet"),
+    ("anything on fanfiction.net", "ffnet"),
+    # The negative forms must say NOTHING rather than pin the wrong archive.
+    ("anywhere but AO3", None),
+    ("not on ao3 please", None),
+    ("no preference", None),
+])
+def test_the_archive_the_reader_actually_uses(phrase, expect):
+    from api.search import _read_site
+    assert _read_site(phrase) == expect
+
+
+@pytest.mark.parametrize("phrase,expect", [
+    ("I do not mind nsfw", True), ("smut is fine", True),
+    ("18+ is fine", True), ("no smut please", False),
+    ("sfw only", False), ("I'll read anything", None),
+])
+def test_nsfw_permission_is_read_but_never_linked(phrase, expect, bulleted):
+    """PERMISSION, not a want — and it stays out of the query string.
+
+    The adult gate is what keeps a shared link safe, and `OutreachPanel` strips
+    `explicit` from every link it builds. A reader saying this on their own
+    post has consented for themselves, not for whoever they paste a link to."""
+    from api.search import _reads_nsfw
+    assert _reads_nsfw(phrase) is expect
+    out = extract(text=f"looking for fluff fics, {phrase}", db=bulleted)
+    assert "explicit" not in out.query
+    assert "rating:" not in out.query
