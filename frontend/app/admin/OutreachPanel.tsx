@@ -43,7 +43,15 @@ interface Result {
 const PUBLIC = "https://ficatlas.com"
 
 interface Extracted {
-  terms: { kind: string; value: string; count: number; matched: string }[]
+  terms: {
+    kind: string; value: string; count: number; matched: string
+    /** Works left if this term is ADDED to the query that was built; null for
+     *  the terms already in it. A reader's wants routinely cannot all hold at
+     *  once — on one post each of three tags narrowed usefully on its own and
+     *  any two together gave zero — so the chip says what clicking it costs
+     *  rather than leaving it to be discovered. */
+    with_query?: number | null
+  }[]
   query: string
   ignored_words: number
   // Read from the post as FILTERS rather than as words to search for. The
@@ -372,11 +380,19 @@ export default function OutreachPanel() {
             return (
               <button key={t.kind + t.value}
                 className={"btn" + (on ? " btn--primary" : "")}
-                title={`${t.count.toLocaleString()} works · from "${t.matched}"`}
+                title={`${t.count.toLocaleString()} works · from "${t.matched}"`
+                  + (t.with_query != null
+                      ? ` · adding it leaves ${t.with_query.toLocaleString()}`
+                      : " · in the query")}
                 onClick={() => setQ(cur => on
                   ? cur.replace(token, "").replace(/\s+/g, " ").trim()
                   : `${cur} ${token}`.replace(/\s+/g, " ").trim())}>
-                {t.value} <small>{t.count.toLocaleString()}</small>
+                {t.value}{" "}
+                <small>
+                  {t.with_query != null && !on
+                    ? (t.with_query === 0 ? "→0" : `→${t.with_query.toLocaleString()}`)
+                    : t.count.toLocaleString()}
+                </small>
               </button>
             )
           })}
