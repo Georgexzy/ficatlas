@@ -319,6 +319,54 @@ works returned mid-backfill:
 - After both fixes plus the unified lists: **0 gated works on every surface** —
   fandom hub 0/132, ship hub 0/83, random 0/45, search 0/100.
 
+### The old "Explicit" toggle is gone; both tiers live in Settings
+
+It read **"Explicit"**, which names a RATING, while controlling a whole tier
+that is mostly about TAGS — a work rated Teen and tagged
+`Dead Dove: Do Not Eat` is in the tier and was never explicit. And it sat one
+careless click from a shared link, on the screen whose links get pasted into
+public threads.
+
+- **Settings is the single control** for both tiers, renamed "Show adult
+  content" and "Show works flagged for underage content". The search page keeps
+  the `explicit` STATE, still seeded from those preferences and from the URL —
+  what went is the control, not the capability.
+- **The "N works hidden" notice links to Settings, not to a one-click reveal.**
+  `showExplicitHref` pushed `explicit=true` into the ADDRESS, so a reader's
+  content preference became part of a URL on the page whose URLs get shared. A
+  preference is remembered, applies everywhere, and does not travel.
+
+### The count has to describe the tier that did the hiding
+
+`hidden_explicit` answered "how many E-RATED works are hidden" while the filter
+applied a whole tier: the E rating, the `gate_adult` column, AND the adult tag
+arrays. So a work rated Teen and tagged `Dead Dove` was hidden from the results
+and missing from the number explaining why the results are short — and the
+notice said "rated explicit" about works that were not.
+
+Measured: `ship:"Juvia Lockser/Reader"` returned **2 works with
+`hidden_explicit = 0`** while turning the tier off returned **7**. After the
+fix, 2 + 5 = 7. The test asserts that addition, because a notice that cannot be
+added to the result count is not explaining it.
+
+- **Four gate predicates now, not two.** They were merged across tiers — one
+  array per column holding both tiers' terms — and that merge is precisely why
+  the count could not be built: it has to run the same search MINUS the adult
+  tier, and a predicate holding both cannot be subtracted without taking tier 1
+  with it. Measured after the split: `harry potter` 2.78s, `fluff` 1.62s,
+  `drarry` 3.41s — no change.
+- **Drop by IDENTITY, and the first attempt did not.** It constructed fresh
+  `Story.gate_adult.is_(False)` objects to remove, which of course matched
+  nothing in the filter list by `id()`, and the count came back 0 while five
+  works were hidden. Keep the actual objects.
+- **Tier 1 is neither dropped nor counted.** A reader is not told how many
+  works were hidden for sexualised minors: that is a setting turned on
+  deliberately, not a number that invites curiosity. Two tests hold it — the
+  count ignores tier 1, and turning the ADULT tier off does not reveal it.
+- **The fuzzy-title arm applied only the COLUMNS**, not the arrays, so a work
+  the backfill had not reached could reach a reader through a misspelt title.
+  It takes the full set now.
+
 ### Tier 1 — sexualised minors (`include_underage`, default off)
 
 - **Its own parameter, separate from `explicit`.** That toggle is about taste

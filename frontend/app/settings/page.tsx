@@ -356,6 +356,14 @@ export default function SettingsPage() {
           </select>
         </div>
 
+        {/* The anchor the search page's "hidden as adult content" notices link
+            to. That notice used to carry a one-click "Show them" button which
+            pushed `explicit=true` into the address — so a reader's content
+            preference became part of a URL, on the page whose URLs get pasted
+            into public threads. It is a remembered preference now, set here,
+            and it does not travel. */}
+        <div id="content" />
+
         {/* Two tiers, two controls, and they are deliberately not one.
             The first is about taste; the second is about what a link you paste
             somewhere public will show a stranger. Collapsing them into a single
@@ -365,11 +373,14 @@ export default function SettingsPage() {
             filtered on RATING and those works were rated M and Not Rated. */}
         <div className="setting-row">
           <div className="setting-row__label">
-            <span className="setting-row__name">Show explicit &amp; adult content</span>
+            <span className="setting-row__name">Show adult content</span>
             <span className="setting-row__hint">
               E-rated works, and anything tagged for explicit sex, non-con,
               incest or <em>Dead Dove: Do Not Eat</em>. Off by default so a
               search you share does not surprise anybody.
+              {" "}Renamed from &ldquo;explicit&rdquo;: the rating is only part
+              of it, and a work rated Teen can still be tagged
+              <em> Dead Dove</em>.
             </span>
           </div>
           <Toggle on={prefs.show_explicit === "true"}

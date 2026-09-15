@@ -1394,30 +1394,12 @@ function SearchPageInner() {
   // Monotonic token so a slow, stale search response can never overwrite a
   // newer one (rapid paging / filter changes used to race and win out of order).
   const searchSeqRef = useRef(0)
-  // The same search with the explicit filter off, as a URL.
-  //
-  // A LINK, not a state change, and that distinction is the whole fix. This
-  // component is keyed on the query string (see SearchPageInner's caller), so a
-  // URL change starts the page over and every filter is re-derived from the
-  // address — "a link IS a new search". Setting `explicit` in state instead
-  // fought that: it armed the Apply bar, then doSearch pushed a URL, which
-  // remounted the component and threw the state away mid-flight. Two earlier
-  // attempts at this button did exactly that and did nothing visible.
-  //
-  // Built from rawParams rather than from the filter state, so it carries
-  // precisely the search that produced these results and changes one thing.
-  const showExplicitHref = useMemo(() => {
-    const qs = new URLSearchParams(rawParams.toString())
-    qs.set("explicit", "true")
-    // The UI states "hide explicit" twice — see the ratings note in
-    // api/search.py — so the rating list has to come off too, or the new URL
-    // still excludes E and the button once again appears to do nothing.
-    const r = qs.get("ratings")
-    if (r && !r.split(",").map(x => x.trim().toUpperCase()).includes("E")) {
-      qs.delete("ratings")
-    }
-    return `${pathname}?${qs.toString()}`
-  }, [rawParams, pathname])
+  // `showExplicitHref` used to live here: the same search with `explicit=true`
+  // pushed into the address. Removed with the header toggle, and deliberately
+  // not replaced — a reader's content preference belongs in their settings,
+  // not in a URL that gets pasted into a public thread. The long note it
+  // carried, about a link being a new search because this page is keyed on the
+  // query string, still applies to `refreshHref` below.
   // The in-flight search, so a superseded one can be cancelled outright rather
   // than merely ignored — the query keeps running on the server otherwise.
   const searchAbortRef = useRef<AbortController | null>(null)
@@ -1761,7 +1743,7 @@ function SearchPageInner() {
 
   // The same search with every filter dropped, as a URL.
   //
-  // A LINK, not a state change, for the reason showExplicitHref is one: this
+  // A LINK, not a state change, for the reason given where showExplicitHref used to be: this
   // component is keyed on the query string, so setting state here would be
   // thrown away by the remount that any later search causes — and calling
   // doSearch() straight after clearFilters() would search on the state as it
@@ -2359,13 +2341,17 @@ function SearchPageInner() {
   return (
     <div className="shell">
       {/* ── Header ── */}
-      <SiteHeader current="search">
-        <label className="toggle-label">
-          <input type="checkbox" checked={explicit} onChange={e => setExplicit(e.target.checked)} className="sr-only" />
-          <span className="toggle-track"><span className="toggle-thumb" /></span>
-          <span>Explicit</span>
-        </label>
-      </SiteHeader>
+      {/* No content toggle in the header.
+          It read "Explicit", which named a RATING while controlling a whole
+          tier that is mostly about tags — a work rated Teen and tagged
+          `Dead Dove: Do Not Eat` is in the tier and was never "explicit". And
+          it sat one careless click from a shared link, on the screen whose
+          links get pasted into public threads.
+          Both tiers now live in Settings, where a deliberate choice is made
+          once and remembered, and where the two can be described honestly
+          side by side. The state below still exists and is still seeded from
+          those preferences and from the URL. */}
+      <SiteHeader current="search" />
 
       <div className="layout">
         {/* Mobile filter backdrop — tap to close the drawer */}
@@ -3120,12 +3106,19 @@ function SearchPageInner() {
                         : `${shown.hidden_explicit!.toLocaleString()} more work${shown.hidden_explicit === 1 ? "" : "s"}`}
                     </strong>{" "}
                     {shown.hidden_explicit === 1 ? "matches" : "match"} this search
-                    but {shown.hidden_explicit === 1 ? "is" : "are"} hidden, because{" "}
-                    {shown.hidden_explicit === 1 ? "it is" : "they are"} rated explicit.
+                    but {shown.hidden_explicit === 1 ? "is" : "are"} hidden as
+                    adult content &mdash; explicit-rated, or tagged for things
+                    like sex, non-con or incest.
                   </span>
-                  <Link href={showExplicitHref} prefetch={false}
-                    className="btn btn--primary hidden-note__btn">
-                    Show {shown.hidden_explicit === 1 ? "it" : "them"}
+                  {/* To SETTINGS, not a one-click reveal.
+                      The old button flipped `explicit=true` into the address,
+                      which made the reader's choice part of a URL — and this
+                      is the page whose URLs get pasted into public threads.
+                      A preference is remembered, applies everywhere, and does
+                      not travel. */}
+                  <Link href="/settings#content" prefetch={false}
+                    className="btn hidden-note__btn">
+                    Change in settings
                   </Link>
                 </div>
               )}
@@ -3209,17 +3202,16 @@ function SearchPageInner() {
                               : `${shown.hidden_explicit!.toLocaleString()} work${shown.hidden_explicit === 1 ? "" : "s"} match${shown.hidden_explicit === 1 ? "es" : ""}`}
                           </strong>{" "}
                           but {shown.hidden_explicit === 1 ? "is" : "are"} hidden
-                          because {shown.hidden_explicit === 1 ? "it is" : "they are"}{" "}
-                          rated explicit.
+                          as adult content &mdash; explicit-rated, or tagged
+                          for things like sex, non-con or incest.
                         </p>
-                        {/* A link, not a toggle — see showExplicitHref. This
-                            page is keyed on the query string, so changing the
-                            filter in state is undone by the remount that
-                            follows it. */}
-                        <Link href={showExplicitHref} prefetch={false}
-                          className="btn btn--primary no-results__fetch">
-                          Show {shown.hidden_explicit! > 999 ? "them"
-                            : shown.hidden_explicit === 1 ? "it" : `all ${shown.hidden_explicit!.toLocaleString()}`}
+                        {/* To SETTINGS, for the reason above the other copy of
+                            this notice: the old button put the reader's choice
+                            into the address, and this page's addresses get
+                            pasted into public threads. */}
+                        <Link href="/settings#content" prefetch={false}
+                          className="btn no-results__fetch">
+                          Change in settings
                         </Link>
                       </>
                     )}
