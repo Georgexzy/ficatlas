@@ -1587,22 +1587,69 @@ def search(          # NOT async — see below
     # ONE predicate per column, not one per tier: four separate `NOT (col &&
     # ARRAY[…])` checks cost more than the search they protect, and merging
     # the arrays makes it two tests over one array apiece instead of four.
-    _gates = []
-    _gate_w: list[str] = []
-    _gate_t: list[str] = []
+    # ── The content gates, ONE NAMED PREDICATE PER TIER PER COLUMN ──────────
+    #
+    # Four, not two. They used to be merged across tiers — one array per column
+    # holding both tiers' terms — to save a predicate, and that merge is why
+    # the "how much is hidden" count could not be built: the count has to run
+    # the same search MINUS the adult tier, and a predicate holding both tiers
+    # cannot be subtracted without taking tier 1 with it. Two attempts at
+    # rebuilding the filter list around the merge failed, one silently.
+    #
+    # Named objects, dropped by IDENTITY. Equality is not enough — a freshly
+    # constructed `Story.gate_adult.is_(False)` is a different object from the
+    # one in the list, and dropping by `id()` then drops nothing at all, which
+    # is exactly the bug that made the count report 0 while five works were
+    # hidden.
+    _p_underage_col = _p_adult_col = None
+    _p_underage_w = _p_underage_t = None
+    _p_adult_w = _p_adult_t = None
+
     if not include_underage and UNDERAGE_FILTER_ON:
-        _gates.append(Story.gate_underage.is_(False))
-        _gate_w += _UNDERAGE_WARNINGS
-        _gate_t += _UNDERAGE_TAGS
+        _p_underage_col = Story.gate_underage.is_(False)
+        filters.append(_p_underage_col)
+        if _UNDERAGE_WARNINGS:
+            _p_underage_w = not_(Story.warnings.op("&&")(
+                cast(list(_UNDERAGE_WARNINGS), PG_ARRAY(Text))))
+            filters.append(_p_underage_w)
+        if _UNDERAGE_TAGS:
+            _p_underage_t = not_(Story.tags.op("&&")(
+                cast(list(_UNDERAGE_TAGS), PG_ARRAY(Text))))
+            filters.append(_p_underage_t)
+
     if not explicit and ADULT_FILTER_ON:
-        _gates.append(Story.gate_adult.is_(False))
-        _gate_w += _ADULT_WARNINGS
-        _gate_t += _ADULT_TAGS
-    filters.extend(_gates)
-    if _gate_w:
-        filters.append(not_(Story.warnings.op("&&")(cast(_gate_w, PG_ARRAY(Text)))))
-    if _gate_t:
-        filters.append(not_(Story.tags.op("&&")(cast(_gate_t, PG_ARRAY(Text)))))
+        _p_adult_col = Story.gate_adult.is_(False)
+        filters.append(_p_adult_col)
+        if _ADULT_WARNINGS:
+            _p_adult_w = not_(Story.warnings.op("&&")(
+                cast(list(_ADULT_WARNINGS), PG_ARRAY(Text))))
+            filters.append(_p_adult_w)
+        if _ADULT_TAGS:
+            _p_adult_t = not_(Story.tags.op("&&")(
+                cast(list(_ADULT_TAGS), PG_ARRAY(Text))))
+            filters.append(_p_adult_t)
+
+    # Every gate predicate, for the other query arms that build their own
+    # WHERE and would otherwise be a hole straight through this one. The
+    # fuzzy-title arm used to apply only the COLUMNS, so a work the backfill
+    # had not reached could reach a reader through a misspelt title.
+    _gate_all = [p for p in (_p_underage_col, _p_underage_w, _p_underage_t,
+                             _p_adult_col, _p_adult_w, _p_adult_t)
+                 if p is not None]
+
+    # Everything the ADULT tier contributes, for the count below to remove.
+    _adult_drop = {id(p) for p in (_p_adult_col, _p_adult_w, _p_adult_t)
+                   if p is not None}
+    # And what it means for a work to BE adult — the union of the three.
+    _is_adult = []
+    if not explicit and ADULT_FILTER_ON:
+        _is_adult.append(Story.gate_adult.is_(True))
+        if _ADULT_WARNINGS:
+            _is_adult.append(Story.warnings.op("&&")(
+                cast(list(_ADULT_WARNINGS), PG_ARRAY(Text))))
+        if _ADULT_TAGS:
+            _is_adult.append(Story.tags.op("&&")(
+                cast(list(_ADULT_TAGS), PG_ARRAY(Text))))
 
     # Works whose title we hold in a visibly broken state.
     #
@@ -2542,7 +2589,7 @@ def search(          # NOT async — see below
             # `filters` entirely and would otherwise be a hole straight through
             # the exclusions above.
             fuzzy_q = db.query(Story).filter(Story.delisted_at.is_(None))
-            for _g in _gates:
+            for _g in _gate_all:
                 fuzzy_q = fuzzy_q.filter(_g)
             if site_enums:
                 fuzzy_q = fuzzy_q.filter(Story.site.in_(site_enums))
@@ -3256,14 +3303,28 @@ def search(          # NOT async — see below
     hidden_explicit = 0
     if _explicit_pred is not None and page == 1 and total <= per_page:
         try:
-            # Both expressions of "hide explicit" have to come out, or the count
-            # contradicts itself. See the note on _ratings_pred above.
+            # WHAT THE ADULT TIER HIDES, which is not the same as what the
+            # RATING hides — and reporting the second while applying the first
+            # is how the notice came to contradict the results.
+            #
+            # The tier has three expressions: the E rating, the `gate_adult`
+            # column, and the belt-and-braces adult arrays. All three have to
+            # come out of the count's filter set, and the count's own predicate
+            # has to be their union — otherwise a work tagged `Dead Dove: Do
+            # Not Eat` and rated Teen is hidden from the results and missing
+            # from the number explaining why the results are short.
+            #
+            # Tier 1 is NOT dropped and NOT counted. A reader is not told how
+            # many works were hidden for sexualised minors; that is a setting
+            # they turn on deliberately, not a number that invites curiosity.
             dropped = {id(_explicit_pred)}
             if _ratings_is_all_but_explicit and _ratings_pred is not None:
                 dropped.add(id(_ratings_pred))
+            dropped.update(_adult_drop)
             others = [f for f in filters if id(f) not in dropped]
+            is_adult = [Story.rating == RatingEnum.explicit] + _is_adult
             capped = (db.query(Story.id)
-                        .filter(*others, Story.rating == RatingEnum.explicit)
+                        .filter(*others, or_(*is_adult))
                         .limit(HIDDEN_EXPLICIT_CEILING + 1).subquery())
             hidden_explicit = db.query(func.count()).select_from(capped).scalar() or 0
         except Exception:
