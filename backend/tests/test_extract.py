@@ -561,11 +561,20 @@ def test_two_spellings_of_one_concept_do_not_both_become_requirements(xover):
     """))
     xover.commit()
     out = extract(text="looking for a self-insert fic", db=xover)
-    assert out.query.count("tag:") <= 1, out.query
-    tags = [t for t in out.terms if t.kind == "tag"]
-    assert tags
-    assert "Self-Insert" == tags[0].value
-    assert any("self insert" in sp.lower() for sp in tags[0].spellings)
+    # The INVARIANT: no two terms in the query are the same concept modulo
+    # punctuation. Asserted on the output rather than on which spelling won,
+    # because `query_intent` caches resolved phrases per process — so what a
+    # phrase resolves to depends on what earlier tests resolved, and this test
+    # passed alone and failed in a full run until it stopped asking.
+    import re as _re
+    keys = [_re.sub(r"[^a-z0-9]+", "", v.lower())
+            for v in _re.findall(r'tag:"([^"]+)"', out.query)]
+    assert len(keys) == len(set(keys)), out.query
+
+    # And the unit that does it, which no cache can affect.
+    from api.search import _concept_key_for_test as _k
+    assert _k("Self-Insert") == _k("Self Insert") == _k("self insert")
+    assert _k("Self-Insert") != _k("Selfish Insert")
 
 
 def test_a_tag_that_negates_the_concept_is_not_a_spelling_of_it():
@@ -829,3 +838,54 @@ def test_whether_a_query_is_safe_to_paste_in_public(query, unsafe):
     """
     from api.search import _link_is_unsafe
     assert _link_is_unsafe(query) is unsafe, query
+
+
+def test_a_bullet_marker_is_stripped_but_the_number_is_not(bulleted):
+    """"-50k+ words" lost its NUMBER and became "k+ words".
+
+    The bullet strip was a character class over `-`, `*`, digits, `.` and `)`,
+    greedy from the start of the line — so it ate the "50" as happily as the
+    "-", and the reader's length constraint vanished before `read_request`
+    could see it. A numbered marker ("1.", "2)", "3 .") still goes, because the
+    digits there ARE the marker."""
+    out = extract(text="-50k+ words\n-drarry fics", db=bulleted)
+    assert out.word_count_min == 50000, out.query
+    assert "words:>50k" in out.query
+
+
+def test_a_hyphenated_tag_is_found_from_spaced_words(bulleted):
+    """The archives hyphenate what readers space out: `Harry-centric` is a tag
+    on 186 works and a reader types "harry centric". The lookup is an indexed
+    equality, so the two never met — the hyphen-joined variant of every
+    multi-word run is generated rather than normalising the column, which would
+    seq-scan 1.57M rows."""
+    bulleted.execute(text("""
+        INSERT INTO facets (kind, value, count)
+        VALUES ('tag','Harry-centric',186) ON CONFLICT (kind, value) DO NOTHING
+    """))
+    bulleted.commit()
+    out = extract(text="i need harry centric fics badly", db=bulleted)
+    assert "Harry-centric" in [t.value for t in out.terms]
+
+
+@pytest.mark.parametrize("line,retracted", [
+    # The caveat brings the subject BACK: the reader takes it back.
+    ("id prefer no slash, but if there is slash then drarry is my no.1", True),
+    # The caveat contrasts two REASONS: the negation stands.
+    ("not because someone dies but because you feel so sorry for them", False),
+    ("no harems, but any length is fine", False),
+])
+def test_a_caveat_only_retracts_when_the_subject_comes_back(line, retracted):
+    """Treating every "but" as a retraction dropped a post's exclusions
+    wholesale — "NOT because someone dies but because you just feel SO SORRY"
+    contrasts reasons and means every word of its negation.
+
+    Compared on the READER's words rather than the resolved tag's, because that
+    is what reappears."""
+    import re as _re
+    parts = _re.split(r"\b(?:but|though|although|however)\b", line, 1, _re.I)
+    head, tail = parts[0], (parts[1] if len(parts) > 1 else "")
+    subject = {w for w in _re.findall(r"[a-z]{3,}", head.lower())
+               if w not in ("prefer", "because", "there", "then", "your")}
+    tail_words = set(_re.findall(r"[a-z]{3,}", tail.lower()))
+    assert bool(subject & tail_words) is retracted, (subject, tail_words)
