@@ -935,16 +935,57 @@ class ParsedToken(BaseModel):
 
 
 class Suggestion(BaseModel):
-    """One thing the reader might have meant, when they matched nothing."""
+    """One thing to try, when a search found nothing or nearly nothing.
+
+    Started as a spelling rescue and is no longer only that, because a
+    measurement said otherwise. Ablating every component of every query built
+    from a corpus of real fic-finder posts — drop one part, re-count — gives:
+
+        tag                 3,829 works recovered (median)
+        word count            972
+        character             352
+        status                148
+        ship                  129
+        crossover filter        8
+        fandom                  1
+        exclusion (-tag)        0
+
+    So the dominant reason a reader sees nothing is not a typo: it is a query
+    with one term too many, and almost always a TAG. A misspelling announces
+    itself; over-constraint looks exactly like a thin index.
+    """
     kind: str            # fandom | character | relationship | tag
     value: str           # the canonical spelling, as the archives write it
     count: int           # how many works carry it — the reason to trust it
     query: str           # a ready-made search that runs it
+    # Why it is being offered. `spelling` is the original trigram rescue;
+    # `relax` drops one of the reader's own filters; `broaden` swaps a narrow
+    # tag for the way the archives usually spell the same idea.
+    reason: str = "spelling"
+    # How many works the suggested query would find — probe-measured and
+    # capped, so it is a floor rather than an exact total. The point of the
+    # feature is to be worth clicking, and a number is the only honest way to
+    # say so: `count` is how many works carry the term ANYWHERE, which on an
+    # over-constrained search is not the same question.
+    works: Optional[int] = None
+    # For `relax`: which of the reader's terms this suggestion removes.
+    drops: Optional[str] = None
 
 
 # How alike a facet has to be before it is worth offering. Trigram similarity,
 # so 1.0 is identical. Below about 0.35 the matches stop being spellings of the
 # same thing and start being coincidences of letters.
+# How much better a relaxed or broadened query has to be before it is worth
+# suggesting. Two more works is noise; a page is the reason the reader is
+# looking at an empty screen.
+_RELAX_MIN_GAIN = int(os.getenv("SEARCH_RELAX_MIN_GAIN", "10"))
+_RELAX_LIMIT = int(os.getenv("SEARCH_RELAX_LIMIT", "3"))
+# How high to count for a suggestion. The extractor's cap of 20 answers "are
+# there at least ten?"; a reader deciding whether to click needs a number, and
+# "→ 20" on every suggestion reads as broken. Capped all the same, because an
+# exact count over 20.5M rows is what the 5,000 ceiling exists to avoid.
+_SUGGEST_CAP = int(os.getenv("SEARCH_SUGGEST_CAP", "2000"))
+
 _DYM_MIN_SIM = 0.35
 # And how many works must carry it. This is the guard that stops the feature
 # recommending a TYPO: `hermoine granger` trigram-matches the misspelled facet
@@ -975,6 +1016,144 @@ _DYM_OPERATOR = {
     "fandom": "fandom", "character": "char",
     "relationship": "ship", "tag": "tag",
 }
+
+
+class _Term:
+    """The shape `_probe_count` wants, for terms that came from a query rather
+    than from a post."""
+    __slots__ = ("kind", "value", "spellings")
+
+    def __init__(self, kind: str, value: str, spellings=None):
+        self.kind, self.value = kind, value
+        self.spellings = list(spellings or [value])
+
+
+def _as_query(terms: list, status=None, wc_min=None, wc_max=None,
+              crossovers=None, site=None) -> str:
+    """A filter set back in the search bar's own syntax."""
+    op = {"fandom": "fandom", "character": "char",
+          "relationship": "ship", "tag": "tag"}
+    parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in terms]
+    if status:
+        parts.append("complete" if status in ("complete", "completed") else "wip")
+    if crossovers in ("exclude", "only"):
+        parts.append(f"xover:{crossovers}")
+    if site:
+        parts.append(f"site:{site}")
+    if wc_min or wc_max:
+        parts.append("words:" + (f"{_k(wc_min)}-{_k(wc_max)}" if wc_min and wc_max
+                                 else f">{_k(wc_min)}" if wc_min else f"<{_k(wc_max)}"))
+    return " ".join(parts)
+
+
+def _relax_suggestions(db, terms: list, status, wc_min, wc_max, crossovers,
+                       site, base: int) -> list[Suggestion]:
+    """Which ONE of the reader's own filters is costing them the results.
+
+    This is the ablation, run for the reader instead of for me. Drop each term
+    in turn, probe what comes back, and offer the drops that recover something
+    worth having. Ordered by what they recover, because that is the question —
+    not by how common the term is.
+
+    Only offered when there is more than one term to drop: "try it without the
+    only thing you searched for" is not a suggestion.
+    """
+    if len(terms) < 2:
+        return []
+    out: list[Suggestion] = []
+    for t in terms:
+        rest = [x for x in terms if x is not t]
+        try:
+            n = _probe_count(db, rest, wc_min, status, crossovers,
+                             cap=_SUGGEST_CAP)
+        except Exception:
+            log.debug("relax probe failed", exc_info=True)
+            continue
+        # Worth saying only if it actually changes the answer. A drop that
+        # recovers two works is noise; one that recovers a page is the reason
+        # the reader is looking at an empty screen.
+        if n <= max(base, 0) + _RELAX_MIN_GAIN:
+            continue
+        out.append(Suggestion(
+            kind=t.kind, value=t.value, count=n, works=n,
+            reason="relax", drops=t.value,
+            query=_as_query(rest, status, wc_min, wc_max, crossovers, site)))
+    out.sort(key=lambda s: -(s.works or 0))
+    return out[:_RELAX_LIMIT]
+
+
+def _broaden_suggestions(db, terms: list, status, wc_min, wc_max, crossovers,
+                         site, base: int) -> list[Suggestion]:
+    """The way the archives usually spell what the reader typed.
+
+    A concept is a GROUP of spellings and a query names one of them, so the
+    choice of spelling alone costs about 20%: `tag:"Slytherin Harry Potter"`
+    returns 2,247 where its three spellings hold 2,918. Where a tag has a
+    much better attested sibling, swapping it is the cheapest thing a reader
+    can do — it keeps every constraint they asked for.
+    """
+    out: list[Suggestion] = []
+    for t in terms:
+        if t.kind != "tag":
+            continue
+        try:
+            sib = _stem_sibling(db, t.value) or _biggest_spelling(db, [t.value])
+        except Exception:
+            log.debug("broaden lookup failed", exc_info=True)
+            continue
+        if not sib or sib[0] == t.value:
+            continue
+        swapped = [_Term(t.kind, sib[0]) if x is t else x for x in terms]
+        try:
+            n = _probe_count(db, swapped, wc_min, status, crossovers,
+                             cap=_SUGGEST_CAP)
+        except Exception:
+            continue
+        if n <= max(base, 0) + _RELAX_MIN_GAIN:
+            continue
+        out.append(Suggestion(
+            kind="tag", value=sib[0], count=sib[1], works=n, reason="broaden",
+            drops=t.value,
+            query=_as_query(swapped, status, wc_min, wc_max, crossovers, site)))
+    out.sort(key=lambda s: -(s.works or 0))
+    return out[:_RELAX_LIMIT]
+
+
+def _split_ship_suggestions(db, terms: list, status, wc_min, wc_max,
+                            crossovers, site, base: int) -> list[Suggestion]:
+    """The two characters, when the PAIRING is what is starving the search.
+
+    The archives file a pairing only if somebody wrote it under that name, and
+    a rarely-written pairing is a much harder filter than the two people in it.
+    Measured on the post that taught this: `Juvia Lockser/Reader` is on 4 works
+    and returns 2, while works carrying `Juvia Lockser` AND `Reader` number 26.
+    Same lesson `_pair_characters` learned in the extractor — a pairing the
+    archives barely file is still a request for both characters — asked here of
+    a search that has already come back thin.
+    """
+    out: list[Suggestion] = []
+    for t in terms:
+        if t.kind != "relationship" or "/" not in t.value:
+            continue
+        halves = [h.strip() for h in t.value.split("/") if h.strip()]
+        if len(halves) != 2:
+            continue
+        rest = [x for x in terms if x is not t]
+        chars = [_Term("character", h) for h in halves]
+        try:
+            n = _probe_count(db, rest + chars, wc_min, status, crossovers,
+                             cap=_SUGGEST_CAP)
+        except Exception:
+            log.debug("split-ship probe failed", exc_info=True)
+            continue
+        if n <= max(base, 0) + _RELAX_MIN_GAIN:
+            continue
+        out.append(Suggestion(
+            kind="character", value=" + ".join(halves), count=n, works=n,
+            reason="split", drops=t.value,
+            query=_as_query(rest + chars, status, wc_min, wc_max, crossovers,
+                            site)))
+    return out[:1]
 
 
 def _did_you_mean(db, q: str, min_sim: float | None = None) -> list[Suggestion]:
@@ -3489,6 +3668,49 @@ def search(          # NOT async — see below
         # reasons. Removed rather than retuned.
         _suggestions = _did_you_mean(db, q, min_sim=SUGGEST_NEAR_SIM)
 
+    # ── And the failure that actually happens: one term too many ────────────
+    #
+    # The spelling rescue above is gated on TYPED TEXT, so the searches most
+    # likely to be over-constrained — the ones built entirely from operators,
+    # which is what every fic-finder link and every sidebar filter produces —
+    # got no help at all. Measured on three real over-constrained searches
+    # returning 9, 2 and 0 works: zero suggestions between them.
+    #
+    # Ablation says which term to blame, and it is nearly always a tag: the
+    # median drop recovers 3,829 works for a tag against 1 for a fandom. So
+    # offer the reader their own query minus the expensive part, and the count
+    # it would return, rather than leaving them to guess which of five
+    # constraints is the problem.
+    if total <= SUGGEST_MAX_RESULTS:
+        try:
+            _live_terms = ([_Term("relationship", v) for v in (relationships or "").split(",") if v.strip()]
+                           + [_Term("fandom", v) for v in (fandoms or "").split(",") if v.strip()]
+                           + [_Term("character", v) for v in (characters or "").split(",") if v.strip()]
+                           + [_Term("tag", v) for v in (tags or "").split(",") if v.strip()])
+            if _live_terms:
+                _extra = (_split_ship_suggestions(
+                              db, _live_terms, status, word_count_min,
+                              word_count_max, crossovers,
+                              sites if sites and "," not in (sites or "") else None,
+                              total)
+                          + _broaden_suggestions(
+                              db, _live_terms, status, word_count_min,
+                              word_count_max, crossovers, sites if sites and "," not in (sites or "") else None,
+                              total)
+                          + _relax_suggestions(
+                              db, _live_terms, status, word_count_min,
+                              word_count_max, crossovers, sites if sites and "," not in (sites or "") else None,
+                              total))
+                _have = {(sg.reason, sg.value) for sg in _suggestions}
+                for sg in _extra:
+                    if (sg.reason, sg.value) not in _have:
+                        _suggestions.append(sg)
+                        _have.add((sg.reason, sg.value))
+        except Exception:
+            # A suggestion is a nicety on a page that already says "no
+            # results". It must never be the reason the response fails.
+            log.debug("relax/broaden suggestions failed", exc_info=True)
+
     _response = SearchResponse(
         total=total,                          # stable across pages — indexed count only
         count_is_capped=count_is_capped,
@@ -4605,7 +4827,8 @@ def _k(n: Optional[int]) -> str:
 
 def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
                  status: Optional[str] = None,
-                 crossovers: Optional[str] = None) -> int:
+                 crossovers: Optional[str] = None,
+                 cap: Optional[int] = None) -> int:
     """Would this combination of concepts find anything at all?"""
     # OR within a concept, AND between them — the shape the search itself
     # builds. Probing ONE spelling per concept is why good combinations were
@@ -4657,7 +4880,13 @@ def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
         clauses.append("is_crossover")
     clauses.append("NOT gate_underage")
     clauses.append("NOT gate_adult")
-    params["cap"] = _PROBE_CAP
+    # The cap is the caller's question, not a constant.
+    #
+    # `_PROBE_CAP` is 20 because the extractor only ever asks "are there at
+    # least ten?" — but a SUGGESTION shows the number to a reader, and every
+    # suggestion reading "→ 20" tells them nothing and looks broken. Same
+    # query, different question.
+    params["cap"] = cap or _PROBE_CAP
     return int(db.execute(sql_text(
         "SELECT count(*) FROM (SELECT 1 FROM stories WHERE delisted_at IS NULL "
         "AND " + " AND ".join(clauses) + " LIMIT :cap) x"), params).scalar() or 0)

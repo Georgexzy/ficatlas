@@ -1852,6 +1852,47 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     parsed — `read_request` gives `word_count_min=50000` from the word "long"
     and ignores the number.
 
+- **The suggestion feature was answering the wrong question, and the ablation
+  is what said so.** It was a spelling rescue and nothing else. But dropping
+  one TAG from a real query recovers a median **3,829 works** against **1** for
+  the fandom — so the dominant reason a reader sees nothing is not a typo, it
+  is one term too many. A misspelling announces itself; over-constraint looks
+  exactly like a thin index.
+  - **It did not fire at all on the searches most likely to be
+    over-constrained.** The trigram rescue is gated on TYPED TEXT, and every
+    fic-finder link and every sidebar filter produces a query made entirely of
+    operators. Measured on three real over-constrained searches returning 9, 2
+    and 0 works: **zero suggestions between them.**
+  - Three new reasons beside `spelling`, each a lesson from the fic-finder work
+    asked of a search that has already come back thin:
+    - **`relax`** — the reader's own query minus the expensive term, which is
+      the ablation run for them instead of for me. Ordered by what it recovers,
+      because that is the question. `tag:"Masks" ship:"…" fandom:"…"` (9 works)
+      offers *without "Masks" — 2,000+ works* first.
+    - **`broaden`** — a narrow tag swapped for the spelling the archives
+      actually use. A query names one spelling of a concept and the search does
+      not expand it, so the choice alone costs ~20%.
+    - **`split`** — a rarely-filed pairing swapped for the two characters in
+      it. `Juvia Lockser/Reader` is on 4 works and returns 2; both characters
+      together return 18. Same lesson `_pair_characters` learned in the
+      extractor, asked at search time.
+  - **Never relaxed to nothing**: a single-term query gets no relax suggestion,
+    because "try it without the only thing you searched for" is not a
+    suggestion. And a drop recovering fewer than `_RELAX_MIN_GAIN` works is not
+    offered — a feature that talks for the sake of it gets ignored.
+  - **The cap is the caller's question, not a constant.** `_PROBE_CAP` is 20
+    because the extractor only asks "are there at least ten?"; a suggestion
+    shows the number to a reader, and every suggestion reading "→ 20" tells
+    them nothing and looks broken. `_SUGGEST_CAP` is 2,000.
+  - **Two headings, not one.** "Did you mean" is a correction; the other three
+    are not — the reader spelled everything right and asked for one thing too
+    many, so putting them under that heading would tell them they had made a
+    mistake they had not made. The second heading states the actual rule:
+    *"Every term is a requirement."*
+  - Free on the hot path: the whole block is gated on
+    `total <= SUGGEST_MAX_RESULTS`, and an ordinary search returns zero
+    suggestions and runs no probes.
+
 - **Zero-result searches now suggest a spelling.** A real visitor searched
   `hsrry potter wandcrafter` and got nothing, with `Harry Potter` — 686,558
   works — one transposed letter away. `_did_you_mean` trigram-matches the WHOLE
