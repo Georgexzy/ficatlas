@@ -80,6 +80,26 @@ export interface Suggestion {
   value: string     // the canonical spelling, as the archives write it
   count: number     // how many works carry it
   query: string     // a ready-made search that runs it
+  /**
+   * Why it is offered:
+   *   spelling — a facet the reader may have meant (the original feature)
+   *   relax    — their own query minus the term that is costing the results
+   *   broaden  — a narrow tag swapped for the way the archives usually spell it
+   *   split    — a rarely-filed pairing swapped for the two characters in it
+   *
+   * The last three exist because a measurement said the first was answering
+   * the wrong question: ablating every component of every query built from a
+   * corpus of real fic-finder posts, dropping one TAG recovers a median 3,829
+   * works while dropping the fandom recovers 1. A typo announces itself;
+   * over-constraint looks exactly like a thin index.
+   */
+  reason?: "spelling" | "relax" | "broaden" | "split"
+  /** Works the suggested query would find — probe-measured and capped, so a
+   *  floor. `count` is how many carry the term ANYWHERE, which on an
+   *  over-constrained search is a different question. */
+  works?: number | null
+  /** For relax/broaden/split: the term being removed or replaced. */
+  drops?: string | null
 }
 
 export interface SearchParams {

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation"
 import Link from "next/link"
 import OfflineLink from "./OfflineLink"
 import HelpTip from "./HelpTip"
-import type { SearchParams, SearchResponse, StoryCard } from "@/lib/types"
+import type { SearchParams, SearchResponse, StoryCard, Suggestion } from "@/lib/types"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
          DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getTopHubs, type TopHub, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
@@ -3139,23 +3139,72 @@ function SearchPageInner() {
                         than a rewrite of the sentence they typed, so searching
                         it for them would quietly drop the part they cared most
                         about — the wandcrafter, not the Potter. */}
-                    {shown.suggestions && shown.suggestions.length > 0 && (
-                      <div className="dym">
-                        <p className="dym__lead">Did you mean:</p>
-                        <ul className="dym__list">
-                          {shown.suggestions.map(sg => (
-                            <li key={sg.kind + sg.value}>
-                              <button className="dym__pick"
-                                onClick={() => { setQuery(sg.query); doSearch(true, undefined, sg.query) }}>
-                                <span className="dym__value">{sg.value}</span>
-                                <span className="dym__kind">{DYM_KIND_LABEL[sg.kind] ?? sg.kind}</span>
-                                <span className="dym__count">{fmtCount(sg.count)}</span>
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
+                    {/* Two different offers, and they are not the same
+                        sentence.
+
+                        "Did you mean" is a spelling correction. The others are
+                        not corrections at all — the reader spelled everything
+                        right and asked for one thing too many — so grouping
+                        them under the same heading would tell them they had
+                        made a mistake they had not made. Measured on real
+                        queries: dropping one TAG recovers a median 3,829
+                        works, dropping the fandom recovers 1. The reader
+                        cannot know which of their five constraints is the
+                        expensive one; this is how they find out. */}
+                    {(() => {
+                      const sug = shown.suggestions ?? []
+                      const spelling = sug.filter(s => (s.reason ?? "spelling") === "spelling")
+                      const wider = sug.filter(s => (s.reason ?? "spelling") !== "spelling")
+                      const label = (s: Suggestion) =>
+                        s.reason === "relax"   ? `without “${s.drops}”`
+                      : s.reason === "broaden" ? `“${s.drops}” → “${s.value}”`
+                      : s.reason === "split"   ? `both characters instead of the pairing`
+                      : s.value
+                      return (
+                        <>
+                          {spelling.length > 0 && (
+                            <div className="dym">
+                              <p className="dym__lead">Did you mean:</p>
+                              <ul className="dym__list">
+                                {spelling.map(sg => (
+                                  <li key={sg.kind + sg.value}>
+                                    <button className="dym__pick"
+                                      onClick={() => { setQuery(sg.query); doSearch(true, undefined, sg.query) }}>
+                                      <span className="dym__value">{sg.value}</span>
+                                      <span className="dym__kind">{DYM_KIND_LABEL[sg.kind] ?? sg.kind}</span>
+                                      <span className="dym__count">{fmtCount(sg.count)}</span>
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          {wider.length > 0 && (
+                            <div className="dym">
+                              <p className="dym__lead">
+                                Every term is a requirement. Try it{" "}
+                                {wider.length > 1 ? "one of these ways" : "this way"}:
+                              </p>
+                              <ul className="dym__list">
+                                {wider.map(sg => (
+                                  <li key={(sg.reason ?? "") + sg.value}>
+                                    <button className="dym__pick"
+                                      onClick={() => { setQuery(sg.query); doSearch(true, undefined, sg.query) }}>
+                                      <span className="dym__value">{label(sg)}</span>
+                                      <span className="dym__count">
+                                        {sg.works != null
+                                          ? `${fmtCount(sg.works)}${sg.works >= 2000 ? "+" : ""} works`
+                                          : fmtCount(sg.count)}
+                                      </span>
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </>
+                      )
+                    })()}
                     {/* Ship/character/tag data is missing for most bulk-imported
                         stories, so a strict filter on those is the likeliest reason
                         for an empty page. Say so, and offer the fix directly. */}
