@@ -621,6 +621,48 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     effective. The residual gap is that hub pages carry ~157 un-nofollowed links
     into `/?…`; it is theoretical today (over a full day, every request to `/?…`
     came from a browser or this project's own scanner, none from any crawler).
+- **98.3% of a day's traffic was one AI-agent browser, and it counted as an
+  audience.** Reported as "did we get hit by a bot swarm, we got 20k searches
+  today". Yes:
+
+  | | |
+  |---|---:|
+  | `Lightpanda/1.0` requests in 24h | **87,330 of 88,860 (98.3%)** |
+  | peak hour | 43,645 requests (~12/second) |
+  | distinct IPv6 addresses | 5,863, across five /32 allocations |
+  | robots.txt fetches | **0** |
+  | searches it recorded | **23,993**, from 23,984 "visitors" |
+
+  - **One search per visitor, 23,991 times over.** That is the tell, and it is
+    the same shape as the `/story/` botnet already recorded here: the visitor
+    hash is IP + user agent per day, so a rotating address pool mints a new
+    reader for every request. A real audience does not arrive 24,000-strong and
+    ask one question each.
+  - **It executes JavaScript, which is why nothing caught it.** It fired the
+    pageview beacon, so `_NOT_A_BROWSER` — "searched and never rendered a
+    page" — cannot see it, and `_BOT_RE` named the automation DRIVERS
+    (playwright, puppeteer, selenium) and not this newer class of real browser
+    engines built to be driven by scrapers and agents. Added with
+    `browserless`, `firecrawl`, `crawlee`, `jina-ai`, `diffbot` and the rest.
+  - **Blocked at the edge, not in robots.txt**, for the reason the
+    meta-webindexer rule gives: it has never fetched robots.txt, and you cannot
+    decline a request that is never preceded by asking. Verified after:
+    Lightpanda 403, ordinary browsers, Googlebot and `facebookexternalhit` all
+    200, and origin traffic fell from ~900 requests per three minutes to 23 per
+    minute.
+  - **The panel was reclassified by the SHAPE OF THE DAY, not the user agent**,
+    which `visit_events` deliberately does not store: every visitor making two
+    searches or fewer, on a day when exactly ONE visitor made three. 59,617
+    rows. Today reads 3 human searches from 1 visitor, which is the honest
+    number. The cost of the rule is that a genuine reader who searched once
+    that day is swept up with it; on a normal day that is a handful of rows
+    against 24,000, and a figure that is quietly 8,000× too high is worse.
+  - **A user-agent list will always lag**, and this is the third entry in that
+    lesson after `python-urllib` and the rotating-UA botnet. The durable
+    signals are structural — one request per address, one search per visitor,
+    an arrival rate no audience has — and they are what to reach for first the
+    next time a number looks too good.
+
 - **Half the origin's traffic was one crawler and one number, and both are now
   gone.** Measured over 24h of nginx logs, 85,435 requests: `meta-webindexer`
   22,287 (26%) and `/api/stats/totals` 20,494 (24%). After the two fixes below,

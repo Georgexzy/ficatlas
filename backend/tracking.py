@@ -96,7 +96,23 @@ _BOT_RE = re.compile(
     # BROWSER AUTOMATION. Playwright's default UA says HeadlessChrome and is
     # already caught by `headless` above, but a run configured with a real
     # browser's user agent is not, and these tokens cost nothing to name.
-    r"playwright|puppeteer|selenium|webdriver|phantomjs|cypress",
+    r"playwright|puppeteer|selenium|webdriver|phantomjs|cypress|"
+    # AGENT BROWSERS. A newer class than the automation drivers above: real
+    # browser engines built to be driven by scrapers and AI agents, which
+    # execute JavaScript and therefore fire the pageview beacon. That is what
+    # makes them invisible to every other check here — `_NOT_A_BROWSER` looks
+    # for "searched and never rendered a page", and these render.
+    #
+    # Measured the day `lightpanda` was added: **87,330 of 88,860 origin
+    # requests in 24 hours, 98.3%**, from 5,863 IPv6 addresses across five
+    # different /32 allocations, peaking at 43,645 requests in one hour. It
+    # recorded **23,993 searches and 23,984 "visitors"** — one search each —
+    # and every one of them counted as a reader.
+    #
+    # It never fetched robots.txt. Only the edge can decline a request that is
+    # never preceded by asking.
+    r"lightpanda|browserless|browserbase|agentql|scrapfly|scrapingbee|"
+    r"zenrows|brightdata|apify|crawlee|firecrawl|jina-ai|diffbot",
     re.I,
 )
 
