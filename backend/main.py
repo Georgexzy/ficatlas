@@ -168,6 +168,7 @@ async def track_search_middleware(request: Request, call_next):
                     # would read as "this search found nothing".
                     results=getattr(request.state, "search_total", None),
                     bot=tracking.is_bot(ua),
+                    kind_of_bot=tracking.bot_kind(ua),
                 )
     except Exception:
         pass  # analytics may never fail a request

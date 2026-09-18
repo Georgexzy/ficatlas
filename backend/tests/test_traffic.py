@@ -632,3 +632,67 @@ def test_activity_does_not_separate_a_scrape_from_a_reader():
     from api import traffic
     assert "ref_host" in traffic._SWARM
     assert "count(*) FILTER" not in traffic._SWARM
+
+
+# ── the scraper flag ────────────────────────────────────────────────────────
+#
+# Everything in visit_events was SERVED: the blocking lives at the edge, and a
+# blocked request never reaches this application. So a named scraper in this
+# table is the record of a rule that did not fire, and that is what the flag is
+# for. The last one was noticed four days in by a human wondering why the
+# search count looked odd.
+
+def test_a_bot_is_recorded_by_which_one_not_merely_that_it_was_one(db):
+    traffic.hit(_FakeRequest(ua="Mozilla/5.0 (X11) lightpanda/1.0"), path="/", ref="")
+    traffic.hit(_FakeRequest(ua="Googlebot/2.1 (+http://www.google.com/bot.html)"),
+                path="/", ref="")
+    tracking.flush()
+    kinds = {r[0] for r in db.execute(text(
+        "SELECT bot_kind FROM visit_events WHERE bot")).fetchall()}
+    assert kinds == {"lightpanda", "bot"}
+
+
+def test_a_wanted_crawler_does_not_raise_the_alarm(db):
+    """Googlebot is `bot = true` and is the thing this site is WAITING for. An
+    alert that fires every time Google crawls is furniture within a week."""
+    traffic.hit(_FakeRequest(ua="Googlebot/2.1 (+http://www.google.com/bot.html)"),
+                path="/", ref="")
+    traffic.hit(_FakeRequest(ua="bingbot/2.0"), path="/", ref="")
+    tracking.flush()
+    assert traffic.scrapers(days=2, db=db, _owner=None)["alert"] is False
+
+
+def test_a_named_scraper_getting_served_raises_the_alarm(db):
+    from sqlalchemy import text as t
+    db.execute(t("DELETE FROM visit_events"))
+    db.commit()
+    traffic.hit(_FakeRequest(ua="Mozilla/5.0 (X11) lightpanda/1.0"),
+                path="/api/search", ref="")
+    tracking.flush()
+    r = traffic.scrapers(days=2, db=db, _owner=None)
+    assert r["alert"] is True
+    # The headline has to be actionable on its own: WHICH agent, so the next
+    # thing said to Claude is a rule and not a question.
+    assert "lightpanda" in r["headline"]
+    named = next(d for d in r["detectors"] if d["detector"] == "hostile_agent")
+    assert named["worst_day"]["kinds"] == ["lightpanda"]
+    assert [p["path"] for p in named["paths"]] == ["/api/search"]
+
+
+def test_the_rate_detectors_report_but_do_not_raise_the_alarm(db):
+    """They fire on small automation most weeks — including this repo's own
+    tests — and an alert that is always lit is not an alert. They are reported
+    all the same, because the baseline is what makes the loud one legible."""
+    _seed(db, [("script7", "search", "/api/search", False)] * 3)
+    r = traffic.scrapers(days=2, db=db, _owner=None)
+    assert r["alert"] is False
+    assert any(d["detector"] == "headless" for d in r["detectors"])
+
+
+def test_the_scraper_report_is_owner_only(db):
+    """It names what automation asked for, which is the same class of thing the
+    rest of this module gates at owner rather than admin."""
+    import inspect
+    sig = inspect.signature(traffic.scrapers)
+    dep = sig.parameters["_owner"].default
+    assert getattr(dep, "dependency", None) is require_owner

@@ -183,6 +183,43 @@ def is_bot(ua: str) -> bool:
     return bool(_BOT_RE.search(ua))
 
 
+# The scrapers the EDGE is supposed to be refusing. A hit from one of these in
+# this table is not a statistic, it is a failed block: the request reached the
+# origin, so whatever rule was meant to stop it did not fire — the rule was
+# removed, the zone setting was reset, or the client changed enough to slip it.
+#
+# Deliberately not "everything `_BOT_RE` matches". Googlebot, bingbot and the
+# link-preview fetchers are also bots and are all WANTED here; a flag that goes
+# off every time Google crawls the site is a flag nobody looks at. These are
+# the tokens that only ever belong to somebody taking the index.
+HOSTILE = {
+    "lightpanda", "browserless", "browserbase", "agentql", "scrapfly",
+    "scrapingbee", "zenrows", "brightdata", "apify", "crawlee", "firecrawl",
+    "jina-ai", "diffbot", "scrape", "playwright", "puppeteer", "selenium",
+    "webdriver", "phantomjs", "headless",
+}
+
+
+def bot_kind(ua: str) -> Optional[str]:
+    """WHICH pattern matched, not merely that one did.
+
+    `bot` has always been a boolean, and a boolean cannot answer the question
+    the traffic panel now has to answer: a scraper got through, which one, and
+    what do I ask for it to be blocked by. Googlebot and Lightpanda are both
+    `bot = true` and only one of them is a problem.
+
+    It stores THE TOKEN THAT MATCHED, not the user agent. That distinction is
+    the whole reason this is acceptable under the module's own rules: the token
+    is a word from a list in this file — "lightpanda", "python", "crawl" — and
+    carries nothing about the visitor. A full user agent string is a
+    fingerprint, and this site does not keep those.
+    """
+    if not ua or not ua.strip():
+        return "none"
+    m = _BOT_RE.search(ua)
+    return m.group(0).lower()[:24] if m else None
+
+
 def ref_host(referer: str) -> Optional[str]:
     """The host a referrer points at, or None.
 
@@ -205,7 +242,8 @@ def ref_host(referer: str) -> Optional[str]:
 
 def record(kind: str, path: str, visitor: str, *,
            ref: Optional[str] = None, q: Optional[str] = None,
-           results: Optional[int] = None, bot: bool = False) -> None:
+           results: Optional[int] = None, bot: bool = False,
+           kind_of_bot: Optional[str] = None) -> None:
     """Queue one event. Never raises, never blocks on I/O."""
     global _dropped
     if not ENABLED:
@@ -220,6 +258,7 @@ def record(kind: str, path: str, visitor: str, *,
             "q": (q[:200] if q else None),
             "results": results,
             "bot": bool(bot),
+            "bot_kind": (kind_of_bot or None),
         }
     except Exception:
         return
@@ -253,9 +292,11 @@ def flush() -> int:
         with db_session() as db:
             db.execute(text("""
                 INSERT INTO visit_events
-                    (at, visitor, kind, path, ref_host, q, results, bot)
+                    (at, visitor, kind, path, ref_host, q, results, bot,
+                     bot_kind)
                 VALUES
-                    (:at, :visitor, :kind, :path, :ref_host, :q, :results, :bot)
+                    (:at, :visitor, :kind, :path, :ref_host, :q, :results, :bot,
+                     :bot_kind)
             """), batch)
             db.commit()
         return len(batch)

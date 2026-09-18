@@ -1052,3 +1052,143 @@ def test_the_subject_has_to_be_a_real_thing(bulleted):
     # `fandom:"Marvel" -tag:"System" …` and returns 5,000 works, against
     # `tag:"different characters - Freeform" tag:"Marvel" …` returning 0.
     assert "different characters - Freeform" not in subject_marked(out)
+
+
+# ── A name the reader wrote without the archive's punctuation ───────────────
+
+@pytest.fixture()
+def punctuated(db):
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('fandom','Spider-Man - All Media Types',102772),
+          ('character','Peter Parker',53376),
+          ('character','Gwen Stacy | Spider-Gwen',4084),
+          ('character','Gwen (Merlin)',9802),
+          ('character','Gwen',900),
+          -- The guard case. A two-word facet loses only a SPACE when
+          -- squashed, and the first version of this matched it to the bare
+          -- phrase "main character" — sending a post about The Walking Dead
+          -- to a visual novel.
+          ('character','Main Character (Mystic Messenger)',15000),
+          ('tag','Sad',32891), ('tag','Sweet',17170)
+    """))
+    db.commit()
+    yield db
+    db.execute(text("DELETE FROM facets"))
+    db.commit()
+
+
+def test_a_name_written_without_its_hyphen_still_finds_the_fandom(punctuated):
+    """"a spectacular spiderman fanfic" matched NO fandom and came out as
+    `tag:"Sad" tag:"Sweet"` — two adjectives from its own prose, one of them
+    describing how the reader felt about canon. The archive writes
+    `Spider-Man` and the reader wrote `spiderman`; the lookup is an indexed
+    equality, so the two could never meet."""
+    out = extract(text="any suggestions for a good spiderman fanfic?",
+                  db=punctuated)
+    assert "Spider-Man - All Media Types" in [t.value for t in out.terms]
+
+
+def test_a_disambiguator_is_not_a_way_in(punctuated):
+    """The guard, and it is load-bearing rather than theoretical.
+
+    Squashing removes spaces too, so without this every two-word facet becomes
+    reachable by its bare phrase THROUGH its disambiguator: "SI main character"
+    resolved to `Main Character (Mystic Messenger)`. Real punctuation — a
+    hyphen, colon, pipe or apostrophe — is required."""
+    out = extract(text="ongoing fics with an SI main character", db=punctuated)
+    assert "Main Character (Mystic Messenger)" not in [t.value for t in out.terms]
+
+
+def test_a_bare_first_name_resolves_inside_the_post_s_fandom(punctuated):
+    """`Gwen` is 9,802 works as Guinevere of Camelot and 4,084 as Gwen Stacy,
+    so most-written alone picks the wrong person in a post whose every other
+    word is Spider-Man. That failure is worse than a dropped term: a search in
+    the wrong fandom still returns hundreds of works, so nothing about the
+    result looks wrong.
+
+    The evidence is CO-OCCURRENCE, so the works have to exist: the facet table
+    knows how often a character is written and nothing at all about which
+    fandom writes them. That is the whole reason this asks the index instead of
+    reading the bracket in the name.
+    """
+    for i, char in enumerate(["Gwen Stacy | Spider-Gwen", "Peter Parker"]):
+        punctuated.execute(text("""
+            INSERT INTO stories (site, site_id, url, title, author,
+                                 fandoms, characters)
+            VALUES ('ao3', :sid, :url, 'x', 'y',
+                    ARRAY['Spider-Man - All Media Types'], ARRAY[:c])
+        """), {"sid": f"gw{i}", "url": f"https://example.test/gw{i}", "c": char})
+    punctuated.commit()
+    out = extract(text="a good spiderman fic with Peter and Gwen", db=punctuated)
+    values = [t.value for t in out.terms]
+    assert "Gwen Stacy | Spider-Gwen" in values
+    assert "Gwen (Merlin)" not in values
+
+
+def test_most_written_still_wins_when_the_fandom_says_nothing(punctuated):
+    """The fallback matters as much as the rule. A character genuinely absent
+    from the post's fandom — a crossover, a fandom-hopping OC — must still
+    resolve to a name rather than to nothing."""
+    from api.search import _canonical_character
+    assert _canonical_character(punctuated, "Gwen") == "Gwen (Merlin)"
+    assert _canonical_character(punctuated, "Gwen", "No Such Fandom") == "Gwen (Merlin)"
+
+
+# ── Tags that are really just English ───────────────────────────────────────
+
+def test_a_word_people_write_more_than_they_tag_ranks_below_a_name(db):
+    """Measured, not listed. See tag_prose.py: `Sad` is tagged on 32,891 works
+    and written in the summaries of ~85,000, so a reader typing it is usually
+    just talking. `Fluff` is tagged four times more often than it is written,
+    so it is a term of art and must NOT be demoted by the same rule."""
+    import api.search as S
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag','Sad',32891), ('tag','Fluff',1130841),
+          ('character','Peter Parker',53376), ('character','Peter',800)
+    """))
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS tag_prose (
+            tag text PRIMARY KEY, works integer NOT NULL,
+            written integer NOT NULL, ratio real NOT NULL,
+            built_at timestamp DEFAULT now())
+    """))
+    db.execute(text("DELETE FROM tag_prose"))
+    db.execute(text("INSERT INTO tag_prose (tag, works, written, ratio) VALUES "
+                    "('Sad', 32891, 85439, 0.38), "
+                    "('Fluff', 1130841, 238356, 4.74)"))
+    db.commit()
+    S._TAG_PROSE, S._TAG_PROSE_AT = set(), 0.0
+    try:
+        out = extract(text="Sad to see her die, anything with Peter?", db=db)
+        values = [t.value for t in out.terms]
+        assert "Peter Parker" in values and "Sad" in values
+        assert values.index("Peter Parker") < values.index("Sad")
+
+        out = extract(text="anything fluff with Peter?", db=db)
+        values = [t.value for t in out.terms]
+        assert values.index("Fluff") < values.index("Peter Parker"), \
+            "a term of art must not be demoted by the rule aimed at English"
+    finally:
+        S._TAG_PROSE, S._TAG_PROSE_AT = set(), 0.0
+        db.execute(text("DELETE FROM tag_prose"))
+        db.execute(text("DELETE FROM facets"))
+        db.commit()
+
+
+def test_the_signal_being_absent_is_not_an_error(db):
+    """The table is built offline and genuinely does not exist on a fresh
+    install. A ranking signal that is merely OFF must not take the request
+    down with it — nor poison the caller's transaction, which is what a failed
+    statement without a SAVEPOINT does."""
+    import api.search as S
+    db.execute(text("DROP TABLE IF EXISTS tag_prose"))
+    db.commit()
+    S._TAG_PROSE, S._TAG_PROSE_AT = set(), 0.0
+    assert S._prose_words(db) == set()
+    # The transaction must still be usable.
+    assert db.execute(text("SELECT 1")).scalar() == 1
+    S._TAG_PROSE_AT = 0.0
