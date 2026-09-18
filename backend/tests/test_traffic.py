@@ -557,3 +557,78 @@ def test_a_story_opened_much_later_is_a_new_visit_not_a_click(db):
     db.commit()
     got = {r["source"]: r["opens"] for r in routes(days=2, db=db, _owner=None)["sources"]}
     assert got.get("hub") is None, "an hour later is not a click-through"
+
+
+def test_a_swarm_is_not_an_audience(db):
+    """A rotating address pool mints a new "visitor" for every request, so a
+    scrape arrives as thousands of one-request readers. Measured on the day it
+    happened: 23,993 searches from 23,984 visitors, one each.
+
+    Neither existing defence sees it. `is_bot` reads the user agent, and an
+    agent browser sends its own name only until somebody changes it;
+    `_NOT_A_BROWSER` looks for "searched and never rendered a page", and an
+    agent browser executes JavaScript, so it renders.
+    """
+    from api.traffic import _SWARM_PER_MINUTE
+    base = datetime(2026, 5, 1, 12, 0, 0)
+    for i in range(_SWARM_PER_MINUTE + 5):
+        db.execute(text("""
+            INSERT INTO visit_events (at, visitor, kind, path)
+            VALUES (:at, :v, 'search', '/api/search')
+        """), {"at": base, "v": f"swarm{i:011d}"})
+    db.commit()
+    rows = db.execute(text("""
+        WITH first_seen AS (
+          SELECT visitor, date_trunc('minute', min(at)) AS m
+            FROM visit_events GROUP BY visitor),
+        referred AS (
+          SELECT DISTINCT visitor FROM visit_events
+           WHERE ref_host IS NOT NULL AND ref_host NOT ILIKE '%ficatlas%')
+        SELECT count(*) FROM first_seen
+         WHERE visitor NOT IN (SELECT visitor FROM referred)
+           AND m IN (SELECT m FROM first_seen GROUP BY m HAVING count(*) >= :n)
+    """), {"n": _SWARM_PER_MINUTE}).scalar()
+    assert rows >= _SWARM_PER_MINUTE
+
+
+def test_the_day_the_site_works_is_not_mistaken_for_one(db):
+    """The objection to any arrival-rate rule, and the reason it is safe.
+
+    A link doing well on Reddit puts hundreds of real people through the door in
+    a minute — the one moment the panel must not quietly hide. A crowd arrives
+    FROM somewhere; the scrape arrived from nowhere at all: 26,852 visitors and
+    not one with a referrer, against a normal week carrying Google, AO3, Reddit,
+    Bing and DuckDuckGo. So the better a post does, the less the rule can touch
+    it.
+    """
+    from api.traffic import _SWARM_PER_MINUTE
+    base = datetime(2026, 5, 2, 9, 0, 0)
+    for i in range(_SWARM_PER_MINUTE + 50):
+        db.execute(text("""
+            INSERT INTO visit_events (at, visitor, kind, path, ref_host)
+            VALUES (:at, :v, 'page', '/', 'www.reddit.com')
+        """), {"at": base, "v": f"viral{i:011d}"})
+    db.commit()
+    flagged = db.execute(text("""
+        WITH first_seen AS (
+          SELECT visitor, date_trunc('minute', min(at)) AS m
+            FROM visit_events WHERE at::date = DATE '2026-05-02' GROUP BY visitor),
+        referred AS (
+          SELECT DISTINCT visitor FROM visit_events
+           WHERE ref_host IS NOT NULL AND ref_host NOT ILIKE '%ficatlas%')
+        SELECT count(*) FROM first_seen
+         WHERE visitor NOT IN (SELECT visitor FROM referred)
+           AND m IN (SELECT m FROM first_seen GROUP BY m HAVING count(*) >= :n)
+    """), {"n": _SWARM_PER_MINUTE}).scalar()
+    assert flagged == 0, "a referred crowd must never be filtered as a swarm"
+
+
+def test_activity_does_not_separate_a_scrape_from_a_reader():
+    """Recorded because it was the obvious rule and the data says no: 6,529 of
+    the scrape's visitors had three or more events, and the mean was 2.2 either
+    way. Provenance separates them; activity does not. The filter must not grow
+    an events-per-visitor clause on the strength of it looking sensible."""
+    import inspect
+    from api import traffic
+    assert "ref_host" in traffic._SWARM
+    assert "count(*) FILTER" not in traffic._SWARM

@@ -165,6 +165,7 @@ def summary(days: int = Query(30, ge=1, le=365),
               -- _NOT_A_BROWSER: this is the backstop for automation that sends
               -- a browser's user agent, which is_bot cannot see.
               AND NOT ({_NOT_A_BROWSER})
+              AND NOT ({_SWARM})
         GROUP BY 1 ORDER BY 1
     """), {"first": first, "last": last}).fetchall()
 
@@ -192,7 +193,7 @@ def summary(days: int = Query(30, ge=1, le=365),
          WHERE e.at >= CAST(:first AS date)
            AND e.at <  CAST(:last AS date) + interval '1 day'
            AND NOT e.bot
-           AND ({_NOT_A_BROWSER})
+           AND (({_NOT_A_BROWSER}) OR ({_SWARM}))
     """), {"first": first, "last": last}).first()
 
     busiest = max(rows, key=lambda r: r[3], default=None)
@@ -312,6 +313,79 @@ _OUT_SINCE = "2026-09-07"
 # identical to a script here. They contribute no pageviews either way, so the
 # only number this can understate is searches, and on this site the measured
 # population has been developer traffic every time it has been looked at.
+# A SWARM: visitors who arrived shoulder to shoulder with hundreds of others.
+#
+# The second backstop, and it exists because the first two are both defeated by
+# the same thing. `is_bot` reads the user agent, and an agent browser sends its
+# own name only until somebody changes it. `_NOT_A_BROWSER` looks for "searched
+# and never rendered a page", and an agent browser EXECUTES JAVASCRIPT — it
+# fires the pageview beacon, so it renders.
+#
+# What neither can fake cheaply is arriving like a person. The visitor hash is
+# IP plus user agent per day, so a rotating address pool mints a brand-new
+# reader for every request, and that is the tell rather than the disguise.
+# Measured across twelve days:
+#
+#     organic arrival        p95 = 2-7 new visitors per minute
+#     the day of the scrape  p95 = 129, peaking at 210
+#     minutes above ten      1-3 on a normal day, 357 on that one
+#
+# Twenty-five in one minute is far above anything this site has seen organically
+# and far below what a scrape produces. The normal-day peaks of 46-72 it also
+# catches are not a false positive: an audience does not arrive fifty-at-once
+# either, and those were very likely smaller scrapes nobody noticed.
+#
+# THE DAY THIS SITE FINALLY WORKS MUST NOT LOOK LIKE A SCRAPE.
+#
+# That is the obvious objection to any arrival-rate rule, and it is right: a
+# link doing well on Reddit puts hundreds of real people through the door in a
+# minute, which is the one moment the panel must not quietly hide. Two things
+# make it safe.
+#
+# It EXCLUDES ANYONE WITH A REFERRER. A crowd arrives from somewhere —
+# `www.reddit.com`, `com.reddit.frontpage`, `www.google.com` — and the scrape
+# arrived from nowhere at all: **26,852 visitors, not one with a referrer**,
+# against a normal week carrying Google, AO3, Reddit, Bing and DuckDuckGo. So
+# the better a post does, the less this rule can touch it.
+#
+# And it BLOCKS NOBODY. This decides what one admin page counts, never who gets
+# served; the blocking lives at the edge, where it names a class of scraper and
+# was verified against real browsers, Googlebot, bingbot and the link-preview
+# fetcher. A mistake here costs a number, not a reader.
+#
+# Rejected: "a visitor who did almost nothing". It looked obvious and the data
+# says no — 6,529 of the scrape's visitors had three or more events, and the
+# mean was 2.2 either way. Activity does not separate them; provenance does.
+#
+# Applied at READ time like `_NOT_A_BROWSER`, not by flagging rows, so it
+# self-corrects — and so a mistake here costs a number on one page rather than
+# a permanent mislabelling in the table.
+_SWARM_PER_MINUTE = 25
+
+_SWARM = f"""
+    e.visitor IN (
+      WITH first_seen AS (
+        SELECT visitor, date_trunc('minute', min(at)) AS m
+          FROM visit_events
+         WHERE at >= CAST(:first AS date)
+           AND at <  CAST(:last AS date) + interval '1 day'
+         GROUP BY visitor),
+      -- Anybody who arrived FROM SOMEWHERE is a person, whatever else is
+      -- happening that minute. See the note above: this is what makes the rule
+      -- safe on the best day this site ever has.
+      referred AS (
+        SELECT DISTINCT visitor FROM visit_events
+         WHERE at >= CAST(:first AS date)
+           AND at <  CAST(:last AS date) + interval '1 day'
+           AND ref_host IS NOT NULL
+           AND ref_host NOT ILIKE '%ficatlas%')
+      SELECT visitor FROM first_seen
+       WHERE visitor NOT IN (SELECT visitor FROM referred)
+         AND m IN (SELECT m FROM first_seen
+                    GROUP BY m HAVING count(*) >= {_SWARM_PER_MINUTE}))
+"""
+
+
 _NOT_A_BROWSER = """
     e.visitor IN (SELECT visitor FROM visit_events
                    WHERE at >= CAST(:first AS date)

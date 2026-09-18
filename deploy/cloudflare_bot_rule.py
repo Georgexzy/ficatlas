@@ -171,6 +171,23 @@ RULES = [
         # browser that is usually invisible and under a second. It is a genuine
         # cost against ~50,000 scraped pages a day, and it is reversible with
         # `--remove` the moment it stops being worth it.
+        # NOT HERE: a managed challenge on the search space, `/?…`.
+        #
+        # It was written, dry-run, and deliberately not applied. It would work
+        # — a rotating pool cannot cheaply answer one — and the cost lands on
+        # exactly the wrong people: `/?…` is where every shared search link
+        # arrives, including the ones the outreach panel builds for a reply on
+        # Reddit. The whole point of that link is that somebody clicks it and
+        # sees results; an interstitial is the opposite.
+        #
+        # The /story/ rule below accepts that cost because 100% of the traffic
+        # it refused was a botnet and story pages are not where readers are
+        # won. Search is the product.
+        #
+        # If a scraper returns that Cloudflare's managed AI-bot blocking does
+        # not know, this is the next lever — and it should be scoped to `/?…`
+        # and never to `/api/search`, because challenge HTML handed to a
+        # reader's XHR cannot be answered by it.
         "description": "Challenge the /story/ scraper botnet (19,705 IPs, 1 req each)",
         "action": "managed_challenge",
         "expression": 'starts_with(http.request.uri.path, "/story/") '

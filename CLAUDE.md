@@ -621,6 +621,59 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     effective. The residual gap is that hub pages carry ~157 un-nofollowed links
     into `/?…`; it is theoretical today (over a full day, every request to `/?…`
     came from a browser or this project's own scanner, none from any crawler).
+- **Defence in depth against scrapers, and the layer that matters is the one
+  nobody has to maintain.** Asked for after the Lightpanda scrape: "make
+  protections against this sort of thing robust, someone clearly wants my
+  data". Four layers, in order of how long each keeps working unattended:
+
+  1. **Cloudflare's maintained AI-scraper blocking** — `ai_bots_protection =
+     block`, `crawler_protection = enabled`, set by
+     `deploy/cloudflare_bot_settings.py`. It was available and switched OFF the
+     whole time. Cloudflare keeps the signatures and TLS fingerprints current
+     for this entire class; nothing here has to learn the next name.
+  2. **A named block at the edge** for the agent seen (`cloudflare_bot_rule.py`).
+     Cheap, immediate, and rots the moment the user agent changes.
+  3. **The user-agent regex** in `tracking.py`, now naming the agent-browser
+     class as well as the automation drivers.
+  4. **A structural read-time filter** so the PANEL cannot be fooled by a name
+     it has never seen.
+
+  - **`fight_mode` is deliberately OFF.** Bot Fight Mode challenges anything it
+    finds plausible, cannot be scoped to a path, and the people it
+    inconveniences are readers arriving from a link.
+  - **Per-IP rate limiting cannot touch this and it is worth knowing why.** The
+    scrape came from **5,914 addresses averaging 14.9 requests each**. The
+    app's own limiter is per-IP and never came close to firing, and a
+    Cloudflare rate limit would not have either — a rotating pool is precisely
+    the shape those defend against least.
+  - **A managed challenge on the search space was written, dry-run, and NOT
+    applied.** It would work, and the cost lands on exactly the wrong people:
+    `/?…` is where every shared search link arrives, including the ones the
+    outreach panel builds for a reply on Reddit. The /story/ rule accepts that
+    cost because 100% of what it refused was a botnet and story pages are not
+    where readers are won. Search is the product. Kept as the documented next
+    lever, scoped to `/?…` and never to `/api/search` — challenge HTML handed
+    to a reader's XHR cannot be answered by it.
+
+- **"What if the site actually gets busy — we can't block real humans."** The
+  right objection to any arrival-rate rule, and the reason `_SWARM` is built
+  the way it is.
+  - **It blocks nobody.** It decides what one admin page counts, never who gets
+    served. A mistake costs a number, not a reader.
+  - **It exempts anyone with a REFERRER.** A crowd arrives from somewhere; the
+    scrape arrived from nowhere — **26,852 visitors and not one referrer**,
+    against a normal week carrying Google, AO3, Reddit, Bing and DuckDuckGo.
+    The better a post does, the less the rule can touch it.
+  - **"A visitor who did almost nothing" was rejected on the data.** It was the
+    obvious rule: **6,529 of the scrape's visitors had three or more events**,
+    and the mean was 2.2 either way. Activity does not separate a scrape from a
+    reader; provenance does. A test asserts the filter has no
+    events-per-visitor clause, so it cannot grow one on the strength of looking
+    sensible.
+  - Threshold 25 first-seen visitors in one minute, against an organic p95 of
+    **2-7**. It also catches the 46-72/minute spikes on ordinary days, which
+    are very likely smaller scrapes nobody noticed.
+
 - **98.3% of a day's traffic was one AI-agent browser, and it counted as an
   audience.** Reported as "did we get hit by a bot swarm, we got 20k searches
   today". Yes:
