@@ -59,6 +59,38 @@ PHASE = "http_request_firewall_custom"
 # defence is that adding one here and running this is the whole procedure.
 RULES = [
     {
+        "description": "Block Lightpanda (agent browser; 98.3% of origin traffic)",
+        # An AGENT BROWSER — a real engine built to be driven by scrapers and
+        # AI agents. Measured over 24 hours of origin logs:
+        #
+        #     Lightpanda/1.0   87,330 of 88,860 requests   98.3%
+        #     peak hour                43,645 requests     ~12/second
+        #     distinct IPv6 addresses   5,863, across five /32 allocations
+        #     robots.txt fetches               0
+        #
+        # It walks the whole site — /, /fandoms, /ships, /about, /permissions —
+        # and follows the author link on every result card, which is how it
+        # produced 11,632 requests into `/api/search`, each one a query over
+        # 20.5M rows on a home connection.
+        #
+        # It EXECUTES JAVASCRIPT, which is what made it invisible: it fires the
+        # pageview beacon, so it recorded 23,993 searches and 23,984
+        # "visitors" — one search each — and every one counted as a reader in
+        # the traffic panel. The `_NOT_A_BROWSER` heuristic cannot see it,
+        # because that looks for "searched and never rendered a page".
+        #
+        # At the edge and not in robots.txt for the reason the meta-webindexer
+        # rule gives: it has never fetched robots.txt, and you cannot decline a
+        # request that is never preceded by asking. Not in nginx either,
+        # because 87,000 requests would still come down the tunnel first.
+        #
+        # The product token only. Rotating 5,863 addresses across five
+        # allocations is exactly what an IP rule cannot answer, and the agent
+        # names itself honestly — which is worth keeping true by not making
+        # the name the thing that gets it blocked in a way that rewards lying.
+        "expression": '(http.user_agent contains "Lightpanda")',
+    },
+    {
         "description": "Block meta-webindexer (ignores robots.txt; 26% of origin traffic)",
         # `contains` rather than an exact match: Meta sends this token inside
         # five different browser-shaped user agents (Windows/Chrome, Mac/Chrome,
