@@ -91,6 +91,68 @@ RULES = [
         "expression": '(http.user_agent contains "Lightpanda")',
     },
     {
+        # THE AGENT BROWSERS AS A CLASS, not one product at a time.
+        #
+        # The Lightpanda rule above was written for one name, and the name is
+        # the cheapest thing about a scraper to change. Eleven days later the
+        # traffic panel's new scraper flag went off on this:
+        #
+        #     19:30:39  /ship/byun-baekhyun-do-kyungsoo-d-o
+        #     19:30:49  /fandom/avengers
+        #     19:31:01  /ship/total-drama-presents-the-ridonculous-race
+        #     19:31:16  /ship/corvo-attano-the-outsider-dishonored
+        #     19:31:22  /ship/taylor-swift-travis-kelce
+        #     19:31:41  /ship/alejandro-vargas-reader
+        #
+        # Six unrelated hub pages in sixty-two seconds, no referrer on any of
+        # them, and A DIFFERENT VISITOR HASH FOR EVERY ONE — the hash is IP
+        # plus user agent, so that is a rotating address pool. Every request
+        # fired the pageview beacon, so it executes JavaScript and is a real
+        # engine rather than a fetch loop. The same signature as the Lightpanda
+        # scrape, under a different name.
+        #
+        # So this names the CLASS. Every token here is one the application
+        # already treats as automation (tracking._BOT_RE), and not one of them
+        # is a string a reader's browser sends:
+        #
+        #   Headless     Chrome's own headless mode and every driver's default
+        #   Playwright, Puppeteer, Selenium, WebDriver, PhantomJS
+        #                browser automation, announcing itself
+        #   Browserless, Browserbase, AgentQL, Scrapfly, ScrapingBee, ZenRows,
+        #   BrightData, Apify, Crawlee, Firecrawl, Jina-AI, Diffbot
+        #                commercial scraping-as-a-service and agent browsers
+        #
+        # `not cf.client.bot` for the same reason the /story/ rule carries it:
+        # it exempts Cloudflare-VERIFIED crawlers, so no amount of string
+        # matching here can ever cost us Googlebot or bingbot. Nothing in the
+        # list resembles their user agents, and the carve-out costs nothing.
+        #
+        # The one thing this can plausibly catch that is wanted: PageSpeed
+        # Insights has shipped a `HeadlessChrome` user agent in the past
+        # (current builds say `Chrome-Lighthouse`). If a performance audit
+        # starts failing, that is why, and `--remove` reverses the lot.
+        "description": "Block agent browsers and scraping services (rotating pools)",
+        "expression": '(not cf.client.bot) and ('
+                      'http.user_agent contains "Headless" or '
+                      'http.user_agent contains "Playwright" or '
+                      'http.user_agent contains "Puppeteer" or '
+                      'http.user_agent contains "Selenium" or '
+                      'http.user_agent contains "WebDriver" or '
+                      'http.user_agent contains "PhantomJS" or '
+                      'http.user_agent contains "Browserless" or '
+                      'http.user_agent contains "Browserbase" or '
+                      'http.user_agent contains "AgentQL" or '
+                      'http.user_agent contains "Scrapfly" or '
+                      'http.user_agent contains "ScrapingBee" or '
+                      'http.user_agent contains "ZenRows" or '
+                      'http.user_agent contains "BrightData" or '
+                      'http.user_agent contains "Apify" or '
+                      'http.user_agent contains "Crawlee" or '
+                      'http.user_agent contains "Firecrawl" or '
+                      'http.user_agent contains "Jina-AI" or '
+                      'http.user_agent contains "Diffbot")',
+    },
+    {
         "description": "Block meta-webindexer (ignores robots.txt; 26% of origin traffic)",
         # `contains` rather than an exact match: Meta sends this token inside
         # five different browser-shaped user agents (Windows/Chrome, Mac/Chrome,
