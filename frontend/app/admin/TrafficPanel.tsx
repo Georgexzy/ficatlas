@@ -318,6 +318,29 @@ function ago(iso: string): string {
   return `${days} days ago`
 }
 
+interface ScraperDay {
+  day: string; visitors: number; events: number; searches: number
+  pages: number; peak_per_minute: number; kinds: string[]
+}
+interface Detector {
+  detector: string; why: string
+  visitors: number; events: number; searches: number
+  worst_day: ScraperDay; days: ScraperDay[]
+  paths: { path: string; hits: number }[]
+}
+interface Scrapers {
+  since: string; named_agents_since: string
+  detectors: Detector[]; alert: boolean; headline: string | null
+}
+
+// What each detector is called on screen. The endpoint's names are the
+// evidence; these are the sentence a person reads at 2am.
+const DETECTOR_LABEL: Record<string, string> = {
+  hostile_agent: "Named scraper served",
+  swarm:         "Arrived like a swarm",
+  headless:      "API-only sessions",
+}
+
 interface CfDay { day: string; requests: number; bytes: number }
 interface Cloudflare {
   configured: boolean
@@ -380,6 +403,7 @@ export default function TrafficPanel() {
   const [refs, setRefs] = useState<RefRow[] | null>(null)
   const [routes, setRoutes] = useState<Routes | null>(null)
   const [cf, setCf] = useState<Cloudflare | null>(null)
+  const [scr, setScr] = useState<Scrapers | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async (d: number) => {
@@ -392,12 +416,12 @@ export default function TrafficPanel() {
     try {
       // In parallel: four small aggregates over the same window, and waiting for
       // them one after another would show the page filling in for no reason.
-      const [s, p, q, rf, rt] = await Promise.all([
+      const [s, p, q, rf, rt, sc] = await Promise.all([
         get("summary"), get("pages"), get("searches"), get("referrers"),
-        get("routes"),
+        get("routes"), get("scrapers"),
       ])
       setSummary(s); setPages(p.pages); setSearches(q); setRefs(rf.referrers)
-      setRoutes(rt)
+      setRoutes(rt); setScr(sc)
     } catch (e: any) { setError(e.message) }
 
     // Deliberately NOT in the Promise.all above. This one leaves the building
@@ -457,6 +481,25 @@ export default function TrafficPanel() {
         </span>
       </p>
 
+      {/* THE FLAG. Everything else on this page describes an audience; this
+          says a defence failed.
+
+          It is loud and it is rare on purpose. The edge refuses named scrapers
+          before they ever reach this application, so a named scraper appearing
+          in our own table means the rule did not fire — and the last time that
+          happened it was noticed by a human wondering why the search count
+          looked wrong, four days in. */}
+      {scr?.alert && (
+        <div className="scraper-alert" role="alert">
+          <p className="scraper-alert__head">A scraper got through</p>
+          <p className="scraper-alert__body">{scr.headline}</p>
+          <p className="scraper-alert__body">
+            The block for it is at the edge, not here — ask Claude to block it
+            and give it the agent names and days below.
+          </p>
+        </div>
+      )}
+
       {!summary.enabled && (
         <p className="admin-note admin-warn">
           Recording is switched off (TRACKING=false), so nothing new is arriving.
@@ -484,6 +527,58 @@ export default function TrafficPanel() {
           beacon would look the same here — every population measured so far has
           been testing from this repo.
         </p>
+      )}
+
+      {/* The shapes, under the flag. Reported even when nothing is alarming,
+          because "a slow trickle every week" is the baseline you need in order
+          to know that this week is different — and because the two rate-based
+          detectors fire on small automation most weeks and would make a
+          permanently-lit alert if they drove one. */}
+      {scr && scr.detectors.length > 0 && (
+        <details className="scraper-detail">
+          <summary className="scraper-detail__summary">
+            Automation seen in this window
+            <span className="scraper-detail__count">
+              {scr.detectors.map(d => DETECTOR_LABEL[d.detector] ?? d.detector).join(" · ")}
+            </span>
+          </summary>
+          {scr.detectors.map(d => (
+            <div key={d.detector} className="scraper-card">
+              <p className="scraper-card__head">
+                {DETECTOR_LABEL[d.detector] ?? d.detector}
+                <span className="scraper-card__nums">
+                  {d.visitors.toLocaleString()} session{d.visitors === 1 ? "" : "s"},{" "}
+                  {d.events.toLocaleString()} request{d.events === 1 ? "" : "s"}
+                </span>
+              </p>
+              <p className="scraper-card__why">{d.why}</p>
+              <p className="scraper-card__why">
+                Worst on {longDate(d.worst_day.day)}:{" "}
+                {d.worst_day.events.toLocaleString()} requests from{" "}
+                {d.worst_day.visitors.toLocaleString()} session
+                {d.worst_day.visitors === 1 ? "" : "s"}, peak{" "}
+                {d.worst_day.peak_per_minute.toLocaleString()}/minute.
+                {d.worst_day.kinds.length > 0 &&
+                  ` Agent: ${d.worst_day.kinds.join(", ")}.`}
+              </p>
+              <p className="scraper-card__paths">
+                {d.paths.map(x => (
+                  <span key={x.path} className="admin-chip">
+                    {x.path} <b>{x.hits.toLocaleString()}</b>
+                  </span>
+                ))}
+              </p>
+            </div>
+          ))}
+          {/* Said plainly rather than left to be discovered: a window reaching
+              back before the column existed has no named-agent evidence in it,
+              which is not the same as having looked and found none. */}
+          <p className="scraper-detail__since">
+            Agent names have only been recorded since{" "}
+            {longDate(scr.named_agents_since)}; before that the table knows a
+            request was automation but not which.
+          </p>
+        </details>
       )}
 
       <div className="admin-tiles">

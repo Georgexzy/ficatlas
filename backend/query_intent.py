@@ -226,6 +226,20 @@ _WC_MAX_RE = re.compile(
 _WC_RANGE_RE = re.compile(
     r"\bbetween\s+(\d[\d,]*)\s*([km])?\s+and\s+(\d[\d,]*)\s*([km])?\b", re.I)
 
+# The ways a reader writes a range WITHOUT the word "between", which is most of
+# them. Reported from a real post: "I'm mostly looking for shorter fics (1k 10k
+# words)" produced no length filter at all, and neither did `1k-10k` or
+# `1k to 10k` — only the one spelling the regex knew.
+#
+# BOTH SIDES must carry a k/m suffix here, and that is what makes the bare
+# space form safe. Without it "harry is lord of at least 2 houses 3 horcruxes"
+# is a range, which is the same trap `_WC_BARE_FLOOR` exists for one rule over.
+# A reader writing a range in plain digits ("between 1000 and 10000") still has
+# the spelling above.
+_WC_RANGE_LOOSE_RE = re.compile(
+    r"\b(\d[\d,]*)\s*([km])\s*(?:-|–|—|to|and|\.\.|…|\s)\s*(\d[\d,]*)\s*([km])\b",
+    re.I)
+
 # Below this, a bare number is describing something in the story rather than its
 # length. Chosen rather than derived: it is the smallest round number no reader
 # would ever use as a word-count floor, and it is comfortably above the counts
@@ -255,7 +269,7 @@ def _explicit_word_counts(text: str) -> tuple[str, Optional[int], Optional[int],
     lo = hi = None
     tokens: list[dict] = []
 
-    m = _WC_RANGE_RE.search(text)
+    m = _WC_RANGE_RE.search(text) or _WC_RANGE_LOOSE_RE.search(text)
     if m:
         a, b = _wc_value(m.group(1), m.group(2)), _wc_value(m.group(3), m.group(4))
         if a and b:

@@ -101,6 +101,7 @@ def hit(request: Request, path: str = Form(...), ref: str = Form(""),
             tracking.visitor_hash(client_ip(request), ua),
             ref=tracking.ref_host(ref),
             bot=tracking.is_bot(ua),
+            kind_of_bot=tracking.bot_kind(ua),
         )
     except Exception:
         # Analytics must never be able to fail a request. There is nothing the
@@ -738,3 +739,155 @@ def referrers(days: int = Query(30, ge=1, le=365),
     return {"referrers": [{"host": r[0], "hits": r[1], "visitors": r[2],
                            "first_seen": r[3].isoformat(),
                            "last_seen": r[4].isoformat()} for r in rows]}
+
+
+# When `bot_kind` started being recorded. Before this the table knows a request
+# was automation but not WHICH, so a window that reaches back past this date has
+# no named-scraper evidence in it rather than a clean bill of health — the same
+# distinction `_OUT_SINCE` exists to make about outbound clicks.
+_KIND_SINCE = "2026-09-18"
+
+
+@router.get("/scrapers")
+def scrapers(days: int = Query(30, ge=1, le=365),
+             db: Session = Depends(get_db),
+             _owner=Depends(require_owner)):
+    """Did a scraper get past the edge, and what is needed to block it.
+
+    THE PREMISE: everything in `visit_events` was SERVED. The blocking lives at
+    the edge — a Cloudflare firewall rule naming Lightpanda and friends, plus
+    the zone's AI-bot and crawler settings — and a request that was blocked
+    there never reaches this application at all. So a scraper appearing in this
+    table is not a statistic about scrapers. It is the record of a rule that
+    did not fire.
+
+    That is the whole reason this endpoint exists rather than being another
+    number on the summary. The defences were built after a scrape took 98.3% of
+    one day's origin requests, and the honest thing to say about any of them is
+    that they name a client, and a client can be renamed. The panel must
+    therefore be able to say "something got through, here is its shape, go and
+    write a rule" — which is exactly what happened last time, except it was
+    noticed by a human wondering why the search count looked wrong.
+
+    Three detectors, worst first, because they fail in different ways:
+
+      hostile_agent  A user agent this site already names as a scraper. There is
+                     no ambiguity and no judgement in it: the edge was told to
+                     refuse this and did not. Only visible for traffic recorded
+                     since bot_kind existed.
+      swarm          Hundreds of brand-new unreferred visitors in a minute. The
+                     rate rule, which is what catches a scraper that renamed
+                     itself. See the note on `_SWARM` for why a genuinely busy
+                     day does not look like this.
+      headless       Searched the API and never rendered a page — automation
+                     that sent a browser's user agent but did not run the page.
+
+    What it deliberately does NOT do is block anything, and it cannot: this
+    application serves the request long before this query runs. It is a report,
+    and acting on it means a rule at the edge.
+    """
+    first, last = _span(days)
+    p = {"first": first, "last": last}
+    hostile = sorted(tracking.HOSTILE)
+
+    # The busiest minute of each day, measured ONCE over the whole table.
+    #
+    # Across every row, not per detector: the arrival rate is the evidence, and
+    # computing it from the rows a detector already selected would be circular —
+    # of course the swarm rule's own rows arrived fast, it chose them for it.
+    # Once, in one grouped pass, rather than the obvious lateral subquery, which
+    # counts a minute again for every flagged row and on a scrape day is tens of
+    # thousands of counts over a table with tens of thousands of rows in it.
+    peak: dict = {r[0]: r[1] for r in db.execute(text("""
+        SELECT m::date, max(n) FROM (
+            SELECT date_trunc('minute', at) AS m, count(*) AS n
+              FROM visit_events
+             WHERE at >= CAST(:first AS date)
+               AND at <  CAST(:last AS date) + interval '1 day'
+             GROUP BY 1) z
+        GROUP BY 1
+    """), p).fetchall()}
+
+    def _burst(where: str, params: dict) -> list[dict]:
+        """One row per day the detector fired, with the shape of the worst one.
+
+        Per DAY rather than per contiguous burst. A scrape is not tidy — it
+        pauses, resumes, and arrives from a rotating pool — so "the burst"
+        is a fiction, while "the 6th was bad and the 7th was worse" is what
+        somebody deciding whether to act actually needs.
+        """
+        return [{"day": r[0].isoformat(), "visitors": r[1], "events": r[2],
+                 "searches": r[3], "pages": r[4],
+                 "peak_per_minute": peak.get(r[0], 0), "kinds": r[5] or []}
+                for r in db.execute(text(f"""
+            SELECT e.at::date                                      AS day,
+                   count(DISTINCT e.visitor)                       AS visitors,
+                   count(*)                                        AS events,
+                   count(*) FILTER (WHERE e.kind = 'search')       AS searches,
+                   count(*) FILTER (WHERE e.kind = 'page')         AS pages,
+                   array_remove(array_agg(DISTINCT e.bot_kind), NULL) AS kinds
+              FROM visit_events e
+             WHERE e.at >= CAST(:first AS date)
+               AND e.at <  CAST(:last AS date) + interval '1 day'
+               AND ({where})
+             GROUP BY 1 ORDER BY 1 DESC LIMIT 30
+        """), {**p, **params}).fetchall()]
+
+    def _paths(where: str, params: dict) -> list[dict]:
+        return [{"path": r[0], "hits": r[1]} for r in db.execute(text(f"""
+            SELECT e.path, count(*) FROM visit_events e
+             WHERE e.at >= CAST(:first AS date)
+               AND e.at <  CAST(:last AS date) + interval '1 day'
+               AND ({where})
+             GROUP BY 1 ORDER BY 2 DESC LIMIT 8
+        """), {**p, **params}).fetchall()]
+
+    _hostile_where = "e.bot_kind = ANY(:hostile)"
+    detectors = [
+        ("hostile_agent", _hostile_where, {"hostile": hostile},
+         "A user agent this site names as a scraper was served. The edge rule "
+         "for it did not fire."),
+        ("swarm", f"NOT e.bot AND ({_SWARM})", {},
+         f"Unreferred visitors arriving {_SWARM_PER_MINUTE}+ in a minute — the "
+         "shape of a rotating address pool, not an audience."),
+        ("headless", f"NOT e.bot AND ({_NOT_A_BROWSER})", {},
+         "Searched the API and never rendered a page: a script wearing a "
+         "browser's user agent."),
+    ]
+
+    out = []
+    for name, where, params, why in detectors:
+        days_hit = _burst(where, params)
+        if not days_hit:
+            continue
+        out.append({
+            "detector": name, "why": why,
+            "visitors": sum(d["visitors"] for d in days_hit),
+            "events": sum(d["events"] for d in days_hit),
+            "searches": sum(d["searches"] for d in days_hit),
+            "worst_day": max(days_hit, key=lambda d: d["events"]),
+            "days": days_hit,
+            "paths": _paths(where, params),
+        })
+
+    # The named-agent detector is the one that means a rule FAILED, so it alone
+    # raises the alarm. The other two are heuristics over shape, and they fire
+    # on a slow trickle most weeks; an alert that is always on is not an alert.
+    # They are still reported, because the trickle is the thing you look at
+    # after the alarm has gone off once.
+    failed_block = next((d for d in out if d["detector"] == "hostile_agent"), None)
+    return {
+        "since": first.isoformat(),
+        "named_agents_since": _KIND_SINCE,
+        "detectors": out,
+        # The flag itself, and the single sentence to act on. Kept as a string
+        # so the panel renders what the backend decided rather than re-deriving
+        # the rule in TypeScript, where it would drift.
+        "alert": bool(failed_block),
+        "headline": (
+            f"{failed_block['visitors']} visitor(s) using "
+            + ", ".join(sorted(set(
+                k for d in failed_block["days"] for k in d["kinds"]))[:4])
+            + " were served — an edge block is not holding."
+        ) if failed_block else None,
+    }

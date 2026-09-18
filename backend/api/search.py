@@ -1046,6 +1046,46 @@ def _as_query(terms: list, status=None, wc_min=None, wc_max=None,
     return " ".join(parts)
 
 
+def _length_suggestion(db, terms: list, status, wc_min, wc_max, crossovers,
+                       site, base: int) -> list[Suggestion]:
+    """Offer to drop the length filter, which is the second-costliest of them.
+
+    The ablation in `Suggestion`'s note has word count recovering a median 972
+    works — behind tags and ahead of everything else — and yet it was the one
+    filter `_relax_suggestions` could not offer to drop, because it drops TERMS
+    and a length is not a term. So the reader whose search was killed by their
+    own "under 10k words" got told to drop the ship instead.
+
+    It is also the filter readers themselves treat as soft. The post this was
+    written for says it outright: "I'm mostly looking for shorter fics (1k 10k
+    words) but I wouldn't mind longer ones." The ceiling is a preference, not a
+    requirement, and the reader has already said which way to bend it.
+    """
+    if not (wc_min or wc_max):
+        return []
+    try:
+        n = _probe_count(db, terms, None, status, crossovers,
+                         cap=_SUGGEST_CAP, word_count_max=None)
+    except Exception:
+        log.debug("length relax probe failed", exc_info=True)
+        return []
+    if n <= max(base, 0) + _RELAX_MIN_GAIN:
+        return []
+    return [Suggestion(
+        kind="length", value=_length_phrase(wc_min, wc_max), count=n, works=n,
+        reason="relax", drops=_length_phrase(wc_min, wc_max),
+        query=_as_query(terms, status, None, None, crossovers, site))]
+
+
+def _length_phrase(wc_min, wc_max) -> str:
+    """How to say the length filter back to the reader, in their own units."""
+    if wc_min and wc_max:
+        return f"{_k(wc_min)}-{_k(wc_max)} words"
+    if wc_min:
+        return f"over {_k(wc_min)} words"
+    return f"under {_k(wc_max)} words"
+
+
 def _relax_suggestions(db, terms: list, status, wc_min, wc_max, crossovers,
                        site, base: int) -> list[Suggestion]:
     """Which ONE of the reader's own filters is costing them the results.
@@ -1056,16 +1096,19 @@ def _relax_suggestions(db, terms: list, status, wc_min, wc_max, crossovers,
     not by how common the term is.
 
     Only offered when there is more than one term to drop: "try it without the
-    only thing you searched for" is not a suggestion.
+    only thing you searched for" is not a suggestion. The LENGTH filter is the
+    exception — dropping it leaves the reader's terms intact, so it is worth
+    offering even on a one-term search.
     """
+    out: list[Suggestion] = _length_suggestion(db, terms, status, wc_min,
+                                               wc_max, crossovers, site, base)
     if len(terms) < 2:
-        return []
-    out: list[Suggestion] = []
+        return out[:_RELAX_LIMIT]
     for t in terms:
         rest = [x for x in terms if x is not t]
         try:
             n = _probe_count(db, rest, wc_min, status, crossovers,
-                             cap=_SUGGEST_CAP)
+                             cap=_SUGGEST_CAP, word_count_max=wc_max)
         except Exception:
             log.debug("relax probe failed", exc_info=True)
             continue
@@ -1106,7 +1149,7 @@ def _broaden_suggestions(db, terms: list, status, wc_min, wc_max, crossovers,
         swapped = [_Term(t.kind, sib[0]) if x is t else x for x in terms]
         try:
             n = _probe_count(db, swapped, wc_min, status, crossovers,
-                             cap=_SUGGEST_CAP)
+                             cap=_SUGGEST_CAP, word_count_max=wc_max)
         except Exception:
             continue
         if n <= max(base, 0) + _RELAX_MIN_GAIN:
@@ -1142,7 +1185,7 @@ def _split_ship_suggestions(db, terms: list, status, wc_min, wc_max,
         chars = [_Term("character", h) for h in halves]
         try:
             n = _probe_count(db, rest + chars, wc_min, status, crossovers,
-                             cap=_SUGGEST_CAP)
+                             cap=_SUGGEST_CAP, word_count_max=wc_max)
         except Exception:
             log.debug("split-ship probe failed", exc_info=True)
             continue
@@ -4339,22 +4382,73 @@ def _is_status_word(value: str) -> bool:
     return any(rx.fullmatch(value.strip()) for rx, _ in _STATUS_WORDS)
 
 
-def _canonical_character(db, name: str) -> Optional[str]:
-    """The character a first name most likely means.
+# How many name-matches to weigh against the post's fandom, and how far to
+# count each. Six is past the point where the candidates stop being the same
+# person; 200 is enough to tell "writes in this fandom" from "does not".
+_CHAR_CANDIDATES = 6
+_CHAR_FANDOM_CAP = 200
+
+
+def _canonical_character(db, name: str,
+                         fandom: Optional[str] = None) -> Optional[str]:
+    """The character a first name most likely means, IN THE POST'S FANDOM.
 
     "Daphne" is four different people in this index — Greengrass, Bridgerton,
     Blake, Chanders — and the most-written one is what a reader naming her
     without a surname means. Same rule the taste endpoint uses for ambiguous
     titles, and the same reason.
+
+    Most-written is the right answer only when there is nothing better to go
+    on, and usually there is. Measured on a real post — "any suggestions for a
+    spectacular spiderman fanfic? I really liked the nerdy sweet dynamic
+    between Peter and Gwen" — the bare `Gwen` resolved to **`Gwen (Merlin)`**
+    (9,802 works), beating `Gwen Stacy | Spider-Gwen` (4,084) on count alone,
+    in a post whose every other word is Spider-Man. That failure is worse than
+    a dropped term: a search in the wrong fandom still returns hundreds of
+    works, so nothing about the result looks wrong to the reader.
+
+    So when the post has named a fandom, the candidates are asked whether they
+    appear in it. A character facet carries its fandom in the open — `Gwen
+    (Merlin)`, `May Parker (Spider-Man)` — but reading the bracket would only
+    work for the ones that have one, and would be parsing a naming convention
+    rather than asking the index. Co-occurrence answers it for every spelling,
+    including the ones with no disambiguator at all.
+
+    Falls back to most-written whenever the fandom says nothing: a character
+    genuinely absent from it (a crossover, a fandom-hopping OC) should still
+    resolve to a name rather than to nothing.
     """
-    row = db.execute(sql_text("""
-        SELECT value FROM facets
+    rows = db.execute(sql_text("""
+        SELECT value, count FROM facets
          WHERE kind = 'character'
            AND (lower(value) = lower(:n) OR lower(value) LIKE lower(:pre))
          ORDER BY count DESC
-         LIMIT 1
-    """), {"n": name, "pre": name + " %"}).first()
-    return row[0] if row else None
+         LIMIT :lim
+    """), {"n": name, "pre": name + " %", "lim": _CHAR_CANDIDATES}).fetchall()
+    if not rows:
+        return None
+    if fandom:
+        best, best_n = None, 0
+        for value, _count in rows:
+            try:
+                n = int(db.execute(sql_text(
+                    "SELECT count(*) FROM (SELECT 1 FROM stories "
+                    " WHERE delisted_at IS NULL "
+                    "   AND characters && CAST(:c AS text[]) "
+                    "   AND fandoms && CAST(:f AS text[]) LIMIT :cap) x"),
+                    {"c": [value], "f": [fandom],
+                     "cap": _CHAR_FANDOM_CAP}).scalar() or 0)
+            except Exception:
+                log.debug("character/fandom probe failed", exc_info=True)
+                continue
+            # Ordered by count already, so a strict improvement keeps the
+            # most-written of any that tie — which is the old rule, applied
+            # within the fandom instead of across the whole index.
+            if n > best_n:
+                best, best_n = value, n
+        if best is not None:
+            return best
+    return rows[0][0]
 
 
 def _ship_nickname_in_post(db, raw: str) -> Optional[ExtractedTerm]:
@@ -4718,6 +4812,44 @@ def _fandom_from_evidence(db, names: list[str], kind: str) -> Optional[tuple[str
     return None
 
 
+# ONE-WORD TAGS THAT ARE REALLY JUST ENGLISH, measured rather than listed.
+#
+# See tag_prose.py for the measurement and for why prose frequency alone does
+# not answer it. The short version: a word people TAG far more often than they
+# WRITE is a term of art, and one they write constantly and tag rarely is a
+# word that got into the query by accident — "shares his past" -> `tag:"Past"`.
+#
+# Cached like the fandom aliases and for the same reasons: it is rebuilt
+# offline on a weekly timer, it is small, and it must not exist as a
+# per-request query.
+_TAG_PROSE: set[str] = set()
+_TAG_PROSE_AT = 0.0
+_TAG_PROSE_TTL = float(os.getenv("TAG_PROSE_TTL_S", "3600"))
+
+
+def _prose_words(db) -> set[str]:
+    global _TAG_PROSE, _TAG_PROSE_AT
+    now = time.monotonic()
+    if _TAG_PROSE and now - _TAG_PROSE_AT < _TAG_PROSE_TTL:
+        return _TAG_PROSE
+    try:
+        # SAVEPOINT for the same reason `_fandom_aliases` uses one: the table
+        # is built offline and genuinely does not exist on a fresh install or
+        # in the test database, and a failed statement would otherwise poison
+        # the caller's transaction. A signal that is merely OFF must not take
+        # the request down with it.
+        with db.begin_nested():
+            rows = db.execute(sql_text(
+                "SELECT tag FROM tag_prose WHERE ratio < :r"),
+                {"r": float(os.getenv("TAG_PROSE_RATIO", "0.5"))}).fetchall()
+        _TAG_PROSE = {r[0].lower() for r in rows}
+        _TAG_PROSE_AT = now
+    except Exception:
+        log.debug("tag_prose table unavailable", exc_info=True)
+        _TAG_PROSE_AT = now
+    return _TAG_PROSE
+
+
 def _stem_sibling(db, tag: str) -> Optional[tuple[str, int]]:
     """The shorter, far commoner tag this one is a variant of.
 
@@ -4828,7 +4960,8 @@ def _k(n: Optional[int]) -> str:
 def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
                  status: Optional[str] = None,
                  crossovers: Optional[str] = None,
-                 cap: Optional[int] = None) -> int:
+                 cap: Optional[int] = None,
+                 word_count_max: Optional[int] = None) -> int:
     """Would this combination of concepts find anything at all?"""
     # OR within a concept, AND between them — the shape the search itself
     # builds. Probing ONE spelling per concept is why good combinations were
@@ -4852,6 +4985,16 @@ def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
     if word_count_min:
         clauses.append("word_count >= :wcmin")
         params["wcmin"] = int(word_count_min)
+    # And the CEILING, which is the fourth filter to be missing from this probe
+    # after word count, status and the gates. It was invisible while no post
+    # ever produced one: only `between X and Y` parsed, and nobody writes that.
+    # Now that `1k 10k`, `1k-10k` and `1k to 10k` all read as a range, a ceiling
+    # is an ordinary thing for a post to carry, and it is the tightest filter in
+    # the query — on the black-brothers post it is the difference between the
+    # whole ship and the ninth of it under 10k words.
+    if word_count_max:
+        clauses.append("word_count <= :wcmax")
+        params["wcmax"] = int(word_count_max)
     # The STATUS counts too, and leaving it out was the last place a query
     # could pass the probe and still be narrowed to nothing afterwards: on
     # "best aot fics, ongoing, levi whump" the probe saw twelve works and the
@@ -5289,10 +5432,76 @@ def extract(
            AND count >= :min
     """), {"g": list(grams.keys()), "min": EXTRACT_MIN_WORKS}).fetchall()
 
+    # SECOND PASS: the same names with the punctuation taken out.
+    #
+    # The lookup above is an indexed equality, so the archives' spelling and the
+    # reader's have to agree exactly — and on a compound name they routinely do
+    # not. Measured on a real post: "Do you guys have any suggestions for a
+    # spectacular spiderman fanfic?" matched NO fandom, because the archive
+    # writes `Spider-Man` and the reader wrote `spiderman`, and the query that
+    # came out was `tag:"Sad" tag:"Sweet"` — two adjectives from its prose, one
+    # of them describing how the reader felt about canon. `Spectacular
+    # Spider-Man` is a fandom and `Spider-Man - All Media Types` is on 102,772
+    # works; both were one hyphen away.
+    #
+    # Two guards, and they are what keeps this from inventing matches:
+    #
+    #   * THE FACET must carry REAL PUNCTUATION, not merely a space. Spaces
+    #     alone are not enough and the first version of this guard learned it
+    #     the expensive way: every two-word facet loses a space when squashed,
+    #     so `Main Character (Mystic Messenger)` matched the phrase "main
+    #     character" and sent "any good TWD fics, preferably ongoing with SI
+    #     main character" to a visual novel. Requiring a hyphen, colon, pipe or
+    #     apostrophe keeps `Spider-Man` and drops that whole class — the cost
+    #     is that a reader typing "starwars" is not rescued, which no post has
+    #     yet done.
+    #   * SIX CHARACTERS minimum. Below that the squashed forms start colliding
+    #     with each other rather than agreeing.
+    #
+    # The disambiguator is stripped first, the way fandom_aliases.py strips it:
+    # nobody types "(Anime & Manga)".
+    _sq = lambda v: re.sub(r"[^a-z0-9]+", "", v.lower())
+    squashed: dict[str, tuple[int, int]] = {}
+    for g, span in grams.items():
+        k = _sq(g)
+        if len(k) >= 6 and k not in squashed:
+            squashed[k] = span
+    def _base(v: str) -> str:
+        """The name without its disambiguator: "Death Note (Anime & Manga)"."""
+        return v.split(" - ")[0].split(" (")[0]
+
+    if squashed:
+        try:
+            rows = list(rows) + [
+                r for r in db.execute(sql_text("""
+                    SELECT CASE WHEN kind = 'fandom_ao3' THEN 'fandom' ELSE kind END,
+                           value, count,
+                           regexp_replace(
+                               lower(split_part(split_part(value, ' - ', 1),
+                                                ' (', 1)),
+                               '[^a-z0-9]+', '', 'g') AS squashed
+                      FROM facets
+                     WHERE regexp_replace(
+                               lower(split_part(split_part(value, ' - ', 1),
+                                                ' (', 1)),
+                               '[^a-z0-9]+', '', 'g') = ANY(CAST(:g AS text[]))
+                       AND count >= :min
+                """), {"g": list(squashed.keys()), "min": EXTRACT_MIN_WORKS})
+                # The facet must be the side that carried the punctuation. See
+                # the guard note above: without this, squashing turns any two
+                # adjacent prose words into a candidate.
+                if _sq(_base(r[1])) != _base(r[1]).lower().replace(" ", "")
+            ]
+        except Exception:
+            log.debug("squashed facet lookup failed", exc_info=True)
+
     RANK = {"relationship": 0, "character": 1, "fandom": 2, "tag": 3}
     cands = []
-    for kind, value, count in rows:
+    for row in rows:
+        kind, value, count = row[0], row[1], row[2]
         span = grams.get(value.lower())
+        if span is None and len(row) > 3:
+            span = squashed.get(row[3])
         if span is None:
             continue
         if _is_grammar(value):
@@ -5442,6 +5651,18 @@ def extract(
     rank_count: dict[str, int] = {}
     # Characters that arrived as ONE bare first name. See the sort below.
     bare_name: set[str] = set()
+    # THE FANDOM THE POST IS IN, as far as it is known at this point — from the
+    # abbreviation table if one fired, otherwise the best fandom the n-grams
+    # found. It is used to resolve bare first names, where "the most-written
+    # person with this name" is a guess and "the one who appears in this
+    # fandom" is an answer. See `_canonical_character`: `Gwen` resolved to
+    # `Gwen (Merlin)` in a post about Spider-Man.
+    #
+    # Read off `terms` rather than waiting for `fandom_term` to be settled
+    # below, which happens after this loop has already done the resolving.
+    _post_fandom = (fandom_term.value if fandom_term else None) or next(
+        (t.value for t in sorted(terms, key=lambda x: -x.count)
+         if t.kind == "fandom"), None)
     swapped: list[ExtractedTerm] = []
     for t in terms:
         if t.kind == "tag":
@@ -5458,7 +5679,7 @@ def extract(
         # since it was written — the rule was simply never applied to a
         # character found loose in the prose, which is how most of them arrive.
         elif t.kind == "character" and " " not in t.value.strip():
-            full = _canonical_character(db, t.value)
+            full = _canonical_character(db, t.value, _post_fandom)
             if full and full.lower() != t.value.strip().lower():
                 cnt = db.execute(sql_text(
                     "SELECT count FROM facets WHERE kind='character' AND value=:v"),
@@ -5537,17 +5758,31 @@ def extract(
     #   2. said on a LINE       — a line stated it; a loose word appeared
     #   3. not a LEFTOVER       — junk by construction, whatever else is true
     #   4. the reader's EMPHASIS — how hard they pushed for it
-    #   5. not a bare NAME      — weakest kind of match
-    #   6. frequency            — the tiebreak, not the answer
+    #   5. not ENGLISH          — a one-word tag people write more than they tag
+    #   6. not a bare NAME      — weakest kind of match
+    #   7. frequency            — the tiebreak, not the answer
+    #
+    # English below emphasis and above bare name, which is where it belongs on
+    # the evidence. A prose word is WEAKER than a bare first name: the name is
+    # a proper noun the reader chose to type, and `Sad` came out of "Sad to see
+    # her die" — a sentence about the canon they have already read. Above
+    # emphasis it would be wrong, because a word the reader shouted is a word
+    # they meant whatever the archive's usage says.
+    #
+    # It only ever reorders within the LOOSE prose, because `from_line` is
+    # already two places above it: a reader whose post has `- dark` on a line
+    # of its own is taken at their word.
     #
     # Emphasis above leftover was tried and is wrong: it let `Therapy` (a
     # second-pass leftover, mentioned in no sentence of the post) outrank
     # `Top Draco Malfoy`, which the reader asked for and merely hedged. A thing
     # the reader hedged is still a thing they said; a leftover is not.
+    _english = _prose_words(db)
     swapped.sort(key=lambda t: (t.value not in subject_values,
                                 not t.from_line,
                                 t.value in leftover_values,
                                 emphasis.get(t.value, 0),
+                                t.kind == "tag" and t.value.lower() in _english,
                                 t.value in bare_name,
                                 -rank_count.get(t.value, t.count)))
 
@@ -5761,7 +5996,8 @@ def extract(
         if len(cand) > _MAX_QUERY_TERMS:
             break
         try:
-            n = _probe_count(db, cand, wc_min, status, crossovers)
+            n = _probe_count(db, cand, wc_min, status, crossovers,
+                             word_count_max=wc_max)
         except Exception:
             log.debug("extract probe failed", exc_info=True)
             n = 1
@@ -5860,7 +6096,7 @@ def extract(
             continue
         try:
             t.with_query = _probe_count(db, kept + [t], wc_min, status,
-                                        crossovers)
+                                        crossovers, word_count_max=wc_max)
         except Exception:
             log.debug("with_query probe failed", exc_info=True)
 

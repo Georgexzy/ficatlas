@@ -1216,6 +1216,7 @@ async def _ship_alias_loop() -> None:
     """
     import ship_aliases
     import fandom_aliases
+    import tag_prose
 
     interval = _num("SHIP_ALIAS_INTERVAL_HOURS", 168) * 3600
     await asyncio.sleep(_num("SHIP_ALIAS_START_DELAY_SEC", 1800))
@@ -1235,6 +1236,18 @@ async def _ship_alias_loop() -> None:
                      f"{stats['aliases']:,}")
         except Exception as e:
             log.warning(f"fandom alias rebuild failed: {type(e).__name__}: {e}")
+        # And which tags are really just English, on the same schedule for the
+        # third time for the same reason. This one reads a sample of summaries
+        # rather than the vocabulary alone, so it is the expensive member of the
+        # group at about forty seconds -- still nothing next to the ship miner,
+        # and the ratio it measures moves on the timescale of the archive's
+        # habits rather than the week's.
+        try:
+            stats = await asyncio.to_thread(tag_prose.run)
+            log.info("tag prose rebuilt: %s tags, %s are English",
+                     f"{stats['tags']:,}", f"{stats['prose']:,}")
+        except Exception as e:
+            log.warning(f"tag prose rebuild failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
 
 

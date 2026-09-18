@@ -191,6 +191,28 @@ CREATE INDEX IF NOT EXISTS ix_stories_title_lower ON stories (lower(title));
 -- a work?" per request. 277ms as a sequential scan, 0.1ms with this.
 CREATE INDEX IF NOT EXISTS ix_facets_value_lower ON facets (lower(value), count DESC);
 
+-- THE SAME NAME WITH THE PUNCTUATION TAKEN OUT, which is how readers write it.
+--
+-- The extractor looks facets up by indexed equality on lower(value), so the
+-- archives' spelling and the reader's have to agree exactly. They routinely do
+-- not, and the whole term is lost when they disagree: a real post asking for
+-- "a spectacular spiderman fanfic" matched no fandom at all and came out as
+-- `tag:"Sad" tag:"Sweet"` — two adjectives from its prose — while
+-- `Spider-Man - All Media Types` sits on 102,772 works and
+-- `Spectacular Spider-Man` is the exact fandom named.
+--
+-- The disambiguator is stripped before squashing, for the same reason
+-- fandom_aliases.py strips it: "Death Note (Anime & Manga)" is the reader's
+-- "death note", and nobody types the bracket.
+--
+-- An expression index rather than a normalised column: the column is on 2.8M
+-- rows and every other lookup here wants the real spelling back. Partial at
+-- the extractor's own floor (EXTRACT_MIN_WORKS), which is what keeps it small.
+CREATE INDEX IF NOT EXISTS ix_facets_squash ON facets
+    (regexp_replace(lower(split_part(split_part(value, ' - ', 1), ' (', 1)),
+                    '[^a-z0-9]+', '', 'g'))
+    WHERE count >= 50;
+
 -- ── Series ──────────────────────────────────────────────────────────────────
 -- Works that belong together and have a reading order.
 --
@@ -1041,6 +1063,12 @@ CREATE TABLE IF NOT EXISTS visit_events (
 -- Every report is "the last N days", so the ordering column is the one to
 -- index. kind is in the second index because the searches report filters on it
 -- before it sorts, over a table where pageviews will outnumber searches.
+-- WHICH automation, not merely that it was automation. `bot` is true for
+-- Googlebot and for a scraper alike, and those are opposite events: one is the
+-- thing this site is waiting for and the other is a block that failed. The
+-- token that matched is a word from tracking._BOT_RE, never the user agent.
+ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS bot_kind VARCHAR(24);
+
 CREATE INDEX IF NOT EXISTS ix_visit_events_at ON visit_events (at DESC);
 CREATE INDEX IF NOT EXISTS ix_visit_events_kind_at ON visit_events (kind, at DESC);
 

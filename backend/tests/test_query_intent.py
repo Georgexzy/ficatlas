@@ -342,3 +342,47 @@ def test_bare_artefact_noun_goes_in_a_request():
 
 def test_bare_artefact_noun_stays_outside_one():
     assert read_request("toy story").text == "toy story"
+
+
+# ── A length range, written the way people actually write one ───────────────
+
+import pytest
+
+
+@pytest.mark.parametrize("phrase,lo,hi", [
+    ("shorter fics (1k 10k words)", 1000, 10000),
+    ("1k 10k words",                1000, 10000),
+    ("1k-10k words",                1000, 10000),
+    ("1k to 10k words",             1000, 10000),
+    ("1k and 10k words",            1000, 10000),
+    ("10k–50k words",              10000, 50000),  # en dash, what a phone types
+])
+def test_a_range_is_read_however_it_is_punctuated(phrase, lo, hi):
+    """Only `between X and Y` parsed, and nobody writes that.
+
+    From a real post: "I'm mostly looking for shorter fics (1k 10k words)"
+    produced no length filter at all, so the reader's tightest constraint —
+    on that post the difference between the whole ship and the ninth of it
+    under 10k words — was silently dropped."""
+    r = read_request(phrase)
+    assert (r.word_count_min, r.word_count_max) == (lo, hi)
+
+
+@pytest.mark.parametrize("phrase", [
+    "harry is lord of at least 2 houses",
+    "more than 2 years later and 3 horcruxes",
+    "at least 2 houses 3 horcruxes",
+])
+def test_two_bare_numbers_are_not_a_range(phrase):
+    """What the k/m suffix on BOTH sides is for. Without it the loose form
+    turns any two numbers in a sentence into a word count — the same trap
+    `_WC_BARE_FLOOR` exists for one rule over, and the reason a reader writing
+    plain digits still has to say "between"."""
+    r = read_request(phrase)
+    assert (r.word_count_min, r.word_count_max) == (None, None)
+
+
+def test_the_spelled_out_range_still_works():
+    """The form that already parsed must keep parsing."""
+    r = read_request("between 1000 and 10000 words")
+    assert (r.word_count_min, r.word_count_max) == (1000, 10000)
