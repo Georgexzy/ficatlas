@@ -999,6 +999,28 @@ _NEG_HARD_RE = re.compile(
 _NEG_SOFT_RE = re.compile(
     r"\b(?:no|not|don'?t\s+want|nothing\s+with|avoid|please\s+no)\s+", re.I)
 
+# What sits BETWEEN a refusal and the thing refused, stripped before the
+# subject is resolved. The twin of `_NEG_TRAILING` below, which does the same
+# job for the politeness that follows one.
+#
+# Measured on a real post: "I'm not really looking for super fluffy
+# hurt/comfort either" was matched by `not`, and the subject handed on was
+# "really looking for super fluffy hurt/comfort" — which resolved to nothing
+# useful, so the negation was abandoned and `Fluff` and `Hurt/Comfort` were
+# picked up by the POSITIVE path instead. The reader said what they did not
+# want and we searched for exactly that, which is worse than missing it.
+#
+# Intensifiers go too ("super fluffy" -> "fluffy"): they modify the thing
+# being refused without changing which thing it is, and the window matcher has
+# to see the tag to resolve it.
+_NEG_LEAD_FILLER = re.compile(
+    r"^(?:\s*(?:really|very|super|overly|too|particularly|especially|"
+    r"massively|hugely|that|so)\b)*"
+    r"(?:\s*(?:looking\s+for|after|into|keen\s+on|a\s+fan\s+of|"
+    r"interested\s+in|in\s+the\s+mood\s+for|feeling|wanting|want)\b)?"
+    r"(?:\s*(?:really|very|super|overly|too|any|much|a\s+lot\s+of)\b)*\s*",
+    re.I)
+
 
 def _extract_negations(db, text: str, gated: bool) -> tuple[str, list[list[str]]]:
     """Pull "no X" out of a request, as (remaining text, tag groups to exclude).
@@ -1047,6 +1069,10 @@ def _extract_negations(db, text: str, gated: bool) -> tuple[str, list[list[str]]
             if not m:
                 break
             after = text[m.end():].strip()
+            # Strip the filler between the refusal and its subject, or the
+            # window matcher is handed "really looking for super fluffy
+            # hurt/comfort" and resolves none of it. See _NEG_LEAD_FILLER.
+            after = _NEG_LEAD_FILLER.sub("", after, count=1).strip()
             if not after:
                 break
             tags, leftover = _negated_subject(db, after)

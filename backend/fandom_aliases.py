@@ -85,6 +85,38 @@ MIN_LEN, MAX_LEN = 2, 7
 OPTIONAL = {"the", "a", "an", "of", "and", "to", "in", "for", "or",
             "de", "la", "le", "no", "wa", "ga"}
 
+# Words the ARCHIVE adds to a title that nobody says out loud. A trailing
+# "Series" is the difference between `acotars` and `acotar`, and `acotar` is
+# what readers type: AO3 files A Court of Thorns and Roses as
+# "A Court of Thorns and Roses Series - Sarah J. Maas", so every initialism
+# generated for it carried an s on the end and matched nothing.
+#
+# Trailing only. "Series" in the middle of a name is part of it — dropping it
+# everywhere would mangle the fandoms that are genuinely called one.
+TRAILING_NOISE = {"series", "saga", "trilogy", "cycle", "franchise",
+                  "universe", "books", "novels", "movies", "films"}
+
+# THE ONES NO RULE REACHES. This file's whole argument is that a derived
+# abbreviation generalises to fandoms nobody has heard of and a list rots — and
+# the note below the rule has always conceded the exception: `jjk` for Jujutsu
+# Kaisen and `spn` for Supernatural are NICKNAMES, not initialisms. One word
+# cannot produce three letters and no rule over the name yields them.
+#
+# So they are seeded, and kept honest three ways: each is checked against the
+# facets table at build time so a renamed or vanished fandom drops out rather
+# than lingering; each is only added if the rule did not already produce it;
+# and the list is deliberately tiny. If it grows past a dozen, the rule is
+# wrong and should be fixed instead of fed.
+#
+# Measured before seeding: of twenty nicknames readers actually type, the rule
+# already resolved sixteen. This is the residue, not the mechanism.
+SEEDED = {
+    "jjk": "Jujutsu Kaisen",
+    "aot": "Attack on Titan",
+    "hxh": "Hunter X Hunter",
+    "bsd": "Bungou Stray Dogs",
+}
+
 # Abbreviations that are ordinary English words. `it`, `us` and `she` are real
 # fandoms whose initialisms would swallow any query containing them, and an
 # alias that fires on a common word is worse than no alias at all.
@@ -154,14 +186,20 @@ def _initialisms(name: str) -> set[str]:
         words = re.findall(r"[A-Za-z0-9']+", base)
         if len(words) < 2:
             continue
-        for drop in (False, True):
-            sig = [w for w in words
-                   if not (drop and w.lower() in OPTIONAL)]
-            if len(sig) < 2:
-                continue
-            ini = "".join(w[0] for w in sig).lower()
-            if MIN_LEN <= len(ini) <= MAX_LEN and ini not in STOPLIST:
-                out.add(ini)
+        # The archive's own trailing noun, dropped as a third reading. See
+        # TRAILING_NOISE: this is what turns `acotars` into `acotar`.
+        trimmed = list(words)
+        while trimmed and trimmed[-1].lower() in TRAILING_NOISE:
+            trimmed.pop()
+        for base_words in ({tuple(words), tuple(trimmed)}):
+            for drop in (False, True):
+                sig = [w for w in base_words
+                       if not (drop and w.lower() in OPTIONAL)]
+                if len(sig) < 2:
+                    continue
+                ini = "".join(w[0] for w in sig).lower()
+                if MIN_LEN <= len(ini) <= MAX_LEN and ini not in STOPLIST:
+                    out.add(ini)
     return out
 
 
@@ -193,7 +231,24 @@ def run(dry_run: bool = False) -> dict:
                 if ini not in best:
                     best[ini] = (name, count)
 
-        stats = {"fandoms": len(rows), "aliases": len(best)}
+        # The seeds, after the rule and never over it. A derived alias is
+        # evidence about how this index is actually named; a seed is a claim,
+        # and a claim that contradicts the evidence is the one that gives way.
+        seeded = 0
+        for alias, needle in SEEDED.items():
+            if alias in best:
+                continue
+            row = db.execute(text("""
+                SELECT value, count FROM facets
+                 WHERE kind IN ('fandom', 'fandom_ao3') AND value ILIKE :p
+                   AND count >= :min
+                 ORDER BY count DESC LIMIT 1
+            """), {"p": f"%{needle}%", "min": MIN_WORKS}).first()
+            if row:
+                best[alias] = (row[0], row[1])
+                seeded += 1
+
+        stats = {"fandoms": len(rows), "aliases": len(best), "seeded": seeded}
         if dry_run:
             log.info("fandom_aliases: would store %d aliases from %d fandoms",
                      len(best), len(rows))
