@@ -15,6 +15,13 @@ import { permanentRedirect } from "next/navigation"
 // permanentRedirect (308) rather than redirect (307), for the same reason as
 // /s/<code>: this move is not going to be reversed, so a client is free to
 // cache it. /admin is disallowed in robots.txt, so nothing follows it there.
+//
+// `moderation`, which is what that tab is called since the admin page was
+// regrouped into four areas. It pointed at `takedowns` for a while after the
+// rename and still worked, because the page maps the old names — but a 308 is
+// CACHED BY THE BROWSER, so a stale target is one a reader keeps being sent to
+// long after the compatibility map that rescues it has gone. The map is for
+// links this repo does not control; its own links should name the real thing.
 export default function TakedownsRedirect() {
-  permanentRedirect("/admin?tab=takedowns")
+  permanentRedirect("/admin?tab=moderation")
 }

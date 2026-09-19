@@ -562,7 +562,7 @@ export default function SettingsPage() {
                     : "What is thin, what the crawler is pointed at next, whether AO3 is throttling us, and any takedown requests — previously only visible by reading container logs."}
                 </span>
               </div>
-              <Link href={pendingTakedowns > 0 ? "/admin?tab=takedowns" : "/admin"}
+              <Link href={pendingTakedowns > 0 ? "/admin?tab=moderation" : "/admin"}
                 className="btn btn--ghost">Open</Link>
             </div>
           </section>

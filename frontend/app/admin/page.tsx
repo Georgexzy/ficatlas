@@ -4,6 +4,7 @@ import Link from "next/link"
 import TakedownQueue from "./TakedownQueue"
 import TrafficPanel from "./TrafficPanel"
 import OutreachTab from "./OutreachTab"
+import { adminTabFor, type AdminTab } from "@/lib/adminTabs"
 import BackLink from "../BackLink"
 import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
@@ -219,19 +220,11 @@ interface Person {
 }
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<"index" | "audience" | "outreach" | "moderation">("index")
+  const [tab, setTab] = useState<AdminTab>("index")
   useEffect(() => {
-    const t = new URLSearchParams(window.location.search).get("tab")
-    // The old names still work. `/takedowns` is a redirect into this page
-    // carrying `?tab=takedowns`, and anything anybody has bookmarked or linked
-    // predates the regrouping — a rename that breaks its own inbound links is
-    // a rename that gets reverted.
-    const MOVED: Record<string, typeof tab> = {
-      takedowns: "moderation", traffic: "audience",
-      health: "index", queue: "outreach", outreach: "outreach",
-      index: "index", audience: "audience", moderation: "moderation",
-    }
-    const to = t ? MOVED[t] : undefined
+    // The old names still work — see lib/adminTabs, which is where the mapping
+    // lives so it can be tested rather than trusted.
+    const to = adminTabFor(new URLSearchParams(window.location.search).get("tab"))
     if (to) setTab(to)
   }, [])
   const { user, loading: authLoading } = useAuth()
