@@ -891,3 +891,113 @@ def scrapers(days: int = Query(30, ge=1, le=365),
             + " were served — an edge block is not holding."
         ) if failed_block else None,
     }
+
+
+@router.get("/entry")
+def entry(days: int = Query(30, ge=1, le=365),
+          db: Session = Depends(get_db),
+          _owner=Depends(require_owner)):
+    """WHERE a visit starts, and what it does next.
+
+    The rest of this module counts events. This counts JOURNEYS, and it exists
+    because the two answer different questions and only the second one says
+    whether the site is working.
+
+    What it found the day it was written, over 30 days:
+
+        landed on      sessions   searched   went to an archive
+        home                186        34%                   2%
+        HUB PAGE            148         9%                   7%
+        story page           24        21%                  13%
+
+    Hub pages are the front door — 77 of the 80 sessions Google sends land on
+    one rather than the home page — and NINE PER CENT of those visitors ever
+    run a search. That single number is the difference between a site people
+    arrive at and a site people use, and nothing in the panel showed it: hub
+    pages appeared in `/pages` as 11,196 rows of one or two views each, which
+    reads as a long tail rather than as the main entrance.
+
+    Sessions, not events, and the first page of each session decides which row
+    it lands in. `NOT bot` and the two read-time filters apply exactly as they
+    do everywhere else here, so the totals reconcile with `/summary`.
+    """
+    first, last = _span(days)
+    rows = db.execute(text(f"""
+        WITH ev AS (
+          SELECT * FROM visit_events e
+           WHERE e.at >= CAST(:first AS date)
+             AND e.at <  CAST(:last AS date) + interval '1 day'
+             AND NOT e.bot
+             AND NOT ({_NOT_A_BROWSER})
+             AND NOT ({_SWARM})),
+        -- The first PAGE of the session, which is what the visitor actually
+        -- arrived at. A search event has no landing page to speak of.
+        landing AS (
+          SELECT DISTINCT ON (visitor) visitor, path, ref_host
+            FROM ev WHERE kind = 'page'
+           ORDER BY visitor, at),
+        acts AS (
+          SELECT visitor,
+                 count(*) FILTER (WHERE kind = 'page')   AS pages,
+                 count(*) FILTER (WHERE kind = 'search') AS searches,
+                 count(*) FILTER (WHERE kind = 'out')    AS outs
+            FROM ev GROUP BY visitor)
+        SELECT CASE WHEN l.path = '/'              THEN 'home'
+                    WHEN l.path LIKE '/ship/%'     THEN 'ship hub'
+                    WHEN l.path LIKE '/fandom/%'   THEN 'fandom hub'
+                    WHEN l.path LIKE '/story/%'    THEN 'story page'
+                    WHEN l.path LIKE '/series/%'   THEN 'series page'
+                    ELSE 'other' END                       AS entry,
+               count(*)                                    AS sessions,
+               count(*) FILTER (WHERE a.searches > 0)      AS searched,
+               count(*) FILTER (WHERE a.outs > 0)          AS went_out,
+               count(*) FILTER (WHERE a.pages = 1
+                                  AND a.searches = 0)      AS bounced,
+               round(avg(a.pages)::numeric, 1)             AS avg_pages,
+               count(*) FILTER (WHERE l.ref_host IS NOT NULL
+                                  AND l.ref_host NOT ILIKE '%ficatlas%') AS referred
+          FROM landing l JOIN acts a USING (visitor)
+         GROUP BY 1 ORDER BY 2 DESC
+    """), {"first": first, "last": last}).fetchall()
+
+    def _pct(n, d):
+        return round(100.0 * n / d) if d else 0
+
+    entries = [{
+        "entry": r[0], "sessions": r[1],
+        "searched": r[2], "searched_pct": _pct(r[2], r[1]),
+        "went_out": r[3], "went_out_pct": _pct(r[3], r[1]),
+        "bounced": r[4], "bounced_pct": _pct(r[4], r[1]),
+        "avg_pages": float(r[5] or 0), "referred": r[6],
+    } for r in rows]
+
+    # WHICH hubs, not just how many. A hub that brings twenty sessions a month
+    # is a page worth improving by hand; the other 11,000 are not, and the
+    # panel cannot say which is which from a list sorted by total views.
+    hubs = [{"path": r[0], "label": r[1], "sessions": r[2], "views": r[3],
+             "searched": r[4], "went_out": r[5]}
+            for r in db.execute(text(f"""
+        WITH ev AS (
+          SELECT * FROM visit_events e
+           WHERE e.at >= CAST(:first AS date)
+             AND e.at <  CAST(:last AS date) + interval '1 day'
+             AND NOT e.bot AND NOT ({_NOT_A_BROWSER}) AND NOT ({_SWARM})),
+        landing AS (
+          SELECT DISTINCT ON (visitor) visitor, path
+            FROM ev WHERE kind = 'page' ORDER BY visitor, at),
+        acts AS (
+          SELECT visitor,
+                 count(*) FILTER (WHERE kind='search') s,
+                 count(*) FILTER (WHERE kind='out')    o
+            FROM ev GROUP BY visitor)
+        SELECT l.path, '' AS label, count(*) AS sessions,
+               (SELECT count(*) FROM ev x WHERE x.path = l.path AND x.kind='page'),
+               count(*) FILTER (WHERE a.s > 0), count(*) FILTER (WHERE a.o > 0)
+          FROM landing l JOIN acts a USING (visitor)
+         WHERE l.path LIKE '/ship/%' OR l.path LIKE '/fandom/%'
+         GROUP BY l.path ORDER BY 3 DESC, 4 DESC LIMIT 25
+    """), {"first": first, "last": last}).fetchall()]
+    for h in hubs:
+        h["label"] = _labels(db, [h["path"]]).get(h["path"], h["path"])
+
+    return {"since": first.isoformat(), "entries": entries, "hubs": hubs}

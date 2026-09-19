@@ -696,3 +696,48 @@ def test_the_scraper_report_is_owner_only(db):
     sig = inspect.signature(traffic.scrapers)
     dep = sig.parameters["_owner"].default
     assert getattr(dep, "dependency", None) is require_owner
+
+
+# ── where visits start ──────────────────────────────────────────────────────
+
+def test_entry_counts_journeys_not_events(db):
+    """The rest of this module counts events. A hub page appearing in `/pages`
+    as two views says nothing about whether the visitor it brought went on to
+    use the site, and that — not the view count — is the number worth moving."""
+    _seed(db, [
+        ("hubguy1", "page",   "/ship/draco-malfoy-harry-potter", False),
+        ("hubguy1", "page",   "/story/a",                        False),
+        ("hubguy2", "page",   "/ship/draco-malfoy-harry-potter", False),
+        ("searcher", "page",  "/",                               False),
+        ("searcher", "search", "/api/search",                    False),
+        ("searcher", "page",  "/story/b",                        False),
+    ])
+    r = traffic.entry(days=2, db=db, _owner=None)
+    by = {e["entry"]: e for e in r["entries"]}
+    assert by["ship hub"]["sessions"] == 2
+    # Neither hub visitor searched; the one who landed on the home page did.
+    assert by["ship hub"]["searched"] == 0
+    assert by["home"]["searched"] == 1
+    assert by["home"]["searched_pct"] == 100
+    # And the hub itself is named, so a page worth improving can be found.
+    assert any(h["path"] == "/ship/draco-malfoy-harry-potter" for h in r["hubs"])
+
+
+def test_the_landing_page_is_the_first_PAGE_not_the_first_event(db):
+    """A session that searches before any page renders still landed somewhere.
+    Bucketing on the first event of any kind put those sessions under whatever
+    path the search beacon carried, which is not a page anybody arrived at."""
+    _seed(db, [
+        ("early", "search", "/api/search",                 False),
+        ("early", "page",   "/fandom/harry-potter",        False),
+    ])
+    r = traffic.entry(days=2, db=db, _owner=None)
+    by = {e["entry"]: e for e in r["entries"]}
+    assert "fandom hub" in by and by["fandom hub"]["sessions"] == 1
+    assert by["fandom hub"]["searched"] == 1
+
+
+def test_entry_is_owner_only(db):
+    import inspect
+    dep = inspect.signature(traffic.entry).parameters["_owner"].default
+    assert getattr(dep, "dependency", None) is require_owner

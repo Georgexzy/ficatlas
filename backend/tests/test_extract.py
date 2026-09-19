@@ -1192,3 +1192,97 @@ def test_the_signal_being_absent_is_not_an_error(db):
     # The transaction must still be usable.
     assert db.execute(text("SELECT 1")).scalar() == 1
     S._TAG_PROSE_AT = 0.0
+
+
+# ── A reader typed a sentence into the search box ───────────────────────────
+#
+# The extractor was built for somebody ANSWERING a fic-finder post, which is
+# why it lived behind /admin. A reader describing what they want in their own
+# words is the same problem, and theirs is the version that happens to people
+# who never find out the site could have helped: measured against the live
+# index, "a long drarry fic where draco isnt a total douche set in 4th-8th year
+# no smut" returns ZERO through the search box and hundreds through here.
+
+@pytest.fixture()
+def sentences(db):
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('relationship','Draco Malfoy/Harry Potter',53210),
+          ('fandom','Harry Potter - J. K. Rowling',686558),
+          ('tag','Drarry',41000), ('tag','Smut',325862),
+          ('character','Levi Ackerman',30000), ('tag','Whump',45105)
+    """))
+    db.commit()
+    yield db
+    db.execute(text("DELETE FROM facets"))
+    db.commit()
+
+
+def _search(db, q):
+    """Through the ENDPOINT, not the function.
+
+    `search()` takes thirty-odd FastAPI `Query(...)` parameters, so calling it
+    directly leaves every one of them holding a Query object rather than a
+    value — which fails on the first `.split()`. The app is the only thing that
+    resolves them.
+    """
+    from fastapi.testclient import TestClient
+    from db.session import get_db
+    from main import app
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        r = TestClient(app).get("/api/search", params={"q": q, "limit": 5})
+        assert r.status_code == 200, r.text
+        return r.json()
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_a_sentence_that_found_nothing_is_read_as_a_search(sentences):
+    out = _search(sentences, "a long drarry fic where draco isnt a total douche no smut")
+    assert out["total"] == 0
+    assert out["interpreted"] is not None
+    # WHAT it resolves to depends on what works are in the fixture — the ship
+    # needs co-occurring stories to beat the tag, and live it does. Asserting
+    # the exact query here would be testing the fixture. What must be true on
+    # any vocabulary is that the sentence became a VOCABULARY query rather
+    # than coming back as itself.
+    q = out["interpreted"]["query"]
+    assert re.search(r'\b(ship|tag|fandom|char):"', q), q
+    assert q.strip() != "a long drarry fic where draco isnt a total douche no smut"
+    # The terms come back too. A rewrite the reader cannot see is the thing
+    # this must never be.
+    assert out["interpreted"]["terms"]
+
+
+def test_a_search_that_worked_is_left_alone(sentences, db):
+    """The expensive mistake is second-guessing a search that found things.
+    `levi ackerman whump` returns 94 works on the live index and means exactly
+    what it says."""
+    from sqlalchemy import text as t
+    for i in range(12):
+        db.execute(t("""
+            INSERT INTO stories (site, site_id, url, title, author, characters, tags)
+            VALUES ('ao3', :s, :u, 'Levi whump', 'a',
+                    ARRAY['Levi Ackerman'], ARRAY['Whump'])
+        """), {"s": f"lv{i}", "u": f"https://example.test/lv{i}"})
+    db.commit()
+    out = _search(sentences, "levi ackerman whump")
+    assert out["total"] > 0
+    assert out["interpreted"] is None
+
+
+def test_a_query_in_the_query_language_is_never_re_read(sentences):
+    """Every fic-finder link and every sidebar filter produces one of these.
+    Re-reading a deliberate search would throw away what the reader chose."""
+    out = _search(sentences, 'ship:"Nobody/Nobody" tag:"Nothing At All"')
+    assert out["total"] == 0
+    assert out["interpreted"] is None
+
+
+def test_a_two_word_typo_goes_to_spelling_not_interpretation(sentences):
+    """Below four words a miss is a typo, and `_did_you_mean` answers that
+    better. The two features must not fight over the same failure."""
+    out = _search(sentences, "hsrry potter")
+    assert out["interpreted"] is None

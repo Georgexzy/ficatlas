@@ -109,10 +109,27 @@ def build_groups(
                     if i < len(by_site[site]):
                         top.append(by_site[site][i])
 
-            exact = db.execute(text(f"""
-                SELECT count(*) FROM stories
+            # The total AND its split by archive, from the one count that was
+            # already being paid for.
+            #
+            # The split is what decides which archive leads the page, and
+            # getting it from the listing instead was wrong in a way that
+            # showed: the sections were ordered by how many works each archive
+            # contributed to the list, which is capped at `per_hub`, so any two
+            # archives that both filled their quota tied and fell back to
+            # whatever order the dictionary happened to be in. On
+            # `Draco Malfoy/Harry Potter` — 53,210 works and one of the largest
+            # pairings on AO3 — that put FICTIONALLEY first, an archive that
+            # holds a few hundred of them. The page that earns the most search
+            # traffic on this site opened with the least of what the reader
+            # came for.
+            per_site = db.execute(text(f"""
+                SELECT site, count(*) FROM stories
                  WHERE {array_col} && :variants AND delisted_at IS NULL
-            """), {"variants": variants}).scalar_one()
+                 GROUP BY site
+            """), {"variants": variants}).fetchall()
+            site_counts = {str(k): int(v) for k, v in per_site}
+            exact = sum(site_counts.values())
         except Exception:
             # One bad group must not abandon the rest of a long rebuild.
             log.exception("hub build failed for %s", slug)
@@ -124,13 +141,15 @@ def build_groups(
 
         db.execute(text(f"""
             INSERT INTO {table} (slug, name, variants, work_count, top_ids,
-                                 top_by_site, built_at, content_at)
+                                 top_by_site, site_counts, built_at, content_at)
             VALUES (:slug, :name, :variants, :wc, :top,
-                    CAST(:by_site AS jsonb), now(), now())
+                    CAST(:by_site AS jsonb), CAST(:counts AS jsonb),
+                    now(), now())
             ON CONFLICT (slug) DO UPDATE SET
                 name = EXCLUDED.name, variants = EXCLUDED.variants,
                 work_count = EXCLUDED.work_count, top_ids = EXCLUDED.top_ids,
                 top_by_site = EXCLUDED.top_by_site,
+                site_counts = EXCLUDED.site_counts,
                 built_at = EXCLUDED.built_at,
                 -- content_at moves only when the page would actually LOOK
                 -- different. It is the sitemap's <lastmod>, and Google is
@@ -172,7 +191,8 @@ def build_groups(
                     ELSE {table}.content_at
                 END
         """), {"slug": slug, "name": group["name"], "variants": variants,
-               "wc": exact, "top": top, "by_site": json.dumps(by_site)})
+               "wc": exact, "top": top, "by_site": json.dumps(by_site),
+               "counts": json.dumps(site_counts)})
         written += 1
         if written % 200 == 0:
             db.commit()

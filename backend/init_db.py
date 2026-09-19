@@ -189,6 +189,16 @@ CREATE EXTENSION IF NOT EXISTS tsm_system_rows;
 CREATE INDEX IF NOT EXISTS ix_stories_title_lower ON stories (lower(title));
 -- Lets search ask "is this query the name of a fandom/ship/tag, or the name of
 -- a work?" per request. 277ms as a sequential scan, 0.1ms with this.
+-- WHICH ARCHIVE HOLDS HOW MANY, per hub. Decides which section leads the page.
+--
+-- Read off the listing before this existed, which is capped per archive, so two
+-- archives that both filled their quota tied and fell back to dictionary order:
+-- the Drarry hub — the highest-traffic page type on the site — opened with
+-- FictionAlley. Counted at build time from a GROUP BY that replaced a count(*)
+-- already being paid for, so it costs nothing.
+ALTER TABLE ship_hubs   ADD COLUMN IF NOT EXISTS site_counts jsonb;
+ALTER TABLE fandom_hubs ADD COLUMN IF NOT EXISTS site_counts jsonb;
+
 CREATE INDEX IF NOT EXISTS ix_facets_value_lower ON facets (lower(value), count DESC);
 
 -- THE SAME NAME WITH THE PUNCTUATION TAKEN OUT, which is how readers write it.
