@@ -52,3 +52,20 @@ def test_the_popularity_pass_uses_it(db):
         "popularity_rank.run must hold one connection: it builds temp tables"
     assert "with db_session() as db:" not in src, \
         "a plain session hands the connection back on commit and loses them"
+
+
+def test_two_popularity_passes_cannot_run_at_once(db):
+    """Three overlapping runs, started by hand while debugging, took the live
+    site to 13-second searches: the pass rewrites ~500k rows against a crawler
+    updating the same rows, and two of them do not take turns.
+
+    Asserted on the source, because reproducing it needs two processes and an
+    hour. The lock is session-level on the pinned connection, so it is released
+    when that connection closes — including when the process is killed."""
+    import inspect
+    import popularity_rank
+    src = inspect.getsource(popularity_rank.run)
+    assert "pg_try_advisory_lock" in src, \
+        "a pass this heavy must refuse to run beside another"
+    # `try`, not `wait`: a second run has nothing to add and should leave.
+    assert "pg_advisory_lock(" not in src

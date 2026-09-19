@@ -18,6 +18,18 @@ import OutreachPanel from "./OutreachPanel"
 export default function OutreachTab() {
   const [picked, setPicked] = useState<Post | null>(null)
   const [waiting, setWaiting] = useState<number | null>(null)
+  // The list as the queue currently has it, so finishing one post can hand
+  // over the next without waiting for a round trip.
+  const [order, setOrder] = useState<Post[]>([])
+
+  // ANSWER, THEN THE NEXT ONE — rather than answer, then an empty pane and a
+  // scroll back to the list to find where you were. The queue is a worklist
+  // and a worklist that does not advance is a list you stop working.
+  const advance = useCallback((id: string) => {
+    const i = order.findIndex(p => p.id === id)
+    const next = i >= 0 ? order[i + 1] ?? order[i - 1] ?? null : null
+    setPicked(next)
+  }, [order])
 
   const onAnswered = useCallback(async (id: string) => {
     try {
@@ -26,9 +38,9 @@ export default function OutreachTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ state: "answered" }),
       })
-    } catch { /* the pane still clears; the list reloads on its own */ }
-    setPicked(null)
-  }, [])
+    } catch { /* the pane still advances; the list reloads on its own */ }
+    advance(id)
+  }, [advance])
 
   return (
     <>
@@ -47,7 +59,8 @@ export default function OutreachTab() {
       <div className="outreach-split">
         <aside className="outreach-split__queue">
           <QueuePanel selectedId={picked?.id} onPick={setPicked}
-                      onCount={setWaiting} />
+                      onCount={setWaiting} onList={setOrder}
+                      onDone={advance} />
         </aside>
         <section className="outreach-split__work">
           {/* Keyed on the post so switching to another one resets the search

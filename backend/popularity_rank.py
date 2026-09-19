@@ -340,6 +340,11 @@ def _record_evidence(db, scored: int, eligible: int) -> None:
         log.warning("could not record popularity evidence: %s", e)
 
 
+# Any stable 64-bit number; this one is "popularity" as a digest, so it cannot
+# collide with another job's advisory lock by accident.
+_LOCK_KEY = 8_531_197_402_664_219
+
+
 def run(dry_run: bool = False) -> int:
     # PINNED, because this pass lives on its temp tables.
     #
@@ -351,6 +356,28 @@ def run(dry_run: bool = False) -> int:
     # not, and this failed 78 seconds in with `relation "pr_final" does not
     # exist`, silently, for thirteen days.
     with pinned_session() as db:
+        # ONE AT A TIME, ENFORCED.
+        #
+        # This pass rewrites ~500k rows of `stories`, wants 1GB of work_mem and
+        # takes the better part of an hour. Two of them at once do not take
+        # turns — they contend for the same rows against a crawler that is also
+        # updating them, and the whole database goes with it.
+        #
+        # Learned the expensive way: three overlapping runs were started by
+        # hand while debugging, and the live site went to 13-second searches
+        # and 5-second hub pages until they were cancelled. Nothing stopped
+        # them, and nothing would have stopped the weekly loop either if a run
+        # ever overran its own interval.
+        #
+        # A session-level advisory lock, held by the pinned connection for
+        # exactly as long as the work, and released when it closes — including
+        # when it closes because the process was killed. `try` rather than
+        # `wait`: a second run has nothing to add, so it should say so and
+        # leave rather than queue up behind the first.
+        if not db.execute(text(
+                "SELECT pg_try_advisory_lock(:k)"), {"k": _LOCK_KEY}).scalar():
+            log.warning("popularity: another pass is already running, skipping")
+            return 0
         # This walks every scored row and writes most of them; the session's
         # 60s default would abort it partway through, leaving the index half
         # ranked on two different runs' worth of percentiles.

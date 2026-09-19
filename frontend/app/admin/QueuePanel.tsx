@@ -35,10 +35,15 @@ const AGO = (iso?: string | null) => {
 }
 
 export default function QueuePanel(
-  { selectedId, onPick, onCount }: {
+  { selectedId, onPick, onCount, onList, onDone }: {
     selectedId?: string | null
     onPick: (p: Post) => void
     onCount?: (n: number) => void
+    /** The list as loaded, so the pane next door can advance to the next post
+     *  without waiting for a round trip. */
+    onList?: (ps: Post[]) => void
+    /** A post was marked from in here, so the work pane should move on too. */
+    onDone?: (id: string) => void
   },
 ) {
   const [posts, setPosts] = useState<Post[] | null>(null)
@@ -47,6 +52,9 @@ export default function QueuePanel(
   const [sub, setSub] = useState("")
   const [search, setSearch] = useState("")
   const [subs, setSubs] = useState<{ subreddit: string; waiting: number }[]>([])
+  // How many are in each state, so the tabs carry a number — a worklist whose
+  // size is only visible once you open it is one you forget to open.
+  const [states, setStates] = useState<Record<string, number>>({})
   const [error, setError] = useState<string | null>(null)
   const [fetching, setFetching] = useState<string | null>(null)
 
@@ -58,6 +66,7 @@ export default function QueuePanel(
       if (!r.ok) throw new Error(`Could not load the queue (${r.status}).`)
       const data: Post[] = await r.json()
       setPosts(data)
+      onList?.(data)
       if (state === "new") onCount?.(data.length)
     } catch (e: any) { setError(e.message) }
   }, [state, order, sub, search, onCount])
@@ -66,7 +75,7 @@ export default function QueuePanel(
   useEffect(() => {
     fetch("/api/queue/counts", { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
-      .then(d => d && setSubs(d.subreddits ?? []))
+      .then(d => { if (d) { setSubs(d.subreddits ?? []); setStates(d.states ?? {}) } })
       .catch(() => {})
   }, [posts])
 
@@ -77,7 +86,16 @@ export default function QueuePanel(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ state: to }),
       })
-      setPosts(p => (p ?? []).filter(x => x.id !== id))
+      setPosts(p => {
+        const next = (p ?? []).filter(x => x.id !== id)
+        onList?.(next)
+        if (state === "new") onCount?.(next.length)
+        return next
+      })
+      // Only when the row being cleared is the one on screen — marking a
+      // different post from the list should not move you off the one you are
+      // in the middle of answering.
+      if (id === selectedId) onDone?.(id)
     } catch { /* leaving the row up is the honest failure */ }
   }
 
@@ -104,6 +122,7 @@ export default function QueuePanel(
           <button key={s} onClick={() => setState(s)}
             className={`library-tab ${state === s ? "library-tab--on" : ""}`}>
             {s === "new" ? "Waiting" : s === "answered" ? "Answered" : "Skipped"}
+            {states[s] ? <span className="queue__tab-n">{states[s]}</span> : null}
           </button>
         ))}
         <button className="queue__fetch" onClick={fetchNow}>Fetch now</button>

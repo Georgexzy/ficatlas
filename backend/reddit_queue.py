@@ -70,11 +70,30 @@ log = logging.getLogger("reddit_queue")
 
 # Where the people asking are. Flair-filtered where the subreddit uses one, so
 # the feed is requests rather than every post.
+# RECS WANTED FIRST, and the distinction is the whole reason this list is
+# ordered rather than a set.
+#
+# A "Recs Wanted" post is a FILTER: "shipping fics from the POV of an angsty
+# character, any fandom except the Netflix Witcher", "Ben 10 x MCU with a blank
+# Omnitrix, no harem". Every one of those is a set of constraints over metadata,
+# which is the question this index answers.
+#
+# A "Lost Fic" post is an IDENTIFICATION: one specific half-remembered work,
+# recognised by a detail its metadata does not carry — a scene, a line, a cover.
+# Answering it needs somebody who has read it. We can sometimes narrow the
+# search, and the measurement below says how often.
+#
+# Both are fetched, because a narrowed Lost Fic search is still a useful reply
+# and costs nothing extra. The ordering matters because a run walks these one
+# at a time with a gap between them and Reddit rate-limits the unauthenticated
+# feed hard — whatever is first is what reliably arrives.
 FEEDS = [
+    ("FanFiction",    'flair:"Recs Wanted"'),
     ("FanFiction",    'flair:"Lost Fic"'),
-    ("FanFiction",    'flair:"Fic Search"'),
-    ("HPfanfiction",  'flair:"Request"'),
     ("AO3",           'flair:"Fic/Work Search"'),
+    # r/HPfanfiction is deliberately absent. Its requests are a good fit and
+    # this account is banned there, so fetching them would build a worklist of
+    # posts nobody here can reply to.
     ("fanfiction",    None),
 ]
 
@@ -122,20 +141,44 @@ def _field(entry: str, tag: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+# What Reddit's feed adds to every entry, which is not what the reader wrote.
+# A post that is a title and nothing else — "Any good long jjk fics?" — has a
+# BODY consisting entirely of this, and the extractor duly read `[comments]`
+# and returned `tag:"Comment Fic"`. Stripped before anything looks at the text.
+_RSS_CHROME = re.compile(
+    r"\s*submitted by\s*/?u/\S+|\[link\]|\[comments\]|"
+    r"^\s*/?u/\S+\s*$", re.I | re.M)
+
+
 def _text(raw: str) -> str:
     """Reddit double-escapes the post body inside <content type="html">."""
-    return re.sub(r"\s+", " ", _TAG.sub(" ", html.unescape(html.unescape(raw)))).strip()
+    plain = _TAG.sub(" ", html.unescape(html.unescape(raw)))
+    return re.sub(r"\s+", " ", _RSS_CHROME.sub(" ", plain)).strip()
 
 
 def fetch(subreddit: str, flair: str | None) -> list[dict]:
     """One feed, or nothing. Never raises: a feed that is down or rate-limited
     must not abandon the rest of the run."""
+    # SORTED BY NEW, and it is a real choice rather than the default.
+    #
+    # `hot` surfaces the posts with the most engagement, which sounds better
+    # for a reply that wants to be seen — and is the wrong end of the problem.
+    # A fic-finder thread collects its answers in a day or two, so by the time
+    # a post is hot it usually has them, and a late reply is one more comment
+    # nobody scrolls to. `new` is where a useful answer is still the FIRST
+    # useful answer, which is the only kind that gets read.
+    #
+    # Neither sort can tell us the thing we actually want — whether a post has
+    # been answered yet — because the feed carries no comment count. `new` is
+    # the closest available proxy and the queue's own state (waiting /
+    # answered / skipped) carries the rest.
+    sort = os.getenv("REDDIT_SORT", "new")
     if flair:
         q = urllib.parse.quote(flair, safe="")
         url = (f"https://www.reddit.com/r/{subreddit}/search.rss"
-               f"?q={q}&restrict_sr=1&sort=new&limit=25")
+               f"?q={q}&restrict_sr=1&sort={sort}&limit=25")
     else:
-        url = f"https://www.reddit.com/r/{subreddit}/new.rss?limit=25"
+        url = f"https://www.reddit.com/r/{subreddit}/{sort}.rss?limit=25"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:

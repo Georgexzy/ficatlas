@@ -6275,3 +6275,7 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 .attention__detail { margin: 3px 0 0; font-size: 12.5px; color: var(--text-dim); }
 .attention__foot { margin: 10px 0 0; font-size: 11.5px; color: var(--text-faint); }
+.queue__tab-n {
+  margin-left: 6px; font-size: 10.5px; opacity: .7;
+  font-variant-numeric: tabular-nums;
+}
