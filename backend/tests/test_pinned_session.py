@@ -69,3 +69,51 @@ def test_two_popularity_passes_cannot_run_at_once(db):
         "a pass this heavy must refuse to run beside another"
     # `try`, not `wait`: a second run has nothing to add and should leave.
     assert "pg_advisory_lock(" not in src
+
+
+# ── a backoff that can never come back is a broken feature ─────────────────
+
+def test_the_wayback_budget_recovers_from_its_ceiling():
+    """It could not, and the cost was a feature that looked alive.
+
+    Backing off doubles on ONE refusal. Recovering took twenty consecutive
+    clean requests per 10% step, and 600s back to 5s is forty-five steps — nine
+    hundred consecutive successes, against a ratchet that resets on any single
+    failure. The FF.net enrichment pass is bounded to 24 minutes so it cannot
+    outlive its schedule, so it made one or two requests per pass and could
+    never earn its way down. Eight passes a day, three rows touched.
+    """
+    import time
+    import wayback_harvest as W
+    b = W._Budget()
+    b.interval = W.MAX_INTERVAL
+    # An hour quiet, then the host answers cleanly.
+    b._last_recover = time.monotonic() - 3600
+    b.reward()
+    assert b.interval < W.MAX_INTERVAL / 10, \
+        "an hour of quiet plus a clean response must climb well off the ceiling"
+    b._last_recover = time.monotonic() - 3600
+    b.reward()
+    assert b.interval == W.BASE_INTERVAL
+
+
+def test_recovery_still_needs_the_host_to_answer():
+    """Elapsed time alone is not evidence. This narrows on a clean response
+    and never on a guess — one is enough, but one is required."""
+    import time
+    import wayback_harvest as W
+    b = W._Budget()
+    b.interval = W.MAX_INTERVAL
+    b._last_recover = time.monotonic() - 86_400
+    # No reward() call: nothing has answered, so nothing moves.
+    assert b.interval == W.MAX_INTERVAL
+
+
+def test_a_refusal_still_backs_off_immediately():
+    """The asymmetry is deliberate in the other direction: being over the line
+    costs the host, so slowing down is fast and speeding up is slow."""
+    import wayback_harvest as W
+    b = W._Budget()
+    start = b.interval
+    b.penalise()
+    assert b.interval > start

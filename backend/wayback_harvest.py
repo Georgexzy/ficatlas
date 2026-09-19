@@ -159,13 +159,32 @@ class _Budget:
         self.penalise()
 
     def reward(self) -> None:
-        """A clean response. Narrow the interval, but only slowly and on a clock.
+        """A clean response. Narrow the interval on a CLOCK, not on a count.
 
-        Recovery was originally "RECOVER_AFTER consecutive clean requests",
-        which deadlocks against a host that refuses most connections: the
-        successes needed to recover are exactly what being throttled prevents.
-        Requiring elapsed time instead means the interval always comes back down
-        eventually, even from a long block.
+        This was originally "RECOVER_AFTER consecutive clean requests", which
+        deadlocks against a host that refuses most connections: the successes
+        needed to recover are exactly what being throttled prevents. It was
+        then changed to require elapsed time — and the docstring said "instead"
+        while the code said `_clean < RECOVER_AFTER or ...`, which is AND. The
+        deadlock it was written to fix was still there.
+
+        Measured, eleven days later: archive.org sat pinned at the 600s ceiling.
+        Backing off doubles on ONE refusal; recovering took twenty consecutive
+        clean requests per 10% step, and 600s back to 5s is forty-five steps —
+        nine hundred consecutive successes, against a ratchet that resets on
+        any single failure. Meanwhile the FF.net enrichment pass is bounded to
+        24 minutes so it cannot outlive its own schedule, so it made ONE OR TWO
+        requests per pass. It could never have earned its way back down.
+
+        The consequence was a feature that looked alive and did nothing: eight
+        passes a day, "200 FF.net stories to enrich" each time, and three rows
+        touched in twenty-four hours. FF.net character coverage sat at 1.65%.
+
+        So: elapsed time alone, and as many steps as have actually elapsed. One
+        clean response is still required — this narrows on evidence that the
+        host is answering, never on a guess — but one is enough, because a rate
+        limit is a statement about RECENT request rate and an interval learned
+        an hour ago does not describe now.
         """
         now = time.monotonic()
         with self._lock:
@@ -173,11 +192,17 @@ class _Budget:
             self._net_errors = 0
             if self.interval <= BASE_INTERVAL:
                 return
-            if self._clean < RECOVER_AFTER or now - self._last_recover < RECOVER_EVERY:
+            elapsed = now - self._last_recover
+            if elapsed < RECOVER_EVERY:
                 return
+            # Every window that has passed, not one per call. A budget left
+            # idle at the ceiling — which is what being starved of requests
+            # looks like — comes back in proportion to how long it has been
+            # quiet, rather than needing one request per step to climb down.
+            steps = min(int(elapsed // RECOVER_EVERY), 100)
             self._clean = 0
             self._last_recover = now
-            self.interval = max(self.interval * RECOVER, BASE_INTERVAL)
+            self.interval = max(self.interval * (RECOVER ** steps), BASE_INTERVAL)
 
     def snapshot(self) -> dict:
         return {"interval": round(self.interval, 2), "granted": self.granted,
