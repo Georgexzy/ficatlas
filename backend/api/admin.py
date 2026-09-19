@@ -313,22 +313,19 @@ _JOB_QUEUES = [
 ]
 
 
-# What a missing field actually COSTS a reader, which is the only honest way to
-# rank one gap against another. A work with no characters cannot be found by
-# the filter readers use most; a work with no kudos merely sorts late.
 # The archives by the names people call them, for a panel a person reads.
 SITE_LABEL = {"ao3": "AO3", "ffnet": "FanFiction.net",
               "fictionalley": "FictionAlley"}
 
-_GAP_COST = {
-    "no_chars":   ("cannot be found by character", 3),
-    "no_ships":   ("cannot be found by pairing", 3),
-    "no_words":   ("cannot be filtered by length", 2),
-    "no_date":    ("cannot be sorted by date", 2),
-    "no_summary": ("shows no blurb on a result card", 1),
-    "no_genres":  ("cannot be filtered by genre", 1),
-    "no_kudos":   ("sorts behind every scored work", 1),
-}
+# What a missing field costs a reader, and how much it is worth fixing —
+# imported, not declared here.
+#
+# This ranking and `gap_filler`'s queue used to carry separate weightings that
+# disagreed about the most important thing: this said characters and pairings
+# mattered most, that said summaries did. So the panel named a problem and the
+# job that exists to fix it worked on something else. See field_priority.
+from field_priority import COVERAGE_FIELD, FIELD_COST, FIELD_PRIORITY
+
 # A gap has to be big enough to be worth a line. Below this it is a rounding
 # error on a sample and reporting it is noise.
 _GAP_MIN_SHARE = 0.25
@@ -362,7 +359,11 @@ def _attention(evidence: list[dict], coverage: list[dict]) -> list[dict]:
                        + (j.get("why") or "")).strip(),
             # How far past its own limit, so a job that is twice as late as it
             # should be outranks one that is barely over.
-            "severity": min(5, 2 + age / max(limit, 1)),
+            # On the same scale as a gap, so the two orderings are one. A job
+            # at twice its limit sits around the middle of the list, which is
+            # where a stale weekly rebuild belongs against millions of works
+            # nobody can find — and it climbs as it rots.
+            "severity": 3.0 + 2.0 * (age / max(limit, 1)),
             "works": None,
         })
 
@@ -371,7 +372,7 @@ def _attention(evidence: list[dict], coverage: list[dict]) -> list[dict]:
         if not total or not sampled:
             continue
         na = set(c.get("na") or [])
-        for field, (cost, weight) in _GAP_COST.items():
+        for field, name in COVERAGE_FIELD.items():
             if field in na or field not in c:
                 continue
             share = int(c[field]) / sampled
@@ -380,20 +381,43 @@ def _attention(evidence: list[dict], coverage: list[dict]) -> list[dict]:
                 continue
             out.append({
                 "kind": "gap", "key": f"{c['site']}:{field}",
-                "label": f"{SITE_LABEL.get(c['site'], c['site'])}: {cost}",
+                "label": f"{SITE_LABEL.get(c['site'], c['site'])}: "
+                         f"{FIELD_COST.get(name, name)}",
                 "detail": (f"{works:,} works — {share * 100:.0f}% of "
                            f"{total:,} — "
                            + ("counted exactly." if c.get("exact")
                               else f"estimated from a {sampled:,}-row sample.")),
-                # Weighted by what the field is FOR, then by size. A million
-                # works missing a summary is a worse page; a million missing
-                # their characters is a million works nobody can reach.
-                "severity": min(5, weight * (works / 1_000_000) ** 0.4),
+                # THREE THINGS, and the first version had only two of them.
+                #
+                # What the field is for, how many works it costs, and WHAT
+                # SHARE OF THE ARCHIVE it covers — which was missing, and is
+                # the difference between "a third of AO3 has no characters"
+                # and "FanFiction.net effectively does not have the field".
+                # At 98% the filter is not degraded for that archive, it is
+                # absent.
+                #
+                # And uncapped. The first version capped at 5, which every one
+                # of the top four gaps reached — so they tied and fell back to
+                # the order the coverage rows happened to be in, putting a 32%
+                # AO3 gap above a 98% FanFiction.net one. A cap that flattens
+                # exactly the items it is meant to rank is worse than no cap;
+                # the display band below is what bounds this for the eye.
+                "severity": (FIELD_PRIORITY.get(name, 1)
+                             * (works / 1_000_000) ** 0.4
+                             * (0.4 + share)),
                 "works": works,
             })
 
     out.sort(key=lambda a: -a["severity"])
-    return out[:12]
+    out = out[:12]
+    # The BAND is decided here, not in the browser, so the thresholds live next
+    # to the formula that produces the numbers they cut. Relative to the worst
+    # thing on the list, because the absolute scale is unbounded by design.
+    worst = max((a["severity"] for a in out), default=1.0) or 1.0
+    for a in out:
+        r = a["severity"] / worst
+        a["band"] = "high" if r >= 0.66 else "mid" if r >= 0.33 else "low"
+    return out
 
 
 def _job_evidence(db: Session) -> dict:

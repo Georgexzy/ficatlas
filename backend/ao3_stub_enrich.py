@@ -67,6 +67,8 @@ os.environ.setdefault("DATABASE_URL", default_database_url())
 import httpx
 from sqlalchemy import text as sql_text
 
+from field_priority import FIELD_PRIORITY
+
 import ao3_budget
 from db.session import db_session
 
@@ -90,15 +92,22 @@ _CHAPTERS_RE = re.compile(r'<dd class="chapters">(\d+)\s*/\s*(\d+|\?)</dd>')
 # useful recorded against it. Deliberately NOT "word_count = 0" alone — a
 # genuinely empty work exists, and refetching it every run forever would be a
 # slow leak of AO3's goodwill for no gain.
+# The weights are INTERPOLATED from field_priority rather than written here.
+#
+# They were written here, as literals, and were the third copy in the codebase
+# — gap_filler had a fourth and the admin panel a fifth, and they disagreed
+# about whether a missing summary or a missing character list was worse. A
+# number that appears in three files is a number that is wrong in at least one
+# of them. See field_priority for the single scale and the argument.
 _CANDIDATES = sql_text("""
     SELECT id, url,
-           (CASE WHEN nullif(summary,'') IS NULL          THEN 5 ELSE 0 END
-          + CASE WHEN published_at IS NULL                THEN 3 ELSE 0 END
-          + CASE WHEN COALESCE(word_count,0) = 0          THEN 3 ELSE 0 END
-          + CASE WHEN cardinality(characters) = 0         THEN 2 ELSE 0 END
-          + CASE WHEN cardinality(relationships) = 0      THEN 2 ELSE 0 END
+           (CASE WHEN nullif(summary,'') IS NULL          THEN {summary} ELSE 0 END
+          + CASE WHEN published_at IS NULL                THEN {published_at} ELSE 0 END
+          + CASE WHEN COALESCE(word_count,0) = 0          THEN {word_count} ELSE 0 END
+          + CASE WHEN cardinality(characters) = 0         THEN {characters} ELSE 0 END
+          + CASE WHEN cardinality(relationships) = 0      THEN {relationships} ELSE 0 END
           + CASE WHEN COALESCE(kudos,0) = 0
-                  AND COALESCE(hits,0) = 0                THEN 1 ELSE 0 END
+                  AND COALESCE(hits,0) = 0                THEN {kudos} ELSE 0 END
            ) AS gap_score
     FROM stories
     WHERE site = 'ao3'
@@ -111,7 +120,7 @@ _CANDIDATES = sql_text("""
       AND title IS NOT NULL
     ORDER BY gap_score DESC, COALESCE(hits,0) DESC, id
     LIMIT :lim
-""")
+""".format(**FIELD_PRIORITY))
 
 
 def _unescape(v: str) -> str:

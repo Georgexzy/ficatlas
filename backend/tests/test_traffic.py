@@ -919,3 +919,58 @@ def test_a_healthy_index_has_nothing_to_say(db):
     empty box that trains you to skip the area it lives in."""
     from api.admin import _attention
     assert _attention([], []) == []
+
+
+# ── one weighting, not three ────────────────────────────────────────────────
+
+def test_the_panel_and_the_crawler_agree_on_what_matters():
+    """They did not, and it was the expensive kind of disagreement.
+
+    `gap_filler` ranks which row the crawler spends its next request on and
+    weighted `summary` 5 against `characters` 2; the admin ranking had it the
+    other way round. So the panel named six and a half million FanFiction.net
+    works nobody can find by pairing as the site's biggest problem while the
+    job that exists to close gaps worked on blurbs.
+    """
+    import gap_filler
+    from field_priority import FIELD_PRIORITY
+    assert gap_filler.FIELD_WEIGHTS is FIELD_PRIORITY, \
+        "the crawler's queue must rank by the same scale the panel reports"
+
+
+def test_the_stub_enricher_interpolates_the_same_weights():
+    """It had the numbers as SQL literals — a third copy. A number that
+    appears in three files is wrong in at least one of them."""
+    import re
+    import ao3_stub_enrich
+    from field_priority import FIELD_PRIORITY
+    found = [int(n) for n in re.findall(r"THEN (\d+) ELSE", str(ao3_stub_enrich._CANDIDATES))]
+    assert found == [FIELD_PRIORITY[k] for k in
+                     ("summary", "published_at", "word_count",
+                      "characters", "relationships", "kudos")]
+
+
+def test_a_near_total_gap_outranks_a_partial_one_of_similar_size(db):
+    """The bug this was reported for: 98% of FanFiction.net having no
+    characters ranked BELOW 32% of AO3 having none, because both hit a cap of
+    5 and tied, and the tie fell to the order the coverage rows happened to be
+    in. A cap that flattens exactly the items it is meant to rank is worse than
+    no cap."""
+    from api.admin import _attention
+    cov = [
+        {"site": "ao3", "total": 14_141_639, "sampled": 34_185, "exact": False,
+         "na": ["no_genres"], "no_chars": 10_939, "no_ships": 12_658,
+         "no_words": 0, "no_kudos": 0, "no_summary": 0, "no_date": 0,
+         "no_genres": 34_185},
+        {"site": "ffnet", "total": 6_568_435, "sampled": 15_743, "exact": False,
+         "na": [], "no_chars": 15_428, "no_ships": 15_586,
+         "no_words": 0, "no_kudos": 0, "no_summary": 0, "no_date": 0,
+         "no_genres": 0},
+    ]
+    out = _attention([], cov)
+    ffnet = [i for i, a in enumerate(out) if a["key"].startswith("ffnet:")]
+    ao3 = [i for i, a in enumerate(out) if a["key"].startswith("ao3:")]
+    assert max(ffnet) < min(ao3), \
+        "an archive effectively missing the field must outrank one partly missing it"
+    # And the band is decided server-side, next to the formula that makes it.
+    assert out[0]["band"] == "high"

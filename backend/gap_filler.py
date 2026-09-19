@@ -56,19 +56,18 @@ from sqlalchemy import text as sql_text
 
 log = logging.getLogger(__name__)
 
-# What each field is worth fixing, roughly by how visible it is to a reader.
-# A summary is what makes a search result judgeable at a glance; engagement
-# only affects ranking; language only matters to a filter.
-FIELD_WEIGHTS: dict[str, int] = {
-    "summary": 5,
-    "published_at": 3,
-    "word_count": 3,
-    "characters": 2,
-    "relationships": 2,
-    "updated_at": 2,
-    "kudos": 1,
-    "language": 1,
-}
+# What each field is worth fixing — imported, not declared here.
+#
+# This module used to own the weighting and weighted `summary` 5 against
+# `characters` 2, while the admin panel's ranking of what is wrong with the
+# index had it the other way round. So the panel reported six and a half
+# million FanFiction.net works nobody can find by pairing as the site's biggest
+# problem, and this queue — the thing that fixes gaps — spent its requests on
+# blurbs. Two answers to two different questions, never reconciled.
+#
+# See field_priority for the reconciliation and the argument: a work nobody can
+# FIND is worse than a work that looks plain.
+from field_priority import FIELD_PRIORITY as FIELD_WEIGHTS  # noqa: E402
 
 # Rows whose gaps score below this are not worth a request of anyone's time.
 MIN_SCORE = 3

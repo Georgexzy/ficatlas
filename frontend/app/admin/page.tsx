@@ -71,7 +71,11 @@ interface Overview {
    *  works nobody can find by pairing and only one of those was visible.
    *  See _attention in api/admin.py. */
   attention?: { kind: "job" | "gap"; key: string; label: string
-                detail: string; severity: number; works: number | null }[]
+                detail: string; severity: number; works: number | null
+                /** Decided server-side, next to the formula that produces the
+                 *  numbers it cuts, and relative to the worst thing on the
+                 *  list — the scale is unbounded by design. */
+                band?: "high" | "mid" | "low" }[]
   storage?: { db_bytes: number
               objects: { name: string; bytes: number; rows: number }[] } | null
   // Sampled, not queried: grouping 20M rows by indexed_at measured 15.7s and
@@ -358,8 +362,7 @@ export default function AdminPage() {
               <ul className="attention__list">
                 {data.attention.map(a => (
                   <li key={a.key}
-                    className={`attention__item attention__item--${
-                      a.severity >= 4 ? "high" : a.severity >= 2.5 ? "mid" : "low"}`}>
+                    className={`attention__item attention__item--${a.band ?? "low"}`}>
                     <div className="attention__row">
                       <span className="attention__label">{a.label}</span>
                       <span className="attention__kind">
@@ -371,11 +374,15 @@ export default function AdminPage() {
                 ))}
               </ul>
               <p className="attention__foot">
-                Coverage gaps are ranked by how many works they cost a reader,
-                weighted by what the field is for — a work with no characters
-                cannot be found by the filter people use most, one with no kudos
-                merely sorts late. Jobs are ranked by how far past their own
-                staleness limit they are.
+                Ranked by what each one costs a reader: how many works, what
+                share of that archive, and what the field is for — a work with
+                no characters cannot be found by the filter people use most,
+                one with no kudos merely sorts late. Share matters on its own:
+                at 98% a filter is not degraded for an archive, it is absent.
+                Jobs sit on the same scale, climbing as they rot.{" "}
+                <b>The crawler works this list from the top</b> — the queue
+                that decides which row gets the next request is ranked by the
+                same weighting, so effort lands where this says it should.
               </p>
             </section>
           )}
