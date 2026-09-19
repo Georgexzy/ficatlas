@@ -6284,3 +6284,6 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    because it sits in a row of them and does the same kind of thing — but it
    is an anchor, so middle-click and "open in new tab" work as expected. */
 .outreach__open { text-decoration: none; display: inline-flex; align-items: center; }
+/* A post that arrived with no body. The search was built from a title, which
+   is worth knowing before judging it. */
+.queue-item__thin { color: var(--danger, #d9534f); opacity: .85; }
