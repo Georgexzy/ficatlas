@@ -55,6 +55,13 @@ class SiteSection(BaseModel):
     why a single cross-archive ranking could only ever return AO3."""
     site: str
     works: list[HubWork]
+    # How many works this archive actually holds for the hub, which is a
+    # different number from `len(works)` and the one that matters. The listing
+    # is capped per archive, so it says only "this archive filled its quota" —
+    # and ordering the page by it tied every large hub and broke the tie on
+    # dictionary order. See the note in hub_build.py for what that did to the
+    # Drarry page. 0 on a hub built before the column existed.
+    total: int = 0
 
 
 class RelatedHub(BaseModel):
@@ -215,7 +222,7 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     table = _TABLES[kind]
     response.headers["Cache-Control"] = CACHE
     hub = db.execute(text(
-        f"SELECT slug, name, work_count, top_ids, top_by_site "
+        f"SELECT slug, name, work_count, top_ids, top_by_site, site_counts "
         f"  FROM {table} WHERE slug = :s"
     ), {"s": slug}).fetchone()
     if not hub:
@@ -296,13 +303,27 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     # from the same `works` list, so the delisted/restricted re-check above
     # applies to the sections too rather than being done twice.
     by_id = {w.id: w for w in works}
+    # Index 5, named rather than spelled inline: this row is unpacked by
+    # position in four places and a column added in the middle of the SELECT
+    # would silently shift every one of them.
+    _counts = hub[5] or {}
     sections: list[SiteSection] = []
     for site, site_ids in (hub[4] or {}).items():
         picked = [by_id[i] for i in site_ids if i in by_id]
         if picked:
-            sections.append(SiteSection(site=site, works=picked))
-    # Largest archive first, so the biggest list leads the page.
-    sections.sort(key=lambda s: -len(s.works))
+            sections.append(SiteSection(site=site, works=picked,
+                                        total=int(_counts.get(site, 0))))
+    # THE ARCHIVE THAT ACTUALLY HOLDS THE MOST, first.
+    #
+    # `len(s.works)` was the old key and it is the size of the CAP, not of the
+    # archive: on any hub where two archives both filled their quota it tied,
+    # and the tie fell to whatever order the stored dictionary had. The Drarry
+    # hub — 53,210 works, and the single page type that brings the most search
+    # traffic to this site — therefore opened with FictionAlley.
+    #
+    # `len(s.works)` is kept as the tiebreak, for hubs built before the counts
+    # existed: the ordering then is no worse than it was.
+    sections.sort(key=lambda s: (-s.total, -len(s.works)))
 
     nicknames: list[str] = []
     if kind == "ship":

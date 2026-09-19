@@ -1389,6 +1389,19 @@ function SearchPageInner() {
   // Tracks which query we've already auto-deepened for, so a thin-result search
   // pulls fresh AO3 data once without looping on every re-render.
   const autoDeepenedRef = useRef<string>("")
+  // A sentence that was re-read as a search, and the words the reader actually
+  // typed. Kept so the banner can say what happened and hand them back their
+  // own words — see `interpreted` in lib/types.ts.
+  const [readAs, setReadAs] = useState<
+    { typed: string; terms: { kind: string; value: string; count: number }[] } | null>(null)
+  // The text already re-read once. Re-running the reader's literal words must
+  // not bounce them straight back to the interpretation, and this is what
+  // makes "search for what I typed" stick without a second flag.
+  const interpretedRef = useRef<string>("")
+  // doSearch calls itself to run an interpretation, and a useCallback cannot
+  // name itself in its own dependency list. The ref is the usual way out and
+  // is more honest than disabling the lint rule.
+  const doSearchRef = useRef<((r?: boolean, p?: number, q?: string) => void) | null>(null)
   // Auto-search-on-filter-change machinery (see effect below).
   const hasSearchedRef = useRef(false)
   // Monotonic token so a slow, stale search response can never overwrite a
@@ -2101,6 +2114,27 @@ function SearchPageInner() {
       if (seq !== searchSeqRef.current) return   // a newer search superseded this one
       setResults(data)
       setStale(null)
+      // THEY TYPED A SENTENCE, NOT A SEARCH.
+      //
+      // Re-run it as the search the vocabulary read out of it, and say so. The
+      // alternative — showing "No stories matched" with the interpretation
+      // offered underneath — leads with a dead end, and the measurement that
+      // prompted all this is that a reader's own words returned ZERO where the
+      // same words read properly return hundreds.
+      //
+      // Guarded on the typed text, so "search for what I typed instead" runs
+      // their words and stays there rather than bouncing back here.
+      if (data.interpreted && interpretedRef.current !== effectiveQuery) {
+        interpretedRef.current = effectiveQuery
+        setReadAs({ typed: effectiveQuery, terms: data.interpreted.terms ?? [] })
+        setQuery(data.interpreted.query)
+        doSearchRef.current?.(true, undefined, data.interpreted.query)
+        return
+      }
+      // Any other search clears the banner: it describes THIS result set, and
+      // leaving it up over the next one would attribute an interpretation to a
+      // search that never had one.
+      if (!data.interpreted && interpretedRef.current !== effectiveQuery) setReadAs(null)
       setParsedTokens((data as any).parsed_tokens ?? [])
       lastSearchCache = { url: qs.toString(), data }
       // Paging used to scroll to the top of the page HERE, and it was in the
@@ -2138,6 +2172,10 @@ function SearchPageInner() {
       if (seq === searchSeqRef.current) setLoading(false)
     }
   }, [buildParams, page, pathname, router, query, sites, refreshing, filterSig])
+
+  // Published for the self-call above, after every render so it is never the
+  // stale closure from the render that started the search.
+  doSearchRef.current = doSearch
 
 
   // Fetch a page the reader has not asked for yet, on hover or focus.
@@ -3120,6 +3158,36 @@ function SearchPageInner() {
                     className="btn hidden-note__btn">
                     Change in settings
                   </Link>
+                </div>
+              )}
+
+              {/* WHAT WE DID TO THEIR WORDS, said before the results rather
+                  than discovered from them.
+
+                  The rule this page follows everywhere else — a preference is
+                  remembered and does not travel — has a twin here: a search
+                  that was rewritten must say so. Silently answering a
+                  different question is how a search engine loses somebody the
+                  first time it guesses wrong, and this one guesses. Their own
+                  words are one click away and stay put when clicked. */}
+              {readAs && shown.results.length > 0 && (
+                <div className="read-as">
+                  <p className="read-as__lead">
+                    Nothing matched those words exactly, so we read them as a search:
+                  </p>
+                  <p className="read-as__terms">
+                    {readAs.terms.slice(0, 6).map(t => (
+                      <span key={t.kind + t.value} className="read-as__chip">
+                        {t.value}
+                      </span>
+                    ))}
+                  </p>
+                  <button className="read-as__undo"
+                    onClick={() => { setQuery(readAs.typed); setReadAs(null)
+                                     doSearch(true, undefined, readAs.typed) }}>
+                    Search for “{readAs.typed.length > 48
+                      ? readAs.typed.slice(0, 48) + "…" : readAs.typed}” instead
+                  </button>
                 </div>
               )}
 

@@ -72,6 +72,19 @@ export interface SearchResponse {
   parsed_tokens?: any[]
   /** Spelling rescues, sent only when the search matched nothing at all. */
   suggestions?: Suggestion[]
+  /** What the reader probably MEANT, when they typed a sentence rather than a
+   *  search. Sent only when typed words found nothing (or nearly nothing) and
+   *  the vocabulary could read them. Offered, never applied by the server —
+   *  see Interpreted in backend/api/search.py. */
+  interpreted?: Interpreted
+}
+
+/** A sentence read as a search. */
+export interface Interpreted {
+  /** The query to run instead. */
+  query: string
+  /** What it understood, for showing the reader rather than making them guess. */
+  terms: { kind: string; value: string; count: number; matched: string }[]
 }
 
 /** Something the reader might have meant, when they matched nothing. */

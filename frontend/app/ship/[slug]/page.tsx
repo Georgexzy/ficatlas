@@ -35,7 +35,10 @@ interface Work {
   site?: string
   complete?: boolean
 }
-interface SiteSection { site: string; works: Work[] }
+interface SiteSection { site: string; works: Work[]
+  /** How many works this archive actually holds — NOT works.length,
+   *  which is the per-archive cap. See hub_build.py. */
+  total?: number }
 interface RelatedHub {
   kind: "fandom" | "ship"
   slug: string
@@ -201,6 +204,52 @@ export default async function ShipHub(
         </Link>
       </p>
 
+      {/* THE TOOL, ON THE PAGE — not a link to it.
+
+          This page type is the site's front door: 77 of the 80 sessions Google
+          sends in a month land on a hub rather than the home page. Nine per
+          cent of them ever run a search. The page offered a LINK to the search
+          box ("Search all N with filters →"), which is a navigation step
+          between somebody who has just arrived and the only thing here they
+          cannot get from the archive itself.
+
+          A plain GET form, deliberately. It needs no JavaScript, a crawler
+          sees a real form, and it submits to exactly the URL the search page
+          already reads — the one carrying relationships — so the reader lands on
+          results scoped to this pairing rather than in an empty box.
+
+          The placeholder is a sentence on purpose. Typed words that match
+          nothing are now re-read against the vocabulary (see `Interpreted` in
+          backend/api/search.py), so "a long one where they get together at the
+          end" is a search this site can answer and most cannot. */}
+      <form className="hub-find" action="/" method="get" role="search">
+        <input type="hidden" name="relationships" value={hub.name} />
+        <label className="hub-find__label" htmlFor="hub-find-q">
+          Search inside these {hub.work_count.toLocaleString()} works
+        </label>
+        <div className="hub-find__row">
+          <input id="hub-find-q" name="q" type="search" className="hub-find__input"
+            placeholder="slow burn, complete, no major character death" autoComplete="off" />
+          <button type="submit" className="hub-find__go">Search</button>
+        </div>
+        <p className="hub-find__hint">
+          Plain words work — describe the fic you want and we will read it as a search.
+        </p>
+      </form>
+
+      {/* One click each, for the three refinements people actually ask for.
+          Length and completion are the only ones true of EVERY hub — a tag
+          list would have to be per-hub to be honest, and this page has no
+          per-hub tag data. nofollow for the same reason every other search
+          link here carries it: `/*?` is disallowed in robots.txt, and these
+          exist for readers, not crawlers. */}
+      <ul className="hub-find__quick">
+        <li><Link rel="nofollow" href={`${searchHref(hub.name)}&status=complete`}>Complete</Link></li>
+        <li><Link rel="nofollow" href={`${searchHref(hub.name)}&word_count_min=100000`}>100k+ words</Link></li>
+        <li><Link rel="nofollow" href={`${searchHref(hub.name)}&word_count_max=10000`}>Under 10k</Link></li>
+        <li><Link rel="nofollow" href={`${searchHref(hub.name)}&sort=updated_desc`}>Recently updated</Link></li>
+      </ul>
+
       {/* One section per archive rather than one merged list — see the fandom
           hub for why a single cross-archive ranking could only ever return AO3. */}
       {sections.length === 0 ? (
@@ -213,8 +262,14 @@ export default async function ShipHub(
                 ? `Most popular on ${SITE_LABELS[section.site] ?? section.site}`
                 /* The pre-rebuild fallback has no archive to name. */
                 : `Most popular ${hub.name} works`}
+              {/* The archive's REAL size, not the length of the list below
+                  it. They are wildly different numbers — AO3 holds 51,894 of
+                  the 53,265 Drarry works and shows 39 of them — and the big
+                  one is what tells a reader whether this archive is where
+                  their fic lives. 0 on a hub built before the count existed,
+                  and then simply not shown. */}
               <span className="hub__heading-more" aria-hidden="true">
-                see all →
+                {section.total ? `${section.total.toLocaleString()} · see all →` : "see all →"}
               </span>
             </Link>
           </h2>

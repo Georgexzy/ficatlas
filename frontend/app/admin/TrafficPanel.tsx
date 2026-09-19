@@ -318,6 +318,19 @@ function ago(iso: string): string {
   return `${days} days ago`
 }
 
+interface EntryRow {
+  entry: string; sessions: number
+  searched: number; searched_pct: number
+  went_out: number; went_out_pct: number
+  bounced: number; bounced_pct: number
+  avg_pages: number; referred: number
+}
+interface HubRow {
+  path: string; label: string; sessions: number; views: number
+  searched: number; went_out: number
+}
+interface Entry { since: string; entries: EntryRow[]; hubs: HubRow[] }
+
 interface ScraperDay {
   day: string; visitors: number; events: number; searches: number
   pages: number; peak_per_minute: number; kinds: string[]
@@ -404,6 +417,7 @@ export default function TrafficPanel() {
   const [routes, setRoutes] = useState<Routes | null>(null)
   const [cf, setCf] = useState<Cloudflare | null>(null)
   const [scr, setScr] = useState<Scrapers | null>(null)
+  const [entry, setEntry] = useState<Entry | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async (d: number) => {
@@ -416,12 +430,12 @@ export default function TrafficPanel() {
     try {
       // In parallel: four small aggregates over the same window, and waiting for
       // them one after another would show the page filling in for no reason.
-      const [s, p, q, rf, rt, sc] = await Promise.all([
+      const [s, p, q, rf, rt, sc, en] = await Promise.all([
         get("summary"), get("pages"), get("searches"), get("referrers"),
-        get("routes"), get("scrapers"),
+        get("routes"), get("scrapers"), get("entry"),
       ])
       setSummary(s); setPages(p.pages); setSearches(q); setRefs(rf.referrers)
-      setRoutes(rt); setScr(sc)
+      setRoutes(rt); setScr(sc); setEntry(en)
     } catch (e: any) { setError(e.message) }
 
     // Deliberately NOT in the Promise.all above. This one leaves the building
@@ -579,6 +593,84 @@ export default function TrafficPanel() {
             request was automation but not which.
           </p>
         </details>
+      )}
+
+      {/* WHERE A VISIT STARTS, AND WHAT IT DOES NEXT.
+
+          Every other table here counts events; this counts journeys, and it is
+          the only one that says whether the site is working. Hub pages are the
+          front door — most of what search engines send lands on one — and the
+          share of those visitors who go on to run a search is the number this
+          panel exists to move. They used to appear only in `Pages`, as
+          thousands of rows of one or two views each, which reads as a long
+          tail rather than as the main entrance. */}
+      {entry && entry.entries.length > 0 && (
+        <>
+          <h2 className="admin-site__name">Where visits start</h2>
+          <table className="traffic-table entry-table">
+              <thead>
+                <tr>
+                  <th>Landed on</th>
+                  <th className="num">Sessions</th>
+                  <th className="num">Referred</th>
+                  <th className="num">Searched</th>
+                  <th className="num">Went to archive</th>
+                  <th className="num">Left at once</th>
+                  <th className="num">Pages</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entry.entries.map(e => (
+                  <tr key={e.entry}>
+                    <td>{e.entry}</td>
+                    <td className="num">{e.sessions.toLocaleString()}</td>
+                    <td className="num">{e.referred.toLocaleString()}</td>
+                    {/* The percentage leads and the count follows it, because
+                        the rate is the comparable thing across rows of very
+                        different size — and the count is what stops a 100%
+                        built out of one session reading as a triumph. */}
+                    <td className="num">
+                      <b>{e.searched_pct}%</b>{" "}
+                      <span className="entry-table__n">{e.searched}</span>
+                    </td>
+                    <td className="num">
+                      <b>{e.went_out_pct}%</b>{" "}
+                      <span className="entry-table__n">{e.went_out}</span>
+                    </td>
+                    <td className="num">{e.bounced_pct}%</td>
+                    <td className="num">{e.avg_pages}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          {entry.hubs.length > 0 && (
+            <details className="entry-hubs">
+              <summary className="scraper-detail__summary">
+                Which hub pages brought people in
+                <span className="scraper-detail__count">
+                  top {entry.hubs.length} by sessions
+                </span>
+              </summary>
+              <table className="traffic-table">
+                  <thead>
+                    <tr><th>Hub</th><th className="num">Sessions</th>
+                        <th className="num">Searched</th>
+                        <th className="num">Went to archive</th></tr>
+                  </thead>
+                  <tbody>
+                    {entry.hubs.map(h => (
+                      <tr key={h.path}>
+                        <td><a href={h.path} target="_blank" rel="noopener noreferrer">{h.label}</a></td>
+                        <td className="num">{h.sessions}</td>
+                        <td className="num">{h.searched}</td>
+                        <td className="num">{h.went_out}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+            </details>
+          )}
+        </>
       )}
 
       <div className="admin-tiles">

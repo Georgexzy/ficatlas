@@ -6022,3 +6022,75 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .scraper-card__nums { font-weight: 400; font-size: 11.5px; color: var(--text-faint); }
 .scraper-card__why { margin: 0 0 4px; font-size: 12px; color: var(--text-dim); }
 .scraper-card__paths { margin: 6px 0 0; }
+
+/* ── "We read your words as a search" ─────────────────────────────────────
+   Sits above the results, never inside them. A reader who typed a sentence and
+   got an answer to a slightly different question has to be able to see that
+   happened without reading the address bar, and to get their own words back in
+   one click. Quiet rather than alarming: the results below it are good ones. */
+.read-as {
+  margin: 0 0 14px; padding: 10px 12px; border-radius: 8px;
+  background: var(--surface2); border: 1px solid var(--border);
+}
+.read-as__lead { margin: 0 0 7px; font-size: 12.5px; color: var(--text-dim); }
+.read-as__terms { margin: 0 0 8px; display: flex; flex-wrap: wrap; gap: 5px; }
+.read-as__chip {
+  display: inline-block; padding: 3px 9px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text); font-size: 12px;
+}
+.read-as__undo {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-size: 12px; color: var(--accent); text-align: left;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.read-as__undo:hover { text-decoration-thickness: 2px; }
+
+/* ── The search box ON the hub page ───────────────────────────────────────
+   Hub pages are the front door: 77 of the 80 sessions Google sends in a month
+   land on one, and 9% of those visitors ever run a search. The page used to
+   offer a LINK to the search box, which puts a navigation step between arrival
+   and the one thing here an archive cannot do for them. This is the box. */
+.hub-find {
+  margin: 0 0 10px; padding: 14px; border-radius: 10px;
+  background: var(--surface2); border: 1px solid var(--border);
+}
+.hub-find__label {
+  display: block; margin: 0 0 7px; font-size: 13px; font-weight: 600;
+  color: var(--text);
+}
+.hub-find__row { display: flex; gap: 8px; flex-wrap: wrap; }
+.hub-find__input {
+  flex: 1 1 260px; min-width: 0; padding: 9px 12px; font: inherit;
+  font-size: 14px; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 7px;
+}
+.hub-find__input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
+}
+.hub-find__go {
+  padding: 9px 18px; font: inherit; font-size: 14px; font-weight: 600;
+  color: var(--accent-contrast, #fff); background: var(--accent);
+  border: 1px solid transparent; border-radius: 7px; cursor: pointer;
+}
+.hub-find__go:hover { filter: brightness(1.06); }
+.hub-find__hint { margin: 7px 0 0; font-size: 11.5px; color: var(--text-faint); }
+
+.hub-find__quick {
+  list-style: none; margin: 0 0 22px; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.hub-find__quick a {
+  display: inline-block; padding: 4px 11px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 12.5px; color: var(--text-dim); text-decoration: none;
+}
+.hub-find__quick a:hover {
+  border-color: var(--accent); color: var(--text);
+}
+
+/* The count behind a rate. The percentage is what compares across rows of very
+   different size; the raw number is what stops "100%" built out of a single
+   session from reading as a triumph. Both, with the rate leading. */
+.entry-table__n { color: var(--text-faint); font-size: 11px; font-weight: 400; }
+.entry-hubs { margin: 0 0 22px; }

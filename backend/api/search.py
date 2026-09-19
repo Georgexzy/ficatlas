@@ -986,6 +986,22 @@ _RELAX_LIMIT = int(os.getenv("SEARCH_RELAX_LIMIT", "3"))
 # exact count over 20.5M rows is what the 5,000 ceiling exists to avoid.
 _SUGGEST_CAP = int(os.getenv("SEARCH_SUGGEST_CAP", "2000"))
 
+# WHEN A SEARCH WAS REALLY A SENTENCE.
+#
+# Four words before an empty search is re-read: below that a miss is a typo,
+# which `_did_you_mean` already answers better. Six before a search that DID
+# find something is second-guessed, because overriding a search that worked is
+# the expensive mistake — "levi ackerman whump" finds plenty and must be left
+# alone, while "something where harry time travels and meets his parents"
+# found four works and meant `Time Travelling Harry Potter`.
+_NL_MIN_WORDS = int(os.getenv("SEARCH_NL_MIN_WORDS", "4"))
+_NL_SENTENCE_WORDS = int(os.getenv("SEARCH_NL_SENTENCE_WORDS", "6"))
+_NL_MAX_RESULTS = int(os.getenv("SEARCH_NL_MAX_RESULTS", "9"))
+# A query already written in the query language is not a sentence, whoever
+# typed it. Every fic-finder link and every sidebar filter produces one of
+# these, and re-reading it would throw away a deliberate search.
+_HAS_OPERATOR = re.compile(r'-?\b\w+:(?:"|\S)')
+
 _DYM_MIN_SIM = 0.35
 # And how many works must carry it. This is the guard that stops the feature
 # recommending a TYPO: `hermoine granger` trigram-matches the misspelled facet
@@ -1267,6 +1283,26 @@ def _did_you_mean(db, q: str, min_sim: float | None = None) -> list[Suggestion]:
     return out
 
 
+class Interpreted(BaseModel):
+    """A sentence read as a search, offered when the literal words found nothing.
+
+    OFFERED, never silently applied. The frontend re-runs this and says what it
+    did, which keeps two things true that matter more than the round trip it
+    costs: the address bar ends up holding the query that actually ran, so the
+    page is shareable and the back button works — and the reader can see the
+    interpretation was a guess and go back to their own words.
+
+    Quietly rewriting somebody's search is how a search engine loses their
+    trust the first time it guesses wrong, and this one guesses.
+    """
+    query: str
+    # Forward-referenced: `ExtractedTerm` is defined with the extractor, far
+    # below this, and the model is REUSED rather than copied so the chips the
+    # search offers and the chips the extractor returns cannot drift apart.
+    # Resolved by the `model_rebuild()` that follows that definition.
+    terms: List["ExtractedTerm"] = []
+
+
 class SearchResponse(BaseModel):
     total: int
     count_is_capped: bool = False  # True when total hit the count ceiling (show "5000+")
@@ -1295,6 +1331,10 @@ class SearchResponse(BaseModel):
     # Spelling rescues, populated only when the search found nothing at all.
     # See _did_you_mean.
     suggestions: List[Suggestion] = []
+    # What the reader probably MEANT, when they typed a sentence rather than a
+    # search. Populated only on a search that found nothing (or nearly
+    # nothing) from typed words. See `_interpret`.
+    interpreted: Optional[Interpreted] = None
 
 
 # (column name, descending). Stored as names rather than bound expressions so the
@@ -3711,6 +3751,44 @@ def search(          # NOT async — see below
         # reasons. Removed rather than retuned.
         _suggestions = _did_you_mean(db, q, min_sim=SUGGEST_NEAR_SIM)
 
+    # ── And the failure that came first: they typed a sentence ─────────────
+    #
+    # THE MEASUREMENT THAT PROMPTED THIS. Typed into the search box:
+    #
+    #   "a long drarry fic where draco isnt a total douche set in
+    #    4th-8th year no smut"          -> 0 results
+    #
+    # through the extractor, the same words:
+    #
+    #   ship:"Draco Malfoy/Harry Potter" fandom:"Harry Potter…"
+    #   tag:"Drarry" -tag:"Smut"        -> hundreds
+    #
+    # The extractor was built to read a fic-finder post pasted by somebody
+    # ANSWERING one, and lived behind /admin for that reason. But a reader
+    # describing what they want in their own words is the same problem, and
+    # theirs is the version that happens hundreds of times a day to people who
+    # never find out the site could have helped. A full-text search over titles
+    # and summaries cannot answer a sentence; the vocabulary can.
+    #
+    # Deliberately NOT applied here. This hands back an interpretation and the
+    # frontend re-runs it, so the address bar ends up holding the query that
+    # actually ran — shareable, back-buttonable — and the reader is told what
+    # was assumed. See `Interpreted`.
+    interpreted: Optional[Interpreted] = None
+    _words = len(_typed.split())
+    if (_typed and not _HAS_OPERATOR.search(_typed)
+            and (total == 0 and _words >= _NL_MIN_WORDS
+                 or 0 < total <= _NL_MAX_RESULTS and _words >= _NL_SENTENCE_WORDS)):
+        try:
+            _ex = extract(text=_typed, db=db)
+            # Only when it found something to search FOR. An extraction that
+            # returns the words back, or nothing, is not an interpretation —
+            # it is the same failed search with more steps.
+            if _ex.query and _ex.terms and _ex.query.strip() != _typed:
+                interpreted = Interpreted(query=_ex.query, terms=_ex.terms)
+        except Exception:
+            log.debug("interpretation failed", exc_info=True)
+
     # ── And the failure that actually happens: one term too many ────────────
     #
     # The spelling rescue above is gated on TYPED TEXT, so the searches most
@@ -3766,6 +3844,7 @@ def search(          # NOT async — see below
         hidden_explicit=hidden_explicit,
         parsed_tokens=[ParsedToken(**t) for t in parsed_tokens],
         suggestions=_suggestions,
+        interpreted=interpreted,
     )
     # What it cost, and therefore what it has earned. Computed before the cache
     # writes below so the in-process copy, the shared row and the edge all agree.
@@ -3885,6 +3964,14 @@ class ExtractedTerm(BaseModel):
     # chips honest: click that one and you get eighteen works, click the other
     # and you get three.
     with_query: Optional[int] = None
+
+
+
+# `Interpreted` and `SearchResponse` are declared with the search models, above
+# the extractor they borrow this from, so the forward reference is resolved here
+# — at import time, not on the first request that happens to need it.
+Interpreted.model_rebuild()
+SearchResponse.model_rebuild()
 
 
 class ExtractResponse(BaseModel):
