@@ -39,6 +39,7 @@ interface SiteSection { site: string; works: Work[]
   /** How many works this archive actually holds — NOT works.length,
    *  which is the per-archive cap. See hub_build.py. */
   total?: number }
+interface Quality { tag: string; works: number }
 interface RelatedHub {
   kind: "fandom" | "ship"
   slug: string
@@ -55,6 +56,8 @@ interface Hub {
   works: Work[]
   sections?: SiteSection[]
   related?: RelatedHub[]
+  /** What works here tend to be — the refinement chips. */
+  qualities?: Quality[]
 }
 
 const SITE_LABELS: Record<string, string> = {
@@ -198,10 +201,7 @@ export default async function ShipHub(
       )}
       <p className="hub__lede">
         {hub.work_count.toLocaleString()} works tagged with this pairing across
-        Archive of Our Own, FanFiction.net and FictionAlley. {" "}
-        <Link rel="nofollow" href={searchHref(hub.name)}>
-          Search all {hub.work_count.toLocaleString()} with filters →
-        </Link>
+        Archive of Our Own, FanFiction.net and FictionAlley.
       </p>
 
       {/* THE TOOL, ON THE PAGE — not a link to it.
@@ -237,18 +237,42 @@ export default async function ShipHub(
         </p>
       </form>
 
-      {/* One click each, for the three refinements people actually ask for.
-          Length and completion are the only ones true of EVERY hub — a tag
-          list would have to be per-hub to be honest, and this page has no
-          per-hub tag data. nofollow for the same reason every other search
-          link here carries it: `/*?` is disallowed in robots.txt, and these
-          exist for readers, not crawlers. */}
-      <ul className="hub-find__quick">
-        <li><Link rel="nofollow" href={`${searchHref(hub.name)}&status=complete`}>Complete</Link></li>
-        <li><Link rel="nofollow" href={`${searchHref(hub.name)}&word_count_min=100000`}>100k+ words</Link></li>
-        <li><Link rel="nofollow" href={`${searchHref(hub.name)}&word_count_max=10000`}>Under 10k</Link></li>
-        <li><Link rel="nofollow" href={`${searchHref(hub.name)}&sort=updated_desc`}>Recently updated</Link></li>
-      </ul>
+      {/* WHAT WORKS HERE ARE ACTUALLY LIKE.
+          These were a fixed list — complete, 100k+, under 10k, recently
+          updated — which is the same four suggestions on all 11,196 hubs and
+          says nothing about any of them. They are this hub's OWN most common
+          qualities now, sampled and filtered at build time, so Slow Burn
+          appears on the pairings that have it and does not on the ones that
+          do not. See hub_build.hub_qualities for what is excluded and why:
+          the hub's own names and nicknames, the writing process, the artefact,
+          and any word people write more often than they tag. */}
+      {!!hub.qualities?.length && (
+        <div className="hub-find__quick">
+          <span className="hub-find__quick-label">Popular here</span>
+          <ul>
+            {hub.qualities.slice(0, 8).map(q => (
+              <li key={q.tag}>
+                <Link rel="nofollow"
+                  href={`${searchHref(hub.name)}&tags=${encodeURIComponent(q.tag)}`}>
+                  {q.tag}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Length and completion, which are true of every hub and so belong in
+          the fixed row rather than up there with the ones that are not. */}
+      <div className="hub-find__quick hub-find__quick--plain">
+        <span className="hub-find__quick-label">Or narrow by</span>
+        <ul>
+          <li><Link rel="nofollow" href={`${searchHref(hub.name)}&status=complete`}>Complete</Link></li>
+          <li><Link rel="nofollow" href={`${searchHref(hub.name)}&word_count_min=100000`}>100k+ words</Link></li>
+          <li><Link rel="nofollow" href={`${searchHref(hub.name)}&word_count_max=10000`}>Under 10k</Link></li>
+          <li><Link rel="nofollow" href={`${searchHref(hub.name)}&sort=updated_desc`}>Recently updated</Link></li>
+        </ul>
+      </div>
 
       {/* One section per archive rather than one merged list — see the fandom
           hub for why a single cross-archive ranking could only ever return AO3. */}

@@ -64,6 +64,14 @@ class SiteSection(BaseModel):
     total: int = 0
 
 
+class Quality(BaseModel):
+    """One thing works in this hub tend to be, offered as a one-click
+    refinement. `works` is the count within a sample, so it ranks rather than
+    measures — see hub_build.hub_qualities."""
+    tag: str
+    works: int
+
+
 class RelatedHub(BaseModel):
     """Another hub worth a link from this one. `kind` is "fandom" or "ship"."""
     kind: str
@@ -88,6 +96,11 @@ class HubDetail(BaseModel):
     # sideways: the index linked 11,190 hubs, each hub linked 100 story pages,
     # and no hub linked to any other.
     related: list[RelatedHub] = []
+    # What works here tend to BE. The page's refinement chips: real tags from
+    # this hub's own works rather than a generic list, so "Slow Burn" appears
+    # on the pairings that have it and not on the ones that do not. Empty on a
+    # hub built before the column existed.
+    qualities: list[Quality] = []
 
 
 # Both hub tables have the same shape, so listing and detail differ only in the
@@ -222,7 +235,8 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     table = _TABLES[kind]
     response.headers["Cache-Control"] = CACHE
     hub = db.execute(text(
-        f"SELECT slug, name, work_count, top_ids, top_by_site, site_counts "
+        f"SELECT slug, name, work_count, top_ids, top_by_site, site_counts, "
+        f"       qualities "
         f"  FROM {table} WHERE slug = :s"
     ), {"s": slug}).fetchone()
     if not hub:
@@ -332,9 +346,12 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
 
     related = _related(db, kind, hub[0], hub[1], _fandoms, _rels)
 
+    qualities = [Quality(tag=q["tag"], works=int(q.get("works") or 0))
+                 for q in (hub[6] or []) if q.get("tag")]
+
     return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2],
                      nicknames=nicknames, works=works, sections=sections,
-                     related=related)
+                     related=related, qualities=qualities)
 
 
 @router.get("", response_model=list[HubSummary])

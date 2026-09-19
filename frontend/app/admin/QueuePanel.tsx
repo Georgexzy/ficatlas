@@ -3,23 +3,18 @@
 import { useCallback, useEffect, useState } from "react"
 
 /**
- * The fic-finder posts waiting for an answer.
+ * The fic-finder posts waiting for an answer — the left half of Outreach.
  *
- * The outreach panel turns a post into a search in seconds; finding the posts
- * was still somebody remembering to look, and the measurement said that was
- * the binding constraint — Reddit sent SEVEN sessions in thirty days, against
- * eighty from Google, on a site whose whole thesis is that those threads are
- * the audience already asking the question it answers.
+ * It used to be a tab of its own beside the finder, which made answering a
+ * post a four-step tab dance: open it on Reddit, select the text, switch tab,
+ * paste. The two are one workflow, so they are now one screen: pick a post
+ * here and the finder next door has already read it.
  *
- * So this is the worklist, fetched and read offline by reddit_queue.py. It
- * posts nothing anywhere: clicking through opens Reddit in a tab, the reply is
- * written next door in Outreach, and a person sends it.
- *
- * Ordered by whether there is an answer and then by how FEW works it takes to
- * give it, because a post resolving to four works can be answered and one
- * resolving to five thousand cannot.
+ * Ordering is the whole feature. ANSWERABLE first — fewest works, because four
+ * can be read and five thousand cannot — with NEWEST available for when a
+ * thread is live and arriving late is the same as not arriving.
  */
-interface Post {
+export interface Post {
   id: string
   subreddit: string
   title: string
@@ -36,28 +31,46 @@ const AGO = (iso?: string | null) => {
   if (!iso) return ""
   const h = Math.round((Date.now() - Date.parse(iso)) / 3_600_000)
   if (!isFinite(h)) return ""
-  return h < 1 ? "just now" : h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`
+  return h < 1 ? "just now" : h < 24 ? `${h}h` : `${Math.round(h / 24)}d`
 }
 
-export default function QueuePanel() {
+export default function QueuePanel(
+  { selectedId, onPick, onCount }: {
+    selectedId?: string | null
+    onPick: (p: Post) => void
+    onCount?: (n: number) => void
+  },
+) {
   const [posts, setPosts] = useState<Post[] | null>(null)
   const [state, setState] = useState<"new" | "answered" | "skipped">("new")
+  const [order, setOrder] = useState<"answerable" | "newest">("answerable")
+  const [sub, setSub] = useState("")
+  const [search, setSearch] = useState("")
+  const [subs, setSubs] = useState<{ subreddit: string; waiting: number }[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
+  const [fetching, setFetching] = useState<string | null>(null)
 
-  const load = useCallback(async (s: string) => {
-    setError(null); setPosts(null)
+  const load = useCallback(async () => {
+    setError(null)
     try {
-      const r = await fetch(`/api/queue?state=${s}`, { credentials: "include" })
+      const qs = new URLSearchParams({ state, order, subreddit: sub, search })
+      const r = await fetch(`/api/queue?${qs}`, { credentials: "include" })
       if (!r.ok) throw new Error(`Could not load the queue (${r.status}).`)
-      setPosts(await r.json())
+      const data: Post[] = await r.json()
+      setPosts(data)
+      if (state === "new") onCount?.(data.length)
     } catch (e: any) { setError(e.message) }
-  }, [])
+  }, [state, order, sub, search, onCount])
 
-  useEffect(() => { load(state) }, [state, load])
+  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    fetch("/api/queue/counts", { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && setSubs(d.subreddits ?? []))
+      .catch(() => {})
+  }, [posts])
 
   const mark = async (id: string, to: string) => {
-    setBusy(id)
     try {
       await fetch(`/api/queue/${encodeURIComponent(id)}/state`, {
         method: "POST", credentials: "include",
@@ -66,70 +79,98 @@ export default function QueuePanel() {
       })
       setPosts(p => (p ?? []).filter(x => x.id !== id))
     } catch { /* leaving the row up is the honest failure */ }
-    finally { setBusy(null) }
+  }
+
+  const fetchNow = async () => {
+    setFetching("Fetching…")
+    try {
+      const r = await fetch("/api/queue/refresh",
+        { method: "POST", credentials: "include" })
+      const d = await r.json()
+      // The fetch runs behind the response — a run walks the feeds with a
+      // twenty-second gap, so holding the button would mean a two-minute
+      // spinner for something the next load picks up anyway.
+      setFetching(d.started
+        ? "Fetching in the background — reload in a minute"
+        : d.reason ?? "Not now")
+    } catch { setFetching("Could not start a fetch") }
+    setTimeout(() => setFetching(null), 8000)
   }
 
   return (
-    <>
-      <h1 className="settings-title">Posts to answer</h1>
-      <p className="admin-note">
-        Fetched from the Lost Fic and Fic Search flairs and read through the
-        same extractor the Outreach tab uses. Nothing is posted anywhere —
-        open the post, write the reply next door, and send it yourself.
-      </p>
-
-      <div className="admin-tabs">
+    <div className="queue">
+      <div className="queue__bar">
         {(["new", "answered", "skipped"] as const).map(s => (
           <button key={s} onClick={() => setState(s)}
             className={`library-tab ${state === s ? "library-tab--on" : ""}`}>
             {s === "new" ? "Waiting" : s === "answered" ? "Answered" : "Skipped"}
           </button>
         ))}
+        <button className="queue__fetch" onClick={fetchNow}>Fetch now</button>
+      </div>
+
+      {fetching && <p className="queue__note">{fetching}</p>}
+
+      <div className="queue__filters">
+        <input className="queue__search" type="search" value={search}
+          placeholder="Filter by words in the post"
+          onChange={e => setSearch(e.target.value)} />
+        <select value={sub} onChange={e => setSub(e.target.value)}>
+          <option value="">All subreddits</option>
+          {subs.map(s => (
+            <option key={s.subreddit} value={s.subreddit}>
+              r/{s.subreddit} ({s.waiting})
+            </option>
+          ))}
+        </select>
+        <select value={order} onChange={e => setOrder(e.target.value as any)}>
+          <option value="answerable">Most answerable</option>
+          <option value="newest">Newest first</option>
+        </select>
       </div>
 
       {error && <p className="settings-save-error" role="alert">{error}</p>}
       {!posts && !error && <p className="loading">Reading the queue…</p>}
       {posts && posts.length === 0 && (
-        <p className="admin-note">
-          Nothing here. The fetcher runs on a timer and is deliberately slow —
-          Reddit rate-limits an unauthenticated feed after one request, so a
-          run takes a couple of minutes and covers one subreddit at a time.
+        <p className="queue__note">
+          Nothing here. The fetcher runs hourly and is deliberately slow —
+          Reddit rate-limits an unauthenticated feed after one request, so a run
+          covers one subreddit at a time.
         </p>
       )}
 
       <ul className="queue-list">
         {(posts ?? []).map(p => (
-          <li key={p.id} className="queue-item">
-            <div className="queue-item__head">
-              <a href={p.url} target="_blank" rel="noopener noreferrer"
-                 className="queue-item__title">{p.title}</a>
-              {/* The count is the whole ranking, so it leads. A post we cannot
-                  answer says so rather than showing a zero that reads as a
-                  loading state. */}
-              <span className={`queue-item__works ${
-                p.link_unsafe ? "queue-item__works--unsafe"
-                : p.works ? "queue-item__works--yes" : "queue-item__works--no"}`}>
-                {p.link_unsafe ? "rules forbid the link"
-                  : p.works ? `${p.works.toLocaleString()}${p.works >= 2000 ? "+" : ""} works`
-                  : "no answer yet"}
+          <li key={p.id}
+            className={`queue-item ${selectedId === p.id ? "queue-item--on" : ""}`}>
+            <button className="queue-item__pick" onClick={() => onPick(p)}>
+              <span className="queue-item__head">
+                <span className="queue-item__title">{p.title}</span>
+                <span className={`queue-item__works ${
+                  p.link_unsafe ? "queue-item__works--unsafe"
+                  : p.works ? "queue-item__works--yes" : "queue-item__works--no"}`}>
+                  {p.link_unsafe ? "rules forbid the link"
+                    : p.works ? `${p.works.toLocaleString()}${p.works >= 2000 ? "+" : ""}`
+                    : "no answer"}
+                </span>
               </span>
+              <span className="queue-item__meta">
+                r/{p.subreddit} · {AGO(p.posted_at)}
+              </span>
+            </button>
+            <div className="queue-item__acts">
+              <a href={p.url} target="_blank" rel="noopener noreferrer">Open on Reddit</a>
+              {state === "new" && (
+                <>
+                  <button onClick={() => mark(p.id, "answered")}>Answered</button>
+                  <button className="queue-item__skip"
+                    onClick={() => mark(p.id, "skipped")}>Skip</button>
+                </>
+              )}
             </div>
-            <p className="queue-item__meta">
-              r/{p.subreddit} · {AGO(p.posted_at)}
-            </p>
-            {p.query && <p className="queue-item__query">{p.query}</p>}
-            {p.body && <p className="queue-item__body">{p.body.slice(0, 260)}</p>}
-            {state === "new" && (
-              <div className="queue-item__acts">
-                <button disabled={busy === p.id}
-                  onClick={() => mark(p.id, "answered")}>Answered</button>
-                <button disabled={busy === p.id} className="queue-item__skip"
-                  onClick={() => mark(p.id, "skipped")}>Skip</button>
-              </div>
-            )}
           </li>
         ))}
       </ul>
-    </>
+    </div>
   )
 }
