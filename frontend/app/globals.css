@@ -6279,3 +6279,8 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   margin-left: 6px; font-size: 10.5px; opacity: .7;
   font-variant-numeric: tabular-nums;
 }
+
+/* The post, beside the reply you just copied. A link styled as a button
+   because it sits in a row of them and does the same kind of thing — but it
+   is an anchor, so middle-click and "open in new tab" work as expected. */
+.outreach__open { text-decoration: none; display: inline-flex; align-items: center; }
