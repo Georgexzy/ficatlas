@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from api import (search, stories, stats, library, settings, auth, userdata,
                  takedown, password_reset, admin, permissions, hubs,
-                 follows, traffic)
+                 follows, traffic, queue)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -243,6 +243,7 @@ app.include_router(follows.router, prefix="/api/follows", tags=["follows"])
 # The beacon under this prefix is public; every report under it is owner-only.
 # See api/traffic.py for why the reports sit at owner rather than admin.
 app.include_router(traffic.router, prefix="/api/traffic", tags=["traffic"])
+app.include_router(queue.router, prefix="/api/queue", tags=["queue"])
 
 # ── Degrade honestly when the database is saturated ─────────────────────────
 #

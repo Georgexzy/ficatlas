@@ -4,6 +4,7 @@ import Link from "next/link"
 import TakedownQueue from "./TakedownQueue"
 import TrafficPanel from "./TrafficPanel"
 import OutreachPanel from "./OutreachPanel"
+import QueuePanel from "./QueuePanel"
 import BackLink from "../BackLink"
 import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
@@ -219,7 +220,7 @@ interface Person {
 }
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<"health" | "takedowns" | "traffic" | "outreach">("health")
+  const [tab, setTab] = useState<"health" | "takedowns" | "traffic" | "outreach" | "queue">("health")
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab")
     if (t === "takedowns" || t === "traffic") setTab(t)
@@ -300,11 +301,17 @@ export default function AdminPage() {
             something about it. Answering fic-finder threads is the only
             outreach channel where the reply is useful on its own terms and the
             link is the demonstration — see OutreachPanel. */}
+        {/* The worklist that feeds the tab next to it. Outreach answers a post
+            in seconds; this is where the posts come from, which is the part
+            that was still a person remembering to look. */}
+        <button className={`library-tab ${tab === "queue" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("queue")}>Posts to answer</button>
         <button className={`library-tab ${tab === "outreach" ? "library-tab--on" : ""}`}
           onClick={() => setTab("outreach")}>Fic finder</button>
       </div>
 
-      {tab === "outreach" ? <OutreachPanel /> :
+      {tab === "queue" ? <QueuePanel /> :
+       tab === "outreach" ? <OutreachPanel /> :
        tab === "traffic" ? <TrafficPanel /> :
        tab === "takedowns" ? <TakedownQueue /> : (
       <>

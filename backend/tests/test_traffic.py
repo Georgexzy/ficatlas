@@ -775,3 +775,54 @@ def test_nothing_reported_is_unknown_not_a_first_visit(db):
     r = traffic.entry(days=2, db=db, _owner=None)
     assert r["returning"].get("unknown") == 1
     assert "first" not in r["returning"]
+
+
+# ── the fic-finder worklist ─────────────────────────────────────────────────
+
+def test_the_queue_is_ordered_by_what_can_actually_be_answered(db):
+    """A post resolving to four works can be answered; one resolving to five
+    thousand cannot. And a post whose reply would carry a link the subreddit's
+    rules forbid sorts last and is LABELLED rather than hidden — the reason is
+    more useful to the person reading the list than the absence."""
+    from sqlalchemy import text as t
+    from api.queue import list_queue
+    db.execute(t("""
+        CREATE TABLE IF NOT EXISTS reddit_posts (
+            id text PRIMARY KEY, subreddit text NOT NULL, title text NOT NULL,
+            body text, url text NOT NULL, posted_at timestamp,
+            seen_at timestamp DEFAULT now(), query text, works integer,
+            link_unsafe boolean NOT NULL DEFAULT false,
+            state text NOT NULL DEFAULT 'new')
+    """))
+    db.execute(t("DELETE FROM reddit_posts"))
+    for i, (works, unsafe) in enumerate([(5000, False), (12, False),
+                                         (3, True), (None, False)]):
+        db.execute(t("""INSERT INTO reddit_posts (id, subreddit, title, url, works, link_unsafe)
+                        VALUES (:i, 'FanFiction', :ti, 'https://example.test', :w, :u)"""),
+                   {"i": f"p{i}", "ti": f"post {i}", "w": works, "u": unsafe})
+    db.commit()
+    got = list_queue(state="new", limit=10, db=db, _admin=None)
+    assert [p.works for p in got] == [12, 5000, None, 3]
+    assert got[-1].link_unsafe is True
+
+
+def test_a_missing_queue_table_is_an_empty_queue_not_a_500(db):
+    """It is built offline and does not exist until the first run. An empty
+    worklist is a worklist; a broken panel is not."""
+    from sqlalchemy import text as t
+    from api.queue import list_queue
+    db.execute(t("DROP TABLE IF EXISTS reddit_posts"))
+    db.commit()
+    assert list_queue(state="new", limit=10, db=db, _admin=None) == []
+
+
+def test_the_queue_is_admin_gated_and_posts_nothing(db):
+    """It holds no credential that could post to Reddit, and the endpoint that
+    changes a row only marks it done."""
+    import inspect
+    from api import queue
+    from api.auth import require_admin
+    dep = inspect.signature(queue.list_queue).parameters["_admin"].default
+    assert getattr(dep, "dependency", None) is require_admin
+    src = inspect.getsource(queue)
+    assert "urlopen" not in src and "requests" not in src

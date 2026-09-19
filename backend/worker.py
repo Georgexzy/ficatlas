@@ -1251,6 +1251,33 @@ async def _ship_alias_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _reddit_queue_loop() -> None:
+    """Fetch the fic-finder posts nobody has answered yet.
+
+    Its own loop and its own interval, because it is the only job here whose
+    pace is set by somebody else's rate limit rather than by our cost. Reddit
+    429s the second unauthenticated feed request from an address, so a run
+    walks one subreddit at a time with a twenty-second gap and simply takes the
+    misses — see reddit_queue.py.
+
+    Hourly. A fic-finder post collects its answers in a day or two, so an hour
+    is soon enough to be useful and slow enough to be a good guest.
+    """
+    import reddit_queue
+
+    interval = _num("REDDIT_QUEUE_INTERVAL_HOURS", 1) * 3600
+    await asyncio.sleep(_num("REDDIT_QUEUE_START_DELAY_SEC", 600))
+    while True:
+        try:
+            stats = await asyncio.to_thread(reddit_queue.run)
+            if stats["new"]:
+                log.info("reddit queue: %s new posts, %s answerable",
+                         f"{stats['new']:,}", f"{stats['answerable']:,}")
+        except Exception as e:
+            log.warning(f"reddit queue failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _stats_loop() -> None:
     """Recompute the index totals on a timer, so no request ever has to.
 
@@ -1705,6 +1732,13 @@ async def main() -> None:
     if _flag("REFRESH_STATS", "true"):
         tasks.append(asyncio.create_task(_stats_loop()))
         log.info("index totals refresh enabled (keeps the scan off the API)")
+
+    # The one job here paced by somebody else's rate limit. Off by default is
+    # tempting and would be wrong: the queue is empty until it runs, and an
+    # empty worklist reads as a broken feature rather than as an unset flag.
+    if _flag("RUN_REDDIT_QUEUE", "true"):
+        tasks.append(asyncio.create_task(_reddit_queue_loop()))
+        log.info("reddit fic-finder queue enabled (hourly, one feed at a time)")
 
     if _flag("RUN_SERIES_WORDCOUNT", "true"):
         tasks.append(asyncio.create_task(_series_wordcount_loop()))

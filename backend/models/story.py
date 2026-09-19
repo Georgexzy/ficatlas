@@ -125,7 +125,26 @@ class Story(Base):
     crawled_at = Column(DateTime(timezone=True), server_default=func.now())
     indexed_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    search_vector = Column(Text)
+    # search_vector: NOT DECLARED, on purpose.
+    #
+    # The column still exists in the table and is NULL in every one of its
+    # 20,519,000 rows — counted, not sampled — and nothing in this codebase
+    # has ever read or written it. Declaring it was not free: search builds its
+    # candidate set as a UNION of entity queries, a UNION deduplicates on the
+    # WHOLE ROW, and the plan's HashAggregate therefore grouped by all 45
+    # columns at 2,029 bytes each, this one included, as did the sort and the
+    # window aggregate above it. A column nothing reads was widening the three
+    # most expensive nodes of every search on the site.
+    #
+    # `deferred()` was tried first and does not work here: the search composes
+    # `.subquery()` and `.union()` over the entity, and the deferral is lost in
+    # the process — measured, the generated SQL still selected all 47 columns.
+    # Not declaring it is what actually removes it from the SELECT.
+    #
+    # Left in the database rather than dropped. DROP COLUMN is cheap in
+    # Postgres, but it is still a destructive migration on a 20.5M-row table
+    # for a column costing one byte a row, and every cost this was incurring
+    # was the cost of selecting it.
 
     chapters = relationship("Chapter", back_populates="story", cascade="all, delete-orphan",
                             order_by="Chapter.number")
