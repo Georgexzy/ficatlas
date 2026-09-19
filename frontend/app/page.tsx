@@ -1398,6 +1398,15 @@ function SearchPageInner() {
   // not bounce them straight back to the interpretation, and this is what
   // makes "search for what I typed" stick without a second flag.
   const interpretedRef = useRef<string>("")
+  // The words to write into `from=` on the next search, set when an
+  // interpretation is about to be re-run.
+  const pendingFromRef = useRef<string>("")
+  // Mirrors `readAs.typed` for the URL writer, which runs inside a callback
+  // that must not take `readAs` as a dependency — doing so rebuilds the
+  // search function every time the banner changes, and the banner changes
+  // because of a search.
+  const readAsRef = useRef<string>("")
+  const [copied, setCopied] = useState(false)
   // doSearch calls itself to run an interpretation, and a useCallback cannot
   // name itself in its own dependency list. The ref is the usual way out and
   // is more honest than disabling the lint rule.
@@ -2064,6 +2073,16 @@ function SearchPageInner() {
       if (URL_DEFAULTS[k] === String(v)) continue
       qs.set(k, String(v))
     }
+    // The words the reader actually typed, when this search is a reading of
+    // them. Carried in the address so the explanation survives being shared,
+    // and consumed here so it lands on the interpreted search rather than on
+    // the failed one that produced it.
+    if (pendingFromRef.current) {
+      qs.set("from", pendingFromRef.current)
+      pendingFromRef.current = ""
+    } else if (readAsRef.current) {
+      qs.set("from", readAsRef.current)
+    }
     // Remember where to come back to. Recorded here rather than in an effect
     // watching the URL, because this is the one place a search is deliberately
     // performed — the URL also changes on remount and on Back, and neither is a
@@ -2126,7 +2145,16 @@ function SearchPageInner() {
       // their words and stays there rather than bouncing back here.
       if (data.interpreted && interpretedRef.current !== effectiveQuery) {
         interpretedRef.current = effectiveQuery
+        // The reader's own words go into the ADDRESS, not just into state.
+        //
+        // That is what turns an answered question into something worth
+        // sending: a link that opens on "we read your words as this search"
+        // carries the demonstration inside it, where a bare
+        // `?q=ship:"..."+tag:"..."` lands somebody on a query language they
+        // did not write, at the moment they are paying most attention.
+        pendingFromRef.current = effectiveQuery
         setReadAs({ typed: effectiveQuery, terms: data.interpreted.terms ?? [] })
+        readAsRef.current = effectiveQuery
         setQuery(data.interpreted.query)
         doSearchRef.current?.(true, undefined, data.interpreted.query)
         return
@@ -2134,7 +2162,9 @@ function SearchPageInner() {
       // Any other search clears the banner: it describes THIS result set, and
       // leaving it up over the next one would attribute an interpretation to a
       // search that never had one.
-      if (!data.interpreted && interpretedRef.current !== effectiveQuery) setReadAs(null)
+      if (!data.interpreted && interpretedRef.current !== effectiveQuery) {
+        setReadAs(null); readAsRef.current = ""
+      }
       setParsedTokens((data as any).parsed_tokens ?? [])
       lastSearchCache = { url: qs.toString(), data }
       // Paging used to scroll to the top of the page HERE, and it was in the
@@ -2176,6 +2206,23 @@ function SearchPageInner() {
   // Published for the self-call above, after every render so it is never the
   // stale closure from the render that started the search.
   doSearchRef.current = doSearch
+
+  // ARRIVING ON A SHARED LINK. `from=` holds the words somebody typed before
+  // the search was read out of them, so the person the link was sent to gets
+  // the same explanation the person who ran it did — which is the whole reason
+  // the link is worth sending.
+  //
+  // Terms are not carried in the address: they would double its length for
+  // something the chips can live without, and the query itself already names
+  // them. The banner degrades to the sentence and the undo.
+  useEffect(() => {
+    const from = rawParams.get("from")
+    if (from && !readAsRef.current) {
+      readAsRef.current = from
+      setReadAs({ typed: from, terms: [] })
+      interpretedRef.current = from   // do not re-interpret what is already read
+    }
+  }, [rawParams])
 
 
   // Fetch a page the reader has not asked for yet, on hover or focus.
@@ -3042,6 +3089,23 @@ function SearchPageInner() {
                     ✕ Clear {activeFilters} filter{activeFilters === 1 ? "" : "s"}
                   </Link>
                 )}
+                {/* SOMETHING TO HAND OVER.
+                    The site's one genuinely shareable object is an answered
+                    question — somebody asks for a half-remembered fic and a
+                    link finds it — and until now there was no way to produce
+                    one except copying the address bar. `from=` rides along, so
+                    what opens is the explanation and not a query language the
+                    recipient did not write. */}
+                <button type="button" className="results-bar__share"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(window.location.href)
+                      setCopied(true); setTimeout(() => setCopied(false), 2000)
+                    } catch { /* a browser that refuses the clipboard says nothing */ }
+                  }}
+                  title="Copy a link to this search">
+                  {copied ? "Link copied" : "Copy link"}
+                </button>
                 <span className="results-bar__count">
                   {/* The backend counts to a ceiling of 5000 and stops, so a
                       capped total literally arrives as 5001. Printing that as
@@ -3184,6 +3248,7 @@ function SearchPageInner() {
                   </p>
                   <button className="read-as__undo"
                     onClick={() => { setQuery(readAs.typed); setReadAs(null)
+                                     readAsRef.current = ""
                                      doSearch(true, undefined, readAs.typed) }}>
                     Search for “{readAs.typed.length > 48
                       ? readAs.typed.slice(0, 48) + "…" : readAs.typed}” instead

@@ -44,7 +44,7 @@ router = APIRouter()
 
 @router.post("/hit", status_code=204)
 def hit(request: Request, path: str = Form(...), ref: str = Form(""),
-        kind: str = Form("page")):
+        kind: str = Form("page"), seen: str = Form("")):
     """Record one pageview, or one click through to the archive.
 
     `kind="out"` is the only other value accepted, and it is the answer to the
@@ -89,6 +89,28 @@ def hit(request: Request, path: str = Form(...), ref: str = Form(""),
     # silently recorded nothing at all.
     kind = "out" if kind == "out" else "page"
 
+    # HAS THIS BROWSER BEEN HERE BEFORE — and nothing else about it.
+    #
+    # Retention is the stage that decides whether any of the rest compounds,
+    # and it is the one stage this site had decided it could never measure: the
+    # visitor hash is salted with the DATE, so the same person on two days is
+    # two unrelated hashes. Measured over 30 days — 395 distinct visitor ids and
+    # 395 distinct (visitor, day) pairs, exactly equal, which is the proof that
+    # nothing links across a midnight. That is a deliberate privacy decision and
+    # it stays.
+    #
+    # So the browser answers the question instead, and hands over only the
+    # ANSWER. It keeps a last-seen date in its own localStorage, compares it,
+    # and sends one of three words. What arrives here is a bucket, not an
+    # identifier: it cannot be joined to another visit, cannot distinguish two
+    # people in the same bucket, and is the same three values for everybody.
+    # The row it lands on is still keyed by a hash that expires at midnight.
+    #
+    # Constrained to the vocabulary for the same reason `kind` is: a free-text
+    # field on a public endpoint is a way to fill the table with categories
+    # every later report has to learn to ignore.
+    seen = seen if seen in ("first", "week", "return") else None
+
     ua = request.headers.get("user-agent", "")
     # `ref` and not this request's own Referer header: the beacon is a POST made
     # BY the page, so its Referer is always the page itself. Falling back to it
@@ -102,6 +124,7 @@ def hit(request: Request, path: str = Form(...), ref: str = Form(""),
             ref=tracking.ref_host(ref),
             bot=tracking.is_bot(ua),
             kind_of_bot=tracking.bot_kind(ua),
+            seen=seen,
         )
     except Exception:
         # Analytics must never be able to fail a request. There is nothing the
@@ -747,6 +770,12 @@ def referrers(days: int = Query(30, ge=1, le=365),
 # distinction `_OUT_SINCE` exists to make about outbound clicks.
 _KIND_SINCE = "2026-09-18"
 
+# When the browser started answering "have I been here before". Before this
+# there is no data rather than no returning readers — the same distinction
+# `_OUT_SINCE` exists to make about outbound clicks, and it matters more here
+# because every visit before it reads as unknown.
+_SEEN_SINCE = "2026-09-19"
+
 
 @router.get("/scrapers")
 def scrapers(days: int = Query(30, ge=1, le=365),
@@ -1000,4 +1029,21 @@ def entry(days: int = Query(30, ge=1, le=365),
     for h in hubs:
         h["label"] = _labels(db, [h["path"]]).get(h["path"], h["path"])
 
-    return {"since": first.isoformat(), "entries": entries, "hubs": hubs}
+    # DID ANYBODY COME BACK. See `hit` for why this is a bucket the browser
+    # computes: the visitor hash cannot answer it, by design.
+    #
+    # Sessions whose FIRST page reported a bucket, so this counts arrivals
+    # rather than pageviews — and a visit that reported nothing (a browser that
+    # will not remember, or Do Not Track) is counted as unknown rather than as
+    # a first visit, because those are different facts.
+    returning = {r[0] or "unknown": r[1] for r in db.execute(text(f"""
+        SELECT seen, count(DISTINCT visitor) FROM visit_events e
+         WHERE e.at >= CAST(:first AS date)
+           AND e.at <  CAST(:last AS date) + interval '1 day'
+           AND NOT e.bot AND NOT ({_NOT_A_BROWSER}) AND NOT ({_SWARM})
+           AND e.kind = 'page'
+         GROUP BY 1
+    """), {"first": first, "last": last}).fetchall()}
+
+    return {"since": first.isoformat(), "entries": entries, "hubs": hubs,
+            "returning": returning, "returning_since": _SEEN_SINCE}

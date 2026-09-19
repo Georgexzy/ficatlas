@@ -1981,6 +1981,42 @@ def search(          # NOT async — see below
         # in the pool for queries that do not need it. This way only a search
         # asks for it, and the transaction gives it back.
         db.execute(sql_text("SET LOCAL work_mem = :wm"), {"wm": SEARCH_WORK_MEM})
+        # A FILTERED BROWSE MUST NOT SEQUENTIALLY SCAN 20.5M ROWS.
+        #
+        # `fandom:"Star Wars" complete` returned HTTP 503 after 20 seconds, on
+        # the live site, for as long as anyone had tried it. The plan:
+        #
+        #   Limit (rows=5001)
+        #     -> Seq Scan on stories (rows=135526)
+        #          Rows Removed by Filter: 835323
+        #          Buffers: shared hit=24096 read=105926
+        #
+        # 835,323 wide rows read off disk to find 5,001. And the planner was not
+        # being stupid: "Star Wars" expands to SIXTY fandom variants, the match
+        # set really is ~0.6% of the table, and an unordered LIMIT 5001 over a
+        # 0.6% filter genuinely is satisfied after ~4% of a sequential scan. Its
+        # arithmetic was right; 4% of this table is 1.7GB of I/O on a home
+        # server, and that is the part the cost model underweights.
+        #
+        # Not fixable by tuning what the model knows. Measured, in order:
+        # raising the statistics target on fandoms/tags/warnings to 2000 and
+        # re-analysing moved the estimate 144,873 -> 135,526 and changed the
+        # plan not at all; `random_page_cost` is already 1.1 for the SSD.
+        # Refusing the seq scan takes the same query to 2.5s.
+        #
+        # ONLY WHEN THERE IS NO TEXT, which is what makes this narrow. `q` has
+        # been reduced to `clean_text` far above, so this is exactly the browse
+        # shape — a filter over arrays, with a GIN index for every one of them
+        # and no reason ever to walk the table instead. A text search keeps the
+        # planner's own judgement, because its candidate arms are shaped around
+        # tsvector and kudos indexes the seq scan is not competing with.
+        #
+        # `enable_seqscan = off` is a penalty, not a prohibition: Postgres still
+        # picks a sequential scan where no index can serve the query at all,
+        # which is what keeps the small facet lookups in the same transaction
+        # correct.
+        if not q:
+            db.execute(sql_text("SET LOCAL enable_seqscan = off"))
     except Exception:
         # Narrow, and it logs. This block silently did NOTHING for as long as it
         # has existed: `text` is imported here as `sql_text`, so every call

@@ -96,3 +96,49 @@ class TestStatusVocabulary:
         import api.search as s
         assert s.STATUS_WORDS is STATUS_WORDS
         assert set(STATUS_WORDS) >= {"ongoing", "wip", "complete", "completed"}
+
+
+# ── the browse path must never be allowed to walk the table ────────────────
+
+def test_a_text_free_search_refuses_a_sequential_scan(db, monkeypatch):
+    """`fandom:"Star Wars" complete` returned HTTP 503 after 20 seconds.
+
+    The plan read 835,323 wide rows off disk to satisfy an unordered
+    LIMIT 5001 over a filter matching 0.6% of the table — 1.7GB of I/O on a
+    home server. The planner's arithmetic was right and its I/O cost model was
+    not; raising the statistics target on the array columns moved the estimate
+    by 6% and the plan not at all.
+
+    Asserted as the INVARIANT rather than as a timing, because a timing test
+    here measures the page cache: the same query is 13s cold and 1s warm, and
+    the 503 only ever happened cold.
+    """
+    from sqlalchemy import text as t
+    seen = []
+    real = db.execute
+
+    def spy(stmt, *a, **kw):
+        try:
+            seen.append(str(stmt))
+        except Exception:
+            pass
+        return real(stmt, *a, **kw)
+
+    monkeypatch.setattr(db, "execute", spy)
+    from fastapi.testclient import TestClient
+    from db.session import get_db
+    from main import app
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        TestClient(app).get("/api/search", params={"q": 'fandom:"Star Wars" complete'})
+        assert any("enable_seqscan" in s for s in seen), \
+            "a browse with no free text must refuse the sequential scan"
+        seen.clear()
+        # And a TEXT search keeps the planner's own judgement: its candidate
+        # arms are built around tsvector and kudos indexes that the sequential
+        # scan is not competing with.
+        TestClient(app).get("/api/search", params={"q": "hogwarts"})
+        assert not any("enable_seqscan" in s for s in seen), \
+            "a text search must not have its plan forced"
+    finally:
+        app.dependency_overrides.pop(get_db, None)

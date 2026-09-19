@@ -243,7 +243,8 @@ def ref_host(referer: str) -> Optional[str]:
 def record(kind: str, path: str, visitor: str, *,
            ref: Optional[str] = None, q: Optional[str] = None,
            results: Optional[int] = None, bot: bool = False,
-           kind_of_bot: Optional[str] = None) -> None:
+           kind_of_bot: Optional[str] = None,
+           seen: Optional[str] = None) -> None:
     """Queue one event. Never raises, never blocks on I/O."""
     global _dropped
     if not ENABLED:
@@ -259,6 +260,10 @@ def record(kind: str, path: str, visitor: str, *,
             "results": results,
             "bot": bool(bot),
             "bot_kind": (kind_of_bot or None),
+            # first | week | return, or nothing. See api/traffic.hit for why
+            # this is a bucket the BROWSER computes rather than an identifier
+            # this server derives.
+            "seen": (seen or None),
         }
     except Exception:
         return
@@ -293,10 +298,10 @@ def flush() -> int:
             db.execute(text("""
                 INSERT INTO visit_events
                     (at, visitor, kind, path, ref_host, q, results, bot,
-                     bot_kind)
+                     bot_kind, seen)
                 VALUES
                     (:at, :visitor, :kind, :path, :ref_host, :q, :results, :bot,
-                     :bot_kind)
+                     :bot_kind, :seen)
             """), batch)
             db.commit()
         return len(batch)

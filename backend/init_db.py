@@ -1079,6 +1079,15 @@ CREATE TABLE IF NOT EXISTS visit_events (
 -- token that matched is a word from tracking._BOT_RE, never the user agent.
 ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS bot_kind VARCHAR(24);
 
+-- HAS THIS BROWSER BEEN HERE BEFORE: first | week | return.
+--
+-- Not an identifier and deliberately not derived here. The visitor hash is
+-- salted with the date so nothing links across a midnight, which means this
+-- site could not see a returning reader at all. The browser compares its own
+-- last-seen date in localStorage and sends the ANSWER — one of three words,
+-- the same three for everybody, joinable to nothing. See api/traffic.hit.
+ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS seen VARCHAR(8);
+
 CREATE INDEX IF NOT EXISTS ix_visit_events_at ON visit_events (at DESC);
 CREATE INDEX IF NOT EXISTS ix_visit_events_kind_at ON visit_events (kind, at DESC);
 
