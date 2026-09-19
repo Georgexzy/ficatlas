@@ -252,10 +252,45 @@ RULES = [
         # reader's XHR cannot be answered by it.
         "description": "Challenge the /story/ scraper botnet (19,705 IPs, 1 req each)",
         "action": "managed_challenge",
+        # AND NOT SOMEBODY WHO CLICKED A SEARCH RESULT.
+        #
+        # This carve-out was added after measuring what the rule cost. Two
+        # independent sources agree and neither is the dev traffic the first
+        # look blamed:
+        #
+        #   own beacon, comparable periods either side of 8 Sep:
+        #     sessions that opened a story page   75 -> 29   (-61%)
+        #     of which development sessions        2 ->  4   (i.e. not this)
+        #   the edge, successful /story/ loads per day:
+        #     40,903 · 42,909 · 67,374 · 103,529  ->  145 · 547 · 441 · 406
+        #
+        # Almost all of that second collapse is the botnet, which is the point
+        # of the rule. But the site's whole funnel ends at a story page — 104
+        # sessions searched last month, 38 opened a result, 8 reached an
+        # archive — and an interstitial sits exactly on the step where a reader
+        # decides to go and read.
+        #
+        # A REFERRER FROM THIS SITE is what separates them, and it is the one
+        # signal the measured botnet does not have: 19,705 addresses, one
+        # request each, arriving cold on story URLs it already knew. A reader
+        # arrives at a story page by clicking a search result, so their request
+        # carries ficatlas.com and is now let through.
+        #
+        # Spoofable, and deliberately accepted. Forging it costs one header —
+        # but doing so is a behaviour change we would SEE: successful /story/
+        # loads at the edge would climb back into the tens of thousands, and
+        # the traffic panel's scraper flag watches the same shape from the
+        # other side. A defence that can be adapted to, with the adaptation
+        # visible, is worth more here than one that also refuses the readers.
+        #
+        # Arrivals from a search engine to a story page are still challenged.
+        # That is ~4 sessions a month against ~560,000 refused requests a day,
+        # and it is the trade this carve-out deliberately does not make.
         "expression": 'starts_with(http.request.uri.path, "/story/") '
                       'and not starts_with(http.request.uri.path, "/story/offline-shell") '
                       'and not cf.client.bot '
-                      'and not http.cookie contains "sat="',
+                      'and not http.cookie contains "sat=" '
+                      'and not http.referer contains "ficatlas.com"',
     },
 ]
 

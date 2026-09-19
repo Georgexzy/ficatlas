@@ -6103,3 +6103,53 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   cursor: pointer; margin-right: 10px;
 }
 .results-bar__share:hover { border-color: var(--accent); color: var(--text); }
+
+/* ── Posts to answer ──────────────────────────────────────────────────────
+   The worklist that feeds the outreach tab. Ranked by whether there is an
+   answer and then by how few works it takes to give it, so the count is the
+   most important thing on each row and sits opposite the title. */
+.queue-list { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
+.queue-item {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 9px; padding: 13px 15px;
+}
+.queue-item__head {
+  display: flex; gap: 12px; align-items: baseline;
+  justify-content: space-between; flex-wrap: wrap;
+}
+.queue-item__title {
+  font-size: 14.5px; font-weight: 600; color: var(--text); text-decoration: none;
+}
+.queue-item__title:hover { text-decoration: underline; }
+.queue-item__works {
+  font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  padding: 2px 9px; border-radius: 999px;
+}
+.queue-item__works--yes {
+  background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text);
+}
+.queue-item__works--no { background: var(--surface); color: var(--text-faint); }
+.queue-item__works--unsafe {
+  background: color-mix(in srgb, var(--danger, #d9534f) 14%, transparent);
+  color: var(--danger, #d9534f);
+}
+.queue-item__meta { margin: 4px 0 0; font-size: 11.5px; color: var(--text-faint); }
+.queue-item__query {
+  margin: 7px 0 0; font-size: 12px; color: var(--text-dim);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  word-break: break-word;
+}
+.queue-item__body {
+  margin: 7px 0 0; font-size: 12.5px; color: var(--text-dim);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.queue-item__acts { margin: 10px 0 0; display: flex; gap: 8px; }
+.queue-item__acts button {
+  font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); cursor: pointer;
+}
+.queue-item__acts button:hover { border-color: var(--accent); }
+.queue-item__acts button:disabled { opacity: .5; cursor: default; }
+.queue-item__skip { color: var(--text-faint) !important; }
