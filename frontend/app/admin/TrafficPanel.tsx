@@ -329,7 +329,21 @@ interface HubRow {
   path: string; label: string; sessions: number; views: number
   searched: number; went_out: number
 }
-interface Entry { since: string; entries: EntryRow[]; hubs: HubRow[] }
+interface Entry {
+  since: string; entries: EntryRow[]; hubs: HubRow[]
+  /** first | week | return | unknown → sessions. See api/traffic.hit: the
+   *  browser answers this, because the visitor hash is salted per day and
+   *  cannot. */
+  returning: Record<string, number>
+  returning_since: string
+}
+
+const SEEN_LABEL: Record<string, string> = {
+  first:   "First time here",
+  week:    "Back within a week",
+  return:  "Back after a week or more",
+  unknown: "Did not say",
+}
 
 interface ScraperDay {
   day: string; visitors: number; events: number; searches: number
@@ -670,6 +684,33 @@ export default function TrafficPanel() {
                 </table>
             </details>
           )}
+        </>
+      )}
+
+      {/* DID ANYBODY COME BACK — the stage that decides whether any of the
+          rest compounds, and the one this site had decided it could never
+          measure. The visitor hash is salted with the date so nothing links
+          across a midnight; the browser compares its own last-seen date and
+          sends one of three words. Nothing here identifies a returning reader,
+          it only counts them. */}
+      {entry && Object.keys(entry.returning ?? {}).length > 0 && (
+        <>
+          <h2 className="admin-site__name">Did they come back</h2>
+          <div className="admin-tiles">
+            {["first", "week", "return", "unknown"]
+              .filter(k => entry.returning[k])
+              .map(k => (
+                <Tile key={k} label={SEEN_LABEL[k] ?? k}
+                      value={entry.returning[k]} />
+              ))}
+          </div>
+          <p className="admin-note">
+            Counted from {longDate(entry.returning_since)}, when browsers
+            started answering. Before that every visit reads as “did not say”,
+            which is missing data rather than a first visit. A browser that
+            blocks site data, or sends Do Not Track, never reports as
+            returning — so this understates rather than flatters.
+          </p>
         </>
       )}
 

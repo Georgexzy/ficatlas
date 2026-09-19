@@ -741,3 +741,37 @@ def test_entry_is_owner_only(db):
     import inspect
     dep = inspect.signature(traffic.entry).parameters["_owner"].default
     assert getattr(dep, "dependency", None) is require_owner
+
+
+# ── did anybody come back ───────────────────────────────────────────────────
+
+def test_a_return_visit_is_counted_without_being_identifiable(db):
+    """The visitor hash is salted with the date, so nothing links one day to
+    the next — deliberately. The browser answers the question instead and sends
+    one of three words, which is joinable to nothing and cannot tell two people
+    in the same bucket apart."""
+    traffic.hit(_FakeRequest(), path="/", ref="", seen="return")
+    traffic.hit(_FakeRequest(ua="Mozilla/5.0 (X11)"), path="/", ref="", seen="first")
+    tracking.flush()
+    got = {r[0]: r[1] for r in db.execute(text(
+        "SELECT seen, count(*) FROM visit_events WHERE seen IS NOT NULL GROUP BY 1"))}
+    assert got == {"return": 1, "first": 1}
+
+
+def test_an_invented_bucket_is_dropped_not_stored(db):
+    """Same rule `kind` follows: a free-text field on a public endpoint is a
+    way to fill the table with categories every later report must ignore."""
+    traffic.hit(_FakeRequest(), path="/", ref="", seen="loyal-customer")
+    tracking.flush()
+    assert db.execute(text(
+        "SELECT count(*) FROM visit_events WHERE seen IS NOT NULL")).scalar() == 0
+
+
+def test_nothing_reported_is_unknown_not_a_first_visit(db):
+    """A browser that refuses to remember, or one sending Do Not Track, reports
+    nothing. Counting that as a first visit would invent new readers out of
+    privacy settings."""
+    _seed(db, [("quiet1", "page", "/", False)])
+    r = traffic.entry(days=2, db=db, _owner=None)
+    assert r["returning"].get("unknown") == 1
+    assert "first" not in r["returning"]

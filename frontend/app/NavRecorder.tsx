@@ -80,6 +80,41 @@ export default function NavRecorder() {
         const ref = document.referrer
         if (ref && new URL(ref).host !== location.host) fd.append("ref", ref)
       } catch { /* an unparseable referrer is simply not sent */ }
+
+      // HAS THIS BROWSER BEEN HERE BEFORE — answered here, so the server never
+      // has to be able to work it out.
+      //
+      // The visitor hash is salted with the date precisely so that nothing
+      // links one day to the next, which left retention — the stage that
+      // decides whether any of the rest compounds — permanently unmeasurable.
+      // This closes that without reopening the thing it was protecting: what
+      // leaves the browser is ONE OF THREE WORDS, the same three for everybody,
+      // joinable to nothing and useless for telling two people apart.
+      //
+      // A date, not an id. There is deliberately no per-browser identifier to
+      // store, send or leak — only the last date this browser saw the site,
+      // which it compares against today and then overwrites.
+      //
+      // Wrapped, because localStorage throws rather than returning null in a
+      // browser set to block site data, and an analytics beacon must never be
+      // the thing that breaks a page. A browser that refuses to remember
+      // simply never reports as returning, which understates the number and is
+      // the right direction to be wrong in.
+      try {
+        const KEY = "fa_last_seen"
+        const today = new Date().toISOString().slice(0, 10)
+        const last = window.localStorage.getItem(KEY)
+        if (!last) fd.append("seen", "first")
+        else {
+          const days = Math.round(
+            (Date.parse(today) - Date.parse(last)) / 86_400_000)
+          // Same day is not a return, and is not reported at all: the row is
+          // already one of that visitor's, and counting it would make every
+          // multi-page visit look like loyalty.
+          if (days >= 1) fd.append("seen", days <= 7 ? "week" : "return")
+        }
+        if (last !== today) window.localStorage.setItem(KEY, today)
+      } catch { /* a browser that will not remember reports nothing */ }
     }
 
     // keepalive so the report survives the navigation that triggered it, and a
