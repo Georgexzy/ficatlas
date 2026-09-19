@@ -877,3 +877,45 @@ def test_an_unknown_order_is_refused_rather_than_interpolated(db):
     with _pytest.raises(HTTPException):
         list_queue(state="new", subreddit="", order="works; DROP TABLE stories",
                    search="", limit=10, db=db, _admin=None)
+
+
+# ── what needs attention, ranked ────────────────────────────────────────────
+
+def test_attention_ranks_a_big_gap_above_a_late_job(db):
+    """They are comparable only once both are expressed as what they cost.
+
+    Six million works nobody can find by pairing matters more than a job a few
+    hours late, and before this the job was the one with a flag on it while the
+    gap was one cell in a grid of percentages.
+    """
+    from api.admin import _attention
+    evidence = [{"key": "popularity", "label": "Cross-archive popularity",
+                 "why": "", "state": "stale", "age_h": 210.0,
+                 "stale_after_h": 200}]
+    coverage = [{"site": "ffnet", "total": 6_568_434, "sampled": 16_000,
+                 "exact": False, "na": [],
+                 "no_chars": 15_800, "no_ships": 15_900, "no_words": 1,
+                 "no_kudos": 15_000, "no_genres": 11_000,
+                 "no_summary": 0, "no_date": 0}]
+    out = _attention(evidence, coverage)
+    assert out[0]["kind"] == "gap"
+    assert "pairing" in out[0]["label"] or "character" in out[0]["label"]
+    assert any(a["kind"] == "job" for a in out), "a stale job must still appear"
+
+
+def test_a_field_that_does_not_apply_is_not_a_gap(db):
+    """AO3 has no genres and FictionAlley had no kudos concept. Reporting
+    either as missing metadata is reporting a non-problem, loudly."""
+    from api.admin import _attention
+    cov = [{"site": "ao3", "total": 14_000_000, "sampled": 30_000,
+            "exact": False, "na": ["no_genres"],
+            "no_genres": 30_000, "no_chars": 0, "no_ships": 0, "no_words": 0,
+            "no_kudos": 0, "no_summary": 0, "no_date": 0}]
+    assert _attention([], cov) == []
+
+
+def test_a_healthy_index_has_nothing_to_say(db):
+    """An empty list, so the panel can render nothing at all rather than an
+    empty box that trains you to skip the area it lives in."""
+    from api.admin import _attention
+    assert _attention([], []) == []

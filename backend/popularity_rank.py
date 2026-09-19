@@ -83,7 +83,7 @@ from datetime import datetime, timezone
 import sqlalchemy
 from sqlalchemy import text
 
-from db.session import db_session
+from db.session import db_session, pinned_session
 
 log = logging.getLogger("popularity")
 
@@ -341,7 +341,16 @@ def _record_evidence(db, scored: int, eligible: int) -> None:
 
 
 def run(dry_run: bool = False) -> int:
-    with db_session() as db:
+    # PINNED, because this pass lives on its temp tables.
+    #
+    # It builds five of them, commits, and then writes `stories` from the last.
+    # A plain session hands its connection back to the pool on that commit, and
+    # a temp table belongs to the connection that made it — so the write either
+    # finds `pr_final` or does not, depending on whether the pool gives the
+    # same connection back. On an idle pool it does. Under contention it does
+    # not, and this failed 78 seconds in with `relation "pr_final" does not
+    # exist`, silently, for thirteen days.
+    with pinned_session() as db:
         # This walks every scored row and writes most of them; the session's
         # 60s default would abort it partway through, leaving the index half
         # ranked on two different runs' worth of percentiles.

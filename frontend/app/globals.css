@@ -6242,3 +6242,36 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 .queue-item__acts a { color: var(--text-faint); }
 .queue-item__acts button { padding: 2px 9px; font-size: 11.5px; }
+
+/* ── Needs attention ──────────────────────────────────────────────────────
+   The Index tab had every one of these figures and ranked none of them, which
+   is how a broken weekly job stayed broken for thirteen days with its own
+   evidence on screen. One list, worst first, jobs and coverage gaps together —
+   because they are comparable only once both are expressed as what they cost. */
+.attention {
+  margin: 0 0 26px; padding: 14px 16px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface2);
+}
+.attention__head {
+  margin: 0 0 10px; font-size: 15px; display: flex; gap: 10px; align-items: baseline;
+}
+.attention__count { font-size: 11.5px; font-weight: 400; color: var(--text-faint); }
+.attention__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.attention__item {
+  padding: 8px 11px; border-radius: 7px; background: var(--surface);
+  border-left: 3px solid var(--border);
+}
+/* Severity by colour AND by order, never by colour alone. */
+.attention__item--high { border-left-color: var(--danger, #d9534f); }
+.attention__item--mid  { border-left-color: var(--accent); }
+.attention__item--low  { border-left-color: var(--border); }
+.attention__row {
+  display: flex; gap: 10px; align-items: baseline; justify-content: space-between;
+}
+.attention__label { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.attention__kind {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--text-faint); flex: none;
+}
+.attention__detail { margin: 3px 0 0; font-size: 12.5px; color: var(--text-dim); }
+.attention__foot { margin: 10px 0 0; font-size: 11.5px; color: var(--text-faint); }
