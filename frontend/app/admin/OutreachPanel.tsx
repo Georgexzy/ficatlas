@@ -611,6 +611,19 @@ export default function OutreachPanel(
             <button className="btn" onClick={() => copy(publicLink(q, ext?.sort), "link")}>
               Copy link only
             </button>
+            {/* THE POST, next to the thing you just copied.
+                The order of work is: copy the reply, open the thread, paste.
+                The post was linked at the top of the pane, which meant
+                scrolling back past the results and the terms to find it —
+                so it is here as well, where the hand already is. Opens in a
+                tab, because losing this pane would lose the search behind
+                it. */}
+            {post && (
+              <a className="btn outreach__open" href={post.url}
+                 target="_blank" rel="noopener noreferrer">
+                Open post ↗
+              </a>
+            )}
             {copied && <span className="outreach__copied">Copied {copied}</span>}
           </div>
         </>
