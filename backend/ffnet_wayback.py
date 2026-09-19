@@ -214,6 +214,48 @@ def parse_story_snapshot(html_text: str, story_id: int) -> dict | None:
 # budget object is the point — two loops each politely obeying their own budget
 # would together be twice as impolite as either.
 
+def _captured_url(story_id: int, timeout: float = 40.0) -> str | None:
+    """The URL archive.org ACTUALLY captured for this story, slug and all.
+
+    Wayback replays an exact URL and nothing near it. FF.net story URLs carry a
+    title slug — `/s/12803316/1/365-Days-of-Romitri` — and every capture is
+    filed under the slugged form, so the tidy `/s/12803316/1/` this module was
+    rebuilding does not exist in the archive:
+
+        web/{ts}id_/…/s/12803316/1/                    404
+        web/{ts}id_/…/s/12803316/1/365-Days-of-Romitri 200
+
+    Measured on the live queue: nineteen candidates, one parsed. The CDX query
+    that filled the queue asked for `timestamp,original` and had the right URL
+    in its hand — the queue stored only the timestamp and threw the rest away,
+    and this rebuilt a URL that had never been archived.
+
+    So it is asked for again, once, at fetch time. One extra request against a
+    fetch that was failing 95% of the time is not a cost worth optimising, and
+    it self-heals the 108,509 rows already queued without a migration.
+    """
+    import httpx
+
+    from wayback_harvest import BUDGET, HEADERS, note_response
+
+    BUDGET.wait()
+    try:
+        r = httpx.get(CDX_URL, params={
+            "url": f"fanfiction.net/s/{story_id}/1/*",
+            "output": "json", "limit": "1", "filter": "statuscode:200",
+            "fl": "timestamp,original",
+        }, headers=HEADERS, timeout=timeout)
+        note_response(r.status_code)
+        rows = r.json()
+    except Exception:
+        return None
+    # Row 0 is the header when `fl` is echoed back; a bare pair is data.
+    for row in rows[1:] if rows and rows[0] and rows[0][0] == "timestamp" else rows:
+        if len(row) >= 2 and row[1]:
+            return row[1]
+    return None
+
+
 def fetch_story(story_id: int, ts: str, timeout: float = 90.0) -> dict | None:
     """Fetch one archived FF.net story page.
 
@@ -224,7 +266,9 @@ def fetch_story(story_id: int, ts: str, timeout: float = 90.0) -> dict | None:
 
     from wayback_harvest import BACKPRESSURE, BUDGET, HEADERS, Transient, note_response
 
-    url = f"https://www.fanfiction.net/s/{story_id}/1/"
+    # The captured URL, not a reconstructed one. See `_captured_url`: the
+    # slugless form is not in the archive and 404s every time.
+    url = _captured_url(story_id) or f"https://www.fanfiction.net/s/{story_id}/1/"
     # Accept-Encoding: identity, because `id_` serves the ORIGINAL bytes with the
     # ORIGINAL headers. A capture taken when FF.net sent gzip carries
     # Content-Encoding: gzip while the archive may hand back a body that is

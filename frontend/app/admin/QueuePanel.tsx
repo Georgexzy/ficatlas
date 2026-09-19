@@ -175,6 +175,20 @@ export default function QueuePanel(
               </span>
               <span className="queue-item__meta">
                 r/{p.subreddit} · {AGO(p.posted_at)}
+                {/* TITLE ONLY, said rather than left to be discovered.
+                    About a tenth of posts arrive with no body — the request is
+                    entirely in the title, or it is a crosspost whose body is a
+                    link wrapper. The extractor then has eight words to work
+                    with instead of a paragraph, which is worth knowing BEFORE
+                    you judge the search it produced. Reddit blocks the
+                    unauthenticated JSON that would carry the rest (403), so
+                    recovering it needs a registered app — the same thing that
+                    would lift the feed's rate limit. */}
+                {(p.body ?? "").trim().length < 40 && (
+                  <span className="queue-item__thin" title="No body came through — the search is built from the title alone">
+                    · title only
+                  </span>
+                )}
               </span>
             </button>
             <div className="queue-item__acts">
