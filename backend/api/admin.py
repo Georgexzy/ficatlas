@@ -313,6 +313,89 @@ _JOB_QUEUES = [
 ]
 
 
+# What a missing field actually COSTS a reader, which is the only honest way to
+# rank one gap against another. A work with no characters cannot be found by
+# the filter readers use most; a work with no kudos merely sorts late.
+# The archives by the names people call them, for a panel a person reads.
+SITE_LABEL = {"ao3": "AO3", "ffnet": "FanFiction.net",
+              "fictionalley": "FictionAlley"}
+
+_GAP_COST = {
+    "no_chars":   ("cannot be found by character", 3),
+    "no_ships":   ("cannot be found by pairing", 3),
+    "no_words":   ("cannot be filtered by length", 2),
+    "no_date":    ("cannot be sorted by date", 2),
+    "no_summary": ("shows no blurb on a result card", 1),
+    "no_genres":  ("cannot be filtered by genre", 1),
+    "no_kudos":   ("sorts behind every scored work", 1),
+}
+# A gap has to be big enough to be worth a line. Below this it is a rounding
+# error on a sample and reporting it is noise.
+_GAP_MIN_SHARE = 0.25
+_GAP_MIN_WORKS = 50_000
+
+
+def _attention(evidence: list[dict], coverage: list[dict]) -> list[dict]:
+    """What is actually wrong, worst first.
+
+    The panel had all of this already and ranked none of it. Jobs were listed
+    in the order they were declared, with `stale` as a flag somewhere down the
+    list, and coverage as a table of percentages per site — so the
+    cross-archive popularity pass sat broken for THIRTEEN DAYS with the
+    evidence of it on screen the whole time, and "98% of 6.5M FanFiction.net
+    works have no characters" read as one cell among twenty-one.
+
+    Two kinds of problem, one ranking. A stale job is ranked by what it breaks;
+    a coverage gap by HOW MANY WORKS IT COSTS, because that is the comparable
+    number — a job three hours late matters less than six million works nobody
+    can find by pairing, and only one of those two was ever visible.
+    """
+    out: list[dict] = []
+
+    for j in evidence:
+        if j.get("state") != "stale":
+            continue
+        age, limit = j.get("age_h") or 0, j.get("stale_after_h") or 1
+        out.append({
+            "kind": "job", "key": j["key"], "label": j["label"],
+            "detail": (f"Last ran {age:,.0f}h ago, against a {limit}h limit. "
+                       + (j.get("why") or "")).strip(),
+            # How far past its own limit, so a job that is twice as late as it
+            # should be outranks one that is barely over.
+            "severity": min(5, 2 + age / max(limit, 1)),
+            "works": None,
+        })
+
+    for c in coverage:
+        total, sampled = int(c.get("total") or 0), int(c.get("sampled") or 0)
+        if not total or not sampled:
+            continue
+        na = set(c.get("na") or [])
+        for field, (cost, weight) in _GAP_COST.items():
+            if field in na or field not in c:
+                continue
+            share = int(c[field]) / sampled
+            works = int(round(total * share))
+            if share < _GAP_MIN_SHARE or works < _GAP_MIN_WORKS:
+                continue
+            out.append({
+                "kind": "gap", "key": f"{c['site']}:{field}",
+                "label": f"{SITE_LABEL.get(c['site'], c['site'])}: {cost}",
+                "detail": (f"{works:,} works — {share * 100:.0f}% of "
+                           f"{total:,} — "
+                           + ("counted exactly." if c.get("exact")
+                              else f"estimated from a {sampled:,}-row sample.")),
+                # Weighted by what the field is FOR, then by size. A million
+                # works missing a summary is a worse page; a million missing
+                # their characters is a million works nobody can reach.
+                "severity": min(5, weight * (works / 1_000_000) ** 0.4),
+                "works": works,
+            })
+
+    out.sort(key=lambda a: -a["severity"])
+    return out[:12]
+
+
 def _job_evidence(db: Session) -> dict:
     """What each background job last managed to DO, and how stale that is."""
     now = datetime.now(timezone.utc)
@@ -490,6 +573,16 @@ def overview(refresh: bool = False,
     # broken query. It also means no worker changes, so nothing here can affect
     # indexing.
     out["jobs"] = _job_evidence(db)
+
+    # Ranked, and put where it cannot be missed. See `_attention`: everything
+    # in it was already on this page and none of it was ordered by how much it
+    # mattered.
+    try:
+        out["attention"] = _attention(
+            (out.get("jobs") or {}).get("evidence") or [], out["coverage"])
+    except Exception:
+        log.info("attention ranking unavailable", exc_info=True)
+        out["attention"] = []
 
     # ── Where the disk went ──────────────────────────────────────────────────
     # 30ms, and the reason it is worth having on the page: this database is 39GB

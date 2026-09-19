@@ -66,6 +66,12 @@ interface Overview {
                 stale_after_h: number; state: "ok" | "stale" | "unknown" }[]
     queues: { key: string; label: string; depth: number }[]
   }
+  /** What is actually wrong, worst first — stale jobs and coverage gaps in one
+   *  ranking, because a job three hours late matters less than six million
+   *  works nobody can find by pairing and only one of those was visible.
+   *  See _attention in api/admin.py. */
+  attention?: { kind: "job" | "gap"; key: string; label: string
+                detail: string; severity: number; works: number | null }[]
   storage?: { db_bytes: number
               objects: { name: string; bytes: number; rows: number }[] } | null
   // Sampled, not queried: grouping 20M rows by indexed_at measured 15.7s and
@@ -328,6 +334,51 @@ export default function AdminPage() {
 
       {data && (
         <>
+          {/* WHAT IS ACTUALLY WRONG, worst first.
+
+              Every figure here was already on this page and none of it was
+              ordered by how much it mattered: jobs listed in the order they
+              were declared with `stale` as a flag somewhere down the list, and
+              coverage as a grid of percentages per site. The cost was exact —
+              the cross-archive popularity pass sat broken for THIRTEEN DAYS
+              with the evidence on screen the whole time, and "98% of 6.5M
+              FanFiction.net works have no characters" read as one cell among
+              twenty-one.
+
+              Absent when there is nothing to say, rather than rendering an
+              empty box that trains you to skip the area it lives in. */}
+          {!!data.attention?.length && (
+            <section className="attention">
+              <h2 className="attention__head">
+                Needs attention
+                <span className="attention__count">
+                  {data.attention.length} thing{data.attention.length === 1 ? "" : "s"}
+                </span>
+              </h2>
+              <ul className="attention__list">
+                {data.attention.map(a => (
+                  <li key={a.key}
+                    className={`attention__item attention__item--${
+                      a.severity >= 4 ? "high" : a.severity >= 2.5 ? "mid" : "low"}`}>
+                    <div className="attention__row">
+                      <span className="attention__label">{a.label}</span>
+                      <span className="attention__kind">
+                        {a.kind === "job" ? "job" : "coverage"}
+                      </span>
+                    </div>
+                    <p className="attention__detail">{a.detail}</p>
+                  </li>
+                ))}
+              </ul>
+              <p className="attention__foot">
+                Coverage gaps are ranked by how many works they cost a reader,
+                weighted by what the field is for — a work with no characters
+                cannot be found by the filter people use most, one with no kudos
+                merely sorts late. Jobs are ranked by how far past their own
+                staleness limit they are.
+              </p>
+            </section>
+          )}
           <div className="admin-tiles">
             <Tile label="Works indexed" value={data.tables.stories} approx
                   sub={data.growth?.per_day != null

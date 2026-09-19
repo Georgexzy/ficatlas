@@ -106,3 +106,47 @@ def db_session():
         raise
     finally:
         db.close()
+
+
+@contextmanager
+def pinned_session():
+    """A session that keeps ONE database connection for its whole life.
+
+    For work that leaves state on the connection — which here means TEMP
+    TABLES, and nothing else uses them.
+
+    `Session.commit()` ends the transaction and hands the connection back to
+    the pool. Whether the next statement gets the same one is then a matter of
+    luck: on an idle pool it does, which is why this is easy to write and easy
+    to believe. Under contention it does not, and a temp table built before the
+    commit is simply gone — the connection it lived on belongs to somebody else
+    now.
+
+    Measured: the cross-archive popularity pass builds five temp tables,
+    commits, and then writes `stories` from the last of them. It ran for weeks
+    and then stopped, failing 78 seconds in with
+
+        relation "pr_final" does not exist
+
+    and stayed broken for thirteen days while the site's flagship sort went
+    stale. Nothing about it had changed — the WORKER had, by growing more
+    concurrent loops sharing this pool, which is all it takes to lose the
+    coin toss.
+
+    Binding the Session to an explicit Connection is what fixes it: the
+    Connection owns the DBAPI connection until it is closed, so a commit
+    through it is a commit and not a handover. `pool_recycle` cannot take it
+    away mid-flight either, which is the same trap `lift_statement_timeout`
+    exists for one function above.
+    """
+    conn = engine.connect()
+    db = SessionLocal(bind=conn)
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+        conn.close()
