@@ -801,7 +801,11 @@ def test_the_queue_is_ordered_by_what_can_actually_be_answered(db):
                         VALUES (:i, 'FanFiction', :ti, 'https://example.test', :w, :u)"""),
                    {"i": f"p{i}", "ti": f"post {i}", "w": works, "u": unsafe})
     db.commit()
-    got = list_queue(state="new", limit=10, db=db, _admin=None)
+    # Every argument spelled out: called directly, a FastAPI `Query(...)`
+    # default arrives as the sentinel object rather than as its value, which
+    # the ordering check then rejects as an unknown order.
+    got = list_queue(state="new", subreddit="", order="answerable", search="",
+                     limit=10, db=db, _admin=None)
     assert [p.works for p in got] == [12, 5000, None, 3]
     assert got[-1].link_unsafe is True
 
@@ -813,7 +817,8 @@ def test_a_missing_queue_table_is_an_empty_queue_not_a_500(db):
     from api.queue import list_queue
     db.execute(t("DROP TABLE IF EXISTS reddit_posts"))
     db.commit()
-    assert list_queue(state="new", limit=10, db=db, _admin=None) == []
+    assert list_queue(state="new", subreddit="", order="answerable", search="",
+                      limit=10, db=db, _admin=None) == []
 
 
 def test_the_queue_is_admin_gated_and_posts_nothing(db):
@@ -826,3 +831,49 @@ def test_the_queue_is_admin_gated_and_posts_nothing(db):
     assert getattr(dep, "dependency", None) is require_admin
     src = inspect.getsource(queue)
     assert "urlopen" not in src and "requests" not in src
+
+
+def test_the_queue_can_be_ordered_by_age_instead(db):
+    """Two orderings answer different questions. Answerable is "what can I do
+    something about"; newest is for a thread that is live, where arriving late
+    is the same as not arriving."""
+    from sqlalchemy import text as t
+    from api.queue import list_queue
+    db.execute(t("""
+        CREATE TABLE IF NOT EXISTS reddit_posts (
+            id text PRIMARY KEY, subreddit text NOT NULL, title text NOT NULL,
+            body text, url text NOT NULL, posted_at timestamp,
+            seen_at timestamp DEFAULT now(), query text, works integer,
+            link_unsafe boolean NOT NULL DEFAULT false,
+            state text NOT NULL DEFAULT 'new')
+    """))
+    db.execute(t("DELETE FROM reddit_posts"))
+    db.execute(t("""INSERT INTO reddit_posts (id, subreddit, title, url, works, posted_at)
+                    VALUES ('old','FanFiction','old post','u',5,now()-interval '3 days'),
+                           ('new','HPfanfiction','new post','u',900,now())"""))
+    db.commit()
+    by_age = list_queue(state="new", subreddit="", order="newest", search="",
+                        limit=10, db=db, _admin=None)
+    assert [p.id for p in by_age] == ["new", "old"]
+    # And the default still leads with what can be answered.
+    best = list_queue(state="new", subreddit="", order="answerable", search="",
+                      limit=10, db=db, _admin=None)
+    assert [p.id for p in best] == ["old", "new"]
+    # Narrowing to one subreddit, and to words in the post.
+    one = list_queue(state="new", subreddit="HPfanfiction", order="newest",
+                     search="", limit=10, db=db, _admin=None)
+    assert [p.id for p in one] == ["new"]
+    found = list_queue(state="new", subreddit="", order="newest",
+                       search="old po", limit=10, db=db, _admin=None)
+    assert [p.id for p in found] == ["old"]
+
+
+def test_an_unknown_order_is_refused_rather_than_interpolated(db):
+    """The ordering is interpolated into SQL, so it is checked against a
+    literal allowlist rather than trusted."""
+    import pytest as _pytest
+    from fastapi import HTTPException
+    from api.queue import list_queue
+    with _pytest.raises(HTTPException):
+        list_queue(state="new", subreddit="", order="works; DROP TABLE stories",
+                   search="", limit=10, db=db, _admin=None)

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { SITE_LABELS, formatNumber } from "@/lib/api"
 
 /**
@@ -190,7 +190,18 @@ function negativeLines(raw: string): string[] {
     .slice(0, 6)
 }
 
-export default function OutreachPanel() {
+/** A post handed over from the queue next door. */
+export interface HandedOver {
+  id: string
+  title: string
+  body?: string | null
+  url: string
+}
+
+export default function OutreachPanel(
+  { post, onAnswered }: { post?: HandedOver | null
+                          onAnswered?: (id: string) => void } = {},
+) {
   const [raw, setRaw] = useState("")
   const [q, setQ] = useState("")
   const [found, setFound] = useState("")
@@ -280,8 +291,59 @@ export default function OutreachPanel() {
     }
   }
 
+  // Reading a post is the same operation whether a person pasted it or the
+  // queue handed it over, so it is one function rather than two copies that
+  // drift.
+  const read = useCallback(async (textIn: string) => {
+    setErr(null)
+    try {
+      const r = await fetch("/api/search/extract?text=" +
+        encodeURIComponent(textIn.slice(0, 4000)), { credentials: "include" })
+      if (!r.ok) throw new Error(`Could not read the post (${r.status})`)
+      const e: Extracted = await r.json()
+      setExt(e)
+      if (e.query) { setQ(e.query); run(e.query, e.sort) }
+      else setErr("Nothing in that post matches a tag, character or fandom the index knows.")
+    } catch (e: any) { setErr(e.message) }
+  }, [run])
+
+  // HANDED OVER FROM THE QUEUE. The two halves of this workflow used to be
+  // separate tabs, so answering a post meant opening it on Reddit, selecting
+  // its text, switching tab and pasting. The queue already has the text and
+  // has already run the extractor over it; this just picks up where that left
+  // off, and re-reads rather than trusting a stored query so what is shown is
+  // what the index says right now.
+  useEffect(() => {
+    if (!post) return
+    const full = `${post.title}\n\n${post.body ?? ""}`.trim()
+    setRaw(full)
+    setFound("")
+    read(full)
+    // Only when the POST changes. Re-running on every change of `read` would
+    // re-extract on each keystroke in the box below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post?.id])
+
   return (
     <div className="outreach">
+      {/* Which post this is an answer to, and the two things you do with it.
+          Without this the panel gives no sign that it is working on somebody's
+          question rather than on a pasted blob. */}
+      {post && (
+        <div className="outreach__answering">
+          <div>
+            <span className="outreach__answering-label">Answering</span>
+            <a href={post.url} target="_blank" rel="noopener noreferrer">{post.title}</a>
+          </div>
+          {onAnswered && (
+            <div className="outreach__answering-acts">
+              <button className="btn" onClick={() => onAnswered(post.id)}>
+                Mark answered
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <p className="admin-note">
         Turn a fic-finder post into a search you can link. Reads the public
         search API and posts nothing anywhere — the reply is text on your
@@ -305,18 +367,7 @@ export default function OutreachPanel() {
             knows its own vocabulary; asking it which words are searchable
             beats guessing which ones were framing. */}
         <button className="btn btn--primary" disabled={!raw.trim()}
-          onClick={async () => {
-            setErr(null)
-            try {
-              const r = await fetch("/api/search/extract?text=" +
-                encodeURIComponent(raw.slice(0, 4000)), { credentials: "include" })
-              if (!r.ok) throw new Error(`Could not read the post (${r.status})`)
-              const e: Extracted = await r.json()
-              setExt(e)
-              if (e.query) { setQ(e.query); run(e.query, e.sort) }
-              else setErr("Nothing in that post matches a tag, character or fandom the index knows.")
-            } catch (e: any) { setErr(e.message) }
-          }}>
+          onClick={() => read(raw)}>
           Find the searchable terms
         </button>
         <span className="outreach__hint">

@@ -3,8 +3,7 @@
 import Link from "next/link"
 import TakedownQueue from "./TakedownQueue"
 import TrafficPanel from "./TrafficPanel"
-import OutreachPanel from "./OutreachPanel"
-import QueuePanel from "./QueuePanel"
+import OutreachTab from "./OutreachTab"
 import BackLink from "../BackLink"
 import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
@@ -220,10 +219,20 @@ interface Person {
 }
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<"health" | "takedowns" | "traffic" | "outreach" | "queue">("health")
+  const [tab, setTab] = useState<"index" | "audience" | "outreach" | "moderation">("index")
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab")
-    if (t === "takedowns" || t === "traffic") setTab(t)
+    // The old names still work. `/takedowns` is a redirect into this page
+    // carrying `?tab=takedowns`, and anything anybody has bookmarked or linked
+    // predates the regrouping — a rename that breaks its own inbound links is
+    // a rename that gets reverted.
+    const MOVED: Record<string, typeof tab> = {
+      takedowns: "moderation", traffic: "audience",
+      health: "index", queue: "outreach", outreach: "outreach",
+      index: "index", audience: "audience", moderation: "moderation",
+    }
+    const to = t ? MOVED[t] : undefined
+    if (to) setTab(to)
   }, [])
   const { user, loading: authLoading } = useAuth()
   const isAdmin = !!user?.can_manage
@@ -290,30 +299,34 @@ export default function AdminPage() {
           and — more importantly — the same "not an operator" gate. Two copies of
           an access check is one too many: they can drift, and the one that
           drifts laxer is the bug. /takedowns is kept as a redirect. */}
+      {/* FOUR AREAS, NOT FIVE PANELS.
+          The tabs had grown one at a time and listed what had been BUILT —
+          Index health, Takedown requests, Traffic, Posts to answer, Fic
+          finder — rather than what you come here to do. Two of those five were
+          one workflow cut in half.
+
+          Named for the job: the index itself, who is arriving, getting more of
+          them, and what has to be taken down. A fifth tab is now a decision
+          about whether there is a fifth kind of work, which is the right
+          question to have to answer. */}
       <div className="admin-tabs">
-        <button className={`library-tab ${tab === "health" ? "library-tab--on" : ""}`}
-          onClick={() => setTab("health")}>Index health</button>
-        <button className={`library-tab ${tab === "takedowns" ? "library-tab--on" : ""}`}
-          onClick={() => setTab("takedowns")}>Takedown requests</button>
-        <button className={`library-tab ${tab === "traffic" ? "library-tab--on" : ""}`}
-          onClick={() => setTab("traffic")}>Traffic</button>
-        {/* The traffic tab says nobody is coming; this is the one that does
+        <button className={`library-tab ${tab === "index" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("index")}>Index</button>
+        <button className={`library-tab ${tab === "audience" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("audience")}>Audience</button>
+        {/* The Audience tab says nobody is coming; this is the one that does
             something about it. Answering fic-finder threads is the only
             outreach channel where the reply is useful on its own terms and the
-            link is the demonstration — see OutreachPanel. */}
-        {/* The worklist that feeds the tab next to it. Outreach answers a post
-            in seconds; this is where the posts come from, which is the part
-            that was still a person remembering to look. */}
-        <button className={`library-tab ${tab === "queue" ? "library-tab--on" : ""}`}
-          onClick={() => setTab("queue")}>Posts to answer</button>
+            link is the demonstration — see OutreachTab. */}
         <button className={`library-tab ${tab === "outreach" ? "library-tab--on" : ""}`}
-          onClick={() => setTab("outreach")}>Fic finder</button>
+          onClick={() => setTab("outreach")}>Outreach</button>
+        <button className={`library-tab ${tab === "moderation" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("moderation")}>Moderation</button>
       </div>
 
-      {tab === "queue" ? <QueuePanel /> :
-       tab === "outreach" ? <OutreachPanel /> :
-       tab === "traffic" ? <TrafficPanel /> :
-       tab === "takedowns" ? <TakedownQueue /> : (
+      {tab === "outreach" ? <OutreachTab /> :
+       tab === "audience" ? <TrafficPanel /> :
+       tab === "moderation" ? <TakedownQueue /> : (
       <>
       <h1 className="settings-title">Index health</h1>
 
@@ -330,7 +343,7 @@ export default function AdminPage() {
             <Tile label="Readable here" value={data.hosted_public} />
             <Tile label="Delisted" value={data.delisted} />
             <Tile label="Takedowns waiting" value={data.takedowns_pending}
-                  onClick={data.takedowns_pending > 0 ? () => setTab("takedowns") : undefined} />
+                  onClick={data.takedowns_pending > 0 ? () => setTab("moderation") : undefined} />
             {/* Accounts, in the row you actually look at.
                 This existed only as a collapsed section further down, which on a
                 phone is the same as not existing: you have to already know it is

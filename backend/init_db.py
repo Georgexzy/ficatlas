@@ -196,6 +196,13 @@ CREATE INDEX IF NOT EXISTS ix_stories_title_lower ON stories (lower(title));
 -- the Drarry hub — the highest-traffic page type on the site — opened with
 -- FictionAlley. Counted at build time from a GROUP BY that replaced a count(*)
 -- already being paid for, so it costs nothing.
+-- WHAT WORKS IN THIS HUB ARE LIKE: the handful of qualities worth offering as
+-- a one-click refinement, as [{tag, works}]. Sampled and filtered at build
+-- time — see hub_build.quality_vocabulary for why the filtering cannot be per
+-- hub, and why `tag_prose` is the thing that keeps `Sad` off a hub page.
+ALTER TABLE ship_hubs   ADD COLUMN IF NOT EXISTS qualities jsonb;
+ALTER TABLE fandom_hubs ADD COLUMN IF NOT EXISTS qualities jsonb;
+
 ALTER TABLE ship_hubs   ADD COLUMN IF NOT EXISTS site_counts jsonb;
 ALTER TABLE fandom_hubs ADD COLUMN IF NOT EXISTS site_counts jsonb;
 

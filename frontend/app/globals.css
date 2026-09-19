@@ -6076,8 +6076,22 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .hub-find__go:hover { filter: brightness(1.06); }
 .hub-find__hint { margin: 7px 0 0; font-size: 11.5px; color: var(--text-faint); }
 
+/* Two rows of chips, and they are not the same KIND of thing — which is why
+   each is labelled. The first is what works in THIS hub are actually like,
+   sampled from its own works; the second is length and completion, which are
+   true of every hub. Running them together as one undifferentiated row was
+   the half-baked version: it read as eight arbitrary suggestions. */
 .hub-find__quick {
-  list-style: none; margin: 0 0 22px; padding: 0;
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 4px 10px; margin: 0 0 8px;
+}
+.hub-find__quick--plain { margin-bottom: 24px; }
+.hub-find__quick-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--text-faint); flex: none;
+}
+.hub-find__quick ul {
+  list-style: none; margin: 0; padding: 0;
   display: flex; flex-wrap: wrap; gap: 6px;
 }
 .hub-find__quick a {
@@ -6087,6 +6101,11 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 .hub-find__quick a:hover {
   border-color: var(--accent); color: var(--text);
+}
+/* The hub's own qualities lead, so they are the ones that look clickable. */
+.hub-find__quick:not(.hub-find__quick--plain) a {
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  color: var(--text);
 }
 
 /* The count behind a rate. The percentage is what compares across rows of very
@@ -6153,3 +6172,73 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .queue-item__acts button:hover { border-color: var(--accent); }
 .queue-item__acts button:disabled { opacity: .5; cursor: default; }
 .queue-item__skip { color: var(--text-faint) !important; }
+
+/* ── Outreach: one screen for one job ─────────────────────────────────────
+   The worklist and the tool were two tabs, which matched how they were built
+   rather than how they are used. Side by side, picking a post on the left is
+   the same gesture as opening it on the right. Stacks on a narrow screen, list
+   first, because you choose before you answer. */
+.outreach-split {
+  display: grid; grid-template-columns: minmax(280px, 380px) 1fr;
+  gap: 20px; align-items: start;
+}
+@media (max-width: 900px) { .outreach-split { grid-template-columns: 1fr; } }
+.outreach-split__queue {
+  position: sticky; top: 12px; max-height: calc(100vh - 40px);
+  overflow-y: auto; padding-right: 4px;
+}
+@media (max-width: 900px) {
+  .outreach-split__queue { position: static; max-height: 420px; }
+}
+.outreach__waiting {
+  margin-left: 10px; font-size: 12px; font-weight: 500; vertical-align: middle;
+  padding: 2px 9px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+}
+.outreach__answering {
+  display: flex; gap: 12px; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; margin: 0 0 14px; padding: 10px 12px; border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface2));
+  border: 1px solid var(--border);
+}
+.outreach__answering-label {
+  display: block; font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--text-faint);
+}
+.outreach__answering a { color: var(--text); font-weight: 600; font-size: 14px; }
+
+.queue__bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.queue__fetch {
+  margin-left: auto; font: inherit; font-size: 12px; padding: 4px 12px;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-dim); cursor: pointer;
+}
+.queue__fetch:hover { border-color: var(--accent); color: var(--text); }
+.queue__note { margin: 8px 0 0; font-size: 12px; color: var(--text-faint); }
+.queue__filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
+.queue__filters select, .queue__search {
+  font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+.queue__search { flex: 1 1 150px; min-width: 0; }
+
+/* The row is a button: the whole thing is the target, because picking a post
+   is the only thing you do with most of them. */
+.queue-item { padding: 0; overflow: hidden; }
+.queue-item--on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface2));
+}
+.queue-item__pick {
+  display: block; width: 100%; text-align: left; background: none;
+  border: none; padding: 11px 13px 7px; cursor: pointer; font: inherit;
+}
+.queue-item__head { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
+.queue-item__title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.queue-item__acts {
+  margin: 0; padding: 0 13px 10px; display: flex; gap: 10px; align-items: center;
+  font-size: 11.5px;
+}
+.queue-item__acts a { color: var(--text-faint); }
+.queue-item__acts button { padding: 2px 9px; font-size: 11.5px; }

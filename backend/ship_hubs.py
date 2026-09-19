@@ -267,7 +267,13 @@ def _collapse(rows: Iterable[tuple[str, int]]) -> dict[str, dict]:
         display = ship_display(value)
         if not display:
             continue
-        hub = hubs.setdefault(slug, {"name": display, "variants": [], "approx": 0})
+        hub = hubs.setdefault(slug, {"name": display, "variants": [], "approx": 0,
+                                     # Carried so hub_build can keep a hub's own
+                                     # portmanteau off its refinement chips: a
+                                     # nickname shares no words with the names
+                                     # it is made of, so a word-level check
+                                     # cannot see `wolfstar` on Remus/Sirius.
+                                     "nicknames": nicknames_for(slug)})
         hub["variants"].append(value)
         hub["approx"] += count
         # Ranked on (count, spelling), so two variants with identical counts
