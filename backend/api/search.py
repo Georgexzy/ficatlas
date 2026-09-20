@@ -4973,6 +4973,64 @@ def _prose_words(db) -> set[str]:
     return _TAG_PROSE
 
 
+# WHAT THE READER MEANT, when they did not use the archive's word for it.
+#
+# See tag_hints.py. The extractor matches runs of a post against the tag
+# vocabulary, which finds words that ARE tags and nothing else — so "one where
+# they pretend to be dating" resolved to no trope at all while
+# `Fake/Pretend Relationship` sits on tens of thousands of works. The mapping
+# from one to the other is mined from the index itself: a work's summary is
+# natural language and its tags are the structured version of the same story,
+# so the words over-represented in a tag's summaries are the words a reader
+# would use to ask for it.
+_HINT_MIN_SCORE = float(os.getenv("EXTRACT_HINT_MIN_SCORE", "25"))
+_HINT_MAX = int(os.getenv("EXTRACT_HINT_MAX", "2"))
+
+
+def _hinted_tags(db, words: list[str], already: set[str]) -> list[ExtractedTerm]:
+    """Tags the reader described rather than named.
+
+    Only ever from words the vocabulary could NOT place — this never competes
+    with an exact match, it fills the space an exact match left empty. What it
+    returns is a candidate like any other: probed, ranked below everything
+    stated outright, and shown to the reader as a term they can remove.
+
+    The floor is on SUMMED LIFT rather than on a single word, so one
+    coincidental word cannot carry a tag on its own while two or three
+    agreeing ones can.
+    """
+    cand = [w.lower() for w in words if len(w) >= 3]
+    if not cand:
+        return []
+    try:
+        with db.begin_nested():
+            rows = db.execute(sql_text("""
+                SELECT h.tag, sum(h.lift) AS score, max(f.count) AS works
+                  FROM tag_hints h
+                  JOIN facets f ON f.kind = 'tag' AND f.value = h.tag
+                 WHERE h.word = ANY(:ws)
+                 GROUP BY h.tag
+                HAVING sum(h.lift) >= :floor
+                 ORDER BY score DESC
+                 LIMIT :lim
+            """), {"ws": cand, "floor": _HINT_MIN_SCORE,
+                   "lim": _HINT_MAX * 3}).fetchall()
+    except Exception:
+        # Built offline and absent on a fresh install. A signal that is merely
+        # OFF must not take the request down with it.
+        log.debug("tag_hints unavailable", exc_info=True)
+        return []
+    out = []
+    for tag, _score, works in rows:
+        if tag in already or _is_grammar(tag):
+            continue
+        out.append(ExtractedTerm(kind="tag", value=tag, count=int(works or 0),
+                                 matched="(described)", from_line=False))
+        if len(out) >= _HINT_MAX:
+            break
+    return out
+
+
 def _stem_sibling(db, tag: str) -> Optional[tuple[str, int]]:
     """The shorter, far commoner tag this one is a variant of.
 
@@ -6098,6 +6156,21 @@ def extract(
     # Only a RESOLVED pairing, or the two characters either side of a slash.
     # Not a tag, not a fandom — those are qualities and scope, and the probe is
     # right about them.
+    # WHAT THEY DESCRIBED, appended after everything they NAMED.
+    #
+    # Only the words the vocabulary could not place get this far, and the
+    # hinted tags go on the END of `terms` — so every exact match is considered
+    # first and a hint only ever takes a slot nothing better wanted. It is then
+    # probed like any other candidate and dropped if it finds nothing.
+    try:
+        _named = {t.value for t in terms}
+        _placed = {w.lower() for t in terms for w in (t.matched or "").split()}
+        _left = [w for w in words if w.lower() not in _placed]
+        if _left:
+            terms = terms + _hinted_tags(db, _left, _named)
+    except Exception:
+        log.debug("hinted tags failed", exc_info=True)
+
     kept: list[ExtractedTerm] = []
     if pair_term is not None:
         kept = [pair_term]

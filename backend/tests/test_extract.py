@@ -1286,3 +1286,81 @@ def test_a_two_word_typo_goes_to_spelling_not_interpretation(sentences):
     better. The two features must not fight over the same failure."""
     out = _search(sentences, "hsrry potter")
     assert out["interpreted"] is None
+
+
+# ── what the reader described, rather than named ────────────────────────────
+
+def test_a_described_trope_becomes_a_tag(db):
+    """The extractor matches runs of a post against the tag vocabulary, which
+    finds words that ARE tags and nothing else. "one where they pretend to be
+    dating" resolved to no trope at all, while `Fake/Pretend Relationship` sits
+    on tens of thousands of works.
+
+    The mapping is mined from the index itself — a work's summary is natural
+    language and its tags are the structured version of the same story — so
+    this fixture stands in for what tag_hints.py measures.
+    """
+    import api.search as S
+    from sqlalchemy import text as t
+    db.execute(t("DELETE FROM facets"))
+    db.execute(t("""INSERT INTO facets (kind, value, count) VALUES
+                      ('tag','Fake/Pretend Relationship', 41000)"""))
+    db.execute(t("""
+        CREATE TABLE IF NOT EXISTS tag_hints (
+            word text NOT NULL, tag text NOT NULL, lift real NOT NULL,
+            docs integer NOT NULL, built_at timestamp DEFAULT now(),
+            PRIMARY KEY (word, tag))
+    """))
+    db.execute(t("DELETE FROM tag_hints"))
+    for w, lift in (("pretend", 105.0), ("dating", 33.0)):
+        db.execute(t("INSERT INTO tag_hints (word, tag, lift, docs) "
+                     "VALUES (:w,'Fake/Pretend Relationship',:l,40)"),
+                   {"w": w, "l": lift})
+    db.commit()
+    try:
+        out = extract(text="looking for one where they pretend to be dating", db=db)
+        assert "Fake/Pretend Relationship" in [x.value for x in out.terms]
+        # Marked as a reading, not an exact match, so the reader can see which
+        # of their terms was inferred.
+        hinted = [x for x in out.terms if x.value == "Fake/Pretend Relationship"]
+        assert hinted[0].matched == "(described)"
+    finally:
+        db.execute(t("DELETE FROM tag_hints"))
+        db.execute(t("DELETE FROM facets"))
+        db.commit()
+
+
+def test_one_coincidental_word_cannot_carry_a_tag(db):
+    """The floor is on SUMMED lift, so a single ordinary word that happens to
+    correlate with a tag is not enough — two or three agreeing ones are."""
+    import api.search as S
+    from sqlalchemy import text as t
+    db.execute(t("DELETE FROM facets"))
+    db.execute(t("INSERT INTO facets (kind, value, count) VALUES ('tag','Fluff',1130841)"))
+    db.execute(t("""
+        CREATE TABLE IF NOT EXISTS tag_hints (
+            word text NOT NULL, tag text NOT NULL, lift real NOT NULL,
+            docs integer NOT NULL, built_at timestamp DEFAULT now(),
+            PRIMARY KEY (word, tag))
+    """))
+    db.execute(t("DELETE FROM tag_hints"))
+    db.execute(t("INSERT INTO tag_hints (word, tag, lift, docs) "
+                 "VALUES ('blanket','Fluff',6.0,40)"))
+    db.commit()
+    try:
+        assert S._hinted_tags(db, ["blanket"], set()) == []
+    finally:
+        db.execute(t("DELETE FROM tag_hints"))
+        db.execute(t("DELETE FROM facets"))
+        db.commit()
+
+
+def test_the_hint_table_being_absent_is_not_an_error(db):
+    """Built offline and absent on a fresh install. A signal that is merely
+    OFF must not take the request down with it, nor poison the transaction."""
+    import api.search as S
+    from sqlalchemy import text as t
+    db.execute(t("DROP TABLE IF EXISTS tag_hints"))
+    db.commit()
+    assert S._hinted_tags(db, ["pretend", "dating"], set()) == []
+    assert db.execute(t("SELECT 1")).scalar() == 1
