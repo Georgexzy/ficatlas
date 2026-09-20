@@ -1002,6 +1002,27 @@ _NL_MAX_RESULTS = int(os.getenv("SEARCH_NL_MAX_RESULTS", "9"))
 # these, and re-reading it would throw away a deliberate search.
 _HAS_OPERATOR = re.compile(r'-?\b\w+:(?:"|\S)')
 
+# TAGS THAT NAME AN EVENT, not a story.
+#
+# `Fandom Kombat 2024`, `Whumptober 2023`, `Prompt Fill`, `Big Bang` — 130 tags
+# across 310,583 works. Nobody has ever asked for a fic because it was written
+# for a challenge, and none of them survive the usual filters: `tag_prose`
+# measures how often a tag's words appear in SUMMARIES, and an event name never
+# does, so it scores as a pure term of art and outranks the things the reader
+# actually said.
+#
+# Observed doing exactly that: "Can anyone help me find a fic on ao3 it's 9-1-1
+# fandom" came out carrying `tag:"Fandom Kombat 2024"`, matched off the word
+# "fandom" in the reader's own framing.
+#
+# A year on its own is the strongest tell and the cheapest to check. The rest
+# are the words fandom uses for its own events.
+_EVENT_TAG = re.compile(
+    r"\b20[0-2][0-9]\b|"
+    r"\b(?:kombat|ficathon|fest|exchange|challenge|prompt|bingo|"
+    r"whumptober|inktober|kinktober|advent|big ?bang|secret santa|"
+    r"week|day \d+|round \d+)\b", re.I)
+
 _DYM_MIN_SIM = 0.35
 # And how many works must carry it. This is the guard that stops the feature
 # recommending a TYPO: `hermoine granger` trigram-matches the misspelled facet
@@ -5031,6 +5052,52 @@ def _hinted_tags(db, words: list[str], already: set[str]) -> list[ExtractedTerm]
     return out
 
 
+def _wrong_fandom(value: str, kind: str, fandom_words: set[str]) -> bool:
+    """Whether this character or pairing belongs to a DIFFERENT fandom.
+
+    The archives put the fandom in the name — `Sparkling Cookie (Cookie Run)`,
+    `Isa (Kingdom Hearts)`, `Gwen (Merlin)` — and that is free evidence the
+    ranking was ignoring. Measured on a real post:
+
+        "Transformers AO3 fic — Autobots kidnap a Decepticon sparkling"
+          -> char:"Sparkling Cookie (Cookie Run)" char:"Baby - Character"
+
+    `Transformers - All Media Types` was a candidate at 77,324 works and lost
+    to a 236-work Cookie Run character, because `sparkling` is a Transformers
+    word that Cookie Run also uses and the subject heuristic reads the object
+    of "kidnap". No tuning of the frequency tiebreak fixes that; the name
+    itself says it is the wrong fandom.
+
+    A judgement rather than a demotion: a character who cannot appear in the
+    fandom the post is about is not weak evidence, it is wrong evidence, and
+    leaving it in the list lets it return the moment anything else shifts.
+
+    A crossover post names both fandoms, and what survives is the one it led
+    with — which is the same rule the rest of the extractor follows.
+    """
+    if kind not in ("character", "relationship"):
+        return False
+    # AO3's marker for a FREEFORM character or pairing — somebody typed it into
+    # the character box rather than picking a canonical one. `Baby -
+    # Character`, `toji - Relationship`. It is the same signal as the
+    # `- Freeform` suffix on a tag and it means the same thing: the worse
+    # spelling of something, usually of nothing in particular.
+    #
+    # On the Transformers post, `Baby - Character` (529 works) was what
+    # remained at the head of the query once `Sparkling Cookie (Cookie Run)`
+    # had gone — both resolved from the same three words, "a Decepticon
+    # sparkling", and neither is a character anybody asked for.
+    if re.search(r"\s-\s(?:Character|Relationship)\s*$", value, re.I):
+        return True
+    if not fandom_words:
+        return False
+    m = re.search(r"\(([^)]+)\)\s*$", value)
+    if not m:
+        return False
+    inner = {w for w in re.findall(r"[a-z0-9]+", m.group(1).lower()) if len(w) > 2}
+    return bool(inner) and not (inner & fandom_words)
+
+
 def _stem_sibling(db, tag: str) -> Optional[tuple[str, int]]:
     """The shorter, far commoner tag this one is a variant of.
 
@@ -5645,11 +5712,44 @@ def extract(
     squashed: dict[str, tuple[int, int]] = {}
     for g, span in grams.items():
         k = _sq(g)
-        if len(k) >= 6 and k not in squashed:
+        # SIX CHARACTERS, unless the reader's own token is punctuated — which
+        # is what lets a short, punctuated NAME through while still keeping
+        # ordinary short words out.
+        #
+        # `9-1-1 (TV)` is a fandom on 64,923 works, and a post saying "it's
+        # 9-1-1 fandom" resolved to `fandom:"AO3"` instead: the token squashes
+        # to `911`, three characters, and the length floor threw it away before
+        # the vocabulary ever saw it. A bare three-letter word is a coincidence
+        # waiting to happen; `9-1-1` is not a word at all.
+        floor = 3 if re.search(r"[-0-9./:']", g) else 6
+        if len(k) >= floor and k not in squashed:
             squashed[k] = span
     def _base(v: str) -> str:
         """The name without its disambiguator: "Death Note (Anime & Manga)"."""
         return v.split(" - ")[0].split(" (")[0]
+
+    def _keep_squashed(value: str) -> bool:
+        """Whether this facet may be reached by its squashed spelling.
+
+        Two ways in, and the second exists because the first was too strict.
+
+        REAL PUNCTUATION in the base — a hyphen, colon, pipe or apostrophe —
+        which is what `Spider-Man` has and an ordinary phrase does not. Spaces
+        alone are not enough: every two-word facet loses one when squashed, and
+        that let `Main Character (Mystic Messenger)` answer to the bare phrase
+        "main character".
+
+        Or a SINGLE-WORD base, which cannot be a phrase at all. That is what
+        the first guard cost: `Transformers - All Media Types` holds 77,324
+        works, its base is one plain word, and a post whose title begins
+        "Transformers" resolved to `char:"Sparkling Cookie (Cookie Run)"` —
+        the fandom was unreachable because stripping its disambiguator was
+        treated as the same trick as stripping somebody else's.
+        """
+        base = _base(value)
+        if " " not in base.strip():
+            return base.lower() != value.lower()   # i.e. it HAS a disambiguator
+        return _sq(base) != base.lower().replace(" ", "")
 
     if squashed:
         try:
@@ -5671,7 +5771,7 @@ def extract(
                 # The facet must be the side that carried the punctuation. See
                 # the guard note above: without this, squashing turns any two
                 # adjacent prose words into a candidate.
-                if _sq(_base(r[1])) != _base(r[1]).lower().replace(" ", "")
+                if _keep_squashed(r[1])
             ]
         except Exception:
             log.debug("squashed facet lookup failed", exc_info=True)
@@ -5814,6 +5914,23 @@ def extract(
     for t in line_terms + terms:
         if t.value in seen_vals:
             continue
+        # AN EVENT IS NOT A WANT — unless the reader named it.
+        #
+        # See `_EVENT_TAG`. Applied HERE rather than at any one candidate
+        # source, because there are several and the first attempt filtered the
+        # n-gram path while these were arriving from the line resolver: the
+        # 9-1-1 post kept `tag:"Fandom Kombat 2024"` regardless, matched off
+        # the word "fandom" in its own framing.
+        #
+        # The test is whether the EVENT'S OWN WORDS are in what the reader
+        # wrote, not merely whether something matched. "any whumptober fics"
+        # said whumptober and gets it; "help me find a fic … fandom" never said
+        # kombat and does not.
+        if t.kind == "tag" and _EVENT_TAG.search(t.value):
+            said = {w for w in re.findall(r"[a-z0-9]+", (t.matched or "").lower())}
+            if not (said & {w for w in re.findall(r"[a-z0-9]+", t.value.lower())
+                            if _EVENT_TAG.search(w)}):
+                continue
         seen_vals.add(t.value)
         merged.append(t)
     terms = merged
@@ -6170,6 +6287,21 @@ def extract(
             terms = terms + _hinted_tags(db, _left, _named)
     except Exception:
         log.debug("hinted tags failed", exc_info=True)
+
+    # WHERE EVERY PATH MEETS. Applied here rather than mid-pipeline, because
+    # the candidates arrive from four places — the n-gram lookup, the line
+    # resolver, the pairing resolver and the hints — and the first attempt sat
+    # before the pairing resolver had contributed. It dropped
+    # `Isa (Kingdom Hearts)` and left `Sparkling Cookie (Cookie Run)`, which
+    # came in afterwards and went straight to the head of the list.
+    _f_words = {w for w in re.findall(r"[a-z0-9]+", (_post_fandom or "").lower())
+                if len(w) > 2}
+    terms = [t for t in terms if not _wrong_fandom(t.value, t.kind, _f_words)]
+    pair_chars = [t for t in pair_chars
+                  if not _wrong_fandom(t.value, t.kind, _f_words)]
+    if pair_term is not None and _wrong_fandom(pair_term.value,
+                                               "relationship", _f_words):
+        pair_term = None
 
     kept: list[ExtractedTerm] = []
     if pair_term is not None:
