@@ -1217,6 +1217,7 @@ async def _ship_alias_loop() -> None:
     import ship_aliases
     import fandom_aliases
     import tag_prose
+    import tag_hints
 
     interval = _num("SHIP_ALIAS_INTERVAL_HOURS", 168) * 3600
     await asyncio.sleep(_num("SHIP_ALIAS_START_DELAY_SEC", 1800))
@@ -1248,6 +1249,18 @@ async def _ship_alias_loop() -> None:
                      f"{stats['tags']:,}", f"{stats['prose']:,}")
         except Exception as e:
             log.warning(f"tag prose rebuild failed: {type(e).__name__}: {e}")
+        # And what readers SAY for each tag, mined from the summaries of the
+        # works that carry it. Same weekly schedule and the same argument as
+        # the three above: derived wholly from the current vocabulary, so a
+        # rebuild is a replacement with nothing to lose. The most expensive of
+        # the group — two passes over a million summaries, about four minutes —
+        # and bounded so it cannot page the box out from under the API.
+        try:
+            stats = await asyncio.to_thread(tag_hints.run)
+            log.info("tag hints rebuilt: %s hints from %s summaries",
+                     f"{stats['hints']:,}", f"{stats['docs']:,}")
+        except Exception as e:
+            log.warning(f"tag hints rebuild failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
 
 
