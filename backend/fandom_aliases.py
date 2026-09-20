@@ -173,6 +173,17 @@ STOPLIST = {
     # to every reader who types it; that it is also SK8 the Infinity's
     # initialism is a coincidence the reader will never have in mind.
     "si", "oc", "ocs", "sioc", "poc", "hea", "ooc", "pwp", "bamf",
+    # ORDINARY VERBS AND PRONOUNS the rule reaches now that it also drops a
+    # trailing "Series"/"Saga". That change took the table from 506 aliases to
+    # 926, and every new one is another chance to hijack a word somebody typed
+    # by accident — `did` became ダンジョン飯 | Dungeon Meshi, and a post about
+    # Transformers carried a Dungeon Meshi fandom because it contained the word
+    # "did".
+    "did", "does", "done", "had", "let", "put", "saw", "say", "see", "she",
+    "too", "use", "want", "went", "were", "what", "when", "will", "with",
+    "would", "your", "yours", "them", "they", "this", "that", "than", "then",
+    "some", "such", "take", "tell", "than", "very", "well", "were", "how",
+    "why", "who", "yes", "not", "nor", "but", "for", "and", "are", "was",
 }
 
 
