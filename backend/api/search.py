@@ -4345,6 +4345,39 @@ _NEGATED_TAG = re.compile(r"^\s*(?:not\s+a?\s*|no\s+|non[-\s]|anti[-\s])", re.I)
 # distinction cannot be made from the vocabulary, because the vocabulary
 # contains them; it has to be made from what a fic-finder post is.
 _FRAMING_TERMS = {
+    # THE REQUEST'S OWN SUBJECT MATTER, which is also a set of real facets.
+    #
+    # Added after measuring the live queue, where this was the biggest
+    # remaining source of nonsense. Every one of these is a facet on real
+    # works, and every one appears in the framing of an ordinary fic-finder
+    # post:
+    #
+    #     lost -> fandom `Lost`        11,741   fandom -> `Fandom - Fandom` 3,486
+    #     plot -> tag `Plot`            5,367   help   -> tag `Help`        7,630
+    #     fiction -> tag `Fiction`      4,440   ship   -> tag `Ship`          608
+    #
+    # Observed: "[Lost Fic] PLEASE HELP ME FIND THIS TIM DRAKE FIC" came out
+    # as `fandom:"Lost"` with Tim Drake dropped, and two separate posts
+    # resolved to `fandom:"Fandom - Fandom"`.
+    #
+    # `tag_prose` cannot reach these. It measures how often a tag's words turn
+    # up in a SUMMARY — which makes "lost" and "plot" prose and demotes them —
+    # but the ones that are FANDOMS were never in its scope, and a demotion is
+    # not a refusal.
+    #
+    # THE COST, stated plainly: somebody who wants the television programme
+    # Lost, and types only that word, will not get it. That is the right way
+    # round — "Lost fic" means a fic somebody lost far more often than it means
+    # the show, it is the name of the subreddit flair this queue reads, and a
+    # reader who means the show has every other word of their post to say so.
+    "lost", "fandom", "fandoms", "ship", "ships", "shipping", "help",
+    # Spaced spellings of the same words. The vocabulary contains both, and
+    # the match is on the whole facet value, so `fan fiction` needs saying
+    # even though `fanfiction` is already here.
+    "fan fiction", "fan fic", "fan fics", "fic rec", "fic recs",
+    "lost fic", "lost fics", "fic search", "story search",
+    "fiction", "search", "searching", "specific", "remember", "finding",
+    "found", "character", "characters", "anyone", "somebody", "someone",
     # Politeness and sign-offs.
     "thanks", "thank you", "thanks a lot", "please", "thanks in advance",
     "cheers", "hi", "hello", "hey", "sorry", "edit",
@@ -4487,6 +4520,12 @@ def _is_framing(value: str, matched: str = "") -> bool:
     """Is this the reader talking about their request rather than a story?"""
     v = value.strip().lower()
     if v in _FRAMING_TERMS:
+        return True
+    # AO3's `X - X` spelling for a fandom that is really just a word. Two posts
+    # resolved to `fandom:"Fandom - Fandom"` (3,486 works) off the word
+    # "fandom", and the exact-match check above cannot see it.
+    _parts = [p.strip() for p in v.split(" - ")]
+    if len(_parts) == 2 and _parts[0] == _parts[1] and _parts[0] in _FRAMING_TERMS:
         return True
     # Matched FROM a framing word, however the vocabulary spells the result.
     return bool(matched) and matched.strip().lower() in _FRAMING_TERMS
@@ -5787,6 +5826,14 @@ def extract(
             continue
         if _is_grammar(value):
             continue
+        # The vocabulary of ASKING is not the vocabulary of the answer. Refused
+        # here, at the earliest point, because a framing word that survives
+        # this loop goes on to become `fandom_term` and then the lead of the
+        # query — which is how "[Lost Fic] PLEASE HELP ME FIND THIS TIM DRAKE
+        # FIC" became `fandom:"Lost"`. Filtering it later removed it from the
+        # term list and left it leading the search. See `_FRAMING`.
+        if _is_framing(value):
+            continue
 
         cands.append({"count": count, "rank": RANK.get(kind, 9),
                       "n": span[1] - span[0], "kind": kind,
@@ -6296,9 +6343,12 @@ def extract(
     # came in afterwards and went straight to the head of the list.
     _f_words = {w for w in re.findall(r"[a-z0-9]+", (_post_fandom or "").lower())
                 if len(w) > 2}
-    terms = [t for t in terms if not _wrong_fandom(t.value, t.kind, _f_words)]
+    terms = [t for t in terms
+             if not _wrong_fandom(t.value, t.kind, _f_words)
+             and not _is_framing(t.value)]
     pair_chars = [t for t in pair_chars
-                  if not _wrong_fandom(t.value, t.kind, _f_words)]
+                  if not _wrong_fandom(t.value, t.kind, _f_words)
+                  and not _is_framing(t.value)]
     if pair_term is not None and _wrong_fandom(pair_term.value,
                                                "relationship", _f_words):
         pair_term = None

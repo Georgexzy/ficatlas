@@ -115,6 +115,10 @@ SEEDED = {
     "aot": "Attack on Titan",
     "hxh": "Hunter X Hunter",
     "bsd": "Bungou Stray Dogs",
+    # AO3 files this as "Warhammer 40.000" — with a full stop — so neither the
+    # initialism rule nor the squashed spelling can get from `wh40k` to it.
+    "wh40k": "Warhammer 40",
+    "40k": "Warhammer 40",
 }
 
 # Abbreviations that are ordinary English words. `it`, `us` and `she` are real
