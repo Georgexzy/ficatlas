@@ -348,3 +348,29 @@ def test_the_newest_capture_wins_not_the_first_row():
         pass
     assert len(fetched) == 2, f"expected cdx + snapshot, got {fetched}"
     assert "20220523230545" in fetched[1], f"picked the wrong capture: {fetched[1]}"
+
+
+def test_a_story_that_yields_nothing_stops_being_re_selected():
+    """What actually kept FF.net coverage frozen at 108,468.
+
+    find_gaps orders by how much a row lacks and breaks ties on crawled_at ASC
+    NULLS FIRST. The worst gap scores belong to the oldest stories -- and FF.net
+    had no character field before ~2009, so for them characters=[] is the
+    correct and permanent answer. Nothing recorded the attempt, so every pass
+    drew the same doomed rows and the number never moved.
+    """
+    import inspect
+    import ffnet_enrich
+
+    src = inspect.getsource(ffnet_enrich.run)
+    assert "attempted.append(sid)" in src, \
+        "every story looked at must be recorded, not just the ones that parsed"
+    # Recorded before the outcome is known -- a story that yields nothing is
+    # exactly the one that must not come back next pass.
+    before_meta = src.index("attempted.append(sid)") < src.index("meta = fetch_meta")
+    assert before_meta, "the attempt must be recorded regardless of outcome"
+    assert "_mark_attempted(attempted)" in src
+
+    marker = inspect.getsource(ffnet_enrich._mark_attempted)
+    assert "crawled_at" in marker, \
+        "must write the column find_gaps actually breaks ties on"
