@@ -229,6 +229,12 @@ interface Person {
   sessions: number; follows: number; saved: number; imported: number
 }
 
+/** An open reset request. Never carries the code — see list_reset_requests. */
+interface ResetRequest {
+  username: string; email: string | null
+  created_at: string; expires_at: string; emailed: boolean
+}
+
 export default function AdminPage() {
   const [tab, setTab] = useState<AdminTab>("index")
   useEffect(() => {
@@ -241,6 +247,10 @@ export default function AdminPage() {
   const isAdmin = !!user?.can_manage
   const [data, setData] = useState<Overview | null>(null)
   const [people, setPeople] = useState<Person[] | null>(null)
+  const [resets, setResets] = useState<ResetRequest[] | null>(null)
+  // The one-time code, held only in this tab and only until it is handed over.
+  const [issued, setIssued] = useState<{ username: string; code: string } | null>(null)
+  const [issuing, setIssuing] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
@@ -252,6 +262,10 @@ export default function AdminPage() {
       // from tables with tens of entries, and folding it into the cached
       // overview would tie a cheap, always-current answer to a 180-second cache
       // built for queries that scan millions of rows.
+      fetch("/api/auth/reset-requests", { credentials: "include" })
+        .then(r => (r.ok ? r.json() : []))
+        .then(setResets)
+        .catch(() => setResets([]))
       fetch("/api/admin/users", { credentials: "include" })
         .then(r => (r.ok ? r.json() : null))
         .then(d => setPeople(d?.users ?? null))
@@ -441,6 +455,77 @@ export default function AdminPage() {
                       : "all recoverable"} />
             )}
           </div>
+
+          {/* GETTING SOMEBODY BACK INTO THEIR ACCOUNT.
+              Every piece of this existed in the API and none of it had a
+              screen, so the only way to help a locked-out reader was curl —
+              which is the same as it not working. It matters more here than on
+              most sites because this instance cannot send email at all: with
+              no SMTP credential, /forgot mints a code and then has nowhere to
+              put it.
+
+              The list deliberately does NOT show codes. An admin endpoint that
+              handed out working reset tokens would turn one compromised admin
+              session into every account on the site — so seeing that somebody
+              is locked out and CHOOSING to vouch for them are two separate
+              actions, and only the second produces a code. */}
+          <h2 className="admin-site__name">Account recovery</h2>
+          {resets && resets.length > 0 ? (
+            <table className="traffic-table">
+              <thead><tr><th>Waiting</th><th>Email</th><th>Asked</th><th>Expires</th></tr></thead>
+              <tbody>
+                {resets.map(r => (
+                  <tr key={r.username + r.created_at}>
+                    <td>{r.username}</td>
+                    <td>{r.email ?? <em>none on file</em>}</td>
+                    <td>{agoStamp(r.created_at)}</td>
+                    <td>{new Date(r.expires_at).toLocaleTimeString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="admin-note">
+              Nobody is waiting on a password reset.
+            </p>
+          )}
+
+          <div className="admin-actions">
+            <input className="queue__search" value={issuing} placeholder="username"
+              onChange={e => setIssuing(e.target.value)} />
+            <button className="btn" disabled={!issuing.trim()}
+              onClick={async () => {
+                setNote(null); setIssued(null)
+                try {
+                  const fd = new FormData()
+                  fd.append("username", issuing.trim())
+                  const r = await fetch("/api/auth/admin/issue-reset",
+                    { method: "POST", credentials: "include", body: fd })
+                  const d = await r.json()
+                  if (!r.ok) throw new Error(d?.detail ?? `Failed (${r.status})`)
+                  setIssued({ username: d.username, code: d.code })
+                  setIssuing("")
+                } catch (e: any) { setNote(e.message) }
+              }}>
+              Issue a reset code
+            </button>
+          </div>
+          {issued && (
+            <div className="admin-note admin-code">
+              <p>
+                One-time code for <strong>{issued.username}</strong>. It works
+                once, expires shortly, and is not stored anywhere readable —
+                so this is the only time it can be shown. Pass it on however
+                you already talk to them.
+              </p>
+              <code>{issued.code}</code>
+              <p>
+                They enter it at <code>/reset</code>. Issuing a code retires any
+                other one outstanding for that account.
+              </p>
+            </div>
+          )}
+          {note && <p className="settings-save-error" role="alert">{note}</p>}
 
           {data.cached && (data.age_s ?? 0) > 0 && (
             <p className="admin-note">

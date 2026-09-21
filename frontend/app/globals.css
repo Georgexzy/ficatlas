@@ -6287,3 +6287,35 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 /* A post that arrived with no body. The search was built from a title, which
    is worth knowing before judging it. */
 .queue-item__thin { color: var(--danger, #d9534f); opacity: .85; }
+
+/* ── Continue with Google ─────────────────────────────────────────────────
+   Rendered only when the server says the credentials exist. A real anchor and
+   not a fetch: this is a redirect out to Google and back, so it has to be a
+   navigation the browser performs itself, carrying the state cookie and
+   landing on the callback. */
+.auth-or {
+  display: flex; align-items: center; gap: 12px;
+  margin: 16px 0 12px; color: var(--text-faint); font-size: 12px;
+}
+.auth-or::before, .auth-or::after {
+  content: ""; flex: 1; height: 1px; background: var(--border);
+}
+.auth-google {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: 100%; padding: 10px 14px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); font-size: 14px; font-weight: 500; text-decoration: none;
+}
+.auth-google:hover { border-color: var(--accent); }
+.auth-google svg { flex: none; }
+.auth-note--sso { display: block; margin-top: 8px; text-align: center; }
+
+/* The one-time reset code. Shown once, so it is made unmissable and easy to
+   select — the operator is about to paste it into a message to somebody. */
+.admin-actions { display: flex; gap: 8px; margin: 12px 0 0; flex-wrap: wrap; }
+.admin-code code {
+  display: block; margin: 8px 0; padding: 10px 12px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--accent);
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 14px;
+  user-select: all; word-break: break-all;
+}
