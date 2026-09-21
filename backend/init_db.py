@@ -938,8 +938,20 @@ CREATE TABLE IF NOT EXISTS ffnet_captures (
     -- it is what _captured_url exists to avoid; storing it means we never have
     -- to ask twice.
     original    TEXT,
-    found_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    found_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- When the enrichment last tried this capture. Makes the index a work
+    -- queue rather than a lookup that has to be diffed against `stories`
+    -- every pass: selection reads the head of this and stops, instead of
+    -- joining every known capture and sorting the result. At 589,000 captures
+    -- that join cost 911,000 planner units and hit the 60s statement timeout;
+    -- the index is on its way to several million.
+    done_at     TIMESTAMPTZ
 );
+ALTER TABLE ffnet_captures ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ;
+-- Newest captures first: they carry the most of the stats line.
+CREATE INDEX IF NOT EXISTS ix_ffnet_captures_todo
+    ON ffnet_captures (snapshot_ts DESC)
+    WHERE done_at IS NULL AND original IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS fandom_hubs (
     slug        TEXT PRIMARY KEY,
