@@ -302,9 +302,29 @@ def fetch_meta(client: httpx.Client, site_id: str,
     else:
         BUDGET.wait()
         try:
+            # Every capture, then the NEWEST of them — not `limit=1`.
+            #
+            # CDX is sorted by urlkey and then by timestamp, so "the first row"
+            # is the earliest capture of whichever slug sorts first, and
+            # `limit=-1` is the last row of the last slug. Neither is the newest
+            # capture of the story, and the difference is most of the value.
+            # Measured on story 4985743, eighteen captures spanning 2012-2022:
+            #
+            #   2012 capture:  favs=None  follows=None  words=None
+            #   2022 capture:  favs=1657  follows=1020  words=244923
+            #
+            # Same story, same parser. FF.net added favourites, follows and
+            # word counts to the stats line over the years, and characters did
+            # not exist at all on pre-2009 pages — so an old snapshot parses
+            # cleanly and yields almost nothing. This backfill exists to supply
+            # the engagement signal the ranking has none of, and it was reading
+            # the one snapshot per story least likely to carry it.
+            #
+            # Same request, bigger response.
             resp = client.get(CDX, params={
                 "url": f"fanfiction.net/s/{site_id}/1/*",
-                "output": "json", "limit": "1", "filter": "statuscode:200",
+                "output": "json", "filter": "statuscode:200",
+                "fl": "timestamp,original",
             }, timeout=40)
             note_response(resp.status_code)
             rows = resp.json()
@@ -317,7 +337,7 @@ def fetch_meta(client: httpx.Client, site_id: str,
             return None
         if not rows or len(rows) < 2:
             return None
-        ts, original = rows[1][1], rows[1][2]
+        ts, original = max(rows[1:], key=lambda r: r[0])[:2]
     BUDGET.wait()
     try:
         page = client.get(f"https://web.archive.org/web/{ts}/{original}",

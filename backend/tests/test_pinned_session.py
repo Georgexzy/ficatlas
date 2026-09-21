@@ -313,3 +313,38 @@ def test_the_prefix_walk_keeps_the_newest_capture_per_story():
     assert best[777][0] == "20220101000000"
     assert "New-Slug" in best[777][1]
     assert set(best) == {777, 888}
+
+
+def test_the_newest_capture_wins_not_the_first_row():
+    """CDX sorts by urlkey then timestamp, so row 1 is the earliest capture of
+    whichever slug sorts first. Measured on story 4985743 (18 captures,
+    2012-2022): the 2012 snapshot parses cleanly and carries favs=None,
+    follows=None, words=None; the 2022 one carries 1657, 1020 and 244923. The
+    backfill exists to supply exactly that signal."""
+    import ffnet_enrich
+
+    fetched = []
+
+    class Client:
+        def get(self, url, **kw):
+            fetched.append(url)
+            if "cdx" in url:
+                class R:
+                    status_code = 200
+                    @staticmethod
+                    def json():
+                        return [["timestamp", "original"],
+                                # Deliberately not in timestamp order, the way
+                                # interleaved slugs actually arrive.
+                                ["20220523230545", "https://www.fanfiction.net/s/1/1/New-Slug"],
+                                ["20120502212647", "http://www.fanfiction.net/s/1/1/Old_Slug"],
+                                ["20181114194248", "https://www.fanfiction.net/s/1/1/Mid-Slug"]]
+                return R()
+            raise AssertionError("stop after the snapshot URL is chosen")
+
+    try:
+        ffnet_enrich.fetch_meta(Client(), "1")
+    except AssertionError:
+        pass
+    assert len(fetched) == 2, f"expected cdx + snapshot, got {fetched}"
+    assert "20220523230545" in fetched[1], f"picked the wrong capture: {fetched[1]}"
