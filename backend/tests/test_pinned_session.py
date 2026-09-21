@@ -117,3 +117,39 @@ def test_a_refusal_still_backs_off_immediately():
     start = b.interval
     b.penalise()
     assert b.interval > start
+
+
+def test_a_slow_capture_is_not_backpressure():
+    """Conflating the two pinned the archive.org budget at its ceiling.
+
+    Measured with no pacing at all, five CDX lookups back to back: two timed
+    out after 30s and three answered in under eleven seconds. A host refusing
+    us does not answer three requests in a row that fast — those timeouts are
+    slow captures, a property of the capture and not of our request rate.
+
+    Treating each as "slow down" doubled the interval against a recovery of ten
+    per cent per two minutes, and two doublings need fourteen minutes of clean
+    responses to undo. At a forty per cent timeout rate they never arrived, so
+    the FF.net backfill ran one story per twenty-four-minute pass.
+    """
+    import httpx
+    import wayback_harvest as W
+    # The helper classifies against the MODULE budget, which is the whole point
+    # of it being one place — so this exercises that object and puts it back.
+    b = W.BUDGET
+    saved = (b.interval, b._net_errors, b._slow)
+    try:
+        b.interval, b._net_errors, b._slow = W.BASE_INTERVAL, 0, 0
+        start = b.interval
+        for _ in range(5):
+            W.note_transport_error(httpx.ReadTimeout("slow capture"))
+        assert b.interval == start, \
+            "a slow capture must not slow the whole harvest"
+        assert b._slow == 5, "but it must still be counted"
+        # A refused connection still does, because that IS how archive.org
+        # signals a throttle.
+        for _ in range(W.NET_ERRORS_BEFORE_BACKOFF):
+            W.note_transport_error(httpx.ConnectError("refused"))
+        assert b.interval > start
+    finally:
+        b.interval, b._net_errors, b._slow = saved

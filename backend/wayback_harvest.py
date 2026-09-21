@@ -110,6 +110,7 @@ class _Budget:
         self._next = 0.0
         self._clean = 0
         self._net_errors = 0
+        self._slow = 0
         self._last_recover = 0.0
         self.throttled = 0
         self.granted = 0
@@ -134,8 +135,36 @@ class _Budget:
         if self.interval != before:
             log.info(f"wayback budget: throttled -> {before:.1f}s to {self.interval:.1f}s")
 
+    def slow_response(self) -> None:
+        """The host answered late, or not at all, for ONE item.
+
+        NOT backpressure, and conflating the two is what pinned this budget at
+        its ceiling for days. Measured against archive.org with no pacing at
+        all, five CDX lookups back to back:
+
+            1991415   ReadTimeout after 30s
+            5701185   HTTP 200 in 10.6s
+            6408098   HTTP 200 in  2.8s
+            6265617   ReadTimeout after 30s
+            1534265   HTTP 200 in  2.7s
+
+        The connections were accepted and three of them answered promptly. A
+        host that is refusing us does not answer three requests in a row in
+        under eleven seconds. Those timeouts are archive.org being slow on
+        particular captures, which is a property of the capture and not of our
+        request rate — and treating each one as "slow down" doubled the
+        interval against a recovery of ten per cent per two minutes. The
+        arithmetic never came back: two doublings need fourteen minutes of
+        clean responses to undo, and at a forty per cent timeout rate they
+        never arrived.
+
+        So this counts, and says so, and does not slow anything down.
+        """
+        with self._lock:
+            self._slow += 1
+
     def network_error(self) -> None:
-        """A connection failed — which from archive.org means "slow down".
+        """A connection was REFUSED — which from archive.org means "slow down".
 
         Measured, after this ran too fast for a while: 9 of 10 requests refused
         at TCP connect, then 1 of 10 while a cooling-off period was still in
@@ -144,6 +173,10 @@ class _Budget:
         tolerated, it is the rate-limit signal itself, and treating it as
         transport noise is what let the harvest keep pushing while already cut
         off.
+
+        A READ TIMEOUT is a different thing and belongs in `slow_response`:
+        the connection was accepted, so we were not refused. See that method
+        for the measurement.
 
         Still requires a short run rather than a single failure, because a real
         one-off drop should not double the interval — but the run is small, and
@@ -206,10 +239,29 @@ class _Budget:
 
     def snapshot(self) -> dict:
         return {"interval": round(self.interval, 2), "granted": self.granted,
-                "throttled": self.throttled}
+                "throttled": self.throttled, "slow": self._slow}
 
 
 BUDGET = _Budget()
+
+
+def note_transport_error(exc: Exception) -> None:
+    """Tell the budget what KIND of failure this was.
+
+    One place, because the distinction is easy to get wrong and every call site
+    was making it identically by accident — badly. A refused connection is
+    archive.org's throttle signal and must slow us down; a read timeout is one
+    slow capture and must not. See `_Budget.network_error` and
+    `_Budget.slow_response` for the measurement behind that.
+    """
+    import httpx
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout,
+                        httpx.PoolTimeout)):
+        BUDGET.network_error()
+    else:
+        # ReadTimeout, ReadError, RemoteProtocolError, WriteError: the
+        # connection was accepted, so we were not refused.
+        BUDGET.slow_response()
 
 
 # archive.org signals overload with gateway errors far more often than with 429
@@ -473,7 +525,7 @@ def fetch_snapshot(work_id: int, ts: str, timeout: float = 90.0) -> dict | None:
         r = httpx.get(SNAPSHOT.format(ts=ts, wid=work_id), headers=HEADERS,
                       timeout=timeout, follow_redirects=True)
     except httpx.RequestError as e:
-        BUDGET.network_error()
+        note_transport_error(e)
         raise Transient(type(e).__name__) from e
     note_response(r.status_code, r.headers.get("Retry-After"))
     if r.status_code in BACKPRESSURE:
