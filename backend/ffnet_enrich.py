@@ -398,33 +398,36 @@ def _pick_targets(limit: int | None) -> list:
         # Ordered by staleness first for the reason gap_filler now is: a queue
         # that re-draws its own head does not advance. Then by what the story
         # is missing, so the emptiest capture-backed rows go first.
+        # A bounded pool off the head of the capture queue, then ranked.
+        #
+        # Joining every known capture to `stories` and sorting the result cost
+        # 911,000 planner units at 589,000 captures and tripped the 60s
+        # statement timeout mid-pass; the index is heading for several million,
+        # so that shape was never going to hold. Reading the head of a partial
+        # index and stopping is O(batch) no matter how large the index gets.
+        #
+        # Newest captures first, because a 2018 snapshot carries the whole
+        # stats line and a 2012 one often does not. Then ranked by readership
+        # WITHIN the pool -- an approximation of the global ordering, but this
+        # gap never closes, so the question is only ever which few hundred to
+        # fetch next, and the pool is drawn from the best captures we hold.
         rows = db.execute(sql_text("""
+            WITH cand AS (
+                SELECT site_id, snapshot_ts, original
+                  FROM ffnet_captures
+                 WHERE done_at IS NULL AND original IS NOT NULL
+                 ORDER BY snapshot_ts DESC
+                 LIMIT :pool
+            )
             SELECT s.id, s.site_id, c.snapshot_ts, c.original
-              FROM ffnet_captures c
+              FROM cand c
               JOIN stories s ON s.site = 'ffnet' AND s.site_id = c.site_id::text
              WHERE cardinality(s.characters) = 0
-               AND c.original IS NOT NULL
-             ORDER BY date_trunc('day', s.crawled_at AT TIME ZONE 'UTC') ASC,
-                      -- Most-read first, among rows tried equally long ago.
-                      --
-                      -- This gap does not close. 6.4M works against a host
-                      -- that rate-limits us to a few dozen an hour is not a
-                      -- backlog, it is a permanent condition, so WHICH rows
-                      -- get filled is the only decision that matters and it
-                      -- should not be left to whatever the index scan returns.
-                      -- Most FF.net rows have no engagement figure yet --
-                      -- supplying it is half of what this job is for -- but
-                      -- 362,330 do, and those are ordered properly here rather
-                      -- than arbitrarily.
-                      (COALESCE(s.kudos,0) + COALESCE(s.hits,0)
+             ORDER BY (COALESCE(s.kudos,0) + COALESCE(s.hits,0)
                        + COALESCE(s.favourites,0)) DESC,
-                      (CASE WHEN s.published_at IS NULL THEN 1 ELSE 0 END
-                     + CASE WHEN COALESCE(s.word_count,0) = 0 THEN 1 ELSE 0 END
-                     + CASE WHEN COALESCE(s.kudos,0) = 0 THEN 1 ELSE 0 END) DESC,
-                      -- A newer capture carries more of the stats line.
                       c.snapshot_ts DESC
              LIMIT :lim
-        """), {"lim": want}).fetchall()
+        """), {"lim": want, "pool": max(want * 20, 2000)}).fetchall()
         out = [(r[0], r[1], 0, (r[2], r[3])) for r in rows]
 
         # Only if the capture index cannot fill the batch. It is still being
@@ -572,6 +575,16 @@ def _mark_attempted(ids: list) -> None:
             db.execute(sql_text(
                 "UPDATE stories SET crawled_at = now() WHERE id = ANY(:ids)"),
                 {"ids": list(ids)})
+            # And on the capture queue itself, which is what selection reads.
+            # Without this the same head of the queue comes back every pass --
+            # the exact failure the crawled_at stamp was added to fix, one
+            # table along.
+            db.execute(sql_text("""
+                UPDATE ffnet_captures c SET done_at = now()
+                  FROM stories s
+                 WHERE s.id = ANY(:ids)
+                   AND s.site = 'ffnet' AND c.site_id::text = s.site_id
+            """), {"ids": list(ids)})
             db.commit()
     except Exception as e:
         log.info(f"  attempt stamp skipped ({type(e).__name__}); "
