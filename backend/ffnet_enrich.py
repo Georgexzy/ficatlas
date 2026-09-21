@@ -298,8 +298,12 @@ def fetch_meta(client: httpx.Client, site_id: str) -> dict | None:
         }, timeout=40)
         note_response(resp.status_code)
         rows = resp.json()
-    except Exception:
-        BUDGET.network_error()
+    except Exception as e:
+        # A refused connection is archive.org saying slow down; a read timeout
+        # is one slow capture. Conflating them pinned this budget at its
+        # ceiling — see wayback_harvest.note_transport_error.
+        from wayback_harvest import note_transport_error
+        note_transport_error(e)
         return None
     if not rows or len(rows) < 2:
         return None
@@ -308,8 +312,12 @@ def fetch_meta(client: httpx.Client, site_id: str) -> dict | None:
     try:
         page = client.get(f"https://web.archive.org/web/{ts}/{original}",
                           timeout=60, follow_redirects=True)
-    except Exception:
-        BUDGET.network_error()
+    except Exception as e:
+        # A refused connection is archive.org saying slow down; a read timeout
+        # is one slow capture. Conflating them pinned this budget at its
+        # ceiling — see wayback_harvest.note_transport_error.
+        from wayback_harvest import note_transport_error
+        note_transport_error(e)
         return None
     note_response(page.status_code)
     if page.status_code != 200:

@@ -236,7 +236,8 @@ def _captured_url(story_id: int, timeout: float = 40.0) -> str | None:
     """
     import httpx
 
-    from wayback_harvest import BUDGET, HEADERS, note_response
+    from wayback_harvest import (BUDGET, HEADERS, note_response,
+                                 note_transport_error)
 
     BUDGET.wait()
     try:
@@ -264,7 +265,8 @@ def fetch_story(story_id: int, ts: str, timeout: float = 90.0) -> dict | None:
     """
     import httpx
 
-    from wayback_harvest import BACKPRESSURE, BUDGET, HEADERS, Transient, note_response
+    from wayback_harvest import (BACKPRESSURE, BUDGET, HEADERS, Transient,
+                                 note_response, note_transport_error)
 
     # The captured URL, not a reconstructed one. See `_captured_url`: the
     # slugless form is not in the archive and 404s every time.
@@ -303,10 +305,10 @@ def fetch_story(story_id: int, ts: str, timeout: float = 90.0) -> dict | None:
         except httpx.DecodingError:
             return None          # this capture is unreadable; retire it
         except httpx.RequestError as e:
-            BUDGET.network_error()
+            note_transport_error(e)
             raise Transient(type(e).__name__) from e
     except httpx.RequestError as e:
-        BUDGET.network_error()
+        note_transport_error(e)
         raise Transient(type(e).__name__) from e
     note_response(r.status_code, r.headers.get("Retry-After"))
     if r.status_code in BACKPRESSURE:
@@ -321,14 +323,15 @@ def cdx_page(resume: str | None = None, since: str = "20260101",
     """One page of the CDX index. Returns [(story_id, timestamp)], resume key."""
     import httpx
 
-    from wayback_harvest import BUDGET, HEADERS, Transient
+    from wayback_harvest import (BUDGET, HEADERS, Transient,
+                                 note_transport_error)
 
     BUDGET.wait()
     try:
         r = httpx.get(CDX_URL, params=cdx_params(since, limit, resume),
                       headers=HEADERS, timeout=180)
     except httpx.RequestError as e:
-        BUDGET.network_error()
+        note_transport_error(e)
         raise Transient(type(e).__name__) from e
     if r.status_code != 200:
         raise Transient(f"cdx HTTP {r.status_code}")
