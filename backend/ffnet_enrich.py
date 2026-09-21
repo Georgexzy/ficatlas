@@ -376,24 +376,62 @@ def _pick_targets(limit: int | None) -> list:
     """
     from gap_filler import find_gaps
     from sqlalchemy import text as sql_text
+
+    want = limit or 1000
+    out: list = []
     with db_session() as db:
-        rows = find_gaps(db, "ffnet", limit=limit or 1000)
-        # Whatever the bulk capture walk already found for these stories, so
-        # the fetch can skip its own CDX lookup. One query for the batch, and
-        # it saves one rate-limited archive.org request per story that is in
-        # there — see ffnet_wayback.cdx_prefix_page.
-        ids = [int(r["site_id"]) for r in rows if str(r["site_id"]).isdigit()]
-        known: dict[str, tuple[str, str]] = {}
-        if ids:
-            for sid, ts, orig in db.execute(sql_text(
-                    "SELECT site_id, snapshot_ts, original FROM ffnet_captures "
-                    "WHERE site_id = ANY(:ids)"), {"ids": ids}):
-                if orig:
-                    known[str(sid)] = (ts, orig)
-    # Shape kept as (id, site_id, gap_score) for the caller, plus the capture
-    # if we have one.
-    return [(r["id"], r["site_id"], r["gap_score"],
-             known.get(str(r["site_id"]))) for r in rows]
+        # Stories archive.org demonstrably HOLDS come first.
+        #
+        # Measured, and the gap is not marginal. Ten stories drawn this way
+        # yielded characters for six; the eight the gap score was drawing
+        # yielded characters for none, and could not have, because they are
+        # 2002-2005 works whose archived pages have no character field at all.
+        #
+        # Two independent reasons this works. The capture index is a fact about
+        # what exists, so none of these requests is spent discovering that
+        # there is nothing to fetch -- that was about 31% of them. And the
+        # captures are modern: of the first 378,000 indexed, 219,653 are from
+        # 2018 and 123,316 from 2015, against barely 180 predating 2011. Every
+        # one of those renders the stats line that carries characters,
+        # favourites, follows and a word count.
+        #
+        # Ordered by staleness first for the reason gap_filler now is: a queue
+        # that re-draws its own head does not advance. Then by what the story
+        # is missing, so the emptiest capture-backed rows go first.
+        rows = db.execute(sql_text("""
+            SELECT s.id, s.site_id, c.snapshot_ts, c.original
+              FROM ffnet_captures c
+              JOIN stories s ON s.site = 'ffnet' AND s.site_id = c.site_id::text
+             WHERE cardinality(s.characters) = 0
+               AND c.original IS NOT NULL
+             ORDER BY date_trunc('day', s.crawled_at AT TIME ZONE 'UTC') ASC,
+                      (CASE WHEN s.published_at IS NULL THEN 1 ELSE 0 END
+                     + CASE WHEN COALESCE(s.word_count,0) = 0 THEN 1 ELSE 0 END
+                     + CASE WHEN COALESCE(s.kudos,0) = 0 THEN 1 ELSE 0 END) DESC,
+                      c.snapshot_ts DESC
+             LIMIT :lim
+        """), {"lim": want}).fetchall()
+        out = [(r[0], r[1], 0, (r[2], r[3])) for r in rows]
+
+        # Only if the capture index cannot fill the batch. It is still being
+        # built -- the prefix walk covers ids 1000-9999 over several days -- so
+        # early on this is most of the batch and later it should be none of it.
+        if len(out) < want:
+            gaps = find_gaps(db, "ffnet", limit=want - len(out))
+            have = {str(r[1]) for r in out}
+            ids = [int(r["site_id"]) for r in gaps
+                   if str(r["site_id"]).isdigit()]
+            known: dict[str, tuple[str, str]] = {}
+            if ids:
+                for sid, ts, orig in db.execute(sql_text(
+                        "SELECT site_id, snapshot_ts, original FROM ffnet_captures "
+                        "WHERE site_id = ANY(:ids)"), {"ids": ids}):
+                    if orig:
+                        known[str(sid)] = (ts, orig)
+            out += [(r["id"], r["site_id"], r["gap_score"],
+                     known.get(str(r["site_id"])))
+                    for r in gaps if str(r["site_id"]) not in have]
+    return out
 
 
 def run(limit: int | None, dry_run: bool, delay: float, batch: int,

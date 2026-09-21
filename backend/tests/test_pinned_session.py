@@ -514,3 +514,46 @@ def test_the_gap_queue_advances_instead_of_redrawing_the_same_rows(db):
     assert order == ["900000002", "900000001"], (
         f"queue returned {order}; the row tried 30 days ago must come first "
         f"even though the other is 99,999 words")
+
+
+def test_enrichment_targets_stories_the_archive_actually_holds(db):
+    """Measured: ten capture-backed stories yielded characters for six; the
+    eight the gap score was drawing yielded none, and could not have -- they
+    are 2002-2005 works whose archived pages carry no character field.
+
+    Two reasons it works. A capture is a fact about what exists, so no request
+    is spent discovering there is nothing to fetch (about 31% of them were).
+    And the captures are modern: of the first 378,000 indexed, 219,653 are from
+    2018 and 123,316 from 2015, against barely 180 predating 2011.
+    """
+    from sqlalchemy import text as sql_text
+    import ffnet_enrich
+
+    db.execute(sql_text("""
+        INSERT INTO stories (site, site_id, url, title, characters,
+                             relationships, fandoms, tags, crawled_at)
+        VALUES ('ffnet', '910000001', 'u1', 'has a capture', '{}', '{}',
+                '{}', '{}', now() - interval '10 days'),
+               ('ffnet', '910000002', 'u2', 'no capture',    '{}', '{}',
+                '{}', '{}', now() - interval '99 days')
+    """))
+    db.execute(sql_text("""
+        INSERT INTO ffnet_captures (site_id, snapshot_ts, original)
+        VALUES (910000001, '20180101000000',
+                'https://www.fanfiction.net/s/910000001/1/T')
+        ON CONFLICT (site_id) DO NOTHING
+    """))
+    db.commit()
+
+    picked = ffnet_enrich._pick_targets(200)
+    by_id = {str(r[1]): r for r in picked}
+    assert "910000001" in by_id, \
+        "a story with a known capture was not selected"
+    row = by_id["910000001"]
+    assert row[3] is not None and row[3][0] == "20180101000000", \
+        "the capture must be carried, or the fetch pays for CDX again"
+    # The capture-backed row outranks the one with no capture, even though the
+    # other has gone far longer without being tried.
+    order = [str(r[1]) for r in picked]
+    if "910000002" in order:
+        assert order.index("910000001") < order.index("910000002")
