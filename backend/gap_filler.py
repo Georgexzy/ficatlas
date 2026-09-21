@@ -88,10 +88,27 @@ CANDIDATES_SQL = r"""
     FROM stories
     WHERE site = :site
       AND site_id ~ '^[0-9]+$'
+    -- Least-recently-TRIED outranks most-read, and that ordering is the whole
+    -- reason this queue advances.
+    --
+    -- When the staleness key sat last, it was never reached: the rows with the
+    -- worst gap scores tied on engagement at 0 and were then separated by
+    -- word_count, uniquely, so `crawled_at` never broke anything. The same
+    -- eight FF.net stories were returned every pass for months -- 1534265,
+    -- 1625, 2202997, 1383206, 742503, 202864, ordered 27718, 11858, 10709,
+    -- 10105, 7266, 7231 by word count -- and every one of them is a 2002-2005
+    -- story whose archived page has no character field at all, because FF.net
+    -- did not have one before about 2009. The queue was pinned on rows that
+    -- can never satisfy it, and marking them as attempted could not help while
+    -- the mark fed a key nothing ever consulted.
+    --
+    -- Still truncated to the day, so this does not become a pure staleness
+    -- walk: within a day's bucket the most-read work is still tried first,
+    -- which is what the gap score is for. Across days the queue moves on.
     ORDER BY gap_score DESC,
+             date_trunc('day', crawled_at AT TIME ZONE 'UTC') ASC NULLS FIRST,
              (COALESCE(kudos, 0) + COALESCE(hits, 0)) DESC,
-             COALESCE(word_count, 0) DESC,
-             date_trunc('day', crawled_at AT TIME ZONE 'UTC') ASC NULLS FIRST
+             COALESCE(word_count, 0) DESC
     LIMIT :lim
 """
 
