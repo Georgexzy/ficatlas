@@ -455,10 +455,13 @@ def run(dry_run: bool = False) -> int:
         total = 0
         after = "00000000-0000-0000-0000-000000000000"
         while True:
+            # The last id of the next slice. Not max(), which Postgres does
+            # not define for uuid -- the top of an ascending window is the same
+            # thing and uses the primary key index either way.
             upto = db.execute(text(
-                "SELECT max(id) FROM (SELECT id FROM pr_final WHERE id > :after "
-                "ORDER BY id LIMIT :n) t"), {"after": after, "n": WRITE_BATCH}
-            ).scalar()
+                "SELECT id FROM (SELECT id FROM pr_final WHERE id > :after "
+                "ORDER BY id LIMIT :n) t ORDER BY id DESC LIMIT 1"),
+                {"after": after, "n": WRITE_BATCH}).scalar()
             if upto is None:
                 break
             for attempt in range(1, 11):
