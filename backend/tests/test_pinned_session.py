@@ -208,3 +208,54 @@ def test_recovery_needs_evidence_not_just_patience():
     assert widened > W.BASE_INTERVAL
     b.reward()
     assert b.interval < widened
+
+
+# ---- worker supervision -------------------------------------------------
+# The worker created 24 background loops with create_task, never awaited any
+# of them, and kept references in a list. asyncio surfaces an unretrieved task
+# exception only on garbage collection, which the references prevent -- so a
+# crashed loop vanished silently and the container stayed "healthy". Measured:
+# two hours at 0% CPU with nothing running and nothing saying so.
+
+def test_a_crashed_loop_is_restarted_not_silently_dropped():
+    import asyncio
+    import worker
+
+    calls = []
+
+    async def flaky():
+        calls.append(len(calls))
+        if len(calls) < 3:
+            raise RuntimeError("boom")
+        raise asyncio.CancelledError      # stand in for shutdown
+
+    async def go():
+        worker.RESTART_MIN = 0.0
+        with contextlib_suppress(asyncio.CancelledError):
+            await worker._supervised("flaky", flaky)
+
+    asyncio.run(go())
+    assert len(calls) == 3, f"crashed loop restarted {len(calls) - 1} times"
+
+
+def test_shutdown_is_not_treated_as_a_crash():
+    """CancelledError must propagate, or a stopping worker restarts for ever."""
+    import asyncio
+    import worker
+
+    async def cancelled():
+        raise asyncio.CancelledError
+
+    async def go():
+        try:
+            await worker._supervised("cancelled", cancelled)
+        except asyncio.CancelledError:
+            return "propagated"
+        return "swallowed"
+
+    assert asyncio.run(go()) == "propagated"
+
+
+def contextlib_suppress(*excs):
+    import contextlib
+    return contextlib.suppress(*excs)

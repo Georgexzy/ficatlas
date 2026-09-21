@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 import logging
 import os
 import sys
+import time
 
 sys.path.insert(0, "/app")
 from db.dsn import default_database_url  # noqa: E402 — needs the sys.path above
@@ -1662,6 +1663,54 @@ async def _ffnet_wayback_fetch_loop() -> None:
         await asyncio.sleep(interval)
 
 
+# How long a loop must survive before we treat it as healthy again, and the
+# bounds on the restart backoff. A loop that crashes instantly in a tight cycle
+# must not become a log flood or a request flood against someone else's host.
+RESTART_MIN = 10.0
+RESTART_MAX = 600.0
+RESTART_HEALTHY = 300.0
+
+
+async def _supervised(name: str, factory) -> None:
+    """Run one background loop for ever, surviving its own bugs.
+
+    Every loop in this worker used to be a bare `create_task` whose result
+    nobody ever awaited, with the task objects parked in a list so they stayed
+    referenced. That combination is completely silent. asyncio reports an
+    unretrieved task exception only when the task is garbage collected, and
+    holding a reference is precisely what stops that from happening -- so a
+    loop that raised just stopped, permanently, while the worker went on
+    reporting itself healthy and the container stayed up.
+
+    Measured: the worker sat at 0% CPU for over two hours with its last log
+    line an FF.net enrichment pass, every pool thread idle, main task asleep in
+    its `while True: await asyncio.sleep(3600)`. Nothing was running and
+    nothing said so. That is the shape of "why hasn't this job run in twelve
+    days" -- not a scheduling bug but a dead task nobody noticed, revived only
+    by a restart that happened to come along.
+
+    So: catch it, say so with a traceback, and start it again. A job that is
+    broken should be loud and should keep trying, not quietly absent.
+    """
+    delay = RESTART_MIN
+    while True:
+        started = time.monotonic()
+        try:
+            await factory()
+            log.warning(f"[{name}] loop returned unexpectedly; restarting")
+        except asyncio.CancelledError:
+            raise                      # shutdown, not a failure
+        except Exception:
+            log.exception(f"[{name}] crashed; restarting in {delay:.0f}s")
+        # A loop that ran for a good while before dying gets a fresh, short
+        # backoff; one that dies immediately backs off, so a permanent failure
+        # settles into a slow retry instead of spinning.
+        if time.monotonic() - started >= RESTART_HEALTHY:
+            delay = RESTART_MIN
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, RESTART_MAX)
+
+
 async def main() -> None:
     # Schema/indexes may not exist yet on a first boot; the API does this too and
     # it is idempotent, so whichever wins the race is fine.
@@ -1679,102 +1728,102 @@ async def main() -> None:
         log.info("scheduler started (feed polls + crawls)")
 
     if _flag("ENRICH_FFNET"):
-        tasks.append(asyncio.create_task(_enrich_loop()))
+        tasks.append(asyncio.create_task(_supervised("enrich_loop", _enrich_loop)))
         log.info("FF.net enrichment backfill enabled")
 
     if _flag("DETECT_SERIES", "true"):
-        tasks.append(asyncio.create_task(_series_loop()))
+        tasks.append(asyncio.create_task(_supervised("series_loop", _series_loop)))
         log.info("series detection enabled")
 
     if _flag("DEDUP_CROSSPOSTS"):
-        tasks.append(asyncio.create_task(_dedup_loop()))
+        tasks.append(asyncio.create_task(_supervised("dedup_loop", _dedup_loop)))
         log.info("cross-post dedup enabled")
 
     if _flag("RECENT_WORKS", "true"):
-        tasks.append(asyncio.create_task(_recent_works_loop()))
+        tasks.append(asyncio.create_task(_supervised("recent_works_loop", _recent_works_loop)))
         log.info("recent-works indexing enabled (post-dump AO3 coverage)")
 
     if _flag("REFRESH_STALE"):
-        tasks.append(asyncio.create_task(_refresh_stale_loop()))
+        tasks.append(asyncio.create_task(_supervised("refresh_stale_loop", _refresh_stale_loop)))
         log.info("stale-work refresh enabled")
 
     if _flag("ARCHIVES_IMPORT", "true"):
-        tasks.append(asyncio.create_task(_archives_loop()))
+        tasks.append(asyncio.create_task(_supervised("archives_loop", _archives_loop)))
         log.info("alternative-archive full import enabled (HPFFA + HexFiles)")
 
     if _flag("LISTING_HARVEST", "true"):
-        tasks.append(asyncio.create_task(_listing_harvest_loop()))
+        tasks.append(asyncio.create_task(_supervised("listing_harvest_loop", _listing_harvest_loop)))
         log.info("AO3 listing harvest enabled (20 works per request)")
 
     if _flag("TITLE_REPAIR", "true"):
-        tasks.append(asyncio.create_task(_title_repair_loop()))
+        tasks.append(asyncio.create_task(_supervised("title_repair_loop", _title_repair_loop)))
         log.info("AO3 title repair enabled")
 
     if _flag("WITHDRAW_DELETED", "true"):
-        tasks.append(asyncio.create_task(_withdraw_deleted_loop()))
+        tasks.append(asyncio.create_task(_supervised("withdraw_deleted_loop", _withdraw_deleted_loop)))
         log.info("source-deletion check enabled (auto-withdraw text authors removed)")
 
     if _flag("REBUILD_HUBS", "true"):
-        tasks.append(asyncio.create_task(_hubs_loop()))
+        tasks.append(asyncio.create_task(_supervised("hubs_loop", _hubs_loop)))
         log.info("fandom hub rebuild enabled (browse pages stay current)")
 
     if _flag("REBUILD_POPULARITY", "true"):
-        tasks.append(asyncio.create_task(_popularity_loop()))
+        tasks.append(asyncio.create_task(_supervised("popularity_loop", _popularity_loop)))
         log.info("popularity rebuild enabled (cross-archive sort stays current)")
 
     # On by default. The failure it prevents is silent and expensive — see the
     # docstring — and the cost is one sampled scan every few hours.
     if _flag("RUN_ANALYZE", "true"):
-        tasks.append(asyncio.create_task(_analyze_loop()))
+        tasks.append(asyncio.create_task(_supervised("analyze_loop", _analyze_loop)))
         log.info("planner statistics refresh enabled (ANALYZE stories)")
 
     # On by default. The cost is one weekly sampling pass; the failure it
     # prevents is a reader typing the only name they know for a ship and being
     # told the index has twenty works.
     if _flag("REBUILD_SHIP_ALIASES", "true"):
-        tasks.append(asyncio.create_task(_ship_alias_loop()))
+        tasks.append(asyncio.create_task(_supervised("ship_alias_loop", _ship_alias_loop)))
         log.info("ship alias mining enabled (nicknames resolve to pairings)")
 
     # Community recommendations and the content-gate repair. See the loop.
     if _flag("RUN_CURATION", "true"):
-        tasks.append(asyncio.create_task(_curation_loop()))
+        tasks.append(asyncio.create_task(_supervised("curation_loop", _curation_loop)))
         log.info("curation loop enabled (recs imports + content gate repair)")
 
     # On by default. Without it the scan lands on a visitor's request instead,
     # and it is a 17-21 second read of the whole table.
     if _flag("REFRESH_STATS", "true"):
-        tasks.append(asyncio.create_task(_stats_loop()))
+        tasks.append(asyncio.create_task(_supervised("stats_loop", _stats_loop)))
         log.info("index totals refresh enabled (keeps the scan off the API)")
 
     # The one job here paced by somebody else's rate limit. Off by default is
     # tempting and would be wrong: the queue is empty until it runs, and an
     # empty worklist reads as a broken feature rather than as an unset flag.
     if _flag("RUN_REDDIT_QUEUE", "true"):
-        tasks.append(asyncio.create_task(_reddit_queue_loop()))
+        tasks.append(asyncio.create_task(_supervised("reddit_queue_loop", _reddit_queue_loop)))
         log.info("reddit fic-finder queue enabled (hourly, one feed at a time)")
 
     if _flag("RUN_SERIES_WORDCOUNT", "true"):
-        tasks.append(asyncio.create_task(_series_wordcount_loop()))
+        tasks.append(asyncio.create_task(_supervised("series_wordcount_loop", _series_wordcount_loop)))
         log.info("series word count refresh enabled (six-hourly)")
 
     if _flag("RUN_SERIES_FILL", "true"):
-        tasks.append(asyncio.create_task(_series_fill_loop()))
+        tasks.append(asyncio.create_task(_supervised("series_fill_loop", _series_fill_loop)))
         log.info("series fill enabled (fetch missing works for partial series)")
 
     # Only runs if INDEXNOW_KEY is set; indexnow.run() no-ops otherwise, so this
     # is safe to leave on for an install that has not set one up.
     if _flag("RUN_INDEXNOW", "true"):
-        tasks.append(asyncio.create_task(_indexnow_loop()))
+        tasks.append(asyncio.create_task(_supervised("indexnow_loop", _indexnow_loop)))
         log.info("IndexNow submission enabled (hub changes -> Bing/Yandex)")
 
     if _flag("FFNET_WAYBACK", "true"):
-        tasks.append(asyncio.create_task(_ffnet_wayback_cdx_loop()))
-        tasks.append(asyncio.create_task(_ffnet_wayback_fetch_loop()))
+        tasks.append(asyncio.create_task(_supervised("ffnet_wayback_cdx_loop", _ffnet_wayback_cdx_loop)))
+        tasks.append(asyncio.create_task(_supervised("ffnet_wayback_fetch_loop", _ffnet_wayback_fetch_loop)))
         log.info("FF.net Wayback harvest enabled (the only route to FF.net)")
 
     if _flag("WAYBACK_HARVEST", "true"):
-        tasks.append(asyncio.create_task(_wayback_cdx_loop()))
-        tasks.append(asyncio.create_task(_wayback_fetch_loop()))
+        tasks.append(asyncio.create_task(_supervised("wayback_cdx_loop", _wayback_cdx_loop)))
+        tasks.append(asyncio.create_task(_supervised("wayback_fetch_loop", _wayback_fetch_loop)))
         log.info("Wayback harvest enabled (AO3 metadata at zero cost to AO3)")
 
     log.info("worker ready")
