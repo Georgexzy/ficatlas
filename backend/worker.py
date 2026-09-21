@@ -1786,7 +1786,30 @@ async def _supervised(name: str, factory) -> None:
         delay = min(delay * 2, RESTART_MAX)
 
 
+def _install_stack_dumper() -> None:
+    """`docker compose kill -s SIGUSR1 worker` prints every thread's stack.
+
+    Added because this worker has now gone silent twice with no traceback to
+    show for it, and neither time could be diagnosed from the outside. A crash
+    is easy -- _supervised catches it and logs it. A HANG produces nothing at
+    all: the container stays up, the event loop sits in epoll, the pool threads
+    sit in futex, and no amount of reading /proc says which line of Python is
+    not returning.
+
+    faulthandler writes to fd 2, so the dump lands in `docker compose logs`
+    beside everything else. It costs nothing until the signal arrives.
+    """
+    try:
+        import faulthandler
+        import signal
+        faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
+        log.info("stack dumper armed (kill -s SIGUSR1 to dump all threads)")
+    except Exception as e:
+        log.warning(f"stack dumper unavailable: {type(e).__name__}: {e}")
+
+
 async def main() -> None:
+    _install_stack_dumper()
     # Schema/indexes may not exist yet on a first boot; the API does this too and
     # it is idempotent, so whichever wins the race is fine.
     try:

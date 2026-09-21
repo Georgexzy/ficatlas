@@ -374,3 +374,32 @@ def test_a_story_that_yields_nothing_stops_being_re_selected():
     marker = inspect.getsource(ffnet_enrich._mark_attempted)
     assert "crawled_at" in marker, \
         "must write the column find_gaps actually breaks ties on"
+
+
+def test_a_lifted_statement_timeout_does_not_leak_into_the_pool():
+    """lift_statement_timeout uses a plain SET, which is connection-scoped, and
+    a pooled connection outlives the session that lifted it. Without a reset on
+    checkout the next unrelated caller inherits "wait for ever".
+
+    Measured on 21 Sep 2026: the weekly popularity pass held row locks on
+    `stories` for 54 minutes and three writers sat behind it -- 51, 15 and 12
+    minutes -- all reporting statement_timeout = 0 on pooled connections, all
+    of which should have given up after 60 seconds.
+    """
+    from db.session import STATEMENT_TIMEOUT_MS, engine, lift_statement_timeout
+    from sqlalchemy import text
+
+    with engine.connect() as c:
+        lift_statement_timeout(c)
+        assert c.execute(text("SHOW statement_timeout")).scalar() == "0"
+    # Same pooled connection, handed out again.
+    with engine.connect() as c:
+        got = c.execute(text("SHOW statement_timeout")).scalar()
+    assert got != "0", "statement_timeout = 0 leaked back into the pool"
+    # Postgres normalises the units it reports back ("60000ms" -> "1min"), so
+    # compare what it MEANS, not how it spells it.
+    with engine.connect() as c:
+        ms = c.execute(text(
+            "SELECT setting::int FROM pg_settings "
+            "WHERE name = 'statement_timeout'")).scalar()
+    assert ms == STATEMENT_TIMEOUT_MS, f"{ms} != {STATEMENT_TIMEOUT_MS}"
