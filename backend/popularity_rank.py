@@ -77,6 +77,7 @@ and the absolute term carries the rest.
 """
 import argparse
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -271,13 +272,20 @@ ALTER TABLE pr_final ADD PRIMARY KEY (id);
 ANALYZE pr_final;
 """
 
+# One slice of the write, bounded by id so each transaction holds a bounded
+# number of row locks for a bounded time. See `_write` for why that matters.
 UPDATE_WRITE_SQL = """
 UPDATE stories s
    SET popularity = pf.popularity
   FROM pr_final pf
  WHERE s.id = pf.id
+   AND pf.id > :after AND pf.id <= :upto
    AND (s.popularity IS DISTINCT FROM pf.popularity)
 """
+
+# Rows per transaction. Small enough that no other writer waits long, large
+# enough that the per-batch planning and commit overhead stays irrelevant.
+WRITE_BATCH = int(os.getenv("POPULARITY_WRITE_BATCH", "50000"))
 
 
 # Each percentile is keyed by id with a PK, so the planner joins on exact
@@ -423,21 +431,57 @@ def run(dry_run: bool = False) -> int:
         # (temp tables survive on COMMIT PRESERVE ROWS), so just re-run the
         # UPDATE in a fresh transaction until it wins. The deadlock checks both
         # lock orders, so the retry is safe regardless of which side got aborted.
-        for attempt in range(1, 11):
-            try:
-                res = db.execute(text(UPDATE_WRITE_SQL))
-                db.commit()
-                n = res.rowcount or 0
-                _record_evidence(db, n, eligible)
-                log.info("popularity written for %s works (attempt %s)", f"{n:,}", attempt)
-                return n
-            except sqlalchemy.exc.OperationalError as e:
-                if attempt == 10 or "DeadlockDetected" not in str(e):
-                    raise
-                db.rollback()
-                log.warning("deadlock with worker, retrying (%s/10)", attempt)
-                time.sleep(2)
-        return 0
+        # In id-ordered slices, committing between each, rather than one
+        # statement across the whole table.
+        #
+        # As a single UPDATE this takes row locks on most of `stories` and
+        # holds them until it finishes. Measured on 21 Sep: one hour and
+        # twenty-one minutes, with four writers queued behind it -- an AO3
+        # crawled_at stamp blocked for seventy-eight minutes, another for
+        # forty-two, an FF.net enrichment stamp for forty, a comment-count
+        # merge for fourteen. Those jobs were not slow and were not broken.
+        # They were waiting, silently, with nothing in any log to say so, and
+        # from the outside the worker had simply stopped.
+        #
+        # Nothing about the computation needs one transaction. The scores are
+        # already final in pr_final, each row is independent, and a pass that
+        # stops halfway has still correctly written every row it committed --
+        # the next run recomputes from scratch anyway. Holding one lock set for
+        # an hour bought consistency nobody was reading and cost every other
+        # writer to this table.
+        #
+        # Ordered by id so the slices are disjoint and the index-scan plan
+        # above still applies within each one.
+        total = 0
+        after = "00000000-0000-0000-0000-000000000000"
+        while True:
+            upto = db.execute(text(
+                "SELECT max(id) FROM (SELECT id FROM pr_final WHERE id > :after "
+                "ORDER BY id LIMIT :n) t"), {"after": after, "n": WRITE_BATCH}
+            ).scalar()
+            if upto is None:
+                break
+            for attempt in range(1, 11):
+                try:
+                    res = db.execute(text(UPDATE_WRITE_SQL),
+                                     {"after": after, "upto": upto})
+                    db.commit()
+                    total += res.rowcount or 0
+                    break
+                except sqlalchemy.exc.OperationalError as e:
+                    # The worker updates these same rows one at a time and in a
+                    # different order, so a deadlock is expected rather than
+                    # exceptional. pr_final is ON COMMIT PRESERVE ROWS, so the
+                    # slice can simply be retried.
+                    if attempt == 10 or "DeadlockDetected" not in str(e):
+                        raise
+                    db.rollback()
+                    log.warning("deadlock with worker, retrying slice (%s/10)", attempt)
+                    time.sleep(2)
+            after = str(upto)
+        _record_evidence(db, total, eligible)
+        log.info("popularity written for %s works", f"{total:,}")
+        return total
 
 
 if __name__ == "__main__":
