@@ -405,9 +405,23 @@ def _pick_targets(limit: int | None) -> list:
              WHERE cardinality(s.characters) = 0
                AND c.original IS NOT NULL
              ORDER BY date_trunc('day', s.crawled_at AT TIME ZONE 'UTC') ASC,
+                      -- Most-read first, among rows tried equally long ago.
+                      --
+                      -- This gap does not close. 6.4M works against a host
+                      -- that rate-limits us to a few dozen an hour is not a
+                      -- backlog, it is a permanent condition, so WHICH rows
+                      -- get filled is the only decision that matters and it
+                      -- should not be left to whatever the index scan returns.
+                      -- Most FF.net rows have no engagement figure yet --
+                      -- supplying it is half of what this job is for -- but
+                      -- 362,330 do, and those are ordered properly here rather
+                      -- than arbitrarily.
+                      (COALESCE(s.kudos,0) + COALESCE(s.hits,0)
+                       + COALESCE(s.favourites,0)) DESC,
                       (CASE WHEN s.published_at IS NULL THEN 1 ELSE 0 END
                      + CASE WHEN COALESCE(s.word_count,0) = 0 THEN 1 ELSE 0 END
                      + CASE WHEN COALESCE(s.kudos,0) = 0 THEN 1 ELSE 0 END) DESC,
+                      -- A newer capture carries more of the stats line.
                       c.snapshot_ts DESC
              LIMIT :lim
         """), {"lim": want}).fetchall()
