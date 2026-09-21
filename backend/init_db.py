@@ -903,6 +903,34 @@ CREATE INDEX IF NOT EXISTS ix_ffnet_wayback_pending
 --
 -- Filling this turns the backfill from two rate-limited requests per story
 -- into one, and removes the wasted third that were spent discovering nothing.
+-- Traffic that is OURS, kept out of every report by construction.
+--
+-- The admin Outreach panel previews each queued Reddit post by running its
+-- query through the public /api/search, so one working session writes a search
+-- per post. Measured 21 Sep 2026: 74 of that day's 177 searches, 65 of 340 the
+-- day before, and climbing as the outreach queue gets used. Those are not
+-- readers, and the popular-search and empty-result lists are read as if they
+-- were.
+--
+-- A flag rather than a DELETE, because the rows are still true -- somebody did
+-- search -- and unpicking a deletion later is impossible.
+ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS internal BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS ix_visit_events_public
+    ON visit_events (at DESC) WHERE NOT internal;
+
+-- Every report reads this, never the table.
+--
+-- There are twenty-one separate report queries over visit_events, and a rule
+-- that has to be repeated twenty-one times is a rule the twenty-second one
+-- will not follow. Putting the exclusion in the view makes "our own traffic is
+-- not in the numbers" a property of the schema instead of a convention.
+--
+-- Dropped and recreated rather than CREATE OR REPLACE: replace cannot change a
+-- view's column list, so adding a column to visit_events would fail the boot.
+DROP VIEW IF EXISTS visit_events_public;
+CREATE VIEW visit_events_public AS
+    SELECT * FROM visit_events WHERE NOT internal;
+
 CREATE TABLE IF NOT EXISTS ffnet_captures (
     site_id     BIGINT PRIMARY KEY,
     snapshot_ts VARCHAR(20) NOT NULL,
