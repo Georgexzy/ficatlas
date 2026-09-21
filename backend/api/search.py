@@ -1023,6 +1023,19 @@ _EVENT_TAG = re.compile(
     r"whumptober|inktober|kinktober|advent|big ?bang|secret santa|"
     r"week|day \d+|round \d+)\b", re.I)
 
+# The short strings that are both a plausible abbreviation and a word people
+# type by accident. Imported rather than copied — fandom_aliases maintains it
+# against exactly this failure, and a second copy would drift.
+def _alias_stoplist() -> set:
+    try:
+        from fandom_aliases import STOPLIST
+        return set(STOPLIST)
+    except Exception:  # pragma: no cover - import guard only
+        return set()
+
+
+_ALIAS_STOPLIST = _alias_stoplist()
+
 _DYM_MIN_SIM = 0.35
 # And how many works must carry it. This is the guard that stops the feature
 # recommending a TYPO: `hermoine granger` trigram-matches the misspelled facet
@@ -5761,6 +5774,22 @@ def extract(
         # the vocabulary ever saw it. A bare three-letter word is a coincidence
         # waiting to happen; `9-1-1` is not a word at all.
         floor = 3 if re.search(r"[-0-9./:']", g) else 6
+        # THE SQUASH PASS NEEDS THE SAME STOPLIST THE ALIASES HAVE.
+        #
+        # Squashing removes the apostrophe, so "I've" becomes `ive` and finds
+        # the K-pop group IVE; "I don't mind mlm" finds `Magi: The Labyrinth of
+        # Magic`; "walking dead (TV)" finds `Tales of Vesperia`. Measured on the
+        # live queue, this was producing the worst output on the site — a post
+        # about The Walking Dead answered in the wrong fandom entirely, and it
+        # looked authoritative because a fandom filter always returns works.
+        #
+        # `fandom_aliases.STOPLIST` is exactly the right list and already
+        # exists: it is the set of short strings that are both a plausible
+        # abbreviation and a word people type by accident, maintained against
+        # the same failure on the alias path. The squash pass was added later
+        # and never consulted it.
+        if k in _ALIAS_STOPLIST or g.strip() in _ALIAS_STOPLIST:
+            continue
         if len(k) >= floor and k not in squashed:
             squashed[k] = span
     def _base(v: str) -> str:

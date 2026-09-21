@@ -794,6 +794,10 @@ def test_the_queue_is_ordered_by_what_can_actually_be_answered(db):
             link_unsafe boolean NOT NULL DEFAULT false,
             state text NOT NULL DEFAULT 'new')
     """))
+    # The column arrived after these fixtures did, and `list_queue` guards its
+    # whole query — so a missing column reads as an empty queue rather than as
+    # an error, which is exactly as confusing as it sounds.
+    db.execute(t("ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS flair text"))
     db.execute(t("DELETE FROM reddit_posts"))
     for i, (works, unsafe) in enumerate([(5000, False), (12, False),
                                          (3, True), (None, False)]):
@@ -804,8 +808,8 @@ def test_the_queue_is_ordered_by_what_can_actually_be_answered(db):
     # Every argument spelled out: called directly, a FastAPI `Query(...)`
     # default arrives as the sentinel object rather than as its value, which
     # the ordering check then rejects as an unknown order.
-    got = list_queue(state="new", subreddit="", order="answerable", search="",
-                     limit=10, db=db, _admin=None)
+    got = list_queue(state="new", subreddit="", flair="", order="answerable",
+                     search="", limit=10, db=db, _admin=None)
     assert [p.works for p in got] == [12, 5000, None, 3]
     assert got[-1].link_unsafe is True
 
@@ -817,8 +821,8 @@ def test_a_missing_queue_table_is_an_empty_queue_not_a_500(db):
     from api.queue import list_queue
     db.execute(t("DROP TABLE IF EXISTS reddit_posts"))
     db.commit()
-    assert list_queue(state="new", subreddit="", order="answerable", search="",
-                      limit=10, db=db, _admin=None) == []
+    assert list_queue(state="new", subreddit="", flair="", order="answerable",
+                      search="", limit=10, db=db, _admin=None) == []
 
 
 def test_the_queue_is_admin_gated_and_posts_nothing(db):
@@ -847,23 +851,27 @@ def test_the_queue_can_be_ordered_by_age_instead(db):
             link_unsafe boolean NOT NULL DEFAULT false,
             state text NOT NULL DEFAULT 'new')
     """))
+    # The column arrived after these fixtures did, and `list_queue` guards its
+    # whole query — so a missing column reads as an empty queue rather than as
+    # an error, which is exactly as confusing as it sounds.
+    db.execute(t("ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS flair text"))
     db.execute(t("DELETE FROM reddit_posts"))
     db.execute(t("""INSERT INTO reddit_posts (id, subreddit, title, url, works, posted_at)
                     VALUES ('old','FanFiction','old post','u',5,now()-interval '3 days'),
                            ('new','HPfanfiction','new post','u',900,now())"""))
     db.commit()
-    by_age = list_queue(state="new", subreddit="", order="newest", search="",
-                        limit=10, db=db, _admin=None)
+    by_age = list_queue(state="new", subreddit="", flair="", order="newest",
+                        search="", limit=10, db=db, _admin=None)
     assert [p.id for p in by_age] == ["new", "old"]
     # And the default still leads with what can be answered.
-    best = list_queue(state="new", subreddit="", order="answerable", search="",
-                      limit=10, db=db, _admin=None)
+    best = list_queue(state="new", subreddit="", flair="", order="answerable",
+                      search="", limit=10, db=db, _admin=None)
     assert [p.id for p in best] == ["old", "new"]
     # Narrowing to one subreddit, and to words in the post.
-    one = list_queue(state="new", subreddit="HPfanfiction", order="newest",
-                     search="", limit=10, db=db, _admin=None)
+    one = list_queue(state="new", subreddit="HPfanfiction", flair="",
+                     order="newest", search="", limit=10, db=db, _admin=None)
     assert [p.id for p in one] == ["new"]
-    found = list_queue(state="new", subreddit="", order="newest",
+    found = list_queue(state="new", subreddit="", flair="", order="newest",
                        search="old po", limit=10, db=db, _admin=None)
     assert [p.id for p in found] == ["old"]
 
@@ -875,8 +883,9 @@ def test_an_unknown_order_is_refused_rather_than_interpolated(db):
     from fastapi import HTTPException
     from api.queue import list_queue
     with _pytest.raises(HTTPException):
-        list_queue(state="new", subreddit="", order="works; DROP TABLE stories",
-                   search="", limit=10, db=db, _admin=None)
+        list_queue(state="new", subreddit="", flair="",
+                   order="works; DROP TABLE stories", search="", limit=10,
+                   db=db, _admin=None)
 
 
 # ── what needs attention, ranked ────────────────────────────────────────────
@@ -974,3 +983,40 @@ def test_a_near_total_gap_outranks_a_partial_one_of_similar_size(db):
         "an archive effectively missing the field must outrank one partly missing it"
     # And the band is decided server-side, next to the formula that makes it.
     assert out[0]["band"] == "high"
+
+
+def test_a_recs_post_outranks_an_identification_post(db):
+    """Not a preference — it is which posts this index can answer.
+
+    A "Recs Wanted" post is a FILTER, and 23 of 25 measured produced an answer
+    with 18 of those under 400 works. A "Lost Fic" post asks to identify one
+    specific remembered work by a detail its metadata does not carry, so the
+    best possible extraction still answers "Harry Potter, time travel, 5,000
+    works" — which is not the fic. A tight number there is a narrower guess,
+    not a better answer, and it was letting hopeless posts outrank answerable
+    ones purely by being narrow.
+    """
+    from sqlalchemy import text as t
+    from api.queue import list_queue
+    db.execute(t("""
+        CREATE TABLE IF NOT EXISTS reddit_posts (
+            id text PRIMARY KEY, subreddit text NOT NULL, title text NOT NULL,
+            body text, url text NOT NULL, posted_at timestamp,
+            seen_at timestamp DEFAULT now(), query text, works integer,
+            link_unsafe boolean NOT NULL DEFAULT false,
+            state text NOT NULL DEFAULT 'new', flair text)
+    """))
+    db.execute(t("ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS flair text"))
+    db.execute(t("DELETE FROM reddit_posts"))
+    db.execute(t("""INSERT INTO reddit_posts (id, subreddit, title, url, works, flair)
+                    VALUES ('lost','FanFiction','a lost fic','u',3,'Lost Fic'),
+                           ('recs','FanFiction','some recs','u',900,'Recs Wanted')"""))
+    db.commit()
+    got = list_queue(state="new", subreddit="", flair="", order="answerable",
+                     search="", limit=10, db=db, _admin=None)
+    assert [p.id for p in got] == ["recs", "lost"], \
+        "a recs post must lead even when an identification post looks tighter"
+    # And either can be worked deliberately.
+    only = list_queue(state="new", subreddit="", flair="Lost", order="newest",
+                      search="", limit=10, db=db, _admin=None)
+    assert [p.id for p in only] == ["lost"]

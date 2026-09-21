@@ -177,6 +177,20 @@ STOPLIST = {
     # to every reader who types it; that it is also SK8 the Infinity's
     # initialism is a coincidence the reader will never have in mind.
     "si", "oc", "ocs", "sioc", "poc", "hea", "ooc", "pwp", "bamf",
+    # FANDOM'S OWN SHORTHAND, which is not an abbreviation of any work.
+    #
+    # `tv` is the worst of these and was live: AO3 disambiguates television
+    # fandoms as "(TV)" — `9-1-1 (TV)`, `The Walking Dead (TV)` — so a post
+    # saying "walking dead (TV) fanfics" resolved to `Tales of Vesperia`,
+    # whose initialism is `tov` and which also answers to `tv`. A reader
+    # naming the medium was sent to a video game.
+    #
+    # `mlm` and `wlw` name the kind of relationship somebody wants; on the
+    # live queue "I don't mind mlm" resolved to
+    # `Magi: The Labyrinth of Magic`. The rest are the register of a request.
+    "tv", "mlm", "wlw", "mxm", "fxf", "mm", "ff", "het", "slash", "femslash",
+    "nsfw", "sfw", "smut", "fluff", "angst", "au", "aus", "canon", "noncon",
+    "dubcon", "tw", "cw", "mc", "fmc", "mmc", "lb", "ml", "fl",
     # ORDINARY VERBS AND PRONOUNS the rule reaches now that it also drops a
     # trailing "Series"/"Saga". That change took the table from 506 aliases to
     # 926, and every new one is another chance to hijack a word somebody typed
