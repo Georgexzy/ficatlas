@@ -403,3 +403,26 @@ def test_a_lifted_statement_timeout_does_not_leak_into_the_pool():
             "SELECT setting::int FROM pg_settings "
             "WHERE name = 'statement_timeout'")).scalar()
     assert ms == STATEMENT_TIMEOUT_MS, f"{ms} != {STATEMENT_TIMEOUT_MS}"
+
+
+def test_the_popularity_write_is_chunked_not_one_giant_transaction():
+    """As a single UPDATE this held row locks on most of `stories` for an hour
+    and twenty-one minutes, with four writers queued behind it and nothing in
+    any log to say so -- an AO3 crawled_at stamp blocked 78 minutes, another
+    42, an FF.net enrichment stamp 40, a comment merge 14.
+
+    Nothing needs one transaction: the scores are final in pr_final before the
+    write starts, every row is independent, and a pass that stops halfway has
+    correctly written everything it committed.
+    """
+    import inspect
+    import popularity_rank as P
+
+    assert ":after" in P.UPDATE_WRITE_SQL and ":upto" in P.UPDATE_WRITE_SQL, \
+        "the write must be bounded by an id range"
+    src = inspect.getsource(P.run)
+    assert "while True" in src, "the write must iterate slices"
+    # A commit inside the loop is the whole point -- it is what releases the
+    # locks other writers are waiting on.
+    loop = src[src.index("while True"):]
+    assert "db.commit()" in loop, "each slice must commit, releasing its locks"
