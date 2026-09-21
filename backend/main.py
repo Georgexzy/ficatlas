@@ -143,6 +143,12 @@ async def track_search_middleware(request: Request, call_next):
                 q = f"{q} {filters}"
             elif filters:
                 q = filters
+            # Set by search() once it knows who is asking. Staff previews --
+            # the admin Outreach panel runs every queued Reddit post through
+            # this endpoint -- are not reader searches and must not be counted
+            # as them. See the comment at the top of search().
+            if getattr(request.state, "staff", False):
+                return response
             if q:
                 ua = request.headers.get("user-agent", "")
                 # The RESULTS PAGE, in the path, because paging is a second

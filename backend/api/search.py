@@ -1759,6 +1759,28 @@ def search(          # NOT async — see below
     request: Request = None,
     response: Response = None,
 ):
+    # Staff searches are not reader searches, and counting them as such makes
+    # the one report this site is judged by lie in our own favour.
+    #
+    # The admin Outreach panel previews every queued Reddit post by running its
+    # query through this endpoint — deliberately, so the panel shows exactly
+    # what a reader following the link would see. One working session therefore
+    # writes a search per post: measured on 21 Sep, 174 searches in fourteen
+    # minutes from two admin sessions, which on a site this size is a visible
+    # share of the day. They also skew the CONTENT of the report, because they
+    # are machine-built operator queries across a hundred unrelated fandoms and
+    # nothing a reader types looks remotely like them.
+    #
+    # Marked here rather than filtered in the report: the row should never be
+    # written. A flag the caller sends would be worse -- a public endpoint that
+    # accepts "do not count me" is a way for anyone to leave no trace.
+    if request is not None:
+        try:
+            request.state.staff = bool(viewer is not None
+                                       and viewer.at_least(ROLE_ADMIN))
+        except Exception:
+            request.state.staff = False
+
     # ── Parse q for embedded operators ───────────────────────────────────────
     parsed_tokens = []
     if q:

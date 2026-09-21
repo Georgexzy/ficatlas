@@ -1020,3 +1020,64 @@ def test_a_recs_post_outranks_an_identification_post(db):
     only = list_queue(state="new", subreddit="", flair="Lost", order="newest",
                       search="", limit=10, db=db, _admin=None)
     assert [p.id for p in only] == ["lost"]
+
+
+# ── staff searches are not reader searches ─────────────────────────────────
+#
+# The admin Outreach panel previews every queued Reddit post by running its
+# query through the public /api/search, on purpose, so the panel shows what a
+# reader following the link would see. Measured on 21 Sep 2026: 174 searches in
+# fourteen minutes from two admin sessions, 49 of the 144 distinct queries
+# matching reddit_posts.query exactly. On a site this size that is a visible
+# share of the day's traffic, and it skews the content of the report as well as
+# the count -- they are machine-built operator queries across a hundred
+# unrelated fandoms, and nothing a reader types looks anything like them.
+
+def test_a_staff_search_is_not_recorded_as_a_reader_search(monkeypatch):
+    """Through the middleware, which is where the row is actually written."""
+    import asyncio
+    import main as main_mod
+
+    written = []
+    monkeypatch.setattr("tracking.ENABLED", True, raising=False)
+    monkeypatch.setattr("tracking.record",
+                        lambda *a, **k: written.append(k.get("q")),
+                        raising=False)
+    monkeypatch.setattr(main_mod, "is_internal_render", lambda r: False,
+                        raising=False)
+
+    class _URL:
+        path = "/api/search"
+
+    class _State:
+        pass
+
+    class _Client:
+        host = "203.0.113.7"
+
+    class _Req:
+        url = _URL()
+        query_params = {"q": 'fandom:"Harry Potter" xover:exclude'}
+        headers = {"user-agent": "Mozilla/5.0"}
+        client = _Client()
+
+        def __init__(self, staff):
+            self.state = _State()
+            self.state.search_total = 5000
+            if staff:
+                self.state.staff = True
+
+    class _Resp:
+        status_code = 200
+
+    async def call_next(_req):
+        return _Resp()
+
+    async def drive(staff):
+        return await main_mod.track_search_middleware(_Req(staff), call_next)
+
+    asyncio.run(drive(staff=True))
+    assert written == [], f"staff search was recorded: {written}"
+
+    asyncio.run(drive(staff=False))
+    assert len(written) == 1, "a reader search must still be recorded"
