@@ -480,3 +480,37 @@ def test_one_caller_never_waits_more_than_the_ceiling():
             b._next = start + b.interval
     assert b._next - now <= W.MAX_INTERVAL + b.interval + 1, \
         "the reservation queue ran away from the present"
+
+
+def test_the_gap_queue_advances_instead_of_redrawing_the_same_rows(db):
+    """Least-recently-tried must outrank most-read, or the queue never moves.
+
+    With the staleness key last it was never reached: the worst-gap rows tie on
+    engagement at 0 and are then separated uniquely by word_count. The same
+    eight FF.net stories came back every pass -- all 2002-2005 works whose
+    archived pages have no character field at all, because FF.net had none
+    before ~2009 -- so the queue was pinned on rows that could never satisfy
+    it, and recording the attempt could not help while the mark fed a key
+    nothing consulted.
+    """
+    from sqlalchemy import text as sql_text
+    from gap_filler import find_gaps
+
+    # Two rows, identically empty so their gap scores match. The one with the
+    # bigger word count would win on the old ordering; the one tried longer ago
+    # must win now.
+    db.execute(sql_text("""
+        INSERT INTO stories (site, site_id, url, title, word_count, crawled_at,
+                             characters, relationships, fandoms, tags)
+        VALUES ('ffnet', '900000001', 'u1', 'recently tried', 99999,
+                now(), '{}', '{}', '{}', '{}'),
+               ('ffnet', '900000002', 'u2', 'tried long ago',     1,
+                now() - interval '30 days', '{}', '{}', '{}', '{}')
+    """))
+    db.commit()
+
+    order = [r["site_id"] for r in find_gaps(db, "ffnet", limit=2000)
+             if r["site_id"] in ("900000001", "900000002")]
+    assert order == ["900000002", "900000001"], (
+        f"queue returned {order}; the row tried 30 days ago must come first "
+        f"even though the other is 99,999 words")
