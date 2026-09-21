@@ -122,8 +122,34 @@ class _Budget:
         self.granted = 0
 
     def wait(self) -> None:
+        """Block until this caller's turn, but never for an unbounded time.
+
+        `_next` is a shared reservation counter: each caller claims the next
+        slot and pushes it one interval further out. With several jobs sharing
+        this budget against one host -- the AO3 snapshot harvest, the FF.net
+        snapshot harvest, the FF.net enrichment backfill and the capture index
+        walk all do -- the queue can run a long way ahead of now, and the Nth
+        caller waits N intervals. At the 260s interval archive.org pushed us to
+        on the evening of 21 Sep, that is over a quarter of an hour inside a
+        single wait().
+
+        That is how a pass overruns a deadline it checks faithfully. The FF.net
+        enrichment loop tests its time budget between stories, which is the
+        right place, and then disappears into one wait() for longer than the
+        whole budget. Caught with the SIGUSR1 stack dump: wayback_harvest.py
+        line 131, called from fetch_meta, five minutes past a pass that should
+        already have ended.
+
+        So the queue may not run more than MAX_INTERVAL ahead of the present.
+        Past that the reservation is granted at the ceiling instead of behind
+        everyone else -- the host is already being given the longest pacing
+        this budget knows how to apply, and making one unlucky caller wait
+        several multiples of it protects nobody and hides the job.
+        """
         with self._lock:
-            start = max(time.monotonic(), self._next)
+            now = time.monotonic()
+            # The cap is on the DEPTH of the queue, not on the interval.
+            start = min(max(now, self._next), now + MAX_INTERVAL)
             self._next = start + self.interval
             self.granted += 1
         delay = start - time.monotonic()
