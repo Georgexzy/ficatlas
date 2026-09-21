@@ -417,6 +417,7 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
     rows = _pick_targets(limit)
     log.info(f"{len(rows)} FF.net stories to enrich")
     pending: list[tuple] = []          # (story_id, parsed metadata) awaiting a write
+    attempted: list = []               # every story we looked at, found or not
 
     with httpx.Client(headers=UA) as client:
         for n, (sid, site_id, wc, known) in enumerate(rows, 1):
@@ -424,6 +425,7 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
                 log.info(f"  time budget reached after {n - 1} stories — "
                          f"stopping so the loop can come round")
                 break
+            attempted.append(sid)
             meta = fetch_meta(client, site_id, known)
             if not meta and _FICHUB_FALLBACK:
                 # ~31% of works have no usable Wayback capture (no_snapshot=62
@@ -455,9 +457,11 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
 
             # Write in short bursts. The database session is only open for the
             # write itself, never across an archive.org request.
-            if not dry_run and len(pending) >= batch:
+            if not dry_run and len(attempted) >= batch:
                 updated += _write_batch(pending)
                 pending.clear()
+                _mark_attempted(attempted)
+                attempted.clear()
                 log.info(f"  {n}/{len(rows)} — {updated} enriched, {missing} no snapshot")
 
             # Pacing lives in the shared archive.org budget now (see
@@ -474,8 +478,42 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
 
     if pending:
         updated += _write_batch(pending)
+    if attempted:
+        _mark_attempted(attempted)
     log.info(f"DONE — enriched={updated} no_snapshot={missing} "
              f"via_fichub={from_fichub} unparseable={failed}")
+
+
+def _mark_attempted(ids: list) -> None:
+    """Record that we looked, so the queue can move on.
+
+    This is what kept FF.net character coverage frozen at 108,468 through every
+    other fix in this file. `find_gaps` orders by how much a row is missing and
+    breaks ties on `crawled_at ASC NULLS FIRST` -- and nothing in this module
+    ever wrote `crawled_at`, so the tiebreak had nothing to break with and every
+    pass drew the same rows again.
+
+    Which rows made it terminal. The worst gap scores belong to the OLDEST
+    stories, the ones missing characters, word counts, favourites and follows
+    all at once -- and FF.net did not have a character field before about 2009,
+    so those fields are not missing from our copy, they never existed. Measured
+    on a live selection: ids 1625, 202864, 742503, 905278, 1383206, 1470891,
+    every one a 2002-2005 story, every one parsing cleanly to characters=[].
+    The queue was pinned on precisely the stories that can never satisfy it,
+    re-fetching them for ever, and a pass could report enriched=14 while the
+    number it was trying to move did not change by one.
+
+    An attempt is information even when it finds nothing, so it is recorded
+    like one. `crawled_at` is the honest column for it -- we did just look.
+    """
+    if not ids:
+        return
+    from sqlalchemy import text as sql_text
+    with db_session() as db:
+        db.execute(sql_text(
+            "UPDATE stories SET crawled_at = now() WHERE id = ANY(:ids)"),
+            {"ids": list(ids)})
+        db.commit()
 
 
 def _write_batch(items: list[tuple]) -> int:
