@@ -278,7 +278,8 @@ def parse_ffn_meta(page_text: str) -> dict | None:
     return out
 
 
-def fetch_meta(client: httpx.Client, site_id: str) -> dict | None:
+def fetch_meta(client: httpx.Client, site_id: str,
+               known: tuple[str, str] | None = None) -> dict | None:
     """Find an archived copy of a story page and parse its metadata line.
 
     Paced by wayback_harvest.BUDGET rather than by this module's own --delay.
@@ -290,24 +291,33 @@ def fetch_meta(client: httpx.Client, site_id: str) -> dict | None:
     """
     from wayback_harvest import BUDGET, note_response
 
-    BUDGET.wait()
-    try:
-        resp = client.get(CDX, params={
-            "url": f"fanfiction.net/s/{site_id}/1/*",
-            "output": "json", "limit": "1", "filter": "statuscode:200",
-        }, timeout=40)
-        note_response(resp.status_code)
-        rows = resp.json()
-    except Exception as e:
-        # A refused connection is archive.org saying slow down; a read timeout
-        # is one slow capture. Conflating them pinned this budget at its
-        # ceiling — see wayback_harvest.note_transport_error.
-        from wayback_harvest import note_transport_error
-        note_transport_error(e)
-        return None
-    if not rows or len(rows) < 2:
-        return None
-    ts, original = rows[1][1], rows[1][2]
+    if known:
+        # Already known from the bulk capture index, so this story costs ONE
+        # rate-limited request instead of two. See ffnet_wayback.cdx_prefix_page
+        # for why the per-story lookup below is the wrong shape: the same
+        # endpoint answers for every story under an id prefix at once, so
+        # asking per story spends the entire request budget on discovery that
+        # one query could have done for five thousand stories.
+        ts, original = known
+    else:
+        BUDGET.wait()
+        try:
+            resp = client.get(CDX, params={
+                "url": f"fanfiction.net/s/{site_id}/1/*",
+                "output": "json", "limit": "1", "filter": "statuscode:200",
+            }, timeout=40)
+            note_response(resp.status_code)
+            rows = resp.json()
+        except Exception as e:
+            # A refused connection is archive.org saying slow down; a read
+            # timeout is one slow capture. Conflating them pinned this budget
+            # at its ceiling — see wayback_harvest.note_transport_error.
+            from wayback_harvest import note_transport_error
+            note_transport_error(e)
+            return None
+        if not rows or len(rows) < 2:
+            return None
+        ts, original = rows[1][1], rows[1][2]
     BUDGET.wait()
     try:
         page = client.get(f"https://web.archive.org/web/{ts}/{original}",
@@ -345,10 +355,25 @@ def _pick_targets(limit: int | None) -> list:
     crawled_at tiebreak, so the queue keeps advancing.
     """
     from gap_filler import find_gaps
+    from sqlalchemy import text as sql_text
     with db_session() as db:
         rows = find_gaps(db, "ffnet", limit=limit or 1000)
-    # Shape kept as (id, site_id, word_count) for the caller.
-    return [(r["id"], r["site_id"], r["gap_score"]) for r in rows]
+        # Whatever the bulk capture walk already found for these stories, so
+        # the fetch can skip its own CDX lookup. One query for the batch, and
+        # it saves one rate-limited archive.org request per story that is in
+        # there — see ffnet_wayback.cdx_prefix_page.
+        ids = [int(r["site_id"]) for r in rows if str(r["site_id"]).isdigit()]
+        known: dict[str, tuple[str, str]] = {}
+        if ids:
+            for sid, ts, orig in db.execute(sql_text(
+                    "SELECT site_id, snapshot_ts, original FROM ffnet_captures "
+                    "WHERE site_id = ANY(:ids)"), {"ids": ids}):
+                if orig:
+                    known[str(sid)] = (ts, orig)
+    # Shape kept as (id, site_id, gap_score) for the caller, plus the capture
+    # if we have one.
+    return [(r["id"], r["site_id"], r["gap_score"],
+             known.get(str(r["site_id"]))) for r in rows]
 
 
 def run(limit: int | None, dry_run: bool, delay: float, batch: int,
@@ -374,12 +399,12 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
     pending: list[tuple] = []          # (story_id, parsed metadata) awaiting a write
 
     with httpx.Client(headers=UA) as client:
-        for n, (sid, site_id, wc) in enumerate(rows, 1):
+        for n, (sid, site_id, wc, known) in enumerate(rows, 1):
             if deadline and _time.monotonic() > deadline:
                 log.info(f"  time budget reached after {n - 1} stories — "
                          f"stopping so the loop can come round")
                 break
-            meta = fetch_meta(client, site_id)
+            meta = fetch_meta(client, site_id, known)
             if not meta and _FICHUB_FALLBACK:
                 # ~31% of works have no usable Wayback capture (no_snapshot=62
                 # of 200 in a measured pass), and those requests were simply
