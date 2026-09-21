@@ -426,3 +426,34 @@ def test_the_popularity_write_is_chunked_not_one_giant_transaction():
     # locks other writers are waiting on.
     loop = src[src.index("while True"):]
     assert "db.commit()" in loop, "each slice must commit, releasing its locks"
+
+
+def test_the_popularity_slice_bound_query_actually_runs():
+    """Caught a real failure: the first version used max(id), and Postgres has
+    no max() for uuid -- so the chunked write raised UndefinedFunction on its
+    very first slice, after the whole expensive scoring phase had completed."""
+    from db.session import db_session
+    from sqlalchemy import text
+    import popularity_rank as P
+
+    with db_session() as db:
+        db.execute(text("CREATE TEMP TABLE pr_final_probe (id uuid PRIMARY KEY)"))
+        db.execute(text(
+            "INSERT INTO pr_final_probe SELECT gen_random_uuid() "
+            "FROM generate_series(1, 50)"))
+        sql = ("SELECT id FROM (SELECT id FROM pr_final_probe WHERE id > :after "
+               "ORDER BY id LIMIT :n) t ORDER BY id DESC LIMIT 1")
+        seen, after = 0, "00000000-0000-0000-0000-000000000000"
+        while True:
+            upto = db.execute(text(sql), {"after": after, "n": 7}).scalar()
+            if upto is None:
+                break
+            n = db.execute(text(
+                "SELECT count(*) FROM pr_final_probe "
+                "WHERE id > :after AND id <= :upto"),
+                {"after": after, "upto": upto}).scalar()
+            assert n > 0, "a slice must advance, or this loops for ever"
+            seen += n
+            after = str(upto)
+        assert seen == 50, f"slices covered {seen} of 50 rows"
+        assert str(P.WRITE_BATCH).isdigit()
