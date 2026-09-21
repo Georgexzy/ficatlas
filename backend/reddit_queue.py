@@ -94,7 +94,14 @@ FEEDS = [
     # r/HPfanfiction is deliberately absent. Its requests are a good fit and
     # this account is banned there, so fetching them would build a worklist of
     # posts nobody here can reply to.
-    ("fanfiction",    None),
+    #
+    # And r/fanfiction UNFLAIRED is gone. A feed with no flair filter is every
+    # post the subreddit gets, and most of them are not requests at all:
+    # measured on the live queue, it contributed "How fast do you write?"
+    # (-> tag:"Why Did I Write This?"), "Give a piece of dialogue from your
+    # ship" (-> tag:"Dialogue Heavy") and "Hi I need help." (-> char:"OC's").
+    # Every one produced a confident-looking query for a post nobody could
+    # answer with a search, and they crowd the list the flairs fill properly.
 ]
 
 UA = os.getenv(
@@ -114,6 +121,16 @@ DDL = """
 CREATE TABLE IF NOT EXISTS reddit_posts (
     id          text PRIMARY KEY,
     subreddit   text NOT NULL,
+    -- WHICH FEED it came from, which is the difference between two jobs.
+    --
+    -- A "Recs Wanted" post is a FILTER and this index answers filters. A "Lost
+    -- Fic" post is an IDENTIFICATION of one specific remembered work, usually
+    -- by a detail its metadata does not carry — and the best possible
+    -- extraction of it still returns "Harry Potter, time travel, 5,000 works",
+    -- which is not the fic. Without this column the queue could not tell them
+    -- apart, so it sorted a hopeless post above an answerable one whenever the
+    -- hopeless one happened to be narrower.
+    flair       text,
     title       text NOT NULL,
     body        text,
     url         text NOT NULL,
@@ -202,6 +219,7 @@ def fetch(subreddit: str, flair: str | None) -> list[dict]:
         out.append({
             "id": rid[:200],
             "subreddit": subreddit,
+            "flair": (flair or "").replace('flair:"', "").replace('"', "") or None,
             "title": _text(_field(entry, "title"))[:400],
             "body": _text(_field(entry, "content"))[:8000],
             "url": (link.group(1) if link else "")[:500],
@@ -277,15 +295,16 @@ def run(dry_run: bool = False, limit_feeds: int | None = None) -> dict:
                 continue
             db.execute(text("""
                 INSERT INTO reddit_posts
-                    (id, subreddit, title, body, url, posted_at,
+                    (id, subreddit, title, body, url, posted_at, flair,
                      query, works, link_unsafe)
                 VALUES (:id, :sub, :title, :body, :url,
-                        CAST(NULLIF(:posted, '') AS timestamp),
+                        CAST(NULLIF(:posted, '') AS timestamp), :flair,
                         :q, :w, :unsafe)
                 ON CONFLICT (id) DO NOTHING
             """), {"id": p["id"], "sub": p["subreddit"], "title": p["title"],
                    "body": p["body"], "url": p["url"],
                    "posted": (p["posted_at"] or "").replace("T", " "),
+                   "flair": p.get("flair"),
                    "q": read["query"], "w": read["works"],
                    "unsafe": read["link_unsafe"]})
         if not dry_run:
