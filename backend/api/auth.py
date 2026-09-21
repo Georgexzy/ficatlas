@@ -67,7 +67,23 @@ def hash_password(pw: str) -> str:
     return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-def check_password(pw: str, h: str) -> bool:
+def check_password(pw: str, h: Optional[str]) -> bool:
+    """Whether this password matches this hash. NO HASH IS NOT A MATCH.
+
+    `password_hash` became nullable when Google sign-in arrived: an account
+    created through Google has no password, deliberately. Every caller here
+    passes the stored hash straight in, so "no password set" reaches this
+    function as None — and it must mean "cannot sign in with a password",
+    never "any password will do".
+
+    It already failed safe, by accident: `None.encode()` raises and the except
+    below returns False. That is the right answer for the wrong reason, and it
+    is one refactor away from being wrong — somebody narrowing the except to
+    the bcrypt errors it was written for would turn a null hash into a crash
+    or, worse, into a match. So it is checked, in front, on purpose.
+    """
+    if not h:
+        return False
     pw = pw[:72]
     try:
         return bcrypt.checkpw(pw.encode("utf-8"), h.encode("utf-8"))

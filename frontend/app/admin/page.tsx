@@ -282,11 +282,43 @@ export default function AdminPage() {
     <div className="settings-shell"><SiteHeader />
       <BackLink fallback="/settings" fallbackLabel="Settings" /><p className="loading">Loading…</p></div>
   )
+  // TWO DIFFERENT FAILURES, told apart.
+  //
+  // This said "Not found" for both "you are signed out" and "your account is
+  // not an owner", which is the least useful thing it could say to either. It
+  // cost a real diagnosis: an owner whose browser was serving a stale bundle
+  // reported losing admin access, and the page gave no way to tell that from
+  // an actual demotion — the account, its role, its sessions and every
+  // endpoint were verified fine end to end while the screen said "Not found".
+  if (!user) return (
+    <div className="page-prose">
+      <SiteHeader />
+      <h1>Sign in to continue</h1>
+      <p>
+        This page is for whoever runs the site, and you are not signed in on
+        this browser.
+      </p>
+      <p>
+        If you believe you <em>are</em> signed in, this browser is likely
+        holding an old copy of the app — reload with{" "}
+        <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> (or{" "}
+        <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>) and try again.
+      </p>
+      <p>
+        <Link href="/login" className="card-btn card-btn--primary">Sign in</Link>{" "}
+        <Link href="/" className="card-btn">Back to search</Link>
+      </p>
+    </div>
+  )
+
   if (!isAdmin) return (
     <div className="page-prose">
       <SiteHeader />
-      <h1>Not found</h1>
-      <p>There is nothing here for this account.</p>
+      <h1>Not for this account</h1>
+      <p>
+        You are signed in as <strong>{user.username}</strong>, which can search,
+        read and keep a library — this page needs the owner role.
+      </p>
       <p><Link href="/" className="card-btn card-btn--primary">Back to search</Link></p>
     </div>
   )

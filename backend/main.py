@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from api import (search, stories, stats, library, settings, auth, userdata,
                  takedown, password_reset, admin, permissions, hubs,
-                 follows, traffic, queue)
+                 follows, traffic, queue, google_sso)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -236,6 +236,7 @@ app.include_router(permissions.router, prefix="/api/permissions", tags=["permiss
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(auth.router,     prefix="/api/auth",     tags=["auth"])
 app.include_router(password_reset.router, prefix="/api/auth", tags=["auth"])
+app.include_router(google_sso.router, prefix="/api/auth", tags=["auth"])
 app.include_router(userdata.router, prefix="/api/userdata", tags=["userdata"])
 # Following a work across archives — the one subscription list AO3, FF.net and
 # FictionAlley cannot give you between them. See api/follows.py.
