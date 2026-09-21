@@ -36,6 +36,7 @@ the index and no route at all.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 
@@ -445,3 +446,122 @@ def mark_done(db, story_id: int, ok: bool) -> None:
     from sqlalchemy import text as sql_text
     db.execute(sql_text("UPDATE ffnet_wayback_queue SET done_at = now(), ok = :o "
                         "WHERE story_id = :s"), {"o": ok, "s": story_id})
+
+
+# ---------------------------------------------------------------- capture index
+#
+# The backfill's per-story CDX lookup is the wrong shape by three orders of
+# magnitude. Measured against archive.org:
+#
+#     prefix 1284   5,165 captured story ids in  6s   (one request)
+#     prefix 7203     744 captured story ids in  1s   (one request)
+#     prefix 4985     650 captured story ids in  9s   (one request)
+#     one story id      1 captured story id  in  8s   (one request)
+#
+# Same endpoint, same rate limit, 650x the answer. And archive.org is genuinely
+# rate-limiting us -- 429s arrive steadily at a 5s interval -- so the number of
+# requests is the whole budget, and halving it is a straight doubling of the
+# backfill's throughput.
+#
+# The per-story form is also lossy in a way the prefix form is not. It asks for
+# `/s/{id}/1/*`, which only finds chapter one, under whatever slug happened to
+# be captured; it came back empty for ~31% of stories, and those requests bought
+# nothing at all. The prefix walk sees every capture of every chapter and every
+# slug, so "no capture" becomes a fact we know rather than a request we spend.
+#
+# Worth recording what the walk found: archive.org holds MORE FF.net stories
+# than this index does. 5,165 captured against 461 indexed under prefix 1284;
+# more captured than indexed in every prefix sampled. The Wayback Machine is
+# not the limiting factor here -- our own catalogue is.
+
+CAPTURE_PREFIX_LIMIT = int(os.getenv("FFNET_CAPTURE_LIMIT", "50000"))
+
+
+def cdx_prefix_page(prefix: str, resume: str | None = None,
+                    limit: int = CAPTURE_PREFIX_LIMIT,
+                    timeout: float = 240.0
+                    ) -> tuple[list[tuple[int, str, str]], str | None]:
+    """Every captured FF.net story under one numeric id prefix.
+
+    Returns ([(story_id, timestamp, original_url)], resume_key).
+
+    No `from=` filter, unlike `cdx_params`: that one exists for freshness and
+    deliberately ignores everything captured before this year. This walk wants
+    the opposite -- the fifteen years of FF.net captures that the backfill is
+    trying to recover, most of which predate 2021 because that is when FF.net
+    closed to crawlers in the first place.
+    """
+    import httpx
+
+    from wayback_harvest import (BUDGET, HEADERS, Transient,
+                                 note_response, note_transport_error)
+
+    params = {
+        "url": f"fanfiction.net/s/{prefix}",
+        "matchType": "prefix",
+        "output": "json",
+        "filter": "statuscode:200",
+        # One row per distinct URL, not per capture: a popular story has
+        # hundreds of snapshots and we want one good one, not its history.
+        "collapse": "urlkey",
+        "fl": "timestamp,original",
+        "limit": str(limit),
+        "showResumeKey": "true",
+    }
+    if resume:
+        params["resumeKey"] = resume
+
+    BUDGET.wait()
+    try:
+        r = httpx.get(CDX_URL, params=params, headers=HEADERS, timeout=timeout)
+    except httpx.RequestError as e:
+        note_transport_error(e)
+        raise Transient(type(e).__name__) from e
+    note_response(r.status_code, r.headers.get("Retry-After"))
+    if r.status_code != 200:
+        raise Transient(f"cdx HTTP {r.status_code}")
+
+    import json
+    try:
+        rows = json.loads(r.text or "[]")
+    except ValueError:
+        return [], None
+    if not rows:
+        return [], None
+
+    next_key = None
+    if len(rows) >= 2 and rows[-2] == []:
+        next_key = rows[-1][0] if rows[-1] else None
+        rows = rows[:-2]
+
+    # Newest capture per story wins, which is what collapse=urlkey cannot do
+    # for us -- it collapses per URL, and one story has many captured URLs
+    # (chapters, slugs, www/m hosts).
+    best: dict[int, tuple[str, str]] = {}
+    for row in rows[1:]:                  # row 0 is the header
+        if len(row) < 2:
+            continue
+        ts, original = row[0], row[1]
+        sid = story_id_from_url(original)
+        if sid is None:
+            continue
+        if sid not in best or ts > best[sid][0]:
+            best[sid] = (ts, original)
+    return [(sid, ts, url) for sid, (ts, url) in best.items()], next_key
+
+
+def store_captures(db, rows: list[tuple[int, str, str]]) -> int:
+    """Record what archive.org holds. Newest snapshot wins."""
+    if not rows:
+        return 0
+    from sqlalchemy import text as sql_text
+    db.execute(sql_text("""
+        INSERT INTO ffnet_captures (site_id, snapshot_ts, original)
+        VALUES (:sid, :ts, :url)
+        ON CONFLICT (site_id) DO UPDATE
+           SET snapshot_ts = EXCLUDED.snapshot_ts,
+               original    = EXCLUDED.original,
+               found_at    = now()
+         WHERE EXCLUDED.snapshot_ts > ffnet_captures.snapshot_ts
+    """), [{"sid": s, "ts": t, "url": u} for s, t, u in rows])
+    return len(rows)

@@ -259,3 +259,57 @@ def test_shutdown_is_not_treated_as_a_crash():
 def contextlib_suppress(*excs):
     import contextlib
     return contextlib.suppress(*excs)
+
+
+# ---- FF.net capture index ----------------------------------------------
+
+def test_a_known_capture_costs_no_cdx_request():
+    """The point of ffnet_captures: one rate-limited request per story, not two.
+
+    archive.org rate-limits by request, so a discovery lookup we already did in
+    bulk must not be paid for again per story.
+    """
+    import ffnet_enrich
+
+    asked = []
+
+    class Client:
+        def get(self, url, **kw):
+            asked.append(url)
+            raise AssertionError("should not reach the network in this test")
+
+    # With a known capture, fetch_meta must go straight to the snapshot URL and
+    # never touch the CDX endpoint.
+    try:
+        ffnet_enrich.fetch_meta(Client(), "12345",
+                                known=("20200101000000",
+                                       "https://www.fanfiction.net/s/12345/1/T"))
+    except AssertionError:
+        pass
+    assert len(asked) == 1, f"made {len(asked)} requests, expected 1"
+    assert "cdx" not in asked[0].lower(), f"still asked CDX: {asked[0]}"
+    assert "20200101000000" in asked[0]
+
+
+def test_the_prefix_walk_keeps_the_newest_capture_per_story():
+    """One story has many captured URLs -- chapters, slugs, www vs m -- and
+    collapse=urlkey collapses per URL, not per story. Picking the newest is
+    ours to do."""
+    import ffnet_wayback as W
+    rows = [
+        ["timestamp", "original"],
+        ["20150101000000", "http://www.fanfiction.net/s/777/1/Old-Slug"],
+        ["20220101000000", "http://m.fanfiction.net/s/777/1/New-Slug"],
+        ["20180101000000", "http://www.fanfiction.net/s/888/1/Other"],
+    ]
+    best = {}
+    for row in rows[1:]:
+        ts, original = row[0], row[1]
+        sid = W.story_id_from_url(original)
+        if sid is None:
+            continue
+        if sid not in best or ts > best[sid][0]:
+            best[sid] = (ts, original)
+    assert best[777][0] == "20220101000000"
+    assert "New-Slug" in best[777][1]
+    assert set(best) == {777, 888}

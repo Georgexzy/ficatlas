@@ -1671,6 +1671,81 @@ RESTART_MAX = 600.0
 RESTART_HEALTHY = 300.0
 
 
+async def _ffnet_capture_index_loop() -> None:
+    """Walk archive.org's CDX index for FF.net and record what it holds.
+
+    Not a fetch loop and not a queue: it fills `ffnet_captures`, a lookup of
+    "is there a capture of story N, and when", so the enrichment backfill stops
+    spending a rate-limited request per story to discover that.
+
+    Why a prefix walk. Measured against archive.org, same endpoint, same rate
+    limit:
+
+        prefix 1284   5,165 captured story ids in  6s   (one request)
+        prefix 7203     744 captured story ids in  1s   (one request)
+        one story id      1 captured story id  in  8s   (one request)
+
+    archive.org is genuinely rate-limiting this host -- 429s arrive steadily at
+    a five second interval -- so requests, not seconds, are the budget. The
+    per-story form spent two of them per story and came back empty for about
+    31%; this spends roughly one per five thousand.
+
+    Numeric prefixes 1000-9999 cover every story id of four digits or more,
+    which is every FF.net story since 1999. The few hundred older ids fall
+    through to the per-story lookup, which still works.
+
+    The whole sweep is ~9,000 requests. Against 6.5M stories still missing
+    their metadata, that is a rounding error, and it is what makes the rest of
+    the work cost one request each instead of two.
+    """
+    from db.session import db_session
+    from sqlalchemy import text as sql_text
+    from api.settings import get_setting, put_setting
+    from ffnet_wayback import cdx_prefix_page, store_captures
+    from wayback_harvest import Transient
+
+    KEY_PREFIX = "ffnet_capture_prefix"
+    KEY_RESUME = "ffnet_capture_resume"
+    interval = _num("FFNET_CAPTURE_INTERVAL_SEC", 2)
+    first, last = 1000, 9999
+
+    while True:
+        with db_session() as db:
+            cur = int(get_setting(db, KEY_PREFIX) or first)
+            resume = get_setting(db, KEY_RESUME) or None
+        if cur > last:
+            # Swept. The index only grows as archive.org crawls more, so come
+            # back in a week rather than spinning; freshness for NEW captures
+            # is _ffnet_wayback_cdx_loop's job, not this one's.
+            with db_session() as db:
+                total = db.execute(sql_text(
+                    "SELECT count(*) FROM ffnet_captures")).scalar() or 0
+            log.info(f"ffnet capture index: sweep complete, {total:,} captures known")
+            with db_session() as db:
+                put_setting(db, KEY_PREFIX, str(first))
+                put_setting(db, KEY_RESUME, "")
+            await asyncio.sleep(7 * 24 * 3600)
+            continue
+
+        try:
+            rows, next_key = await asyncio.to_thread(
+                cdx_prefix_page, str(cur), resume)
+            with db_session() as db:
+                n = store_captures(db, rows)
+                if next_key:
+                    put_setting(db, KEY_RESUME, next_key)
+                else:
+                    put_setting(db, KEY_PREFIX, str(cur + 1))
+                    put_setting(db, KEY_RESUME, "")
+            if n:
+                log.info(f"ffnet capture index: prefix {cur} -> {n:,} captures"
+                         f"{' (more)' if next_key else ''}")
+        except Transient as e:
+            log.info(f"ffnet capture index: {e}, retrying prefix {cur}")
+            await asyncio.sleep(30)
+        await asyncio.sleep(interval)
+
+
 async def _supervised(name: str, factory) -> None:
     """Run one background loop for ever, surviving its own bugs.
 
@@ -1818,6 +1893,7 @@ async def main() -> None:
 
     if _flag("FFNET_WAYBACK", "true"):
         tasks.append(asyncio.create_task(_supervised("ffnet_wayback_cdx_loop", _ffnet_wayback_cdx_loop)))
+        tasks.append(asyncio.create_task(_supervised("ffnet_capture_index_loop", _ffnet_capture_index_loop)))
         tasks.append(asyncio.create_task(_supervised("ffnet_wayback_fetch_loop", _ffnet_wayback_fetch_loop)))
         log.info("FF.net Wayback harvest enabled (the only route to FF.net)")
 
