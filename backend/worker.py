@@ -74,7 +74,22 @@ async def _enrich_loop() -> None:
     have no characters.
     """
     batch = int(_num("ENRICH_BATCH", 200))
-    interval = _num("ENRICH_INTERVAL_MIN", 30) * 60
+    # How long to REST between passes, which is a different question from how
+    # long a pass may run — and conflating them left this loop idle most of the
+    # time for no benefit to anybody.
+    #
+    # The sleep does not protect archive.org. Every request already waits on
+    # the shared budget, which is what actually paces this against their rate
+    # limit; sleeping on top of it simply leaves granted slots unused. Measured
+    # once the yield came good: a 25-minute pass followed by a 30-minute sleep,
+    # so 55% of the wall clock spent not asking for anything while 6.4M works
+    # sat unfilled.
+    #
+    # So: a long pass, a short rest. The pass budget still exists, because a
+    # pass that runs for ever cannot pick up a re-ranked queue or a newly
+    # walked slice of the capture index.
+    interval = _num("ENRICH_REST_MIN", 1) * 60
+    pass_seconds = _num("ENRICH_PASS_MIN", 20) * 60
     from ffnet_enrich import run as enrich_run
 
     while True:
@@ -83,11 +98,13 @@ async def _enrich_loop() -> None:
             # delay=0: the shared archive.org budget in fetch_meta does the
             # pacing now, and 0.5s on top of it would just be additive.
             #
-            # Bounded to most of the interval so a throttled pass cannot outlive
-            # its own schedule. Without this the loop stalled indefinitely: at
-            # archive.org's 600s backoff a 200-story pass runs for 33 hours.
+            # Bounded so a throttled pass cannot run for ever. Without this
+            # the loop stalled indefinitely: at archive.org's 600s backoff a
+            # 200-story pass runs for 33 hours. The bound is its own setting
+            # rather than a fraction of the rest interval, so shortening the
+            # rest does not shorten the pass with it.
             await asyncio.to_thread(enrich_run, batch, False, 0.0, 25,
-                                    max(60.0, interval * 0.8))
+                                    max(60.0, pass_seconds))
         except Exception as e:
             log.warning(f"enrichment pass failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
