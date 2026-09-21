@@ -153,3 +153,58 @@ def test_a_slow_capture_is_not_backpressure():
         assert b.interval > start
     finally:
         b.interval, b._net_errors, b._slow = saved
+
+
+def test_a_steady_trickle_of_errors_does_not_pin_the_budget():
+    """The failure that killed FF.net enrichment for eleven days.
+
+    Backoff is per-event and recovery used to be per-time, so any error
+    arriving more often than one per thirteen minutes could only ratchet the
+    interval upward. A host answering four requests in five is HEALTHY; the
+    budget must settle near its floor, not climb to the ceiling.
+    """
+    import wayback_harvest as W
+
+    def settle(clean_per_error: int) -> float:
+        """The interval the job actually spends its requests at, which is the
+        one worth asserting on — sampling right after a penalty measures the
+        spike, not the operating point."""
+        b = W._Budget()
+        for _ in range(300):
+            b.penalise(retry_after=0, reason="test")
+            for _ in range(clean_per_error):
+                b.reward()
+        return b.interval
+
+    rough = settle(4)
+    assert rough < W.MAX_INTERVAL / 4, (
+        f"a host answering 4 in 5 pinned the budget at {rough:.1f}s")
+
+    # And the operating point must track how well the host is answering, not
+    # just avoid the ceiling: 40 in 41 is a healthy host and earns the floor.
+    healthy = settle(40)
+    assert healthy <= W.BASE_INTERVAL * 1.5, f"healthy host got {healthy:.1f}s"
+    assert healthy < rough, "the interval must track the host, not a constant"
+
+
+def test_a_host_refusing_everything_still_backs_off():
+    """The other half: recovery must not be so eager that it cancels a real
+    throttle. Nothing clean is coming back here, so nothing should narrow."""
+    import wayback_harvest as W
+    b = W._Budget()
+    for _ in range(10):
+        b.penalise(retry_after=0, reason="test")
+    assert b.interval >= W.MAX_INTERVAL
+
+
+def test_recovery_needs_evidence_not_just_patience():
+    """One clean response narrows the interval. Zero clean responses, however
+    long we wait, must not -- the clock drift in reward() only runs when a
+    response actually arrived."""
+    import wayback_harvest as W
+    b = W._Budget()
+    b.penalise(retry_after=0, reason="test")
+    widened = b.interval
+    assert widened > W.BASE_INTERVAL
+    b.reward()
+    assert b.interval < widened

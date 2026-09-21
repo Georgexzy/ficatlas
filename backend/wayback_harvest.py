@@ -81,6 +81,11 @@ BASE_INTERVAL = float(os.getenv("WAYBACK_MIN_INTERVAL", "5.0"))
 MAX_INTERVAL = float(os.getenv("WAYBACK_MAX_INTERVAL", "600.0"))
 BACKOFF = 2.0
 RECOVER = 0.9
+# How many clean responses in a row earn the full request rate back from
+# nothing. The recovery is ADDITIVE IN RATE, not multiplicative in interval —
+# that is what gives this budget a stable operating point instead of two
+# absorbing ends. See `_Budget.reward` for the arithmetic.
+RECOVER_STEPS = float(os.getenv("WAYBACK_RECOVER_STEPS", "20"))
 RECOVER_AFTER = 20
 # Recovery is on a clock as well as a success count — see _Budget.reward. A
 # throttled host cannot produce the successes that a count-only rule needs to
@@ -111,6 +116,7 @@ class _Budget:
         self._clean = 0
         self._net_errors = 0
         self._slow = 0
+        self._reasons: dict[str, int] = {}
         self._last_recover = 0.0
         self.throttled = 0
         self.granted = 0
@@ -124,7 +130,11 @@ class _Budget:
         if delay > 0:
             time.sleep(delay)
 
-    def penalise(self, retry_after: float | None = None) -> None:
+    def penalise(self, retry_after: float | None = None,
+                 reason: str = "unspecified") -> None:
+        """Widen the interval. `reason` is logged because this budget is shared
+        by three jobs against one host, and when it sits at its ceiling the
+        only question worth answering is which of them put it there."""
         with self._lock:
             self.throttled += 1
             self._clean = 0
@@ -132,8 +142,10 @@ class _Budget:
             self.interval = min(self.interval * BACKOFF, MAX_INTERVAL)
             pause = retry_after if retry_after is not None else self.interval
             self._next = max(self._next, time.monotonic() + pause)
+            self._reasons[reason] = self._reasons.get(reason, 0) + 1
         if self.interval != before:
-            log.info(f"wayback budget: throttled -> {before:.1f}s to {self.interval:.1f}s")
+            log.info(f"wayback budget: throttled -> {before:.1f}s to "
+                     f"{self.interval:.1f}s ({reason})")
 
     def slow_response(self) -> None:
         """The host answered late, or not at all, for ONE item.
@@ -189,7 +201,7 @@ class _Budget:
             if self._net_errors < NET_ERRORS_BEFORE_BACKOFF:
                 return
             self._net_errors = 0
-        self.penalise()
+        self.penalise(reason="connection refused")
 
     def reward(self) -> None:
         """A clean response. Narrow the interval on a CLOCK, not on a count.
@@ -218,6 +230,41 @@ class _Budget:
         host is answering, never on a guess — but one is enough, because a rate
         limit is a statement about RECENT request rate and an interval learned
         an hour ago does not describe now.
+
+        That still was not enough, and the arithmetic says why. Undoing one
+        doubling at 0.9 per 120s window needs log(0.5)/log(0.9) = 6.6 windows,
+        or thirteen minutes of unbroken clean running. Backoff is per EVENT and
+        recovery was per TIME, so any error source arriving more often than one
+        per thirteen minutes could only push the interval up. Three jobs share
+        this budget against one host; the log showed a penalty every thirty to
+        sixty seconds. Under that load the ceiling was not a worst case, it was
+        the fixed point — 5s to 259s in six minutes, measured, with the
+        timeout misclassification already fixed.
+
+        Recovering per clean response instead was still not it, and the reason
+        is worth writing down because it is not obvious: if errors multiply the
+        interval and successes divide it, then log(interval) is a random walk
+        with a drift, and a random walk with a drift has no stable middle. It
+        ends at one end or the other. Whichever way the constants lean, the
+        budget either ignores real throttling or pins at the ceiling — and
+        tuning the ratio only moves which side it falls off. Measured at 0.85
+        per success against a host answering four in five, it still reached
+        600s; the arithmetic is 0.85**4 * 2 = 1.04, compounding, for ever.
+
+        So the recovery is ADDITIVE IN RATE. Errors halve the request rate,
+        successes add a fixed increment to it — the shape TCP uses, for this
+        exact reason. Now the two forces balance at a rate rather than racing
+        to an extreme: over a cycle of n clean responses and one error,
+        r -> (r + n*ALPHA)/2, which settles at r = n*ALPHA. The equilibrium is
+        proportional to how many requests the host answers per refusal, which
+        is precisely the thing we are trying to measure. A host answering four
+        in five earns a moderate interval; one answering forty in forty-one
+        earns the floor; one refusing everything gets the ceiling.
+
+        The clock drift stays for the case the original docstring was right
+        about: a host refusing everything produces no successes to recover on,
+        so without it a fully blocked budget would sit at 600s with nothing
+        able to bring it down and each re-probe ten minutes apart.
         """
         now = time.monotonic()
         with self._lock:
@@ -225,6 +272,9 @@ class _Budget:
             self._net_errors = 0
             if self.interval <= BASE_INTERVAL:
                 return
+            alpha = 1.0 / (BASE_INTERVAL * RECOVER_STEPS)
+            self.interval = max(1.0 / (1.0 / self.interval + alpha),
+                                BASE_INTERVAL)
             elapsed = now - self._last_recover
             if elapsed < RECOVER_EVERY:
                 return
@@ -239,7 +289,8 @@ class _Budget:
 
     def snapshot(self) -> dict:
         return {"interval": round(self.interval, 2), "granted": self.granted,
-                "throttled": self.throttled, "slow": self._slow}
+                "throttled": self.throttled, "slow": self._slow,
+                "reasons": dict(self._reasons)}
 
 
 BUDGET = _Budget()
@@ -277,7 +328,7 @@ def note_response(status_code: int, retry_after: str | None = None) -> None:
             after = float(retry_after) if retry_after else None
         except (TypeError, ValueError):
             after = None
-        BUDGET.penalise(after)
+        BUDGET.penalise(after, reason=f"HTTP {status_code}")
     elif 200 <= status_code < 400:
         BUDGET.reward()
 
