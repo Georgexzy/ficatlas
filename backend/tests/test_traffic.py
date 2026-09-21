@@ -265,16 +265,29 @@ def test_every_report_is_owner_gated():
 
 def test_the_beacon_stays_public():
     """The write side has to work for a reader who is not signed in at all —
-    that is most of them."""
+    that is most of them.
+
+    What must not appear here is a dependency that can REJECT the caller. The
+    beacon does resolve identity — it needs to know whether this is one of us,
+    so our own browsing stays out of the reports — but `get_current_user`
+    returns None for a stranger rather than raising, so it gates nothing. A
+    require_* dependency would.
+    """
     import inspect
 
     hit_route = next(r for r in traffic.router.routes if getattr(r, "path", "") == "/hit")
-    gates = [
+    deps = [
         p.default.dependency
         for p in inspect.signature(hit_route.endpoint).parameters.values()
         if isinstance(p.default, type(Depends(require_owner)))
     ]
-    assert gates == []
+    gates = [d for d in deps if d.__name__.startswith("require_")]
+    assert gates == [], f"the beacon is behind a gate: {gates}"
+
+    # And a stranger really does get through the ones that are there.
+    for d in deps:
+        assert d.__name__ == "get_current_user", \
+            f"unexpected dependency on the public beacon: {d.__name__}"
 
 
 def test_an_admin_is_not_enough(db):
@@ -1081,3 +1094,70 @@ def test_a_staff_search_is_not_recorded_as_a_reader_search(monkeypatch):
 
     asyncio.run(drive(staff=False))
     assert len(written) == 1, "a reader search must still be recorded"
+
+
+def test_reports_read_the_view_not_the_table():
+    """Twenty-one report queries run over visit_events. A rule repeated in
+    twenty-one places is one the twenty-second query will not follow, so the
+    exclusion lives in the view and the reports may not address the table."""
+    import pathlib
+    import re
+    src = pathlib.Path(__file__).resolve().parents[1] / "api" / "traffic.py"
+    text_ = src.read_text()
+    stray = re.findall(r"FROM\s+visit_events(?!_public)\b", text_)
+    assert not stray, f"{len(stray)} report queries still read the raw table"
+    assert "FROM visit_events_public" in text_
+
+
+def test_the_view_hides_our_own_traffic(db):
+    from sqlalchemy import text as sql_text
+    import tracking
+
+    marker = "ficatlas-internal-probe"
+    db.execute(sql_text("""
+        INSERT INTO visit_events (at, visitor, kind, path, q, internal)
+        VALUES (now(), :v, 'search', '/api/search', :q, TRUE),
+               (now(), :v, 'search', '/api/search', :q2, FALSE)
+    """), {"v": "p" * 16, "q": marker + "-ours", "q2": marker + "-reader"})
+    db.commit()
+
+    rows = db.execute(sql_text(
+        "SELECT q FROM visit_events_public WHERE q LIKE :m"),
+        {"m": marker + "%"}).fetchall()
+    got = {r[0] for r in rows}
+    assert got == {marker + "-reader"}, got
+    # Still recorded, not deleted -- the row is true, it is just not audience.
+    all_rows = db.execute(sql_text(
+        "SELECT count(*) FROM visit_events WHERE q LIKE :m"),
+        {"m": marker + "%"}).scalar()
+    assert all_rows == 2
+
+
+def test_the_beacon_ignores_staff():
+    """Working on the site all day would otherwise read as one very engaged
+    reader who visits every hub and never converts."""
+    import inspect
+    from api.traffic import hit
+    src = inspect.getsource(hit)
+    assert "viewer.at_least(ROLE_ADMIN)" in src
+    assert src.index("at_least(ROLE_ADMIN)") < src.index("tracking.record"), \
+        "the staff check must come before the write, not after it"
+
+
+def test_the_beacon_still_records_when_the_viewer_is_not_a_user():
+    """This endpoint's one hard rule is that it never fails a request. A
+    `viewer` that is not a recognisable user -- an unresolved dependency, a
+    direct call -- must record the hit, not raise: dropping real traffic is the
+    failure that matters, not counting one of ours."""
+    import tracking
+    from api import traffic
+
+    written = []
+    real = tracking.record
+    tracking.record = lambda *a, **k: written.append(a)
+    try:
+        traffic.hit(_FakeRequest(ip="203.0.113.9"), path="/x", ref="",
+                    kind="page", seen="", viewer=object())
+    finally:
+        tracking.record = real
+    assert len(written) == 1, "a hit with an unusable viewer was dropped"
