@@ -457,3 +457,26 @@ def test_the_popularity_slice_bound_query_actually_runs():
             after = str(upto)
         assert seen == 50, f"slices covered {seen} of 50 rows"
         assert str(P.WRITE_BATCH).isdigit()
+
+
+def test_one_caller_never_waits_more_than_the_ceiling():
+    """`_next` is a shared reservation counter and several jobs share this
+    budget against one host, so without a cap the Nth caller waits N intervals.
+    At the 260s interval archive.org imposed on 21 Sep that is a quarter of an
+    hour inside one wait() -- which is how the enrichment pass overran a time
+    budget it checks faithfully between every story.
+    """
+    import time
+    import wayback_harvest as W
+
+    b = W._Budget()
+    b.interval = 260.0
+    now = time.monotonic()
+    # Twenty callers queue up without any of them actually sleeping.
+    for _ in range(20):
+        with b._lock:
+            start = min(max(time.monotonic(), b._next),
+                        time.monotonic() + W.MAX_INTERVAL)
+            b._next = start + b.interval
+    assert b._next - now <= W.MAX_INTERVAL + b.interval + 1, \
+        "the reservation queue ran away from the present"
