@@ -891,6 +891,28 @@ CREATE INDEX IF NOT EXISTS ix_ffnet_wayback_priority
 CREATE INDEX IF NOT EXISTS ix_ffnet_wayback_pending
     ON ffnet_wayback_queue (story_id) WHERE done_at IS NULL;
 
+-- What archive.org actually holds for FF.net, cached from their CDX index.
+--
+-- Not a queue and not a backlog: a lookup table answering "is there a capture
+-- of story N, and when". The backfill used to answer that with one CDX request
+-- per story, which is the wrong shape by three orders of magnitude. Measured:
+-- a single prefix query returns every captured story id under that prefix --
+-- 5,165 ids in six seconds for prefix 1284 -- while the per-story form costs
+-- one rate-limited request each and comes back empty ~31% of the time because
+-- it can only look for chapter 1 under a slug it has to guess.
+--
+-- Filling this turns the backfill from two rate-limited requests per story
+-- into one, and removes the wasted third that were spent discovering nothing.
+CREATE TABLE IF NOT EXISTS ffnet_captures (
+    site_id     BIGINT PRIMARY KEY,
+    snapshot_ts VARCHAR(20) NOT NULL,
+    -- The URL as archive.org actually captured it, slug and all. Reconstructing
+    -- it is what _captured_url exists to avoid; storing it means we never have
+    -- to ask twice.
+    original    TEXT,
+    found_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS fandom_hubs (
     slug        TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
