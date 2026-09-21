@@ -509,11 +509,21 @@ def _mark_attempted(ids: list) -> None:
     if not ids:
         return
     from sqlalchemy import text as sql_text
-    with db_session() as db:
-        db.execute(sql_text(
-            "UPDATE stories SET crawled_at = now() WHERE id = ANY(:ids)"),
-            {"ids": list(ids)})
-        db.commit()
+    try:
+        with db_session() as db:
+            # Give up rather than queue. `stories` is under constant write load
+            # and the weekly popularity pass takes row locks across most of the
+            # table for the better part of an hour; a bookkeeping stamp must
+            # never be the thing that wedges the harvest behind it. Losing a
+            # stamp costs one repeated fetch next pass. Waiting costs the pass.
+            db.execute(sql_text("SET LOCAL lock_timeout = '5s'"))
+            db.execute(sql_text(
+                "UPDATE stories SET crawled_at = now() WHERE id = ANY(:ids)"),
+                {"ids": list(ids)})
+            db.commit()
+    except Exception as e:
+        log.info(f"  attempt stamp skipped ({type(e).__name__}); "
+                 f"{len(ids)} stories may be re-selected")
 
 
 def _write_batch(items: list[tuple]) -> int:

@@ -1,6 +1,6 @@
 """Database session management"""
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 
@@ -57,6 +57,40 @@ engine = create_engine(
         "application_name": os.getenv("APP_NAME", "ficatlas"),
     },
 )
+
+
+# Every session starts with the DEFAULT statement timeout, whatever the last
+# borrower of this connection did to it.
+#
+# `lift_statement_timeout` below disables the timeout with a plain `SET`, which
+# is connection-scoped -- and a pooled connection does not stop existing when
+# the session that lifted it closes. It goes back in the pool carrying
+# statement_timeout = 0, and the next unrelated caller silently inherits "wait
+# for ever".
+#
+# Measured on 21 Sep: the weekly popularity pass held row locks on `stories`
+# for fifty-four minutes, and behind it sat three writers that should have
+# given up after sixty seconds -- an AO3 crawled_at stamp blocked for
+# fifty-one minutes, another for fifteen, an FF.net enrichment stamp for
+# twelve. All three were on pooled connections reporting statement_timeout = 0.
+# The FF.net enrichment loop never finished that pass and never logged
+# anything; from the outside the worker had simply gone quiet, which is the
+# hardest failure in this system to see.
+#
+# A deliberate lift still works exactly as before: this fires when the
+# connection is handed out, so any `SET` the borrower makes afterwards stands
+# for as long as they hold it. It costs one round trip to a local socket.
+@event.listens_for(engine, "checkout")
+def _reset_statement_timeout(dbapi_conn, _record, _proxy) -> None:
+    try:
+        with dbapi_conn.cursor() as cur:
+            cur.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")
+    except Exception:
+        # A connection too broken to accept a SET is about to fail anyway, and
+        # pool_pre_ping will discard it. Never turn this into a checkout error.
+        pass
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def lift_statement_timeout(db) -> None:
