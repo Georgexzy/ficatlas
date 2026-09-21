@@ -1084,6 +1084,14 @@ CREATE TABLE IF NOT EXISTS visit_events (
 -- Googlebot and for a scraper alike, and those are opposite events: one is the
 -- thing this site is waiting for and the other is a block that failed. The
 -- token that matched is a word from tracking._BOT_RE, never the user agent.
+-- Sign in with Google. `sub` is Google's stable identifier for an account and,
+-- unlike an email address, is never reassigned to somebody else.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(64);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_sub ON users (google_sub);
+-- An account that signs in with Google has no password. Existing rows all have
+-- one, so this only ever widens what is allowed.
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+
 ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS bot_kind VARCHAR(24);
 
 -- HAS THIS BROWSER BEEN HERE BEFORE: first | week | return.

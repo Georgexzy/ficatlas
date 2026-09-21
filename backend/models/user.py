@@ -30,7 +30,16 @@ class User(Base):
     __tablename__ = "users"
     id            = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     username      = Column(String(50), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
+    # NULLABLE, because an account signed in through Google has no password.
+    # That is the point of it — no password to invent, forget or reset — and
+    # `set-password` is how somebody adds one later if they want a way in that
+    # does not depend on Google. Every path that checks a password must treat
+    # NULL as "no password login", never as "empty password".
+    password_hash = Column(String(255))
+    # The Google account this one is signed in with, if any. Google's `sub`
+    # claim: stable for the life of the Google account and, unlike an email
+    # address, never reassigned to somebody else.
+    google_sub    = Column(String(64), unique=True, index=True)
     created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_login    = Column(DateTime)
     # New accounts are readers. The first account ever created becomes owner —

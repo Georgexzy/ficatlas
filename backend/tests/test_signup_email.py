@@ -97,3 +97,38 @@ def test_an_empty_address_is_null_not_empty_string(db):
     _signup(db, "emptymail", email="   ")
     row = db.query(User).filter(User.username == "emptymail").one()
     assert row.email is None
+
+
+# ── an account with no password ────────────────────────────────────────────
+
+def test_a_null_password_hash_never_matches(db):
+    """`password_hash` is nullable because an account created through Google
+    has no password. That must mean "cannot sign in with a password", never
+    "any password will do" — and it must not depend on an exception being
+    swallowed somewhere."""
+    from api.auth import check_password
+    assert check_password("", None) is False
+    assert check_password("anything", None) is False
+    assert check_password("anything", "") is False
+
+
+def test_a_google_account_cannot_be_signed_into_with_a_password(db):
+    """The end-to-end version of the check above, through the login endpoint."""
+    from sqlalchemy import text as t
+    from fastapi.testclient import TestClient
+    from db.session import get_db
+    from main import app
+    db.execute(t("DELETE FROM users WHERE username = 'ssoprobe'"))
+    db.execute(t("""INSERT INTO users (id, username, password_hash, role, google_sub)
+                    VALUES (gen_random_uuid(), 'ssoprobe', NULL, 'reader', 'g-probe-1')"""))
+    db.commit()
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        for guess in ("", "password", "x"):
+            r = TestClient(app).post("/api/auth/login",
+                                     data={"username": "ssoprobe", "password": guess})
+            assert r.status_code != 200, f"signed in with {guess!r}"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        db.execute(t("DELETE FROM users WHERE username = 'ssoprobe'"))
+        db.commit()
