@@ -5357,6 +5357,36 @@ def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
         "AND " + " AND ".join(clauses) + " LIMIT :cap) x"), params).scalar() or 0)
 
 
+def _drop_contained(cands: list[dict]) -> list[dict]:
+    """Remove every candidate whose span sits inside another candidate's span.
+
+    Settles CONTAINMENT before frequency, which is a different question from
+    the one the candidate sort answers. Sorting by count alone lets a common
+    short word claim its stretch of the post before the longer name it sits
+    inside is ever looked at: "[Highschool DXD] Fanfics" came out as
+    `tag:"Highschool AU"`, because the tag `highschool` is on 1,057 works and
+    the FANDOM `Highschool DxD` -- an exact two-word match and the whole
+    subject of the post -- is on 86. The reader got high-school AUs in no
+    fandom at all.
+
+    This does not reintroduce either failure the count-first sort was built
+    for. Both of those are DISJOINT spans -- `one shots` against `Fluff`, `God`
+    against the tags around it -- where neither term sits inside the other and
+    count still decides. Containment fires only on a longer match that
+    literally spans a shorter one, which is the case the endpoint's docstring
+    already promised: "Daphne Greengrass" is taken and "Daphne" is not.
+
+    Equal spans are kept, both of them: two facets can name the same words (a
+    fandom and a tag spelled alike) and choosing between those is the sort's
+    job, not this one's.
+    """
+    spans = [c["span"] for c in cands]
+    return [c for c in cands
+            if not any(o != c["span"]
+                       and o[0] <= c["span"][0] and c["span"][1] <= o[1]
+                       for o in spans)]
+
+
 @router.get("/extract", response_model=ExtractResponse)
 def extract(
     text: str = Query(..., description="A whole fic-finder post, pasted"),
@@ -5906,6 +5936,25 @@ def extract(
     # broke the unpacking below twice — once showing every count as 1 and once
     # as -3. Positional tuples and a changing sort order do not mix.
     cands.sort(key=lambda c: (-c["count"], c["rank"], -c["n"]))
+
+    # CONTAINMENT is settled before frequency, and it is a different question
+    # from the one the sort above answers.
+    #
+    # Sorting by count alone lets a common short word claim its span before the
+    # longer name it sits inside is ever considered. Measured: "[Highschool
+    # DXD] Fanfics" came out as `tag:"Highschool AU"`, because the tag
+    # `highschool` is on 1,057 works and the FANDOM `Highschool DxD` -- an
+    # exact two-word match, the entire subject of the post -- is on 86. The
+    # reader got a search for high-school AUs in no particular fandom. Same
+    # shape for "High School DxD" -> `tag:"Alternate Universe - High School"`.
+    #
+    # This does not reintroduce either failure the sort was built for. Both of
+    # those are DISJOINT spans -- `one shots` against `Fluff`, `God` against
+    # the tags around it -- where neither term sits inside the other and count
+    # still decides. Containment only ever fires on a longer match that
+    # literally spans a shorter one, which is the case the docstring already
+    # promised: "Daphne Greengrass" is taken and "Daphne" is not.
+    cands = _drop_contained(cands)
 
     chosen: list[tuple] = []
     used: set[int] = set()

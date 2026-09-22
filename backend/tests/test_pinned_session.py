@@ -654,3 +654,62 @@ def test_the_candidate_pool_is_wide_enough_to_survive_the_join():
     assert "60_000" in src or "60000" in src, \
         "the candidate pool must be far larger than the batch"
     assert "want * 300" in src
+
+
+# ---- extractor: containment beats frequency ------------------------------
+#
+# A unit test on the rule itself. The endpoint needs the whole 20M-work facet
+# vocabulary to say anything at all, which the test database does not have --
+# so exercising it end to end here would assert on an empty string and pass for
+# the wrong reason.
+
+def _cand(kind, value, count, span, rank=0):
+    return {"kind": kind, "value": value, "count": count, "span": span,
+            "rank": rank, "n": span[1] - span[0]}
+
+
+def test_a_multi_word_fandom_beats_a_common_word_inside_it():
+    """"[Highschool DXD] Fanfics" came out as tag:"Highschool AU".
+
+    The candidate sort is by count, so the tag `highschool` (1,057 works)
+    claimed its span before the FANDOM `Highschool DxD` (86) -- an exact
+    two-word match and the entire subject of the post -- was ever considered.
+    """
+    from api.search import _drop_contained
+    kept = _drop_contained([
+        _cand("tag", "highschool", 1057, (0, 1)),
+        _cand("fandom", "Highschool DxD", 86, (0, 2)),
+    ])
+    assert [c["value"] for c in kept] == ["Highschool DxD"]
+
+
+def test_containment_does_not_undo_what_the_count_sort_was_for():
+    """Both failures the count-first sort exists to prevent are DISJOINT spans,
+    where nothing sits inside anything, so containment never fires on them."""
+    from api.search import _drop_contained
+    kept = _drop_contained([
+        _cand("tag", "Fluff", 1130841, (1, 2)),
+        _cand("tag", "one shots", 1561, (2, 4)),
+    ])
+    assert {c["value"] for c in kept} == {"Fluff", "one shots"}, \
+        "disjoint terms must both survive; count decides between them"
+
+
+def test_equal_spans_are_both_kept_for_the_sort_to_choose_between():
+    """A fandom and a tag can be spelled alike. Picking one is the sort's job."""
+    from api.search import _drop_contained
+    kept = _drop_contained([
+        _cand("fandom", "Marvel", 686826, (0, 1)),
+        _cand("tag", "Marvel", 46645, (0, 1)),
+    ])
+    assert len(kept) == 2
+
+
+def test_the_longer_name_still_wins_the_way_the_docstring_promised():
+    from api.search import _drop_contained
+    kept = _drop_contained([
+        _cand("char", "Daphne", 79, (0, 1)),
+        _cand("char", "Greengrass", 60, (1, 2)),
+        _cand("ship", "Daphne Greengrass/Harry Potter", 1035, (0, 2)),
+    ])
+    assert [c["value"] for c in kept] == ["Daphne Greengrass/Harry Potter"]
