@@ -1814,6 +1814,40 @@ async def _ffnet_capture_index_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _reddit_answers_loop() -> None:
+    """Build the corpus the extractor is measured against, slowly.
+
+    Pairs of (a lost-fic post, the fic it turned out to be) are the only honest
+    way to tell whether a change to the extractor helped. They live in thread
+    comments, which are public Atom at /r/<sub>/comments/<id>.rss -- see
+    reddit_answers for why that is reachable when the JSON API is not.
+
+    Slow on purpose, and for the reason reddit_queue already documents: the
+    constraint is pace, not access. A second unauthenticated request arriving
+    straight after the first is refused, so this asks about a handful of posts
+    and then waits. The corpus is worth having in a week; it is not worth an
+    IP ban tonight.
+    """
+    from db.session import db_session
+    from reddit_answers import harvest
+
+    batch = int(_num("REDDIT_ANSWERS_BATCH", 5))
+    interval = _num("REDDIT_ANSWERS_INTERVAL_MIN", 20) * 60
+
+    while True:
+        try:
+            with db_session() as db:
+                stats = await asyncio.to_thread(harvest, db, batch)
+            if stats["posts"]:
+                log.info("reddit answers: %s posts, %s links, %s in index, "
+                         "%s confirmed%s", stats["posts"], stats["links"],
+                         stats["resolved"], stats["confirmed"],
+                         f", {stats['refused']} refused" if stats["refused"] else "")
+        except Exception as e:
+            log.warning(f"reddit answers pass failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _supervised(name: str, factory) -> None:
     """Run one background loop for ever, surviving its own bugs.
 
@@ -1966,6 +2000,7 @@ async def main() -> None:
     # empty worklist reads as a broken feature rather than as an unset flag.
     if _flag("RUN_REDDIT_QUEUE", "true"):
         tasks.append(asyncio.create_task(_supervised("reddit_queue_loop", _reddit_queue_loop)))
+        tasks.append(asyncio.create_task(_supervised("reddit_answers_loop", _reddit_answers_loop)))
         log.info("reddit fic-finder queue enabled (hourly, one feed at a time)")
 
     if _flag("RUN_SERIES_WORDCOUNT", "true"):

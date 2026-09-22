@@ -931,6 +931,24 @@ DROP VIEW IF EXISTS visit_events_public;
 CREATE VIEW visit_events_public AS
     SELECT * FROM visit_events WHERE NOT internal;
 
+-- What a lost-fic post turned out to be: the ground truth the extractor is
+-- measured against. See reddit_answers.py for why comments are reachable at
+-- all and why a linked work counts as an answer without a "solved" flair.
+CREATE TABLE IF NOT EXISTS reddit_answers (
+    post_id     TEXT NOT NULL,
+    url         TEXT NOT NULL,
+    story_id    UUID,
+    author      TEXT,
+    -- The original poster linked it back. Reddit's way of saying "that was
+    -- the one", and the difference between a suggestion and an answer.
+    confirmed   BOOLEAN NOT NULL DEFAULT FALSE,
+    found_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (post_id, url)
+);
+CREATE INDEX IF NOT EXISTS ix_reddit_answers_story ON reddit_answers (story_id)
+    WHERE story_id IS NOT NULL;
+ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS answers_checked_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS ffnet_captures (
     site_id     BIGINT PRIMARY KEY,
     snapshot_ts VARCHAR(20) NOT NULL,
