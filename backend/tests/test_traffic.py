@@ -1161,3 +1161,37 @@ def test_the_beacon_still_records_when_the_viewer_is_not_a_user():
     finally:
         tracking.record = real
     assert len(written) == 1, "a hit with an unusable viewer was dropped"
+
+
+def test_marking_our_own_traffic_needs_all_three_signals(db):
+    """The rule is a conjunction on purpose. Any one of the three alone marks
+    real readers or real scrapers, both of which belong in the reports."""
+    from sqlalchemy import text as sql_text
+    import mark_internal_traffic as M
+
+    def seed(visitor, kind, q, n):
+        for _ in range(n):
+            db.execute(sql_text(
+                "INSERT INTO visit_events (at, visitor, kind, path, q) "
+                "VALUES (now(), :v, :k, '/api/search', :q)"),
+                {"v": visitor, "k": kind, "q": q})
+
+    ours = "o" * 16          # search-only, many, operator-built  -> ours
+    seed(ours, "search", 'fandom:"Naruto" tag:"Time Travel" xover:exclude', 12)
+    scraper = "s" * 16       # search-only, many, but plain text  -> not ours
+    seed(scraper, "search", "harry potter", 12)
+    reader = "r" * 16        # operator-built, but they read pages -> not ours
+    seed(reader, "search", 'fandom:"Naruto" xover:exclude', 12)
+    seed(reader, "page", None, 3)
+    db.commit()
+
+    M.run()
+
+    def marked(v):
+        return db.execute(sql_text(
+            "SELECT count(*) FROM visit_events WHERE visitor = :v AND internal"),
+            {"v": v}).scalar()
+
+    assert marked(ours) == 12, "the outreach panel's own searches must be flagged"
+    assert marked(scraper) == 0, "a plain-text scraper stays visible in the reports"
+    assert marked(reader) == 0, "somebody who also reads pages is an audience"
