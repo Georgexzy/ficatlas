@@ -964,6 +964,21 @@ async def _wayback_fetch_loop() -> None:
     # so FF.net can use the budget. 3 gives FF.net roughly two thirds.
     yield_share = int(_num("WAYBACK_AO3_SHARE_EVERY", 3))
     pass_no = 0
+    # Consecutive passes that read nothing at all. A job producing no output
+    # must not keep spending a budget that is shared with jobs producing some.
+    #
+    # Measured: this loop logged "0/0 parsed, 0 new, 0 enriched, 504,974
+    # pending" over and over, each pass ending on three consecutive HTTP 429s
+    # -- and each of those 429s doubles the SHARED archive.org interval, so
+    # three of them multiply it by eight. It drove the budget from 45s to its
+    # 600s ceiling and then went back for more, while the FF.net enrichment
+    # that was actually returning metadata waited behind it.
+    #
+    # Backing off the REQUEST rate is not enough on its own, because that is
+    # the shared thing being damaged. What has to back off is this loop's
+    # appetite for turns.
+    barren = 0
+    BARREN_BACKOFF_MAX = _num("WAYBACK_BARREN_BACKOFF_MAX", 1800)
 
     while True:
         try:
@@ -1046,6 +1061,20 @@ async def _wayback_fetch_loop() -> None:
                      f"{stats['pending']:,} pending, "
                      f"interval {stats['budget']['interval']}s"
                      + (f" (backed off, {stalled} requeued)" if stalled else ""))
+
+            # Read nothing? Then stand further back each time, up to half an
+            # hour. One good pass clears it immediately — this is about not
+            # hammering a host that is currently refusing us, not a penalty.
+            if entries:
+                barren = 0
+            else:
+                barren += 1
+                if barren >= 2:
+                    rest = min(interval * (2 ** (barren - 1)), BARREN_BACKOFF_MAX)
+                    log.info(f"wayback: {barren} passes with nothing read, "
+                             f"standing down {rest:.0f}s so the budget goes to "
+                             f"jobs that are getting answers")
+                    await asyncio.sleep(rest)
         except Exception as e:
             log.warning(f"wayback fetch failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
