@@ -368,7 +368,7 @@ def test_a_story_that_yields_nothing_stops_being_re_selected():
     # refusal is not an outcome and is skipped before this point; see
     # test_a_refused_fetch_does_not_retire_a_good_capture.
     assert src.index("except Transient") < src.index("attempted.append(sid)")
-    assert "_mark_attempted(attempted)" in src
+    assert "_mark_attempted(attempted" in src
 
     marker = inspect.getsource(ffnet_enrich._mark_attempted)
     assert "crawled_at" in marker, \
@@ -592,3 +592,44 @@ def test_a_refused_fetch_does_not_retire_a_good_capture():
     assert idx_try < idx_append, \
         "a refused story must be skipped before it is recorded as attempted"
     assert "continue" in src[idx_try:idx_append]
+
+
+def test_retiring_a_capture_uses_its_primary_key(db):
+    """The first version joined back through `stories` on
+    `c.site_id::text = s.site_id`. Casting the indexed bigint defeats the
+    primary key, so every batch planned a sequential scan of all 1.6M captures
+    -- 45,192 planner units against 4.81 for the index scan.
+
+    It did not error, it just mostly did not finish: 27 stories enriched in a
+    pass and three captures retired. The same head of the queue came back next
+    pass and was "enriched" all over again, which is how the log could read
+    enriched=27 while character coverage moved by one.
+    """
+    import inspect
+    from sqlalchemy import text as sql_text
+    import ffnet_enrich
+
+    # Strip comments first -- the one here describes the old bug and quotes
+    # the very cast this asserts is gone.
+    src = "\n".join(l for l in
+                    inspect.getsource(ffnet_enrich._mark_attempted).splitlines()
+                    if not l.lstrip().startswith("#"))
+    assert "site_id::text" not in src, \
+        "casting the indexed column defeats the primary key"
+    assert "site_id = ANY(:sids)" in src
+
+    # Not an EXPLAIN assertion: on a near-empty test table a sequential scan is
+    # the CORRECT plan, so that would only measure how many rows the fixture
+    # happens to hold. The invariant that survives is above -- compare the
+    # indexed column to a value, never a cast of it -- plus the update working.
+    db.execute(sql_text(
+        "INSERT INTO ffnet_captures (site_id, snapshot_ts, original) "
+        "VALUES (920000001, '20180101000000', 'u') "
+        "ON CONFLICT (site_id) DO NOTHING"))
+    db.commit()
+    db.execute(sql_text("UPDATE ffnet_captures SET done_at = now() "
+                        "WHERE site_id = ANY(:sids)"), {"sids": [920000001]})
+    db.commit()
+    done = db.execute(sql_text("SELECT done_at FROM ffnet_captures "
+                               "WHERE site_id = 920000001")).scalar()
+    assert done is not None, "the capture was not retired"
