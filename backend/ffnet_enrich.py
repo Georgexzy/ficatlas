@@ -278,6 +278,9 @@ def parse_ffn_meta(page_text: str) -> dict | None:
     return out
 
 
+from wayback_harvest import BACKPRESSURE, Transient  # noqa: E402
+
+
 def fetch_meta(client: httpx.Client, site_id: str,
                known: tuple[str, str] | None = None) -> dict | None:
     """Find an archived copy of a story page and parse its metadata line.
@@ -334,7 +337,7 @@ def fetch_meta(client: httpx.Client, site_id: str,
             # at its ceiling — see wayback_harvest.note_transport_error.
             from wayback_harvest import note_transport_error
             note_transport_error(e)
-            return None
+            raise Transient(type(e).__name__) from e
         if not rows or len(rows) < 2:
             return None
         ts, original = max(rows[1:], key=lambda r: r[0])[:2]
@@ -348,8 +351,14 @@ def fetch_meta(client: httpx.Client, site_id: str,
         # ceiling — see wayback_harvest.note_transport_error.
         from wayback_harvest import note_transport_error
         note_transport_error(e)
-        return None
+        raise Transient(type(e).__name__) from e
     note_response(page.status_code)
+    if page.status_code in BACKPRESSURE:
+        # Being throttled is not an answer about this story. Returning None
+        # here made it indistinguishable from "archive.org has no capture",
+        # and the caller retires a story it cannot fetch -- so every refusal
+        # permanently consumed a queued capture that was perfectly good.
+        raise Transient(f"HTTP {page.status_code}")
     if page.status_code != 200:
         return None
     return parse_ffn_meta(page.text)
@@ -468,7 +477,7 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
     """
     import time as _time
     deadline = (_time.monotonic() + max_seconds) if max_seconds else None
-    updated = missing = failed = from_fichub = 0
+    updated = missing = failed = from_fichub = refused = 0
     rows = _pick_targets(limit)
     log.info(f"{len(rows)} FF.net stories to enrich")
     pending: list[tuple] = []          # (story_id, parsed metadata) awaiting a write
@@ -480,8 +489,15 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
                 log.info(f"  time budget reached after {n - 1} stories — "
                          f"stopping so the loop can come round")
                 break
+            try:
+                meta = fetch_meta(client, site_id, known)
+            except Transient as e:
+                # archive.org refused us. That says nothing about this story,
+                # so it must stay queued -- recording it as attempted would
+                # retire a capture we never actually read.
+                refused += 1
+                continue
             attempted.append(sid)
-            meta = fetch_meta(client, site_id, known)
             if not meta and _FICHUB_FALLBACK:
                 # ~31% of works have no usable Wayback capture (no_snapshot=62
                 # of 200 in a measured pass), and those requests were simply
@@ -536,6 +552,7 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
     if attempted:
         _mark_attempted(attempted)
     log.info(f"DONE — enriched={updated} no_snapshot={missing} "
+             f"refused={refused} "
              f"via_fichub={from_fichub} unparseable={failed}")
 
 

@@ -280,12 +280,12 @@ def test_a_known_capture_costs_no_cdx_request():
 
     # With a known capture, fetch_meta must go straight to the snapshot URL and
     # never touch the CDX endpoint.
-    try:
+    # The stub raises to stop the call; fetch_meta now reports any transport
+    # failure as Transient, so that is what arrives here.
+    with __import__("pytest").raises(Exception):
         ffnet_enrich.fetch_meta(Client(), "12345",
                                 known=("20200101000000",
                                        "https://www.fanfiction.net/s/12345/1/T"))
-    except AssertionError:
-        pass
     assert len(asked) == 1, f"made {len(asked)} requests, expected 1"
     assert "cdx" not in asked[0].lower(), f"still asked CDX: {asked[0]}"
     assert "20200101000000" in asked[0]
@@ -342,10 +342,8 @@ def test_the_newest_capture_wins_not_the_first_row():
                 return R()
             raise AssertionError("stop after the snapshot URL is chosen")
 
-    try:
+    with __import__("pytest").raises(Exception):
         ffnet_enrich.fetch_meta(Client(), "1")
-    except AssertionError:
-        pass
     assert len(fetched) == 2, f"expected cdx + snapshot, got {fetched}"
     assert "20220523230545" in fetched[1], f"picked the wrong capture: {fetched[1]}"
 
@@ -365,10 +363,11 @@ def test_a_story_that_yields_nothing_stops_being_re_selected():
     src = inspect.getsource(ffnet_enrich.run)
     assert "attempted.append(sid)" in src, \
         "every story looked at must be recorded, not just the ones that parsed"
-    # Recorded before the outcome is known -- a story that yields nothing is
-    # exactly the one that must not come back next pass.
-    before_meta = src.index("attempted.append(sid)") < src.index("meta = fetch_meta")
-    assert before_meta, "the attempt must be recorded regardless of outcome"
+    # Any DEFINITIVE outcome counts, including finding nothing -- a story that
+    # yields nothing is exactly the one that must not come back next pass. A
+    # refusal is not an outcome and is skipped before this point; see
+    # test_a_refused_fetch_does_not_retire_a_good_capture.
+    assert src.index("except Transient") < src.index("attempted.append(sid)")
     assert "_mark_attempted(attempted)" in src
 
     marker = inspect.getsource(ffnet_enrich._mark_attempted)
@@ -557,3 +556,39 @@ def test_enrichment_targets_stories_the_archive_actually_holds(db):
     order = [str(r[1]) for r in picked]
     if "910000002" in order:
         assert order.index("910000001") < order.index("910000002")
+
+
+def test_a_refused_fetch_does_not_retire_a_good_capture():
+    """A 429 is archive.org declining to answer, not a statement that the
+    story has no capture. Conflating them made every throttled request
+    permanently consume a queued capture that was perfectly good -- and the
+    logs recorded it as `no_snapshot`, so it looked like the archive's fault.
+    """
+    import ffnet_enrich
+    from wayback_harvest import Transient
+    import pytest as _pytest
+
+    class Throttled:
+        def get(self, url, **kw):
+            class R:
+                status_code = 429
+                headers: dict = {}
+                text = ""
+                @staticmethod
+                def json():
+                    return []
+            return R()
+
+    with _pytest.raises(Transient):
+        ffnet_enrich.fetch_meta(Throttled(), "1",
+                                known=("20200101000000",
+                                       "https://www.fanfiction.net/s/1/1/T"))
+
+    # And run() must skip it rather than record it as attempted.
+    import inspect
+    src = inspect.getsource(ffnet_enrich.run)
+    idx_try = src.index("except Transient")
+    idx_append = src.index("attempted.append(sid)")
+    assert idx_try < idx_append, \
+        "a refused story must be skipped before it is recorded as attempted"
+    assert "continue" in src[idx_try:idx_append]
