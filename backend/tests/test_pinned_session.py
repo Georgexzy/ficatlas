@@ -713,3 +713,48 @@ def test_the_longer_name_still_wins_the_way_the_docstring_promised():
         _cand("ship", "Daphne Greengrass/Harry Potter", 1035, (0, 2)),
     ])
     assert [c["value"] for c in kept] == ["Daphne Greengrass/Harry Potter"]
+
+
+# ---- search: typo tolerance for titles with a common opener --------------
+
+def test_a_title_starting_with_a_common_opener_still_gets_typo_tolerance():
+    """"all the yung dudes" returned four works, none of them All the Young
+    Dudes -- the most-kudosed work in this index at 322,055. One letter.
+
+    The multi-word fuzzy path bounds itself with a range scan on the first two
+    words, which cannot serve "all the%" (tens of thousands of titles), so
+    those queries were skipped entirely and had no typo tolerance at all.
+    """
+    import inspect
+    from api import search as S
+    src = inspect.getsource(S.search)
+    assert "common_opener" in src
+    # The trigram operator is the fallback, and it must match the INDEXED
+    # expression: ix_stories_title_trgm is gin (title gin_trgm_ops), so a
+    # lower(title) predicate cannot use it.
+    assert 'Story.title.op("%")(q_norm)' in src
+    assert 'func.lower(Story.title).op("%")' not in src
+
+
+def test_the_trigram_module_is_loaded_before_its_setting_is_changed():
+    """pg_trgm's GUC does not exist until the module is loaded into the
+    session, so a bare SET LOCAL raises "unrecognized configuration parameter"
+    -- which is how this branch first came to fire and contribute nothing at
+    all, silently, while looking correct."""
+    import inspect
+    from api import search as S
+    src = inspect.getsource(S.search)
+    assert "show_limit()" in src
+    assert src.index("show_limit()") < src.index("pg_trgm.similarity_threshold")
+
+
+def test_the_fuzzy_arm_is_ordered_before_it_is_cut():
+    """An unordered LIMIT is an arbitrary cut. Fifty matching titles were kept
+    in scan order, so the All the Young Dudes everybody means was not among
+    them and the reader saw three namesakes with 544, 0 and 84 kudos."""
+    import inspect
+    from api import search as S
+    src = inspect.getsource(S.search)
+    arm = src[src.index("parts.append(\n                fuzzy_q"):]
+    assert "order_by" in arm[:400], "the fuzzy arm must be ordered before limit"
+    assert "similarity" in arm[:400] and "kudos" in arm[:400]
