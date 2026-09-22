@@ -420,6 +420,17 @@ def _pick_targets(limit: int | None) -> list:
         # WITHIN the pool -- an approximation of the global ordering, but this
         # gap never closes, so the question is only ever which few hundred to
         # fetch next, and the pool is drawn from the best captures we hold.
+        #
+        # The pool is wide because most of it does not survive the join. The
+        # capture index holds every FF.net story ARCHIVE.ORG has, and that is
+        # more than this index has -- 5,165 captured against 461 indexed under
+        # one id prefix, and more captured than indexed under every prefix
+        # sampled. At a pool of 4,000 only 35 of a requested 200 came back
+        # capture-backed and the rest fell through to the gap-score fallback,
+        # which is the path that fetches 2002 pages with no character field.
+        #
+        # Widening it is close to free because the join stops at :lim. Measured
+        # at 60,000: a full 200 rows in 761ms, having read 8,469 captures.
         rows = db.execute(sql_text("""
             WITH cand AS (
                 SELECT site_id, snapshot_ts, original
@@ -436,7 +447,7 @@ def _pick_targets(limit: int | None) -> list:
                        + COALESCE(s.favourites,0)) DESC,
                       c.snapshot_ts DESC
              LIMIT :lim
-        """), {"lim": want, "pool": max(want * 20, 2000)}).fetchall()
+        """), {"lim": want, "pool": max(want * 300, 60_000)}).fetchall()
         out = [(r[0], r[1], 0, (r[2], r[3])) for r in rows]
 
         # Only if the capture index cannot fill the batch. It is still being
