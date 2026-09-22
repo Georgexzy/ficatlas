@@ -180,17 +180,23 @@ def _resolve(db, site: str, site_id: str):
 def harvest(db, limit: int = 20, sleep=time.sleep) -> dict:
     """Ask a few unchecked posts what they turned out to be.
 
-    Oldest-unchecked first, so the pass walks the backlog instead of circling
-    the newest posts -- and a post is marked checked whether or not it yielded
-    anything, because "nobody answered this one" is a fact worth keeping and
-    re-asking costs a request we are strictly rationed on.
+    OLDEST first, which is the opposite of what the outreach queue wants and
+    right for the opposite reason. Outreach wants posts nobody has answered
+    yet, so it works newest-first; this wants posts somebody HAS answered, and
+    a thread three hours old has had no time to be. reddit_posts keeps three
+    weeks, so oldest-unchecked is the most-likely-answered end of it.
+
+    A post is marked checked whether or not it yielded anything, because
+    "nobody answered this one" is a fact worth keeping and re-asking costs a
+    request we are strictly rationed on. Being REFUSED is not that fact, and
+    leaves the post unchecked -- see Refused.
     """
     from sqlalchemy import text as sql_text
 
     rows = db.execute(sql_text("""
         SELECT id, subreddit, url FROM reddit_posts
          WHERE answers_checked_at IS NULL
-         ORDER BY posted_at DESC NULLS LAST
+         ORDER BY posted_at ASC NULLS LAST
          LIMIT :lim
     """), {"lim": limit}).fetchall()
 
