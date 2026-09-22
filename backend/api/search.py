@@ -2923,15 +2923,51 @@ def search(          # NOT async — see below
             # Skipped for very common openers ("the", "a", "all the") that
             # would still touch tens of thousands of titles.
             prefix = " ".join(words[:2])
-            if prefix not in ("the", "a", "an", "all the", "to the", "in the",
-                              "of the", "for the", "on the"):
-                nxt = prefix[:-1] + chr(ord(prefix[-1]) + 1) if prefix else None
-                if nxt:
-                    fuzzy_pred = and_(
-                        func.lower(Story.title) >= prefix,
-                        func.lower(Story.title) < nxt,
-                        func.similarity(func.lower(Story.title), q_norm) >= 0.5,
-                    )
+            common_opener = prefix in ("the", "a", "an", "all the", "to the",
+                                       "in the", "of the", "for the", "on the")
+            nxt = prefix[:-1] + chr(ord(prefix[-1]) + 1) if prefix else None
+            if not common_opener and nxt:
+                fuzzy_pred = and_(
+                    func.lower(Story.title) >= prefix,
+                    func.lower(Story.title) < nxt,
+                    func.similarity(func.lower(Story.title), q_norm) >= 0.5,
+                )
+            elif common_opener:
+                # The range scan cannot serve these — "all the%" is tens of
+                # thousands of titles — so they were skipped entirely, and a
+                # title beginning with a common opener had no typo tolerance
+                # at all. Measured: "all the yung dudes" returned four works
+                # and not one of them was All the Young Dudes, which is the
+                # single most-kudosed work in this index at 322,055. One
+                # letter, and the most famous fic in the fandom was
+                # unreachable.
+                #
+                # The trigram operator is the right tool and was already
+                # indexed: ix_stories_title_trgm is gin (title gin_trgm_ops),
+                # so `title % :q` is an index scan rather than the unindexed
+                # similarity() the range scan exists to avoid. Note it matches
+                # on `title`, NOT lower(title) — the index is on the raw
+                # column and a lowered predicate cannot use it. pg_trgm
+                # lowercases when it builds trigrams, so this is still
+                # case-insensitive.
+                #
+                # The threshold has to be raised for it, and that is the whole
+                # cost of the approach. At the 0.3 default the index returns
+                # 860,077 candidates and the query takes 37 seconds; at 0.6 it
+                # returns 377 and takes under a second, with All the Young
+                # Dudes first at 0.773. SET LOCAL, so it reverts with the
+                # transaction and cannot follow the connection back into the
+                # pool — see db/session for what that costs when it does.
+                # show_limit() first, and it is not decoration. The GUC does
+                # not exist until pg_trgm's module is loaded into the session,
+                # so a bare SET LOCAL raises "unrecognized configuration
+                # parameter" — which is how this branch came to fire and
+                # silently contribute nothing. Calling any pg_trgm function
+                # loads it.
+                db.execute(sql_text("SELECT show_limit()"))
+                db.execute(sql_text(
+                    "SET LOCAL pg_trgm.similarity_threshold = 0.6"))
+                fuzzy_pred = Story.title.op("%")(q_norm)
         parts = [
             db_query.order_by(None).filter(title_pred).limit(TITLE_CANDIDATES),
             db_query.order_by(None).limit(COUNT_CEILING + 1),
@@ -2951,7 +2987,22 @@ def search(          # NOT async — see below
                 fuzzy_q = fuzzy_q.filter(or_(
                     Story.rating != RatingEnum.explicit, Story.rating.is_(None)))
 
-            parts.append(fuzzy_q.filter(fuzzy_pred).limit(50))
+            # ORDERED, because the limit is a cut and an unordered cut is an
+            # arbitrary one. This kept fifty matching titles in whatever order
+            # the scan produced them, so "all the yung dudes" found All the
+            # Young Dudes -- fifty-four of them -- and the one everybody means,
+            # at 322,055 kudos and the most-read work in this index, was not
+            # among the fifty it happened to keep. The reader saw three
+            # namesakes with 544, 0 and 84.
+            #
+            # Closest title first, then most-read. Both matter and in that
+            # order: similarity is what the reader typed, and kudos is which of
+            # the identically-titled works they meant.
+            parts.append(
+                fuzzy_q.filter(fuzzy_pred)
+                       .order_by(func.similarity(Story.title, q_norm).desc(),
+                                 Story.kudos.desc().nullslast())
+                       .limit(50))
         # For a BROAD query the arbitrary slice is the whole problem. Searching
         # "harry potter" matches far more than the ceiling, so the 5,001 rows the
         # ranker sees are an arbitrary sample of 686,000 — and the works everyone
