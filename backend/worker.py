@@ -1725,11 +1725,33 @@ async def _ffnet_capture_index_loop() -> None:
     KEY_RESUME = "ffnet_capture_resume"
     interval = _num("FFNET_CAPTURE_INTERVAL_SEC", 2)
     first, last = 1000, 9999
+    # Stop discovering once there is more work queued than anything can get
+    # through. The walk shares one rate-limited budget with the jobs that
+    # CONSUME what it finds, so past this point every request it makes is taken
+    # directly from them.
+    #
+    # Measured after nineteen hours: 1,619,680 captures indexed against 425
+    # actually tried, while the walk drew 79 of the 245 requests archive.org
+    # granted in an hour. A third of the budget spent lengthening a queue that
+    # was already four months deep at the rate it drains.
+    #
+    # This is the same mistake _ffnet_wayback_cdx_loop already documents one
+    # loop above, for the same reason, in the same units.
+    high_water = int(_num("FFNET_CAPTURE_BACKLOG_MAX", 250_000))
 
     while True:
         with db_session() as db:
             cur = int(get_setting(db, KEY_PREFIX) or first)
             resume = get_setting(db, KEY_RESUME) or None
+            backlog = db.execute(sql_text(
+                "SELECT count(*) FROM (SELECT 1 FROM ffnet_captures "
+                "WHERE done_at IS NULL LIMIT :cap) t"),
+                {"cap": high_water + 1}).scalar() or 0
+        if backlog > high_water:
+            log.info(f"ffnet capture index: {backlog:,}+ captures still "
+                     f"unfetched, pausing discovery (at prefix {cur})")
+            await asyncio.sleep(3600)
+            continue
         if cur > last:
             # Swept. The index only grows as archive.org crawls more, so come
             # back in a week rather than spinning; freshness for NEW captures
