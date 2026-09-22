@@ -482,6 +482,7 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
     log.info(f"{len(rows)} FF.net stories to enrich")
     pending: list[tuple] = []          # (story_id, parsed metadata) awaiting a write
     attempted: list = []               # every story we looked at, found or not
+    attempted_site: list = []          # ...and its FF.net id, for the capture queue
 
     with httpx.Client(headers=UA) as client:
         for n, (sid, site_id, wc, known) in enumerate(rows, 1):
@@ -498,6 +499,7 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
                 refused += 1
                 continue
             attempted.append(sid)
+            attempted_site.append(site_id)
             if not meta and _FICHUB_FALLBACK:
                 # ~31% of works have no usable Wayback capture (no_snapshot=62
                 # of 200 in a measured pass), and those requests were simply
@@ -531,8 +533,9 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
             if not dry_run and len(attempted) >= batch:
                 updated += _write_batch(pending)
                 pending.clear()
-                _mark_attempted(attempted)
+                _mark_attempted(attempted, attempted_site)
                 attempted.clear()
+                attempted_site.clear()
                 log.info(f"  {n}/{len(rows)} — {updated} enriched, {missing} no snapshot")
 
             # Pacing lives in the shared archive.org budget now (see
@@ -550,13 +553,13 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
     if pending:
         updated += _write_batch(pending)
     if attempted:
-        _mark_attempted(attempted)
+        _mark_attempted(attempted, attempted_site)
     log.info(f"DONE — enriched={updated} no_snapshot={missing} "
              f"refused={refused} "
              f"via_fichub={from_fichub} unparseable={failed}")
 
 
-def _mark_attempted(ids: list) -> None:
+def _mark_attempted(ids: list, site_ids: list | None = None) -> None:
     """Record that we looked, so the queue can move on.
 
     This is what kept FF.net character coverage frozen at 108,468 through every
@@ -596,12 +599,20 @@ def _mark_attempted(ids: list) -> None:
             # Without this the same head of the queue comes back every pass --
             # the exact failure the crawled_at stamp was added to fix, one
             # table along.
-            db.execute(sql_text("""
-                UPDATE ffnet_captures c SET done_at = now()
-                  FROM stories s
-                 WHERE s.id = ANY(:ids)
-                   AND s.site = 'ffnet' AND c.site_id::text = s.site_id
-            """), {"ids": list(ids)})
+            #
+            # By site_id, not by joining back through `stories`. That join read
+            # `c.site_id::text = s.site_id`, and casting the indexed bigint
+            # column defeats the primary key: the plan was a sequential scan of
+            # all 1.6M captures for every batch. It did not error, it just
+            # mostly did not finish -- 27 stories enriched in a pass and three
+            # captures retired, so the same head came back next time and was
+            # "enriched" again, which is why the pass line could read
+            # enriched=27 while character coverage moved by one.
+            nums = [int(x) for x in (site_ids or []) if str(x).isdigit()]
+            if nums:
+                db.execute(sql_text(
+                    "UPDATE ffnet_captures SET done_at = now() "
+                    "WHERE site_id = ANY(:sids)"), {"sids": nums})
             db.commit()
     except Exception as e:
         log.info(f"  attempt stamp skipped ({type(e).__name__}); "
