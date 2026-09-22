@@ -633,3 +633,24 @@ def test_retiring_a_capture_uses_its_primary_key(db):
     done = db.execute(sql_text("SELECT done_at FROM ffnet_captures "
                                "WHERE site_id = 920000001")).scalar()
     assert done is not None, "the capture was not retired"
+
+
+def test_the_candidate_pool_is_wide_enough_to_survive_the_join():
+    """Most of the capture index does not match a story in this index.
+
+    ffnet_captures holds every FF.net story ARCHIVE.ORG has, which is more than
+    this index has -- 5,165 captured against 461 indexed under one id prefix,
+    and more captured than indexed under every prefix sampled. So a pool sized
+    like the batch mostly evaporates against the join: at 4,000 only 35 of a
+    requested 200 came back capture-backed and 165 fell through to the
+    gap-score fallback, which is the path that fetches 2002 pages having no
+    character field at all.
+
+    Widening it is close to free because the join stops at the limit.
+    """
+    import inspect
+    import ffnet_enrich
+    src = inspect.getsource(ffnet_enrich._pick_targets)
+    assert "60_000" in src or "60000" in src, \
+        "the candidate pool must be far larger than the batch"
+    assert "want * 300" in src
