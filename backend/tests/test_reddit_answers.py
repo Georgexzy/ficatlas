@@ -89,3 +89,12 @@ def test_the_eval_can_be_restricted_to_confirmed_answers():
     stronger label and has to be separable."""
     import extractor_eval
     assert ":confirmed_only" in extractor_eval.CORPUS_SQL
+
+
+def test_the_corpus_asks_about_the_posts_most_likely_to_be_answered():
+    """Opposite of the outreach queue, for the opposite reason. Outreach wants
+    posts nobody has answered yet and works newest-first; this wants posts
+    somebody HAS answered, and a thread three hours old has had no time."""
+    assert "posted_at ASC" in R.harvest.__doc__ or True
+    import inspect
+    assert "ORDER BY posted_at ASC" in inspect.getsource(R.harvest)
