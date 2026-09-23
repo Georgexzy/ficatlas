@@ -260,6 +260,67 @@ def _story_tsv_ranked(entity=Story):
 _FANDOM_AUTHOR_SUFFIX = re.compile(r"\s+-\s+.+$")
 
 
+# How much a reader's own description counts when ordering. Tuned against the
+# solved-thread corpus (see extractor_eval); it sits alongside w_pop, which is
+# the signal it has to beat on a query whose filters are broad.
+W_DESCRIBE = float(os.getenv("SEARCH_W_DESCRIBE", "4.0"))
+
+# Words too common in fic-finder prose to discriminate between works. Not a
+# stopword list -- `to_tsvector` already drops those -- but the vocabulary of
+# ASKING, which is everywhere in these posts and nowhere in a summary that
+# would help: "looking", "remember", "fic", "story", "read", "anyone".
+_DESCRIBE_NOISE = {
+    "looking", "look", "remember", "remembered", "remembering", "fic", "fics",
+    "fanfic", "fanfiction", "story", "stories", "read", "reading", "anyone",
+    "please", "help", "find", "finding", "found", "lost", "searching", "search",
+    "think", "thought", "sure", "maybe", "something", "someone", "basically",
+    "pretty", "really", "wondering", "ao3", "wattpad", "chapter", "chapters",
+    "title", "author", "link", "thanks", "thank", "edit", "update",
+}
+
+
+def _describe_words(text: str, cap: int = 24) -> list[str]:
+    """The discriminating words of a description, in order, deduplicated.
+
+    Everything here is about keeping the words that could only belong to ONE
+    fic. Short words carry no weight in a summary match and the vocabulary of
+    asking for a fic -- "looking", "remember", "story" -- appears in every post
+    and no summary worth ranking, so both are dropped.
+
+    Capped, because ts_rank over a hundred OR'd lexemes costs real time and the
+    tail of a long post is reminiscence rather than description.
+    """
+    out, seen = [], set()
+    for w in re.findall(r"[A-Za-z][A-Za-z'-]{3,}", text or ""):
+        lw = w.lower()
+        if lw in _DESCRIBE_NOISE or lw in seen:
+            continue
+        seen.add(lw)
+        out.append(lw)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _describe_rank(entity, describe: str | None):
+    """A ts_rank over the description, OR'd, or None if there is nothing to use.
+
+    OR and not AND, and that distinction is the whole feature. `q` is matched
+    with websearch_to_tsquery, which ANDs -- every word a requirement -- which
+    is exactly why a post's prose could never go in there: a two-hundred-word
+    request minus its framing is a hundred-and-eighty requirements and matches
+    nothing. As a RANK the same words cost nothing when absent and lift a work
+    for each one present, so a summary sharing four of them outranks one
+    sharing none. websearch_to_tsquery understands `or` in its own syntax, so
+    this needs no unsafe tsquery construction.
+    """
+    words = _describe_words(describe or "")
+    if len(words) < 2:
+        return None
+    tsq = func.websearch_to_tsquery(_REGCONFIG, " or ".join(words))
+    return func.ts_rank(_TSV_WEIGHTS_CATEGORY, _story_tsv_ranked(entity), tsq, 0)
+
+
 def fandom_base(value: str) -> str:
     """The work name from a fandom tag, dropping any ' - Author' suffix."""
     base = _FANDOM_AUTHOR_SUFFIX.sub("", (value or "").strip())
@@ -1755,6 +1816,8 @@ def search(          # NOT async — see below
     per_page:              int           = Query(20, ge=1, le=100),
     live:                  bool          = Query(True, description="Enable hybrid live fetch"),
     db: Session = Depends(get_db),
+    describe: Optional[str] = Query(
+        None, description="Prose describing the fic. Ranks, never filters."),
     viewer: Optional[User] = Depends(get_current_user),
     request: Request = None,
     response: Response = None,
@@ -3431,6 +3494,13 @@ def search(          # NOT async — see below
             _TSV_WEIGHTS_CATEGORY if is_category else _TSV_WEIGHTS_TITLE,
             _story_tsv_ranked(S), text_tsq, 0)
 
+        # The reader's own description, ranking rather than filtering. None
+        # when there is nothing usable in it, which is the common case — most
+        # searches are a few words and carry no description at all.
+        describe_rank = _describe_rank(S, describe)
+        describe_term = (W_DESCRIBE * describe_rank
+                         if describe_rank is not None else literal_column("0.0"))
+
         # A resolved pairing is the one part of a free-text query that is not a
         # guess: the reader named a ship and this work is tagged with it. Recall
         # alone does not help there — "Bts jin and jimin" already returned the
@@ -3499,6 +3569,7 @@ def search(          # NOT async — see below
         relevance = (w_title * title_sim + exact_bonus
                      + w_text * text_rank + w_pop * pop
                      + ship_bonus + trope_bonus + rec_bonus
+                     + describe_term
                      - THIN_PENALTY * _thin(S))
 
         ordered = ordered.order_by(
@@ -3531,9 +3602,29 @@ def search(          # NOT async — see below
         # beats one we cannot, and that was measured when it went in. This
         # ordering still answers to nobody — there is no query and no chosen
         # sort, so unlike `updated_desc` there is no contract here to break.
-        ordered = ordered.order_by(_thin(S).asc(),
-                                   S.popularity.desc().nullslast(),
-                                   S.word_count.desc().nullslast())
+        d_rank = _describe_rank(S, describe)
+        if d_rank is not None:
+            # This is the branch a fic-finder query lands in, and until now it
+            # was the whole problem. A post resolves to operators -- fandom,
+            # a character, complete -- and operators do not rank, so the order
+            # fell through to popularity: the most-read Harry Potter fic with
+            # Snape in it, for a reader describing one particular story.
+            # Measured on the corpus of solved threads: recall@10 of 0.0.
+            #
+            # The description is the part of the post that was being thrown
+            # away, and it is the discriminating part. "Bruce is an Alpha and
+            # had been on suppressants since he was a kid" is a handful of
+            # works; fandom plus character is thousands.
+            #
+            # Still popularity underneath, because ts_rank ties are common on
+            # short summaries and a tie should fall to the work more people
+            # read.
+            ordered = ordered.order_by(d_rank.desc(),
+                                       S.popularity.desc().nullslast())
+        else:
+            ordered = ordered.order_by(_thin(S).asc(),
+                                       S.popularity.desc().nullslast(),
+                                       S.word_count.desc().nullslast())
 
     offset  = (page - 1) * per_page
 

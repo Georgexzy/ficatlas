@@ -87,13 +87,17 @@ def _get(client, path: str, params: dict):
     raise SearchFailed("HTTP 429 after retries")
 
 
-def _rank_of(client, query: str, story_id, k: int) -> int | None:
+def _rank_of(client, query: str, story_id, k: int,
+             describe: str | None = None) -> int | None:
     """1-based rank of the right work in the results, or None if absent.
 
     Raises rather than returning None when the REQUEST failed, so a flaky
     search is never scored as "the extractor's query missed".
     """
-    r = _get(client, "/api/search", {"q": query, "per_page": k})
+    params = {"q": query, "per_page": k}
+    if describe:
+        params["describe"] = describe[:2000]
+    r = _get(client, "/api/search", params)
     if r.status_code != 200:
         raise SearchFailed(f"HTTP {r.status_code}")
     for i, w in enumerate(r.json().get("results") or [], 1):
@@ -134,7 +138,7 @@ def run(k: int = 10, sample: int | None = None, confirmed_only: bool = False,
             stats["no_query"] += 1
             continue
         try:
-            rank = _rank_of(client, q, story_id, k)
+            rank = _rank_of(client, q, story_id, k, describe=post)
         except Exception as e:
             stats["error"] += 1
             stats.setdefault("error_kinds", {})

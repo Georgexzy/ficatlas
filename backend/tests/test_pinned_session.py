@@ -758,3 +758,50 @@ def test_the_fuzzy_arm_is_ordered_before_it_is_cut():
     arm = src[src.index("parts.append(\n                fuzzy_q"):]
     assert "order_by" in arm[:400], "the fuzzy arm must be ordered before limit"
     assert "similarity" in arm[:400] and "kudos" in arm[:400]
+
+
+# ---- describe: the reader's own words, ranking rather than filtering -----
+
+def test_the_description_ranks_and_never_filters():
+    """`q` is matched with websearch_to_tsquery, which ANDs -- every word a
+    requirement. That is exactly why a post's prose could never go in there: a
+    two-hundred-word request minus its framing is a hundred-and-eighty
+    requirements and matches nothing. As a RANK the same words cost nothing
+    when absent and lift a work for each one present."""
+    import inspect
+    from api import search as S
+    src = inspect.getsource(S._describe_rank)
+    assert '" or ".join(words)' in src, "the description must be OR'd, not ANDed"
+    assert "ts_rank" in src
+    # And it must not appear in any filter predicate.
+    full = inspect.getsource(S.search)
+    assert "describe" in full
+    assert "filter(describe" not in full
+
+
+def test_the_vocabulary_of_asking_is_not_the_vocabulary_of_the_fic():
+    """"looking", "remember", "fic", "story" appear in every fic-finder post
+    and in no summary worth ranking, so they discriminate between nothing."""
+    from api.search import _describe_words
+    got = _describe_words(
+        "Looking for a fic I read years ago, I think the story had "
+        "suppressants and an omegaverse hospital")
+    assert "looking" not in got and "story" not in got and "read" not in got
+    assert "suppressants" in got and "omegaverse" in got
+
+
+def test_a_description_with_nothing_usable_ranks_by_nothing():
+    """Below two usable words there is no signal, and ordering by noise is
+    worse than ordering by readership."""
+    from api.search import _describe_rank
+    from models.story import Story
+    assert _describe_rank(Story, "") is None
+    assert _describe_rank(Story, "looking for a fic please") is None
+
+
+def test_the_description_is_capped():
+    """ts_rank over a hundred OR'd lexemes costs real time, and the tail of a
+    long post is reminiscence rather than description."""
+    from api.search import _describe_words
+    long_post = " ".join(f"word{i}" for i in range(200))
+    assert len(_describe_words(long_post)) <= 24
