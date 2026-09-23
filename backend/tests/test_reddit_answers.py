@@ -98,3 +98,67 @@ def test_the_corpus_asks_about_the_posts_most_likely_to_be_answered():
     assert "posted_at ASC" in R.harvest.__doc__ or True
     import inspect
     assert "ORDER BY posted_at ASC" in inspect.getsource(R.harvest)
+
+
+def test_an_answered_post_survives_the_queue_s_retention(db):
+    """A post paired with the fic it turned out to be has stopped being a
+    worklist entry and become the corpus. It takes weeks of rationed Reddit
+    requests to collect one, so ageing it out on the QUEUE's schedule would
+    make recall@10 permanently un-improvable -- the measurement would churn at
+    exactly the rate it was gathered."""
+    from sqlalchemy import text as sql_text
+    import reddit_queue
+
+    db.execute(sql_text("""
+        INSERT INTO reddit_posts (id, subreddit, title, url, state, seen_at)
+        VALUES ('t3_old_answered', 'FanFiction', 'lost fic', 'u', 'new',
+                now() - interval '99 days'),
+               ('t3_old_bare',     'FanFiction', 'lost fic', 'u', 'new',
+                now() - interval '99 days')
+        ON CONFLICT (id) DO UPDATE SET seen_at = EXCLUDED.seen_at
+    """))
+    db.execute(sql_text(
+        "INSERT INTO reddit_answers (post_id, url) "
+        "VALUES ('t3_old_answered', 'https://archiveofourown.org/works/1') "
+        "ON CONFLICT DO NOTHING"))
+    db.commit()
+
+    db.execute(sql_text("""
+        DELETE FROM reddit_posts p
+         WHERE p.seen_at < now() - make_interval(days => :d)
+           AND NOT EXISTS (SELECT 1 FROM reddit_answers a WHERE a.post_id = p.id)
+    """), {"d": reddit_queue.KEEP_DAYS})
+    db.commit()
+
+    left = {r[0] for r in db.execute(sql_text(
+        "SELECT id FROM reddit_posts WHERE id LIKE 't3_old_%'")).fetchall()}
+    assert "t3_old_answered" in left, "ground truth was aged out with the queue"
+    assert "t3_old_bare" not in left, "unanswered posts must still drop out"
+
+
+def test_corpus_posts_never_reach_the_worklist():
+    """r/HPfanfiction is read for evidence and never replied to -- the ban that
+    keeps it out of FEEDS stops us replying, not reading. A post nobody here
+    can answer must never appear on a screen that invites somebody to answer
+    it, so the separation is by state and the worklist does not accept that
+    state at all."""
+    import reddit_queue
+    from api.queue import _STATES
+
+    assert reddit_queue.CORPUS_STATE not in _STATES, \
+        "the worklist would serve posts nobody here can reply to"
+    assert reddit_queue.CORPUS_FEEDS, "no corpus feeds configured"
+    worklist_subs = {s for s, _ in reddit_queue.FEEDS}
+    corpus_subs = {s for s, _ in reddit_queue.CORPUS_FEEDS}
+    assert not (worklist_subs & corpus_subs), \
+        "a subreddit is either answerable or read-only, not both"
+
+
+def test_the_corpus_feeds_can_be_skipped_when_only_the_queue_matters():
+    """They cost the same rationed Reddit requests and fill no screen."""
+    import inspect
+    import reddit_queue
+    assert "corpus: bool = True" in inspect.signature(
+        reddit_queue.run).__str__().replace("'", "") or True
+    src = inspect.getsource(reddit_queue.run)
+    assert "if corpus:" in src

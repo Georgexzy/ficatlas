@@ -104,6 +104,24 @@ FEEDS = [
     # answer with a search, and they crowd the list the flairs fill properly.
 ]
 
+# Subreddits we read but never reply to, stored with state='corpus' so they
+# stay out of the worklist entirely.
+#
+# r/HPfanfiction is the case this exists for. The ban that keeps it out of
+# FEEDS stops us REPLYING there; it does not stop us reading, and its solved
+# threads are among the best evidence available for whether the extractor
+# actually understood a request. The corpus needs the post and the fic somebody
+# named in the comments -- neither of which requires us to say anything.
+#
+# Kept as a separate list rather than a flag on FEEDS so the distinction is
+# impossible to lose: everything here is unanswerable by us, on purpose, and
+# must never appear on a screen that invites somebody to answer it.
+CORPUS_FEEDS = [
+    ("HPfanfiction", 'flair:"Search"'),
+    ("HPfanfiction", 'flair:"Found"'),
+]
+CORPUS_STATE = "corpus"
+
 UA = os.getenv(
     "REDDIT_USER_AGENT",
     "ficatlas/1.0 (fic-finder outreach; +https://ficatlas.com)")
@@ -257,14 +275,27 @@ def _read(db, post: dict) -> dict:
             "link_unsafe": bool(ex.link_unsafe)}
 
 
-def run(dry_run: bool = False, limit_feeds: int | None = None) -> dict:
-    feeds = FEEDS[:limit_feeds] if limit_feeds else FEEDS
+def run(dry_run: bool = False, limit_feeds: int | None = None,
+        corpus: bool = True) -> dict:
+    """Fetch the worklist feeds, and the read-only corpus feeds behind them.
+
+    `corpus` exists so a caller can ask for the worklist alone. The corpus
+    feeds cost the same rationed requests and fill no screen, so on a run whose
+    point is the queue they are simply spent.
+    """
+    feeds = [(s, f, "new") for s, f in
+             (FEEDS[:limit_feeds] if limit_feeds else FEEDS)]
+    if corpus:
+        feeds += [(s, f, CORPUS_STATE) for s, f in CORPUS_FEEDS]
     posts: list[dict] = []
-    for i, (sub, flair) in enumerate(feeds):
+    for i, (sub, flair, state) in enumerate(feeds):
         if i:
             time.sleep(GAP_SECONDS)
         got = fetch(sub, flair)
-        log.info("reddit: r/%s %s -> %d posts", sub, flair or "new", len(got))
+        for g in got:
+            g["state"] = state
+        log.info("reddit: r/%s %s -> %d posts%s", sub, flair or "new", len(got),
+                 " (corpus)" if state == CORPUS_STATE else "")
         posts.extend(got)
 
     stats = {"fetched": len(posts), "new": 0, "answerable": 0}
@@ -296,23 +327,36 @@ def run(dry_run: bool = False, limit_feeds: int | None = None) -> dict:
             db.execute(text("""
                 INSERT INTO reddit_posts
                     (id, subreddit, title, body, url, posted_at, flair,
-                     query, works, link_unsafe)
+                     query, works, link_unsafe, state)
                 VALUES (:id, :sub, :title, :body, :url,
                         CAST(NULLIF(:posted, '') AS timestamp), :flair,
-                        :q, :w, :unsafe)
+                        :q, :w, :unsafe, :state)
                 ON CONFLICT (id) DO NOTHING
             """), {"id": p["id"], "sub": p["subreddit"], "title": p["title"],
                    "body": p["body"], "url": p["url"],
                    "posted": (p["posted_at"] or "").replace("T", " "),
                    "flair": p.get("flair"),
                    "q": read["query"], "w": read["works"],
-                   "unsafe": read["link_unsafe"]})
+                   "unsafe": read["link_unsafe"],
+                   "state": p.get("state", "new")})
         if not dry_run:
             # Stale posts drop out rather than accumulating. A queue that only
             # grows is one nobody opens.
-            db.execute(text(
-                "DELETE FROM reddit_posts WHERE seen_at < now() - make_interval(days => :d)"),
-                {"d": KEEP_DAYS})
+            #
+            # Except the ones that turned out to be ANSWERED. Those have
+            # stopped being a worklist and become the corpus the extractor is
+            # measured against -- a post paired with the fic it turned out to
+            # be is the only evidence that any change to extraction helped, and
+            # it takes weeks of rationed Reddit requests to collect one. Ageing
+            # them out on the queue's schedule would have kept recall@10
+            # permanently un-improvable: the measurement would churn at exactly
+            # the rate it was gathered. See reddit_answers and extractor_eval.
+            db.execute(text("""
+                DELETE FROM reddit_posts p
+                 WHERE p.seen_at < now() - make_interval(days => :d)
+                   AND NOT EXISTS (SELECT 1 FROM reddit_answers a
+                                    WHERE a.post_id = p.id)
+            """), {"d": KEEP_DAYS})
             db.commit()
 
     log.info("reddit_queue: %d fetched, %d new, %d answerable",
