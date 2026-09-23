@@ -805,3 +805,75 @@ def test_the_description_is_capped():
     from api.search import _describe_words
     long_post = " ".join(f"word{i}" for i in range(200))
     assert len(_describe_words(long_post)) <= 24
+
+
+# ---- negation scoping ----------------------------------------------------
+
+def test_a_refusal_stops_at_its_own_clause(db):
+    """A negation governs its clause, not the rest of the sentence.
+
+    Without a boundary the subject matcher read straight through the next
+    refusal and ATE ITS MARKER, which inverts what the reader asked for:
+
+        "not a coffee shop au, definitely no mpreg"
+            -> excluded the coffee shop, handed back "definitely mpreg" with
+               the `no` gone, and Mpreg came back as a WANT.
+        "no smut and no mpreg please"
+            -> excluded Mpreg and left "smut" behind as a want.
+
+    In both the reader refused something and the search went looking for it.
+    """
+    from sqlalchemy import text as sql_text
+    from query_intent import _extract_negations
+
+    # The vocabulary these refusals resolve against. The test database has no
+    # facets of its own, and _extract_negations deliberately refuses to guess
+    # at a subject it cannot resolve — so without this it correctly returns
+    # nothing and the test would pass for the wrong reason.
+    for tag, n in (("Smut", 500000), ("Mpreg", 90000),
+                   ("Coffee Shop", 4000), ("Character Death", 300000)):
+        db.execute(sql_text(
+            "INSERT INTO facets (kind, value, count, norm) "
+            "VALUES ('tag', :v, :c, lower(replace(:v,' ',''))) "
+            "ON CONFLICT (kind, value) DO UPDATE SET count = EXCLUDED.count"),
+            {"v": tag, "c": n})
+    db.commit()
+
+    rest, groups = _extract_negations(
+        db, "Drarry fic, not a coffee shop au, definitely no mpreg", gated=False)
+    excluded = " ".join(g[0] for g in groups).lower()
+    assert "coffee shop" in excluded
+    assert "mpreg" in excluded, "the second refusal's marker was eaten"
+    assert "mpreg" not in rest.lower(), "a refused thing became a want"
+
+    rest, groups = _extract_negations(
+        db, "drarry fic with no smut and no mpreg please", gated=False)
+    excluded = " ".join(g[0] for g in groups).lower()
+    assert "smut" in excluded and "mpreg" in excluded
+    assert "smut" not in rest.lower()
+
+
+def test_the_clause_boundary_does_not_break_a_trailing_want(db):
+    """"no character death fluff" must still take Character Death and leave
+    fluff behind -- the case the negation logic was written for."""
+    from sqlalchemy import text as sql_text
+    from query_intent import _extract_negations
+    db.execute(sql_text(
+        "INSERT INTO facets (kind, value, count, norm) "
+        "VALUES ('tag', 'Character Death', 300000, 'characterdeath') "
+        "ON CONFLICT (kind, value) DO UPDATE SET count = EXCLUDED.count"))
+    db.commit()
+    rest, groups = _extract_negations(db, "no character death fluff please",
+                                      gated=False)
+    assert any("character death" in g[0].lower() for g in groups)
+    assert "fluff" in rest.lower()
+
+
+def test_a_clause_boundary_hands_the_rest_back_untouched():
+    """The next refusal's marker has to survive, or the loop cannot find it."""
+    from query_intent import _neg_clause
+    subject, tail = _neg_clause("a coffee shop au, definitely no mpreg")
+    assert subject == "a coffee shop au"
+    assert "no mpreg" in tail, tail
+    # No boundary at all: the whole phrase is the subject.
+    assert _neg_clause("mpreg") == ("mpreg", "")
