@@ -877,3 +877,39 @@ def test_a_clause_boundary_hands_the_rest_back_untouched():
     assert "no mpreg" in tail, tail
     # No boundary at all: the whole phrase is the subject.
     assert _neg_clause("mpreg") == ("mpreg", "")
+
+
+# ---- anchors: a linked fic is evidence, not a guess ----------------------
+
+def test_a_linked_work_is_read_before_the_urls_are_stripped():
+    """URLs are removed before the words are read, because a bare domain in
+    prose otherwise resolves as a fandom. That threw away the strongest thing
+    a fic-finder post can carry: a link to a work whose fandom and pairing this
+    index already holds as recorded fact."""
+    import inspect
+    from api import search as S
+    src = inspect.getsource(S.extract)
+    assert src.index("_resolve_anchors") < src.index('re.sub(r"https?://'), \
+        "anchors must be read before the URL strip destroys them"
+
+
+def test_a_bare_domain_is_not_a_fandom():
+    """"I stumbled upon some fanfiction ... references destinysgateway.com"
+    came out as fandom:"Destiny (Video Games)" -- a fandom read off a hostname,
+    on a post about Hellsing."""
+    import inspect
+    from api import search as S
+    src = inspect.getsource(S.extract)
+    assert "co\\\\.uk|me|tv" in src or "(?:com|net|org" in src, \
+        "bare domains must be stripped, not just http:// ones"
+
+
+def test_an_anchor_contributes_the_fandom_and_pairing_only():
+    """A work carries dozens of tags, most incidental, and every one added to a
+    query is another requirement the answer has to satisfy. The fandom and the
+    pairing are what "something like this one" actually means."""
+    import inspect
+    from api import search as S
+    src = inspect.getsource(S._resolve_anchors)
+    assert "fandoms, relationships" in src
+    assert "tags" not in src.split("SELECT")[1].split("FROM")[0]

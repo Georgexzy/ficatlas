@@ -4244,6 +4244,18 @@ class ExtractResponse(BaseModel):
     explicit_ok: Optional[bool] = None
     # "ongoing", "complete", "WIP" — a filter, not a word to search for.
     status: Optional[str] = None
+    # Works the reader LINKED, resolved against this index.
+    #
+    # A link is the strongest thing a fic-finder post can carry and it was
+    # being thrown away: URLs are stripped before the words are read, because
+    # a bare domain in prose ("destinysgateway.com") otherwise resolves as a
+    # fandom. But a link to a work we hold is not a guess at all — it names a
+    # fic whose fandom, pairing and tags are already in the index, which is
+    # better evidence than anything the surrounding prose can be made to yield.
+    #
+    # NOT taken from the "I have read" list: those are works to avoid, and
+    # _split_read_list has already removed them by the time this runs.
+    anchors: list[str] = []
     # "no crossovers" / "naruto x bleach crossover" — read from the post, never
     # assumed. See the note in extract() for why there is no default.
     crossovers: Optional[str] = None
@@ -5529,6 +5541,53 @@ def _drop_contained(cands: list[dict]) -> list[dict]:
                        for o in spans)]
 
 
+# Work links in a post, in the two shapes the archives publish. Chapter and
+# query suffixes are tolerated and discarded: readers paste whatever was in the
+# address bar.
+_ANCHOR_AO3 = re.compile(r"archiveofourown\.org/works/(\d+)", re.I)
+_ANCHOR_FFN = re.compile(r"fanfiction\.net/s/(\d+)", re.I)
+
+
+def _resolve_anchors(db, raw: str, cap: int = 3):
+    """Works the reader linked, and the terms they contribute.
+
+    A link is the strongest thing a fic-finder post can carry, and it was being
+    discarded — URLs are stripped before the words are read. But a link to a
+    work this index holds is not a guess: its fandom and pairing are recorded
+    facts, where the surrounding prose is a phrase somebody hoped would match.
+
+    Only the fandom and the relationship are taken. Tags are not, and that is
+    deliberate: a work carries dozens, most of them incidental, and every one
+    added to a query is another requirement the answer has to satisfy. The
+    fandom and the pairing are what "something like this one" actually means.
+    """
+    ids: list[str] = []
+    for site, pat, col in (("ao3", _ANCHOR_AO3, "ao3"),
+                           ("ffnet", _ANCHOR_FFN, "ffnet")):
+        for m in pat.finditer(raw or ""):
+            if (site, m.group(1)) not in ids:
+                ids.append((site, m.group(1)))
+    ids = ids[:cap]
+    if not ids:
+        return [], []
+    terms: list[tuple[str, str]] = []
+    found: list[str] = []
+    for site, site_id in ids:
+        row = db.execute(sql_text(
+            "SELECT title, fandoms, relationships FROM stories "
+            "WHERE site = :s AND site_id = :i LIMIT 1"),
+            {"s": site, "i": site_id}).first()
+        if not row:
+            continue
+        title, fandoms, ships = row
+        found.append(title)
+        for f in (fandoms or [])[:1]:
+            terms.append(("fandom", f))
+        for r in (ships or [])[:1]:
+            terms.append(("ship", r))
+    return found, terms
+
+
 @router.get("/extract", response_model=ExtractResponse)
 def extract(
     text: str = Query(..., description="A whole fic-finder post, pasted"),
@@ -5770,9 +5829,18 @@ def extract(
     # read" titles back into the n-gram pass, which is how `Sarcasm` and
     # `Slytherin` — two words from a title the reader had already finished —
     # came back as things they were asking for.
+    # The linked works, read BEFORE the URLs are stripped below.
+    anchor_ids, anchor_terms = _resolve_anchors(db, raw)
+
     # Strip URLs and anything that is not a letter, digit or apostrophe. Emoji
     # are common in these posts and are not vocabulary.
+    #
+    # Bare domains too, not just http:// ones. "I stumbled upon some fanfiction
+    # ... references destinysgateway.com" came out as
+    # fandom:"Destiny (Video Games)" -- a fandom read off a hostname, on a post
+    # about Hellsing.
     raw = re.sub(r"https?://\S+", " ", raw)
+    raw = re.sub(r"\b[\w-]+\.(?:com|net|org|io|co\.uk|me|tv)\b", " ", raw, flags=re.I)
     words = re.findall(r"[A-Za-z0-9']+", raw)[:EXTRACT_MAX_WORDS]
     if not words:
         return ExtractResponse(terms=[], query="", ignored_words=0)
@@ -6723,13 +6791,28 @@ def extract(
     _query_text = " ".join(parts)
     link_unsafe = bool(gated_terms) or _link_is_unsafe(_query_text)
 
+    # A linked work's fandom and pairing, if the post carried one and the
+    # extraction did not already find them. Prepended rather than appended: the
+    # reader pointing at a specific fic is stronger evidence than a phrase the
+    # window matcher resolved, and the query reads better with the subject
+    # first. Anything already present is not repeated.
+    if anchor_terms:
+        have = _query_text or ""
+        lead = []
+        for kind, value in anchor_terms:
+            clause = f'{kind}:"{value}"'
+            if clause.lower() not in have.lower():
+                lead.append(clause)
+        if lead:
+            _query_text = " ".join(lead + ([have] if have else []))
+
     return ExtractResponse(terms=terms, query=_query_text,
                            ignored_words=max(len(words) - len(used), 0),
                            word_count_min=wc_min, word_count_max=wc_max,
                            already_read=already_read, status=status, sort=sort,
                            crossovers=crossovers, site=site,
                            explicit_ok=nsfw_ok, gated_terms=gated_terms,
-                           link_unsafe=link_unsafe,
+                           link_unsafe=link_unsafe, anchors=anchor_ids,
                            exclude_tags=exclude_tags[:_MAX_EXCLUDES])
 
 
