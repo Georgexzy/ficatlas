@@ -1112,6 +1112,44 @@ _NEG_TRAILING = {
 }
 
 
+# Where a refusal STOPS. A negation governs its own clause and not the rest of
+# the sentence, and without this the subject matcher reads straight through the
+# next one.
+#
+# Measured, and both failures are worse than a missed negation because they
+# invert what the reader asked for:
+#
+#   "not a coffee shop au, definitely no mpreg"
+#       -> excluded the coffee shop tags, and handed back "definitely mpreg"
+#          as leftover with the `no` eaten -- so Mpreg came back as a WANT.
+#   "no smut and no mpreg please"
+#       -> excluded Mpreg, left "smut" behind as a want.
+#
+# In both the reader refused something and the search went looking for it.
+#
+# A comma, a semicolon, a dash, "and"/"but"/"or", or another refusal all end
+# the clause. "and" is included deliberately even though it sometimes joins two
+# things being refused together ("no smut and gore"): stopping early costs one
+# exclusion, while running on inverts one, and the second negation is caught by
+# the loop's next pass anyway.
+_NEG_CLAUSE_END = re.compile(
+    r"[,;–—]|\b(?:and|but|or|also|plus|however|though)\b|"
+    r"\b(?:without|excluding|no|not|avoid|nothing\s+with)\s+", re.I)
+
+
+def _neg_clause(phrase: str) -> tuple[str, str]:
+    """Split a refusal's subject from whatever follows it.
+
+    Returns (the clause the negation governs, the rest, unchanged). The rest is
+    handed back verbatim so the loop can find the next refusal in it -- which is
+    the whole point: the marker that was being swallowed is still there.
+    """
+    m = _NEG_CLAUSE_END.search(phrase)
+    if not m or m.start() == 0:
+        return phrase, ""
+    return phrase[:m.start()].strip(), phrase[m.start():].strip()
+
+
 def _negated_subject(db, phrase: str) -> tuple[list[str], str]:
     """The tag a negation refers to, and the words left over.
 
@@ -1121,6 +1159,10 @@ def _negated_subject(db, phrase: str) -> tuple[list[str], str]:
     one-word window would fire on any query — but which is exactly what "no
     harems" and "without bashing" are.
     """
+    # The clause this refusal governs, and no further — see `_neg_clause`.
+    # Everything after the boundary is handed back untouched so the loop can
+    # find the next refusal in it, markers intact.
+    phrase, tail = _neg_clause(phrase)
     # Trailing politeness off first — see `_NEG_TRAILING`.
     _w = phrase.split()
     while _w and _w[-1].strip(",.;:!?").lower() in _NEG_TRAILING:
@@ -1129,14 +1171,14 @@ def _negated_subject(db, phrase: str) -> tuple[list[str], str]:
 
     tags, _works, leftover, _whole = resolve_trope_tags(db, phrase)
     if tags:
-        return tags, leftover
+        return tags, (leftover + " " + tail).strip()
 
     words = phrase.split()
     if not words:
-        return [], phrase
+        return [], (phrase + " " + tail).strip()
     head = words[0].rstrip(",.;:!?")
     if len(head) < 4:
-        return [], phrase
+        return [], (phrase + " " + tail).strip()
     # The tag must BE the word, not merely contain it. A substring match here
     # was actively wrong: "no way home peter parker" matched
     # `Homeless Peter Parker` and excluded it, and "the no name" matched
@@ -1154,10 +1196,10 @@ def _negated_subject(db, phrase: str) -> tuple[list[str], str]:
         """), {"a": stem, "b": stem + "s", "floor": _NEG_MIN_WORKS}).fetchall()
     except Exception:
         log.debug("negation lookup failed", exc_info=True)
-        return [], phrase
+        return [], (phrase + " " + tail).strip()
     if not rows:
-        return [], phrase
-    return [r[0] for r in rows], " ".join(words[1:])
+        return [], (phrase + " " + tail).strip()
+    return [r[0] for r in rows], (" ".join(words[1:]) + " " + tail).strip()
 
 
 # Fandom abbreviations, read once and refreshed on a timer.
