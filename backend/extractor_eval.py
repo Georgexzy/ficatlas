@@ -23,7 +23,14 @@ nowhere has not, however tidy the terms look.
 
 Also reported, and worth as much:
 
-  * no query   -- the extractor produced nothing at all to search with.
+  * no query   -- the extractor answered, with nothing to search for.
+  * error      -- the request itself failed. Counted apart from "no query",
+                  because the first version conflated them and the count moved
+                  between 17 and 10 on identical data: a flaky request looked
+                  exactly like an extractor that had found nothing to say. That
+                  is the same confusion that cost the FF.net enrichment its
+                  queued captures and nearly cost this corpus its posts, and it
+                  is worth the extra counter every time.
   * not found  -- it produced a query and the answer was not in it. These are
                   the interesting failures; --show prints them.
 
@@ -34,7 +41,9 @@ extractor for the archive's gaps rather than its own.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import time
 
 sys.path.insert(0, "/app")
 from sqlalchemy import text as sql_text  # noqa: E402
@@ -52,11 +61,41 @@ CORPUS_SQL = """
 """
 
 
+class SearchFailed(Exception):
+    """The search request failed. Not a statement about the query."""
+
+
+# This walks the corpus as fast as it can and the site rate-limits /api/search,
+# which is correct of it -- an evaluation is not entitled to more of the search
+# path than a reader. Measured before this existed: nine of thirty-eight pairs
+# came back HTTP 429, the count moved run to run, and the failures were being
+# read as the extractor finding nothing. So requests are paced and a refusal is
+# waited out rather than scored.
+PACE = float(os.getenv("EVAL_PACE_SECONDS", "0.2"))
+RETRIES = int(os.getenv("EVAL_RETRIES", "4"))
+
+
+def _get(client, path: str, params: dict):
+    """One request, waiting out a throttle instead of counting it as a miss."""
+    delay = 1.0
+    for attempt in range(RETRIES):
+        r = client.get(path, params=params)
+        if r.status_code != 429:
+            return r
+        time.sleep(delay)
+        delay *= 2
+    raise SearchFailed("HTTP 429 after retries")
+
+
 def _rank_of(client, query: str, story_id, k: int) -> int | None:
-    """1-based rank of the right work in the results, or None."""
-    r = client.get("/api/search", params={"q": query, "per_page": k})
+    """1-based rank of the right work in the results, or None if absent.
+
+    Raises rather than returning None when the REQUEST failed, so a flaky
+    search is never scored as "the extractor's query missed".
+    """
+    r = _get(client, "/api/search", {"q": query, "per_page": k})
     if r.status_code != 200:
-        return None
+        raise SearchFailed(f"HTTP {r.status_code}")
     for i, w in enumerate(r.json().get("results") or [], 1):
         if str(w.get("id")) == str(story_id):
             return i
@@ -75,16 +114,35 @@ def run(k: int = 10, sample: int | None = None, confirmed_only: bool = False,
                            "lim": sample or 100000}).fetchall()
 
     stats = {"pairs": len(rows), "no_query": 0, "found": 0, "not_found": 0,
-             "ranks": []}
+             "error": 0, "ranks": []}
     misses = []
     for post_id, title, body, story_id, _conf in rows:
         post = f"{title}\n{body}"[:4000]
-        q = (client.get("/api/search/extract", params={"text": post})
-             .json().get("query") or "").strip()
+        try:
+            r = _get(client, "/api/search/extract", {"text": post})
+            if r.status_code != 200:
+                raise SearchFailed(f"extract HTTP {r.status_code}")
+            q = (r.json().get("query") or "").strip()
+        except Exception as e:
+            stats["error"] += 1
+            stats.setdefault("error_kinds", {})
+            k_ = f"extract:{type(e).__name__}"
+            stats["error_kinds"][k_] = stats["error_kinds"].get(k_, 0) + 1
+            stats.setdefault("error_msg", str(e)[:200])
+            continue
         if not q:
             stats["no_query"] += 1
             continue
-        rank = _rank_of(client, q, story_id, k)
+        try:
+            rank = _rank_of(client, q, story_id, k)
+        except Exception as e:
+            stats["error"] += 1
+            stats.setdefault("error_kinds", {})
+            k_ = f"search:{type(e).__name__}"
+            stats["error_kinds"][k_] = stats["error_kinds"].get(k_, 0) + 1
+            stats.setdefault("error_msg", str(e)[:200])
+            continue
+        time.sleep(PACE)
         if rank:
             stats["found"] += 1
             stats["ranks"].append(rank)
@@ -93,7 +151,11 @@ def run(k: int = 10, sample: int | None = None, confirmed_only: bool = False,
             if len(misses) < show:
                 misses.append((title[:70], q))
 
-    n = stats["pairs"] or 1
+    # Scored over the pairs that actually produced a verdict. Dividing by the
+    # whole corpus would let a flaky run quietly improve the number by failing
+    # more often.
+    n = (stats["found"] + stats["not_found"] + stats["no_query"]) or 1
+    stats["scored"] = n
     stats["recall_at_k"] = round(stats["found"] / n, 3)
     stats["mean_rank"] = (round(sum(stats["ranks"]) / len(stats["ranks"]), 2)
                           if stats["ranks"] else None)
@@ -116,11 +178,15 @@ def main() -> int:
         print("No pairs yet — the corpus is still being harvested "
               "(see _reddit_answers_loop).")
         return 1
-    print(f"pairs        {s['pairs']}")
+    print(f"pairs        {s['pairs']}  (scored {s['scored']})")
     print(f"recall@{a.k:<6} {s['recall_at_k']}   ({s['found']} found)")
     print(f"mean rank    {s['mean_rank']}")
     print(f"no query     {s['no_query']}")
     print(f"not found    {s['not_found']}")
+    if s["error"]:
+        print(f"errors       {s['error']}   (requests that failed; not scored)")
+        print(f"             {s.get('error_kinds')}")
+        print(f"             {s.get('error_msg','')}")
     for title, q in s["misses"]:
         print(f"\n  MISS {title}\n       -> {q}")
     return 0
