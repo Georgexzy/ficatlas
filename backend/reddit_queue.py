@@ -116,9 +116,22 @@ FEEDS = [
 # Kept as a separate list rather than a flag on FEEDS so the distinction is
 # impossible to lose: everything here is unanswerable by us, on purpose, and
 # must never appear on a screen that invites somebody to answer it.
+# No flair filter here, and that is deliberate even though an unflaired feed is
+# exactly what was removed from FEEDS above. The objection there was WORKLIST
+# QUALITY -- "How fast do you write?" producing a confident query for a post
+# nobody could answer, crowding out the real requests on a screen a person has
+# to read. None of that applies to a feed nobody ever looks at.
+#
+# It also has to be unflaired to work at all: r/HPfanfiction's flairs are not
+# exposed in RSS (every <category term> is just the subreddit) and the sub
+# marks its requests by title convention -- "LF: Conscientious Objector +
+# Healer Harry". A flair-filtered search returns nothing.
+#
+# The cost of the noise is one rationed request per post that turns out to have
+# no fic link in its comments, and that post is then marked checked and never
+# asked about again.
 CORPUS_FEEDS = [
-    ("HPfanfiction", 'flair:"Search"'),
-    ("HPfanfiction", 'flair:"Found"'),
+    ("HPfanfiction", None),
 ]
 CORPUS_STATE = "corpus"
 
