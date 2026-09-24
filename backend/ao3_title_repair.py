@@ -214,6 +214,12 @@ TRUNCATED_SQL = r"""
       AND site_id ~ '^[0-9]+$'
       AND tags @> ARRAY['ao3_meta_dump']
       AND title ~* ' (and|of|the|with)$'
+      -- Works only registered users may read. AO3 answers 302 to /users/login
+      -- for these, so asking again can only ever cost the request and return
+      -- the same 302 -- and the AO3 allowance is the binding constraint on how
+      -- fast anything here fills. withdraw_deleted clears the stamp when a work
+      -- comes back, so this is a skip rather than a retirement.
+      AND source_restricted_at IS NULL
     ORDER BY date_trunc('day', crawled_at AT TIME ZONE 'UTC') ASC NULLS FIRST,
              (COALESCE(kudos, 0) + COALESCE(hits, 0)) DESC,
              COALESCE(word_count, 0) DESC
@@ -305,6 +311,10 @@ class RateLimiter:
 # throttled request as an unreachable work and dropped it from the queue for
 # good, so a rate limit quietly looked like 154 deleted works.
 THROTTLED = object()
+# A work only registered users may read. Distinct from "not found" and from a
+# parse failure, because it is PERMANENT and the caller must record it: see
+# fetch_work for what re-asking costs.
+RESTRICTED = object()
 
 
 def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
@@ -314,8 +324,20 @@ def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
     try:
         # view_adult skips the "this work could have adult content" interstitial
         # that would otherwise be parsed as a work page with no title.
+        # The redirect is NOT followed, and that is the point.
+        #
+        # A work restricted to registered users answers 302 to /users/login,
+        # and following it spends a second request to fetch a login page that
+        # can never contain a work. Measured over an hour of live traffic: 483
+        # of 1,548 AO3 requests were that login page -- 31% of an allowance
+        # that is the binding constraint on how fast AO3 summaries fill at all.
+        #
+        # Worse, nothing recorded the outcome, so the same works came round
+        # again every pass and paid twice again. Zero rows carried
+        # source_restricted_at while the column was already being used to
+        # filter hubs.
         r = client.get(f"https://archiveofourown.org/works/{work_id}?view_adult=true",
-                       timeout=45, follow_redirects=True)
+                       timeout=45, follow_redirects=False)
     except Exception:
         return None
     ao3_budget.note_response(r.status_code, r.headers.get("retry-after"))
@@ -327,10 +349,13 @@ def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
         limiter.penalise(retry_after)
         return THROTTLED
     limiter.reward()
+    if r.status_code in (301, 302, 303, 307, 308):
+        dest = r.headers.get("location", "")
+        if "/users/login" in dest:
+            return RESTRICTED
+        return None
     if r.status_code != 200:
         return None
-    # A restricted work redirects to /users/login, which is a 200 with no work
-    # markup — parse_work_page returns None for it rather than inventing fields.
     return parse_work_page(r.text)
 
 
@@ -439,7 +464,8 @@ def apply_work(story: Story, data: dict) -> list[str]:
     return changed
 
 
-def _flush(pending: list[tuple[int, dict]], touched: list[int], stats: dict) -> None:
+def _flush(pending: list[tuple[int, dict]], touched: list[int], stats: dict,
+           restricted: list[int] | None = None) -> None:
     """Write harvested fields, and stamp crawled_at on everything we looked at.
 
     The stamp is what keeps the queue moving. TRUNCATED_SQL orders by
@@ -465,9 +491,19 @@ def _flush(pending: list[tuple[int, dict]], touched: list[int], stats: dict) -> 
                 for field in apply_work(story, fetched[sid]):
                     stats[field] = stats.get(field, 0) + 1
             story.crawled_at = datetime.now(timezone.utc)
+        if restricted:
+            # Recorded once, never overwritten: withdraw_deleted clears it when
+            # a work comes back, and that verdict is better evidence than this
+            # pass's 302.
+            db.execute(sql_text(
+                "UPDATE stories SET source_restricted_at = COALESCE("
+                "source_restricted_at, now()) WHERE id = ANY(:ids)"),
+                {"ids": list(restricted)})
         db.commit()
     pending.clear()
     touched.clear()
+    if restricted is not None:
+        restricted.clear()
 
 
 def run(limit: int, dry_run: bool, delay: float) -> None:
@@ -481,6 +517,7 @@ def run(limit: int, dry_run: bool, delay: float) -> None:
     stats: dict[str, int] = {}
     pending: list[tuple[int, dict]] = []
     touched: list[int] = []
+    restricted: list[int] = []
     lock = threading.Lock()
     started = time.monotonic()
 
@@ -502,7 +539,15 @@ def run(limit: int, dry_run: bool, delay: float) -> None:
                 counts["throttled"] += 1
                 return
 
-            if not data:
+            if data is RESTRICTED:
+                # Registered-users-only. A permanent answer, recorded so the
+                # next pass does not spend two more requests learning it again
+                # -- and so the hubs, which already filter on this column, stop
+                # offering a work nobody can open.
+                counts["restricted"] = counts.get("restricted", 0) + 1
+                restricted.append(sid)
+                touched.append(sid)
+            elif not data:
                 counts["missed"] += 1
             else:
                 counts["fetched"] += 1
@@ -519,7 +564,7 @@ def run(limit: int, dry_run: bool, delay: float) -> None:
             if not dry_run:
                 touched.append(sid)
                 if len(touched) >= WRITE_BATCH:
-                    _flush(pending, touched, stats)
+                    _flush(pending, touched, stats, restricted)
 
     # One client for the pool so connections are reused; httpx.Client is thread-safe.
     with httpx.Client(headers=UA, limits=httpx.Limits(max_connections=WORKERS)) as client:
@@ -527,7 +572,7 @@ def run(limit: int, dry_run: bool, delay: float) -> None:
             list(pool.map(handle, rows))
 
     with lock:
-        _flush(pending, touched, stats)
+        _flush(pending, touched, stats, restricted)
 
     elapsed = max(time.monotonic() - started, 0.001)
     filled = " ".join(f"{k}={v}" for k, v in sorted(stats.items(), key=lambda kv: -kv[1]))

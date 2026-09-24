@@ -913,3 +913,35 @@ def test_an_anchor_contributes_the_fandom_and_pairing_only():
     src = inspect.getsource(S._resolve_anchors)
     assert "fandoms, relationships" in src
     assert "tags" not in src.split("SELECT")[1].split("FROM")[0]
+
+
+# ---- AO3 request budget: the login redirect -----------------------------
+
+def test_a_restricted_work_costs_one_request_not_two():
+    """AO3 answers 302 to /users/login for works only registered users may
+    read. Following that redirect spends a second request to fetch a login page
+    that can never contain a work.
+
+    Measured over an hour of live traffic: 483 of 1,548 AO3 requests were that
+    login page -- 31% of the allowance that is the binding constraint on how
+    fast AO3 summaries fill at all.
+    """
+    import inspect
+    from ao3_title_repair import fetch_work
+    src = inspect.getsource(fetch_work)
+    assert "follow_redirects=False" in src, \
+        "following the login redirect doubles the cost of every locked work"
+    assert "/users/login" in src
+
+
+def test_a_restricted_work_is_recorded_so_it_is_not_asked_again():
+    """Nothing recorded the outcome, so the same works came round every pass
+    and paid twice again -- zero rows carried source_restricted_at while the
+    column was already being used to filter hubs."""
+    import inspect
+    import ao3_title_repair as T
+    assert T.RESTRICTED is not T.THROTTLED, \
+        "permanent and transient outcomes must not be the same value"
+    assert "source_restricted_at" in inspect.getsource(T._flush)
+    # And the candidate query must skip what was recorded, or nothing is saved.
+    assert "source_restricted_at IS NULL" in T.TRUNCATED_SQL
