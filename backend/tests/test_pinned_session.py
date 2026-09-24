@@ -1014,3 +1014,20 @@ def test_the_joint_floor_is_lower_than_the_marginals():
     summaries. The first run with both at 25 produced exactly one hint."""
     import tag_hints
     assert tag_hints.BIGRAM_MIN_JOINT < tag_hints.BIGRAM_MIN_DOCS
+
+
+def test_the_bigram_sample_is_capped_at_what_the_box_survives():
+    """Moving the counting into Postgres removed the PYTHON memory cap and that
+    worked -- 0.5% mines in 200s where the Python version was OOM-killed twice.
+    It did not remove the box. A 3% run drove the machine to 0GB free and was
+    killed by the OOM reaper while the host was serving searches.
+
+    So the original note was right for a reason it did not name: this needs
+    more memory than this box has spare, whichever process does the counting.
+    """
+    import inspect
+    import tag_hints
+    assert tag_hints.BIGRAM_MAX_PCT <= 1.0
+    src = inspect.getsource(tag_hints.mine_bigrams)
+    assert "min(BIGRAM_SAMPLE_PCT, BIGRAM_MAX_PCT)" in src, \
+        "a caller must not be able to discover the limit by taking the site down"
