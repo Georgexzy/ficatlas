@@ -959,3 +959,58 @@ def test_the_only_job_that_can_reach_fandomless_rows_is_scheduled():
     assert "_ao3_stub_loop" in src, "the loop exists but is never started"
     assert "_supervised(\"ao3_stub_loop\"" in src, \
         "an unsupervised loop dies silently -- see _supervised"
+
+
+# ---- bigram tag hints ----------------------------------------------------
+
+def test_bigrams_are_counted_in_the_database_not_in_python():
+    """The documented reason bigrams were off is exact -- they multiply the
+    vocabulary ~40x, two builds were OOM-killed at 1.2GB, and the bounded
+    version kept 21 of them because a rare gram is the first thing a memory cap
+    discards. Every one of those is a property of counting in PYTHON. Postgres
+    spills to disk and finishes."""
+    import inspect
+    import tag_hints
+    src = inspect.getsource(tag_hints.mine_bigrams)
+    assert "bg_doc" in tag_hints._BIGRAM_SQL
+    assert "GROUP BY" in tag_hints._BIGRAM_HINTS_SQL
+    # And it must lift the statement timeout, which is only safe because the
+    # engine restores the default on pool checkout.
+    assert "lift_statement_timeout" in src
+
+
+def test_a_gram_is_a_name_only_when_every_word_is():
+    """`names` holds 46,181 words from character and fandom vocabularies and
+    necessarily contains ordinary English -- "the", "and", "home", "night",
+    "time", "love" are all in it, because works are tagged with characters
+    called Love and Night. Rejecting a pair for containing ANY of them rejected
+    every pair: 132 candidates, 0 survivors."""
+    names = {"mike", "wheeler", "peter", "parker", "time", "the", "one"}
+
+    def is_name(gram):
+        parts = gram.split()
+        return bool(parts) and all(p in names for p in parts)
+
+    assert is_name("mike wheeler")
+    assert is_name("peter parker")
+    assert not is_name("time loop"), "a trope phrase must survive"
+    assert not is_name("one bed")
+
+
+def test_a_hint_may_not_point_at_a_tag_nobody_uses():
+    """Sample-relative floors cannot catch a private tag: a work carrying
+    "Fraxus in a steampunk world" IS the whole population of that tag, so it
+    clears any within-sample bar and arrives with an enormous lift. Both were
+    learned before this guard existed."""
+    import tag_hints
+    assert ":min_tag_works" in tag_hints._BIGRAM_HINTS_SQL
+    assert "FROM facets f" in tag_hints._BIGRAM_HINTS_SQL
+    assert tag_hints.BIGRAM_MIN_TAG_WORKS >= 100
+
+
+def test_the_joint_floor_is_lower_than_the_marginals():
+    """Requiring the pairing to clear the same bar as each side asks for one
+    specific phrase-and-tag combination twenty times in forty-five thousand
+    summaries. The first run with both at 25 produced exactly one hint."""
+    import tag_hints
+    assert tag_hints.BIGRAM_MIN_JOINT < tag_hints.BIGRAM_MIN_DOCS

@@ -366,3 +366,191 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# ── bigrams, counted in the database ────────────────────────────────────────
+#
+# The meaning of a request is usually in the pair -- "time loop", "one bed",
+# "hate each other", "pretend to be dating" -- and a unigram model cannot reach
+# any of them. That is the honest limit written up in `grams_of`, and the
+# reason given there is exact: bigrams multiply the vocabulary about fortyfold,
+# two builds were OOM-killed at 1.2GB on a box that is also serving searches,
+# and the bounded version kept twenty-one of them, because a rare gram is the
+# first thing a memory cap discards.
+#
+# Every one of those failures is a property of counting in PYTHON, where the
+# counter must fit in RAM and the only defence is to throw rows away. Postgres
+# has no such constraint: an aggregate that exceeds work_mem spills to disk and
+# finishes, slower and correct. So the counting moves into the database and the
+# memory cap -- along with the bias it introduced -- goes away entirely.
+#
+# It is a separate pass rather than a flag on the old one because it shares
+# nothing with it but the output table.
+BIGRAM_SAMPLE_PCT = float(os.getenv("TAG_HINTS_BIGRAM_PCT", "0.5"))
+# A pair has to appear in this many sampled summaries before it can be a hint.
+# Higher than the unigram floor: there are far more distinct pairs, so the tail
+# is far longer and almost entirely noise.
+BIGRAM_MIN_DOCS = int(os.getenv("TAG_HINTS_BIGRAM_MIN_DOCS", "20"))
+# How often the PAIRING of a phrase and a tag has to be seen. Much lower than
+# the marginals above, and the difference is the whole point: requiring the
+# joint to clear the same bar asks for one specific phrase-and-tag combination
+# twenty times in a sample of forty-five thousand summaries, which almost
+# nothing does. The first run with both at 25 produced exactly one hint.
+#
+# The marginals stay high because they are what the lift is measured against,
+# and a denominator from three documents is noise however large the ratio
+# looks.
+BIGRAM_MIN_JOINT = int(os.getenv("TAG_HINTS_BIGRAM_MIN_JOINT", "8"))
+# How many works in the whole index must carry a tag before a phrase may point
+# at it. Sample-relative floors cannot catch a private tag: a work carrying
+# "Fraxus in a steampunk world" IS the entire population of that tag, so it
+# clears any within-sample bar and arrives with an enormous lift.
+BIGRAM_MIN_TAG_WORKS = int(os.getenv("TAG_HINTS_BIGRAM_MIN_TAG_WORKS", "400"))
+
+_BIGRAM_SQL = """
+CREATE TEMP TABLE bg_doc ON COMMIT DROP AS
+WITH sampled AS (
+    SELECT summary, tags
+      FROM stories TABLESAMPLE SYSTEM (:pct)
+     WHERE summary IS NOT NULL AND length(summary) BETWEEN 40 AND 4000
+       AND tags IS NOT NULL AND cardinality(tags) > 0
+), toks AS (
+    -- One array of words per summary. Apostrophes kept: "don't" is one token,
+    -- and splitting it produces the junk gram "don t".
+    SELECT tags, regexp_split_to_array(lower(summary), '[^a-z0-9'']+') AS w
+      FROM sampled
+)
+SELECT tags, w[i] || ' ' || w[i + 1] AS gram
+  FROM toks, generate_subscripts(w, 1) AS i
+ WHERE i < array_length(w, 1)
+   AND length(w[i]) > 2 AND length(w[i + 1]) > 2;
+
+CREATE INDEX ON bg_doc (gram);
+ANALYZE bg_doc;
+"""
+
+_BIGRAM_HINTS_SQL = """
+WITH totals AS (
+    SELECT count(*)::numeric AS n_docs FROM bg_doc
+), gram_df AS (
+    SELECT gram, count(*)::numeric AS df
+      FROM bg_doc GROUP BY gram
+     HAVING count(*) >= :min_docs
+), tag_df AS (
+    -- The tag must be one the ARCHIVE uses, not one this sample happened to
+    -- see. Without this the pass learned "Fraxus in a steampunk world" and
+    -- "manslaughter as prayer" -- single works' private tags, which clear any
+    -- sample-relative floor trivially because the sample contains one work
+    -- and it carries them. A hint to a tag nobody else uses can never help a
+    -- reader find anything.
+    SELECT t AS tag, count(*)::numeric AS df
+      FROM bg_doc, unnest(tags) AS t
+     WHERE EXISTS (SELECT 1 FROM facets f
+                    WHERE f.kind = 'tag' AND f.value = t
+                      AND f.count >= :min_tag_works)
+     GROUP BY t
+     HAVING count(*) >= :min_docs
+), joint AS (
+    SELECT b.gram, t AS tag, count(*)::numeric AS df
+      FROM bg_doc b, unnest(b.tags) AS t
+     WHERE b.gram IN (SELECT gram FROM gram_df)
+       AND t IN (SELECT tag FROM tag_df)
+     GROUP BY b.gram, t
+     HAVING count(*) >= :min_joint
+), scored AS (
+    SELECT j.gram, j.tag, j.df AS docs,
+           -- Lift: how much likelier this pair is in works carrying the tag
+           -- than in summaries at large. The same measure the unigram pass
+           -- uses, so the two halves of the table stay comparable.
+           (j.df / g.df) / (tg.df / tot.n_docs) AS lift
+      FROM joint j
+      JOIN gram_df g  ON g.gram = j.gram
+      JOIN tag_df  tg ON tg.tag = j.tag
+     CROSS JOIN totals tot
+)
+SELECT gram, tag, lift, docs FROM scored
+ WHERE lift >= :min_lift
+ ORDER BY lift DESC
+"""
+
+
+def mine_bigrams(db, dry_run: bool = False) -> int:
+    """Learn the multi-word phrases readers use, counting in Postgres.
+
+    Returns how many hints were written. The pass is additive: it writes into
+    the same tag_hints table the unigram pass fills, and the extractor does not
+    care which half a hint came from.
+    """
+    from sqlalchemy import text as sql_text
+
+    # A maintenance pass over millions of summaries, so the ordinary 60s
+    # statement timeout has to come off -- it exists to stop a reader's query
+    # wedging the site, which is not what this is. Safe to lift now in a way it
+    # was not before: the engine restores the default on pool checkout, so this
+    # cannot follow the connection back out and silently remove the timeout
+    # from somebody else's query. See db/session.
+    from db.session import lift_statement_timeout
+    lift_statement_timeout(db)
+    db.execute(sql_text("SET LOCAL work_mem = '128MB'"))
+    for stmt in _BIGRAM_SQL.split(";"):
+        if stmt.strip():
+            db.execute(sql_text(stmt), {"pct": BIGRAM_SAMPLE_PCT})
+
+    rows = db.execute(sql_text(_BIGRAM_HINTS_SQL),
+                      {"min_docs": BIGRAM_MIN_DOCS,
+                       "min_joint": BIGRAM_MIN_JOINT,
+                       "min_tag_works": BIGRAM_MIN_TAG_WORKS,
+                       "min_lift": MIN_LIFT}).fetchall()
+
+    # The same two guards the unigram pass applies, for the same reasons: a
+    # gram that names many tags is describing how summaries are WRITTEN, and a
+    # tag with hundreds of hints drowns the ones that discriminate.
+    # Character and person names, excluded exactly as the unigram pass excludes
+    # them. Without it the top of the list was "kim seungmin -> Top Kim
+    # Seungmin" and "jason todd -> Priest Jason Todd": a name predicts tags
+    # about that character with enormous lift and tells a reader nothing they
+    # did not already type.
+    names = _name_words(db)
+
+    per_word: dict[str, int] = {}
+    per_tag: dict[str, int] = {}
+    keep = []
+    for gram, tag, lift, docs in rows:
+        if tag.lower() in NOT_A_TROPE:
+            continue
+        # A gram is a NAME when every word of it is one, not when any word is.
+        #
+        # `names` holds 46,181 words drawn from character and fandom
+        # vocabularies, and it necessarily contains ordinary English -- "the",
+        # "and", "home", "night", "time", "love", "first", "black" are all in
+        # there, because works are tagged with characters called Love and Night.
+        # Rejecting a pair for containing any of them rejected every pair: 132
+        # candidates, 0 survivors. Requiring ALL of them still drops "mike
+        # wheeler" and "peter parker", which is the class that needed dropping,
+        # while leaving "time loop" and "one bed" reachable.
+        parts = gram.split()
+        if parts and all(part in names for part in parts):
+            continue
+        if per_word.get(gram, 0) >= MAX_TAGS_PER_WORD:
+            continue
+        if per_tag.get(tag, 0) >= HINTS_PER_TAG:
+            continue
+        per_word[gram] = per_word.get(gram, 0) + 1
+        per_tag[tag] = per_tag.get(tag, 0) + 1
+        keep.append({"w": gram, "t": tag, "l": float(lift), "d": int(docs)})
+
+    log.info("bigrams: %s candidate pairs, %s kept", f"{len(rows):,}",
+             f"{len(keep):,}")
+    if dry_run or not keep:
+        for k in keep[:15]:
+            log.info("    %-28s -> %-34s lift %.0f", k["w"], k["t"], k["l"])
+        return len(keep)
+
+    db.execute(sql_text("""
+        INSERT INTO tag_hints (word, tag, lift, docs)
+        VALUES (:w, :t, :l, :d)
+        ON CONFLICT (word, tag) DO UPDATE
+           SET lift = EXCLUDED.lift, docs = EXCLUDED.docs, built_at = now()
+    """), keep)
+    db.commit()
+    return len(keep)
