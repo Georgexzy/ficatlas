@@ -945,3 +945,17 @@ def test_a_restricted_work_is_recorded_so_it_is_not_asked_again():
     assert "source_restricted_at" in inspect.getsource(T._flush)
     # And the candidate query must skip what was recorded, or nothing is saved.
     assert "source_restricted_at IS NULL" in T.TRUNCATED_SQL
+
+
+def test_the_only_job_that_can_reach_fandomless_rows_is_scheduled():
+    """~3.9M AO3 rows have no fandom at all, and ao3_listing_harvest cannot see
+    them by construction -- it walks fandom tag pages and a work with no fandom
+    is on none of them. ao3_stub_enrich exists for exactly those rows and was
+    a manual script that nothing ever called."""
+    import inspect
+    import worker
+    assert hasattr(worker, "_ao3_stub_loop")
+    src = inspect.getsource(worker.main)
+    assert "_ao3_stub_loop" in src, "the loop exists but is never started"
+    assert "_supervised(\"ao3_stub_loop\"" in src, \
+        "an unsupervised loop dies silently -- see _supervised"

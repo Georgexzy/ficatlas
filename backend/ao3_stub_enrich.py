@@ -114,6 +114,7 @@ _CANDIDATES = sql_text("""
       AND url LIKE 'https://archiveofourown.org/works/%'
       -- The whole point: rows the fandom-tag harvest cannot reach.
       AND (fandoms IS NULL OR cardinality(fandoms) = 0)
+      AND source_restricted_at IS NULL
       AND COALESCE(word_count, 0) = 0
       AND COALESCE(kudos, 0) = 0
       AND COALESCE(hits, 0) = 0
@@ -199,7 +200,12 @@ async def enrich(limit: int, dry_run: bool, maxlen: int = 60,
         return 0
 
     done = failed = 0
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True,
+    # The login redirect is not followed. A work only registered users may read
+    # answers 302 to /users/login, and fetching that page spends a second
+    # request on markup that can never contain a work. Measured on the title
+    # repair pass, which had the same bug: 483 of 1,548 AO3 requests in an hour
+    # were login pages -- 31% of the allowance that bounds every AO3 job here.
+    async with httpx.AsyncClient(timeout=60, follow_redirects=False,
                                  headers={"User-Agent": UA}) as client:
         for sid, url, _tl in rows:
             await ao3_budget.await_slot()
@@ -216,6 +222,20 @@ async def enrich(limit: int, dry_run: bool, maxlen: int = 60,
                             "UPDATE stories SET word_count = -1 WHERE id = :i"),
                             {"i": sid})
                         db.commit()
+                    failed += 1
+                    continue
+                if r.status_code in (301, 302, 303, 307, 308):
+                    # Registered-users-only: a permanent answer. Recorded so
+                    # the next pass does not queue it again, and so the hubs --
+                    # which already filter on this column -- stop offering a
+                    # work nobody can open.
+                    if "/users/login" in r.headers.get("location", ""):
+                        with db_session() as db:
+                            db.execute(sql_text(
+                                "UPDATE stories SET source_restricted_at = "
+                                "COALESCE(source_restricted_at, now()) "
+                                "WHERE id = :i"), {"i": sid})
+                            db.commit()
                     failed += 1
                     continue
                 if r.status_code != 200:
