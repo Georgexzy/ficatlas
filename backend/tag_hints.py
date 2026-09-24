@@ -387,6 +387,20 @@ if __name__ == "__main__":
 # It is a separate pass rather than a flag on the old one because it shares
 # nothing with it but the output table.
 BIGRAM_SAMPLE_PCT = float(os.getenv("TAG_HINTS_BIGRAM_PCT", "0.5"))
+# The sample this box can actually take, measured rather than guessed.
+#
+# Moving the counting into Postgres removed the PYTHON memory cap, and that
+# part worked: 0.5% mines in 200s with no pressure at all, where the Python
+# version was OOM-killed twice. It did not remove the box. A 3% run -- one
+# temp table of every bigram in ~270,000 summaries, then aggregated -- drove
+# the machine to 0GB free and was killed by the OOM reaper on a host that is
+# also serving searches.
+#
+# So the original note in `grams_of` was right for a reason it did not name:
+# "turning them on needs more memory than this box has spare" holds whichever
+# process does the counting. Capped, rather than left to a caller to discover
+# by taking the site down.
+BIGRAM_MAX_PCT = float(os.getenv("TAG_HINTS_BIGRAM_MAX_PCT", "1.0"))
 # A pair has to appear in this many sampled summaries before it can be a hint.
 # Higher than the unigram floor: there are far more distinct pairs, so the tail
 # is far longer and almost entirely noise.
@@ -483,6 +497,11 @@ def mine_bigrams(db, dry_run: bool = False) -> int:
     """
     from sqlalchemy import text as sql_text
 
+    pct = min(BIGRAM_SAMPLE_PCT, BIGRAM_MAX_PCT)
+    if pct < BIGRAM_SAMPLE_PCT:
+        log.warning("bigrams: sample capped at %.1f%% (asked %.1f%%) — see "
+                    "BIGRAM_MAX_PCT", pct, BIGRAM_SAMPLE_PCT)
+
     # A maintenance pass over millions of summaries, so the ordinary 60s
     # statement timeout has to come off -- it exists to stop a reader's query
     # wedging the site, which is not what this is. Safe to lift now in a way it
@@ -494,7 +513,7 @@ def mine_bigrams(db, dry_run: bool = False) -> int:
     db.execute(sql_text("SET LOCAL work_mem = '128MB'"))
     for stmt in _BIGRAM_SQL.split(";"):
         if stmt.strip():
-            db.execute(sql_text(stmt), {"pct": BIGRAM_SAMPLE_PCT})
+            db.execute(sql_text(stmt), {"pct": pct})
 
     rows = db.execute(sql_text(_BIGRAM_HINTS_SQL),
                       {"min_docs": BIGRAM_MIN_DOCS,
