@@ -1848,6 +1848,41 @@ async def _reddit_answers_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _ao3_stub_loop() -> None:
+    """Fill the AO3 rows nothing else can reach.
+
+    About 30% of the AO3 rows here -- roughly 3.9M -- have NO FANDOM AT ALL,
+    and essentially every one is also a stub: no summary, no kudos, no word
+    count. ao3_listing_harvest cannot see them by construction, because it
+    walks fandom tag pages and a work with no fandom is on none of them.
+    ao3_stub_enrich exists precisely for those rows, and had never been
+    scheduled -- it was a manual script, and the manual runs stopped.
+
+    That matters more than a display gap. 81.2% of the AO3 rows in this index
+    have no summary, which is why the fic-finder's ranking signal has nothing
+    to match against; and it breaks search by name outright, which is the
+    failure its own docstring opens with -- 73 works are called "All the Young
+    Dudes" and 68 of them are stubs at kudos 0, including the one everybody
+    means.
+
+    Small batches on a long interval. It goes through ao3_budget like every
+    other AO3 path, so it cannot outbid the harvester -- and one work page is
+    twenty works' worth of AO3's patience, which is exactly why it takes only
+    the rows the cheap route can never reach.
+    """
+    from ao3_stub_enrich import enrich
+
+    batch = int(_num("AO3_STUB_BATCH", 120))
+    interval = _num("AO3_STUB_INTERVAL_MIN", 20) * 60
+
+    while True:
+        try:
+            await enrich(batch, dry_run=False)
+        except Exception as e:
+            log.warning(f"ao3 stub enrich failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _supervised(name: str, factory) -> None:
     """Run one background loop for ever, surviving its own bugs.
 
@@ -1954,6 +1989,11 @@ async def main() -> None:
     if _flag("LISTING_HARVEST", "true"):
         tasks.append(asyncio.create_task(_supervised("listing_harvest_loop", _listing_harvest_loop)))
         log.info("AO3 listing harvest enabled (20 works per request)")
+
+    if _flag("AO3_STUB_ENRICH", "true"):
+        tasks.append(asyncio.create_task(
+            _supervised("ao3_stub_loop", _ao3_stub_loop)))
+        log.info("AO3 stub enrichment enabled (the 3.9M rows with no fandom)")
 
     if _flag("TITLE_REPAIR", "true"):
         tasks.append(asyncio.create_task(_supervised("title_repair_loop", _title_repair_loop)))
