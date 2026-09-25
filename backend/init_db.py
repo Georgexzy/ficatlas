@@ -934,6 +934,35 @@ CREATE VIEW visit_events_public AS
 -- What a lost-fic post turned out to be: the ground truth the extractor is
 -- measured against. See reddit_answers.py for why comments are reachable at
 -- all and why a linked work counts as an answer without a "solved" flair.
+-- What readers SAY, mapped to what the archives TAG. Filled two ways: mined
+-- statistically from summaries (tag_hints.py) and taught from labelled posts
+-- (extractor_teacher.py --teach). api/search reads it either way and does not
+-- care which half a hint came from.
+CREATE TABLE IF NOT EXISTS tag_hints (
+    word     TEXT NOT NULL,
+    tag      TEXT NOT NULL,
+    lift     REAL NOT NULL,
+    docs     INTEGER NOT NULL,
+    built_at TIMESTAMP DEFAULT now(),
+    PRIMARY KEY (word, tag)
+);
+CREATE INDEX IF NOT EXISTS ix_tag_hints_word ON tag_hints (word);
+
+-- What a model read out of a fic-finder post, OFFLINE. See
+-- extractor_teacher.py: the labels become vocabulary and test cases inside the
+-- deterministic extractor, and nothing in a request path touches this table.
+CREATE TABLE IF NOT EXISTS post_labels (
+    post_id     TEXT PRIMARY KEY,
+    -- As returned, before any checking.
+    raw         JSONB NOT NULL,
+    -- The same, reduced to names this index actually has. A proposal that
+    -- resolves to nothing is dropped and recorded -- a want we cannot name is
+    -- a gap in the vocabulary, not noise.
+    grounded    JSONB NOT NULL,
+    model       TEXT NOT NULL,
+    labelled_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS reddit_answers (
     post_id     TEXT NOT NULL,
     url         TEXT NOT NULL,

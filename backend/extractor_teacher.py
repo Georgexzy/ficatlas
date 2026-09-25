@@ -104,8 +104,20 @@ already read, false if they want recommendations
 Rules:
 - "phrase" must be copied verbatim from the post. It is what justifies the \
 entry, and an entry without one is worthless.
-- "idea" is how a fanfiction archive would name that trope or theme, in a few \
-words. Do not invent elaborate names.
+- "idea" must be a SHORT tag in the register an archive actually uses. Real
+  examples, to show the style and length: Fluff, Angst, Hurt/Comfort, Slow
+  Burn, Friends to Lovers, Enemies to Lovers, Fake/Pretend Relationship,
+  Alternate Universe, Time Travel, Amnesia, Mutual Pining, Happy Ending, Major
+  Character Death, Canon Divergence, Soulmates, Alpha/Beta/Omega Dynamics,
+  Whump, Angst with a Happy Ending, Found Family, Redemption.
+  Two or three words. NOT a description of the plot, NOT a composite joined
+  with a slash or "and", NOT a phrase you invented to fit this one post.
+  "Bureaucratic Fantasy Worldbuilding" is wrong; "Worldbuilding" is right.
+  "Character Parallel / Foil" is wrong; leave it out.
+- If no short archive-style tag fits, OMIT the entry. A want that has to be
+  described in a sentence is one the archive has no name for, and guessing at
+  one is worse than saying nothing: it is checked against the real vocabulary
+  afterwards and a near-miss resolves to something unrelated.
 - Only include a want the reader actually expressed. Do not infer what is \
 typical of the fandom.
 - An exclusion is anything they ruled out: "no smut", "not a coffee shop AU", \
@@ -436,13 +448,124 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=50)
     ap.add_argument("--dry-run", action="store_true",
                     help="read and ground, print, store nothing")
+    ap.add_argument("--teach", action="store_true",
+                    help="turn stored labels into tag_hints the extractor reads")
     ap.add_argument("--load", metavar="PATH",
                     help="import labels produced elsewhere (an agent, say) "
                          "through the same grounding the API path uses")
     a = ap.parse_args()
+    if a.teach:
+        with db_session() as db:
+            teach_hints(db, a.dry_run)
+        return 0
     if a.load:
         return load_labels(a.load, a.dry_run)
     return run(a.limit, a.dry_run)
+
+
+
+
+# ── turning labels into something the extractor reads ──────────────────────
+
+# Words too ordinary to mean a tag. The phrase a reader used is a sentence, and
+# most of its words are grammar; only the distinctive ones can carry a mapping.
+_PHRASE_NOISE = {
+    "the", "and", "for", "with", "that", "this", "they", "them", "their",
+    "she", "her", "his", "him", "was", "were", "had", "has", "have", "been",
+    "but", "not", "are", "you", "your", "its", "it's", "from", "there",
+    "where", "when", "what", "who", "which", "would", "could", "should",
+    "about", "into", "some", "just", "like", "really", "very", "much",
+    "more", "most", "also", "then", "than", "other", "only", "even", "still",
+    "fic", "fics", "story", "stories", "read", "reading", "looking", "find",
+    "remember", "please", "want", "wants", "wanted", "one", "two", "get",
+    "gets", "got", "make", "makes", "made", "take", "takes", "goes", "going",
+    "something", "someone", "anything", "everything", "character", "main",
+}
+
+# How much a taught pair counts beside a mined one. The mined hints carry a
+# statistical lift; this is not that number and must not pretend to be. It is
+# set so a single taught word is worth less than the summed-lift floor on its
+# own -- one word from one post should never place a tag by itself -- and so
+# two or three agreeing words do.
+TAUGHT_LIFT = float(os.getenv("TEACHER_TAUGHT_LIFT", "6.0"))
+# How many distinct posts must use a word for the same tag before it is taught.
+# One post is an anecdote: the phrase "he loses his memory and she finds him"
+# would otherwise teach `finds` -> Amnesia for ever.
+MIN_SUPPORT = int(os.getenv("TEACHER_MIN_SUPPORT", "2"))
+
+
+def _phrase_words(phrase: str) -> list[str]:
+    import re as _re
+    return [w for w in _re.findall(r"[a-z']{3,}", (phrase or "").lower())
+            if w not in _PHRASE_NOISE]
+
+
+def teach_hints(db, dry_run: bool = False) -> int:
+    """Turn stored labels into tag_hints rows the extractor already reads.
+
+    `_hinted_tags` looks up single lowercase words and sums their lift, so a
+    phrase teaches several words that point at one tag and reinforce each
+    other. That is why the phrase had to be recorded verbatim beside every
+    want: without it there is nothing to key on.
+
+    This is the whole point of the exercise. tag_hints already maps what
+    readers SAY to what archives TAG, mined statistically from summaries -- but
+    only one word at a time, because mining pairs needs a sample this machine
+    cannot hold. A labelled post gives the mapping directly, from the words a
+    reader actually used, with no sample size at all.
+    """
+    import collections
+    rows = db.execute(sql_text(
+        "SELECT post_id, grounded FROM post_labels")).fetchall()
+
+    support: dict[tuple, set] = collections.defaultdict(set)
+    for post_id, grounded in rows:
+        # The names THIS post is about, taken from what it already resolved to.
+        #
+        # Without this the first teach produced `harry -> Canon Divergence`,
+        # `steve -> Hurt/Comfort` and `harry -> Alternate Universe`: a name
+        # appears in every phrase about that character, so it correlates with
+        # whatever trope the post happened to want. The extractor already
+        # resolves names properly, so a hint on one adds noise to a term it
+        # would have found anyway.
+        #
+        # Per post, NOT against tag_hints' global name list. That list holds
+        # 46,181 words and necessarily contains ordinary English -- filtering
+        # by it removed `canon` and `brothers` along with `harry`, and taught
+        # nothing at all.
+        g = grounded or {}
+        own = " ".join([str(g.get("fandom") or ""), str(g.get("pairing") or "")]
+                       + [str(c) for c in (g.get("characters") or [])]).lower()
+        own_words = {w for w in _phrase_words(own)}
+        for field in ("wants", "excludes"):
+            for item in (grounded or {}).get(field) or []:
+                tag = item.get("tag")
+                for w in _phrase_words(item.get("phrase")):
+                    if w in own_words:
+                        continue
+                    support[(w, tag)].add(post_id)
+
+    keep = [{"w": w, "t": t, "l": TAUGHT_LIFT * len(posts), "d": len(posts)}
+            for (w, t), posts in support.items()
+            if len(posts) >= MIN_SUPPORT]
+
+    log.info("labels: %d pairs seen, %d taught (support >= %d)",
+             len(support), len(keep), MIN_SUPPORT)
+    if dry_run or not keep:
+        for k in sorted(keep, key=lambda x: -x["d"])[:20]:
+            log.info("    %-18s -> %-34s posts %d", k["w"], k["t"], k["d"])
+        return len(keep)
+
+    db.execute(sql_text("""
+        INSERT INTO tag_hints (word, tag, lift, docs)
+        VALUES (:w, :t, :l, :d)
+        ON CONFLICT (word, tag) DO UPDATE
+           SET lift = GREATEST(tag_hints.lift, EXCLUDED.lift),
+               docs = GREATEST(tag_hints.docs, EXCLUDED.docs),
+               built_at = now()
+    """), keep)
+    db.commit()
+    return len(keep)
 
 
 if __name__ == "__main__":

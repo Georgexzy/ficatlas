@@ -117,3 +117,73 @@ def test_both_label_sources_go_through_the_same_door():
     src = inspect.getsource(T.load_labels)
     assert "_ground(db, raw)" in src, \
         "imported labels must be grounded exactly as API labels are"
+
+
+def test_a_phrase_teaches_its_distinctive_words_not_its_grammar():
+    """`_hinted_tags` looks up single lowercase words and sums their lift, so a
+    phrase teaches several words pointing at one tag. Most of a sentence is
+    grammar and can carry no mapping."""
+    got = T._phrase_words("they pretend to be dating for the whole story")
+    assert "pretend" in got and "dating" in got
+    for w in ("the", "they", "for", "story"):
+        assert w not in got
+
+
+def test_one_post_is_an_anecdote(db):
+    """"he loses his memory and she finds him" would otherwise teach
+    `finds` -> Amnesia for ever, on the strength of a single post."""
+    from sqlalchemy import text as sql_text
+    import json
+    db.execute(sql_text("DELETE FROM post_labels WHERE post_id LIKE 'probe%'"))
+    db.execute(sql_text(
+        "INSERT INTO post_labels (post_id, raw, grounded, model) "
+        "VALUES ('probe1', '{}'::jsonb, CAST(:g AS jsonb), 'test')"),
+        {"g": json.dumps({"wants": [{"phrase": "amnesia plot", "tag": "Amnesia"}],
+                          "excludes": []})})
+    db.commit()
+    before = db.execute(sql_text(
+        "SELECT count(*) FROM tag_hints WHERE tag = 'Amnesia' "
+        "AND word = 'amnesia'")).scalar()
+    T.teach_hints(db, dry_run=False)
+    after = db.execute(sql_text(
+        "SELECT count(*) FROM tag_hints WHERE tag = 'Amnesia' "
+        "AND word = 'amnesia'")).scalar()
+    assert T.MIN_SUPPORT >= 2
+    assert after == before, "a single post taught a mapping"
+    db.execute(sql_text("DELETE FROM post_labels WHERE post_id LIKE 'probe%'"))
+    db.commit()
+
+
+def test_a_taught_word_cannot_place_a_tag_alone():
+    """The mined hints carry a statistical lift and this is not that number.
+    One word from one post must be worth less than the floor `_hinted_tags`
+    applies to summed lift, or a label becomes a veto on everything else."""
+    from api.search import _HINT_MIN_SCORE
+    assert T.TAUGHT_LIFT < _HINT_MIN_SCORE, (
+        f"a single taught word ({T.TAUGHT_LIFT}) clears the hint floor "
+        f"({_HINT_MIN_SCORE}) by itself")
+
+
+def test_a_name_teaches_nothing_about_a_trope(db):
+    """The first teach produced `harry -> Canon Divergence`, `steve ->
+    Hurt/Comfort` and `harry -> Alternate Universe`. A name appears in every
+    phrase about that character, so it correlates with whatever trope the post
+    happened to want -- and the extractor already resolves names properly, so a
+    hint on one only adds noise to a term it would have found anyway."""
+    import inspect
+    src = inspect.getsource(T.teach_hints)
+    assert "own_words" in src
+    # Per post, not against tag_hints' global name list: that holds 46,181
+    # words including ordinary English, and filtering by it removed `canon` and
+    # `brothers` along with `harry` and taught nothing at all.
+    assert "_name_words" not in src
+
+
+def test_the_teacher_is_still_out_of_every_request_path():
+    """Restated after --teach was added, because that is the step which finally
+    writes into a table the extractor reads. What crosses over is DATA, in a
+    table api/search already consulted; no request imports this module."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[1]
+    for name in ("api/search.py", "main.py", "worker.py"):
+        assert "extractor_teacher" not in (root / name).read_text()

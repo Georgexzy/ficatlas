@@ -1370,5 +1370,21 @@ def test_the_hint_table_being_absent_is_not_an_error(db):
     from sqlalchemy import text as t
     db.execute(t("DROP TABLE IF EXISTS tag_hints"))
     db.commit()
-    assert S._hinted_tags(db, ["pretend", "dating"], set()) == []
-    assert db.execute(t("SELECT 1")).scalar() == 1
+    try:
+        assert S._hinted_tags(db, ["pretend", "dating"], set()) == []
+        assert db.execute(t("SELECT 1")).scalar() == 1
+    finally:
+        # PUT IT BACK. Dropping a shared table and leaving it dropped makes
+        # this test a trap for every later one that needs it -- latent for as
+        # long as nothing did, and then a failure that looks like the new
+        # test's fault rather than this one's.
+        db.execute(t("""
+            CREATE TABLE IF NOT EXISTS tag_hints (
+                word     TEXT NOT NULL,
+                tag      TEXT NOT NULL,
+                lift     REAL NOT NULL,
+                docs     INTEGER NOT NULL,
+                built_at TIMESTAMP DEFAULT now(),
+                PRIMARY KEY (word, tag)
+            )"""))
+        db.commit()
