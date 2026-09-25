@@ -147,6 +147,7 @@ def _cost_ttl(elapsed_ms: float) -> int:
 from query_parser import STATUS_WORDS, parse_query, parsed_to_search_params
 from query_intent import (resolve_intent, read_request, resolve_trope_tags,
                           _extract_negations, _fandom_aliases)
+import collections
 import re
 from character_aliases import character_variants, relationship_variants
 from language_aliases import language_variants
@@ -1094,6 +1095,20 @@ def _alias_stoplist() -> set:
     except Exception:  # pragma: no cover - import guard only
         return set()
 
+
+# Real fandoms whose names are also ordinary English words. Matching one of
+# these from a single bare word is nearly always a coincidence: "After" (Anna
+# Todd) from "after nearly a decade", "It" from any sentence at all.
+#
+# They are not removed from the vocabulary -- somebody really does search for
+# After -- only from what a POST is allowed to be about on the strength of one
+# word, because that choice then governs which characters survive.
+_COMMON_WORD_FANDOMS = {
+    "after", "it", "us", "them", "her", "him", "home", "hope", "friends",
+    "control", "still", "once", "life", "lost", "found", "why", "when",
+    "hurt", "want", "need", "real", "same", "wonder", "rush", "hold",
+    "the100", "one", "two", "up", "cars", "brave", "frozen", "hair",
+}
 
 _ALIAS_STOPLIST = _alias_stoplist()
 
@@ -5350,6 +5365,15 @@ def _stem_sibling(db, tag: str) -> Optional[tuple[str, int]]:
 # still worth searching", not "how many", and a bounded count answers it for a
 # fraction of the cost.
 _PROBE_CAP = 20
+# The extractor's own probe stops at _PROBE_CAP because it only ever asked "are
+# there at least a few". Comparing what a term COSTS needs a number that is
+# still counting at the top of the range: at a cap of 20 a pairing with 3,529
+# works and the same pairing narrowed to 38 both come back 20, the ratio is
+# 1.0, and the guard that exists to reject that narrowing cannot see it.
+#
+# Still bounded, and only paid on /extract -- which is an editor's endpoint
+# answering one post at a time, not the reader-facing search path.
+_RATIO_CAP = int(os.getenv("EXTRACT_RATIO_CAP", "600"))
 # Below this a term has narrowed the search past usefulness.
 #
 # Three was too low, and the failure was easy to miss because it looked like
@@ -5362,6 +5386,12 @@ _PROBE_CAP = 20
 # A reader asking for three qualities wants stories with those qualities, not
 # the intersection of every word they used. The extra terms are still returned
 # for them to add by hand.
+# The smallest share of the current result set a new term may leave behind.
+# See the probe loop: an absolute floor cannot tell a narrowing the reader
+# asked for from a coincidence found in their prose, and the difference is what
+# the term COSTS, not what survives it.
+_PROBE_MIN_RETAIN = float(os.getenv("EXTRACT_MIN_RETAIN", "0.10"))
+
 _PROBE_MIN_KEEP = int(os.getenv("SEARCH_EXTRACT_MIN_KEEP", "10"))
 # How many refusals a query will carry. Every exclusion is a predicate, and a
 # post listing nine of them — the corpus has one — would otherwise build a
@@ -5586,6 +5616,93 @@ def _resolve_anchors(db, raw: str, cap: int = 3):
         for r in (ships or [])[:1]:
             terms.append(("ship", r))
     return found, terms
+
+
+# How many works must carry both the character and the post's fandom before the
+# character counts as belonging to it, and how far to look. The cap bounds the
+# cost; the floor is what separates a major character from a crossover cameo.
+_FANDOM_FIT_CAP = 40
+_FANDOM_FIT_MIN = 8
+
+
+def _character_fits_fandom(db, value: str, f_words: set) -> bool:
+    """Does this character ever appear in works of the fandom the post names?
+
+    The parenthetical test in `_wrong_fandom` can only judge names that CARRY
+    one. Plenty do not, and those are exactly where frequency picks the wrong
+    fandom. Measured on a real post whose first line read "Newt/Thomas (Maze
+    Runner)": the extractor emitted char:"Newt Scamander" -- a Fantastic Beasts
+    character on 7,001 works, beating `Newt (Maze Runner)` on 5,679 purely on
+    count. The reader named the fandom in the same breath as the character.
+
+    So the index is asked. A character never once tagged alongside the fandom
+    the post is about is WRONG evidence, not weak evidence, and no tuning of a
+    frequency tiebreak fixes that.
+
+    Bounded: one EXISTS over a handful of candidates, and only when the post
+    named a fandom at all. Unknown means KEPT -- a lookup that fails must not
+    silently delete a good character.
+    """
+    if not f_words:
+        return True
+    try:
+        # Each word its own pattern, matched with LIKE ALL, because one
+        # chained pattern imposes an ORDER the fandom's name need not follow.
+        # Sorting the words alphabetically and joining them produced
+        # "%all%man%media%", which cannot match "spider-man - all media types"
+        # -- the name has man before all -- so a correct character was judged
+        # to be from the wrong fandom.
+        #
+        # The LONGEST words, because they are the distinctive ones: "maze" and
+        # "runner" identify the fandom where "the" and "all" identify nothing.
+        pats = ["%" + w + "%" for w in
+                sorted(f_words, key=len, reverse=True)[:2]]
+        if not pats:
+            return True
+        # A HANDFUL of works, not one.
+        #
+        # EXISTS was too weak by exactly the margin that matters: crossovers
+        # exist, so `Newt Scamander` really does appear in a Maze Runner work
+        # somewhere, and one accident was enough to license a Fantastic Beasts
+        # character on a Maze Runner post. A character the reader actually
+        # named is a major one in that fandom and clears this easily; a
+        # crossover cameo does not.
+        #
+        # Bounded by the inner LIMIT, so the cost is the same whether the
+        # character has five matching works or fifty thousand.
+        n = db.execute(sql_text("""
+            SELECT count(*) FROM (
+                SELECT 1 FROM stories
+                 WHERE characters @> ARRAY[:c]
+                   AND EXISTS (SELECT 1 FROM unnest(fandoms) f
+                                WHERE lower(f) LIKE ALL(:pats))
+                 LIMIT :cap
+            ) t
+        """), {"c": value, "pats": pats, "cap": _FANDOM_FIT_CAP}).scalar() or 0
+        return n >= _FANDOM_FIT_MIN
+    except Exception:
+        log.debug("character/fandom check failed", exc_info=True)
+        return True
+
+
+def _restates_pairing(ship: str, tag: str) -> bool:
+    """Is this tag just the kept pairing, written as a sentence?
+
+    Archives carry tags like `Thomas Loves Newt (Maze Runner)` beside the
+    relationship itself. Adding one to a query that already has the ship
+    narrows hard and says nothing new, because every work carrying it carries
+    the ship.
+
+    Both halves must appear, and the halves are taken from the ship's own name
+    with its fandom suffix removed -- so this fires on "Thomas Loves Newt" and
+    not on "Newt Whump", which really is an extra requirement.
+    """
+    base = re.sub(r"\s*\([^)]*\)\s*$", "", ship)
+    halves = [h.strip().lower() for h in re.split(r"[/&]", base) if h.strip()]
+    if len(halves) < 2:
+        return False
+    low = tag.lower()
+    return all(any(w in low for w in h.split() if len(w) > 2) for h in halves)
 
 
 @router.get("/extract", response_model=ExtractResponse)
@@ -6315,9 +6432,49 @@ def extract(
     #
     # Read off `terms` rather than waiting for `fandom_term` to be settled
     # below, which happens after this loop has already done the resolving.
-    _post_fandom = (fandom_term.value if fandom_term else None) or next(
+    # A ONE-WORD fandom that is also an ordinary English word is not evidence.
+    #
+    # `After` is a real fandom -- Anna Todd's -- and "I started watching the
+    # movies after nearly a decade" therefore named it, on a post about The
+    # Maze Runner. That mattered more than it looks: `_post_fandom` is what the
+    # character check below judges every candidate against, so one preposition
+    # read as a fandom does not merely add a wrong clause, it deletes the right
+    # characters for disagreeing with it.
+    #
+    # Multi-word fandoms are exempt. "The Maze Runner" contains ordinary words
+    # and is unambiguous as a phrase; it is the bare single word that is a
+    # coincidence.
+    def _usable_fandom(t) -> bool:
+        return (" " in t.value.strip()
+                or t.value.strip().lower() not in _COMMON_WORD_FANDOMS)
+
+    _post_fandom = (fandom_term.value
+                    if fandom_term and _usable_fandom(fandom_term) else None) or next(
         (t.value for t in sorted(terms, key=lambda x: -x.count)
-         if t.kind == "fandom"), None)
+         if t.kind == "fandom" and _usable_fandom(t)), None)
+
+    # Failing that, the fandom a matched CHARACTER carries in its own name.
+    #
+    # The archives disambiguate characters by appending the fandom -- `Thomas
+    # (Maze Runner)`, `Voldemort (Harry Potter)` -- so a matched character is
+    # often naming the fandom even when no fandom term resolved. It routinely
+    # does not resolve: the reader writes "Maze Runner" and the vocabulary has
+    # "The Maze Runner Series - James Dashner" and "The Maze Runner (Movies)",
+    # neither of which an exact n-gram lookup will find.
+    #
+    # Without this the post that prompted it -- first line "Newt/Thomas (Maze
+    # Runner)" -- had no fandom at all, so the character check had nothing to
+    # judge against, `Newt Scamander` survived on frequency, and the query
+    # char:"Newt Scamander" char:"Thomas (Maze Runner)" returned ZERO works.
+    # Two characters who have never appeared together because they are from
+    # different franchises.
+    if not _post_fandom:
+        _parens = collections.Counter(
+            m.group(1).strip()
+            for t in terms if t.kind in ("character", "relationship")
+            for m in [re.search(r"\(([^)]+)\)\s*$", t.value)] if m)
+        if _parens:
+            _post_fandom = _parens.most_common(1)[0][0]
     swapped: list[ExtractedTerm] = []
     for t in terms:
         if t.kind == "tag":
@@ -6656,6 +6813,13 @@ def extract(
     terms = [t for t in terms
              if not _wrong_fandom(t.value, t.kind, _f_words)
              and not _is_framing(t.value)]
+    # And the same judgement for names that carry no parenthetical to judge.
+    # Only characters: a TAG may legitimately belong to no fandom, and a
+    # relationship is already the most specific thing a post can name.
+    if _f_words:
+        terms = [t for t in terms
+                 if t.kind != "character"
+                 or _character_fits_fandom(db, t.value, _f_words)]
     pair_chars = [t for t in pair_chars
                   if not _wrong_fandom(t.value, t.kind, _f_words)
                   and not _is_framing(t.value)]
@@ -6664,10 +6828,54 @@ def extract(
         pair_term = None
 
     kept: list[ExtractedTerm] = []
+    prev_n: int | None = None
+    _ship_in_terms = next((t for t in terms if t.kind == "relationship"), None)
     if pair_term is not None:
         kept = [pair_term]
+    elif _ship_in_terms is not None:
+        # Before the loose halves, not after them. `pair_chars` holds the
+        # characters either side of a slash, and seeding with those let the
+        # relationship arrive third -- so the query led with char:"Thomas (Maze
+        # Runner)" and a niche tag, and ANDed the pairing on the end: 41 works,
+        # where the pairing alone is the request. The reader wrote the
+        # archive's own name for the ship in their first line.
+        kept = [_ship_in_terms]
     elif pair_chars:
         kept = [t for t in terms if t in pair_chars][:2]
+    else:
+        # A RELATIONSHIP the n-gram pass already found leads the query.
+        #
+        # `_resolve_pair` handles slash notation and nicknames, and when it
+        # comes back empty the pairing can still be sitting in `terms` -- the
+        # window matcher finds it whenever the post writes the archive's own
+        # name for it. Nothing promoted it, so the loop below filled the slots
+        # in frequency order and characters got there first.
+        #
+        # Measured on a real post whose FIRST LINE was the canonical tag,
+        # "Newt/Thomas (Maze Runner)": the extractor matched that relationship,
+        # ranked it sixth, and emitted char:"Newt Scamander" char:"Thomas (Maze
+        # Runner)" -- Newt Scamander being a Fantastic Beasts character. The
+        # reader named one pairing exactly and got a character from a different
+        # fandom.
+        #
+        # A pairing is the most specific thing a post can carry, which is the
+        # same reason `_ship_nickname_in_post` is tried before everything else.
+        # The `_implies` test below then drops the halves of it for free, since
+        # a ship's name contains its characters'.
+        ship = next((t for t in terms if t.kind == "relationship"), None)
+        if ship is not None:
+            kept = [ship]
+
+    # What the seeded terms alone return, so the ratio guard below has a
+    # baseline. Without it `prev_n` is None for the first candidate and the
+    # very term the guard exists to reject -- the first one added to a
+    # confidently-seeded pairing -- sails through unmeasured.
+    if kept and prev_n is None:
+        try:
+            prev_n = _probe_count(db, kept, wc_min, status, crossovers,
+                                  cap=_RATIO_CAP, word_count_max=wc_max)
+        except Exception:
+            log.debug("extract seed probe failed", exc_info=True)
 
     for t in terms[:6]:
         if t in kept:
@@ -6680,20 +6888,57 @@ def extract(
         # one the reader was more nearly asking for.
         if any(_implies(k.value, t.value) for k in kept):
             continue
+        # A tag that names BOTH halves of a kept pairing restates it.
+        #
+        # `Thomas Loves Newt (Maze Runner)` alongside ship:"Newt/Thomas (Maze
+        # Runner)" is the same request said twice, and saying it twice is not
+        # free: every clause is a requirement, so it took a pairing with
+        # thousands of works down to forty-six. String containment cannot see
+        # it -- the tag is not a substring of the ship, it is a sentence about
+        # the same two people.
+        if any(k.kind == "relationship" and _restates_pairing(k.value, t.value)
+               for k in kept):
+            continue
         cand = kept + [t]
         if len(cand) > _MAX_QUERY_TERMS:
             break
         try:
             n = _probe_count(db, cand, wc_min, status, crossovers,
-                             word_count_max=wc_max)
+                             cap=_RATIO_CAP, word_count_max=wc_max)
         except Exception:
             log.debug("extract probe failed", exc_info=True)
             n = 1
         # Not merely non-empty — still WORTH READING. A term that cuts the
         # result set to a single work has answered the request too precisely to
         # be useful, and the reader said "at least", not "exactly".
-        if n >= _PROBE_MIN_KEEP:
+        # An absolute floor is not enough; what matters is what the term COSTS.
+        #
+        # Each clause is a requirement, so a weak term bought with a huge cut is
+        # a bad trade however many works survive it. On a post naming one
+        # pairing exactly, ship:"Newt/Thomas (Maze Runner)" is thousands of
+        # works and the request itself -- and adding tag:"The Maze Runner
+        # Spoilers", a tag about nothing the reader asked for, took it to
+        # twelve, three of them at zero kudos. It cleared the absolute floor
+        # comfortably.
+        #
+        # So a candidate must also RETAIN a share of what it narrows. A term
+        # that keeps a tenth of the results is welcome to, if it is what the
+        # reader asked for; one that keeps a fiftieth is almost always a
+        # coincidence the window matcher found in their prose.
+        #
+        # The ratio is measured against a CAPPED count, so it understates how
+        # hard a term really narrows: the pairing above reports 600 where it
+        # has 3,529, making the spoilers tag look like it keeps a seventeenth
+        # when it keeps a nintieth. The threshold is set for the compressed
+        # scale, not the true one.
+        keeps_enough = prev_n is None or n >= prev_n * _PROBE_MIN_RETAIN
+        if n >= _PROBE_MIN_KEEP and keeps_enough:
             kept = cand
+            prev_n = n
+        elif not keeps_enough:
+            # Said out loud, because a dropped term is invisible otherwise and
+            # this is the guard most likely to be wrong in a new way.
+            log.debug("extract: dropped %r — keeps %s of %s", t.value, n, prev_n)
 
     parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in kept]
 
