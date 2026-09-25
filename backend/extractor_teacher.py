@@ -480,6 +480,18 @@ _PHRASE_NOISE = {
     "remember", "please", "want", "wants", "wanted", "one", "two", "get",
     "gets", "got", "make", "makes", "made", "take", "takes", "goes", "going",
     "something", "someone", "anything", "everything", "character", "main",
+    # Added after a teach produced `being -> Found Family`, `after -> Canon
+    # Divergence`, `working -> Hurt/Comfort` and `care -> Found Family`. These
+    # appear in any sentence about any story and correlate with whichever trope
+    # happened to be nearby.
+    "being", "after", "before", "during", "while", "working", "works",
+    "care", "cares", "life", "lives", "time", "times", "years", "days",
+    "back", "down", "away", "over", "through", "around", "together",
+    "another", "each", "both", "same", "different", "little", "long",
+    "first", "last", "next", "end", "ends", "ending", "start", "starts",
+    "becomes", "become", "comes", "come", "know", "knows", "knew",
+    "think", "thinks", "thought", "feel", "feels", "felt", "says", "said",
+    "tell", "tells", "told", "sees", "seen", "saw", "put", "puts",
 }
 
 # How much a taught pair counts beside a mined one. The mined hints carry a
@@ -491,6 +503,18 @@ TAUGHT_LIFT = float(os.getenv("TEACHER_TAUGHT_LIFT", "6.0"))
 # How many distinct posts must use a word for the same tag before it is taught.
 # One post is an anecdote: the phrase "he loses his memory and she finds him"
 # would otherwise teach `finds` -> Amnesia for ever.
+# Raised from two after a teach produced `greenhouse`, `botanical` and
+# `garden` all pointing at Hurt/Comfort -- the scenery of a couple of posts,
+# not a mapping anybody else's words will match. Three independent readers
+# using the same word for the same tag is the point at which it is a shared
+# vocabulary rather than a coincidence.
+# Two independent posts. Three was tried and left exactly one hint out of 448
+# pairs, because 133 posts is not enough for three readers to reach for the
+# same word. Two is safe here for a reason that is built in rather than hoped
+# for: TAUGHT_LIFT is below the floor _hinted_tags applies to summed lift, so a
+# lone taught word cannot place a tag by itself. Scenery like `greenhouse`
+# needs corroboration it will never get; a real mapping gets it from the other
+# words in the same phrase.
 MIN_SUPPORT = int(os.getenv("TEACHER_MIN_SUPPORT", "2"))
 
 
@@ -498,6 +522,52 @@ def _phrase_words(phrase: str) -> list[str]:
     import re as _re
     return [w for w in _re.findall(r"[a-z']{3,}", (phrase or "").lower())
             if w not in _PHRASE_NOISE]
+
+
+_CHAR_WORD_CACHE: dict[str, bool] = {}
+
+
+def _is_character_word(db, word: str) -> bool:
+    """Is this word, on its own, a character somebody is written about?
+
+    The per-post exclusion catches a name the label RESOLVED -- but a post
+    whose pairing or characters came back empty still has its names in the
+    phrases, and they leaked straight through: `sirius -> Canon Divergence`,
+    `aizawa -> Found Family`, `batman's -> Deconstruction`. A name correlates
+    with whatever trope its post happened to want, and the extractor resolves
+    names properly by itself, so a hint on one can only add noise.
+
+    Asked of the vocabulary rather than a word list, and cached, because the
+    alternative -- tag_hints' 46,181-word name set -- contains ordinary English
+    and removed `canon` and `brothers` along with the names.
+    """
+    # A possessive SUFFIX, not a set of characters to strip from both ends.
+    # str.strip("'s") removes every leading and trailing ' and s, so "sirius"
+    # arrived here as "iriu" and matched no character at all -- which is how
+    # `sirius -> Canon Divergence` survived the check written to stop it, while
+    # `aizawa` was caught and looked like proof the check worked.
+    key = word[:-2] if word.endswith("'s") else word
+    if key in _CHAR_WORD_CACHE:
+        return _CHAR_WORD_CACHE[key]
+    try:
+        # A WORD WITHIN a character's name, not the whole name.
+        #
+        # Exact matching caught nothing useful: the vocabulary holds `Sirius
+        # Black` and `Aizawa Shouta`, never the bare first name a reader writes
+        # -- so `sirius -> Canon Divergence` and `aizawa -> Found Family`
+        # survived a check that was supposed to stop exactly them.
+        #
+        # The regex is anchored on word boundaries so `art` does not match
+        # `Bartholomew`, and the count floor keeps it to characters enough
+        # people write for the name to be worth protecting.
+        hit = bool(db.execute(sql_text(
+            "SELECT 1 FROM facets WHERE kind = 'character' AND count >= :c "
+            r"AND value ~* ('\m' || :w || '\M') LIMIT 1"),
+            {"w": key, "c": 2000}).first())
+    except Exception:
+        hit = False
+    _CHAR_WORD_CACHE[key] = hit
+    return hit
 
 
 def teach_hints(db, dry_run: bool = False) -> int:
@@ -541,7 +611,7 @@ def teach_hints(db, dry_run: bool = False) -> int:
             for item in (grounded or {}).get(field) or []:
                 tag = item.get("tag")
                 for w in _phrase_words(item.get("phrase")):
-                    if w in own_words:
+                    if w in own_words or _is_character_word(db, w):
                         continue
                     support[(w, tag)].add(post_id)
 
