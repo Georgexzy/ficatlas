@@ -934,6 +934,27 @@ CREATE VIEW visit_events_public AS
 -- What a lost-fic post turned out to be: the ground truth the extractor is
 -- measured against. See reddit_answers.py for why comments are reachable at
 -- all and why a linked work counts as an answer without a "solved" flair.
+-- How many works in each fandom still have no summary. Materialised because
+-- the live question -- unnest(fandoms) over 14M rows -- is far too expensive to
+-- ask per pass, and the answer changes slowly.
+--
+-- ao3_listing_harvest's BACKFILL mode used to order by how many works we hold
+-- in a fandom, on the reasoning that "100% of AO3 rows arrived without a
+-- summary, so most of our works is also most of our gaps". That was true when
+-- it was written and is not now: 81% lack one, unevenly, so ordering by total
+-- sent the harvest back through fandoms it had already filled while the real
+-- gaps sat untouched. A tag listing returns 20 works per request against 1 for
+-- a work page, so pointing that path at the actual gap is the cheapest
+-- throughput there is.
+CREATE TABLE IF NOT EXISTS fandom_gaps (
+    fandom     TEXT PRIMARY KEY,
+    no_summary INTEGER NOT NULL,
+    works      INTEGER NOT NULL,
+    built_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_fandom_gaps_missing
+    ON fandom_gaps (no_summary DESC);
+
 -- What readers SAY, mapped to what the archives TAG. Filled two ways: mined
 -- statistically from summaries (tag_hints.py) and taught from labelled posts
 -- (extractor_teacher.py --teach). api/search reads it either way and does not
