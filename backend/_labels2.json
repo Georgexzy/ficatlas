@@ -1,0 +1,396 @@
+[
+  {
+    "post_id": "t3_1wpzimm",
+    "fandom": "Marvel Cinematic Universe",
+    "pairing": "Steve/Bucky",
+    "characters": ["Bucky", "Steve", "Alpine"],
+    "wants": [
+      {"phrase": "bucky calls himself the asset", "idea": "Whump"},
+      {"phrase": "post serum Steve practically trying to rehabilitate winter soilder", "idea": "Hurt/Comfort"}
+    ],
+    "excludes": [],
+    "length": "long",
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wptfbp",
+    "fandom": null,
+    "pairing": null,
+    "characters": [],
+    "wants": [
+      {"phrase": "batshit insane oviposition hucow esque fic", "idea": "Body Horror"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpqkxi",
+    "fandom": null,
+    "pairing": null,
+    "characters": [],
+    "wants": [
+      {"phrase": "military fanfics with the premise of GATE", "idea": "Military"},
+      {"phrase": "portal in the modern world opens to fantasy isekai world", "idea": "Isekai"},
+      {"phrase": "realistic approach to integrating fantasy elements with modern society", "idea": "Worldbuilding"}
+    ],
+    "excludes": [],
+    "length": "long",
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpph76",
+    "fandom": "Harry Potter",
+    "pairing": null,
+    "characters": ["Harry", "Draco", "Blaise", "Greengrass", "Neville"],
+    "wants": [
+      {"phrase": "Harry meets Draco and befriends him because he reminds harry of Dudley", "idea": "Canon Divergence"}
+    ],
+    "excludes": [
+      {"phrase": "I don't enjoy the ones where Draco actually fully cares for Harry", "idea": "Canon Compliant"}
+    ],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpp41b",
+    "fandom": null,
+    "pairing": null,
+    "characters": [],
+    "wants": [],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wporxj",
+    "fandom": "Harry Potter",
+    "pairing": "Harry/Voldemort",
+    "characters": ["Harry", "Voldemort"],
+    "wants": [
+      {"phrase": "do-over time travel trope", "idea": "Time Travel"},
+      {"phrase": "major canon divergence", "idea": "Canon Divergence"}
+    ],
+    "excludes": [],
+    "length": "long",
+    "status": "complete",
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpopow",
+    "fandom": "Harry Potter",
+    "pairing": "Original Character/George Weasley",
+    "characters": ["George Weasley", "Original Character"],
+    "wants": [
+      {"phrase": "orange hair with purple streaks/highlights that was compared to a sunset", "idea": "Fluff"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpobus",
+    "fandom": "Danny Phantom/DC",
+    "pairing": null,
+    "characters": ["Danny"],
+    "wants": [
+      {"phrase": "Danny eventually quits being a superhero or steps away from hero work", "idea": "Canon Divergence"},
+      {"phrase": "Danny using his ghost powers/abilities to help with his job", "idea": "Worldbuilding"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpo3mz",
+    "fandom": "DC Comics",
+    "pairing": null,
+    "characters": ["Tim", "Damian"],
+    "wants": [
+      {"phrase": "main focus is Tim and Dami being brothers", "idea": "Found Family"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpmc3s",
+    "fandom": "DuckTales",
+    "pairing": null,
+    "characters": ["Louie", "Scrooge", "Beakley", "Webby"],
+    "wants": [
+      {"phrase": "he needed a pacemaker", "idea": "Hurt/Comfort"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpm3zw",
+    "fandom": "Detroit: Become Human",
+    "pairing": null,
+    "characters": ["Connor", "Simon"],
+    "wants": [
+      {"phrase": "Connor finds Simon on the tower, but then lies about finding anything", "idea": "Canon Divergence"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wplpsc",
+    "fandom": "The Outsiders/Karate Kid",
+    "pairing": "Johnny Cade/Ponyboy",
+    "characters": ["Daniel LaRusso", "Johnny Cade", "Ponyboy"],
+    "wants": [
+      {"phrase": "Daniel Larusso is in Tulsa for a karate tournament and while he's there he bumps into Johnny Cade", "idea": "Canon Divergence"},
+      {"phrase": "discovered that they're twin brothers", "idea": "Found Family"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpl3kf",
+    "fandom": "The Vampire Diaries",
+    "pairing": null,
+    "characters": [],
+    "wants": [],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpl3kf",
+    "fandom": "Hazbin Hotel",
+    "pairing": "Charlie/Vaggie",
+    "characters": ["Charlie", "Vaggie"],
+    "wants": [
+      {"phrase": "Charlie x Vaggi fanfiction that has Vaggi angst", "idea": "Angst"}
+    ],
+    "excludes": [
+      {"phrase": "doesn't include age regression", "idea": "Age Regression"}
+    ],
+    "length": null,
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpks0l",
+    "fandom": "Transformers Animated",
+    "pairing": null,
+    "characters": ["Optimus", "Sari"],
+    "wants": [
+      {"phrase": "Sari starts off homeless in this fic", "idea": "Hurt/Comfort"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpjiik",
+    "fandom": null,
+    "pairing": null,
+    "characters": [],
+    "wants": [
+      {"phrase": "anything close to this story on either fanfic or wattpad", "idea": null}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpjdlu",
+    "fandom": "Harry Potter/God of War",
+    "pairing": null,
+    "characters": ["Kratos", "Hagrid", "Vernon", "Petunia"],
+    "wants": [],
+    "excludes": [],
+    "length": null,
+    "status": "complete",
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpjd19",
+    "fandom": "Arcane: League of Legends",
+    "pairing": "Vander/Silco",
+    "characters": ["Vander", "Silco"],
+    "wants": [
+      {"phrase": "slowburn with realistic depictions of trauma and PTSD", "idea": "Slow Burn"},
+      {"phrase": "Silco learns to trust/be comfortable around Vander again", "idea": "Hurt/Comfort"}
+    ],
+    "excludes": [],
+    "length": "long",
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpjbrq",
+    "fandom": "Harry Potter",
+    "pairing": null,
+    "characters": [],
+    "wants": [],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpj35p",
+    "fandom": "Harry Potter",
+    "pairing": null,
+    "characters": ["Harry", "Sirius"],
+    "wants": [
+      {"phrase": "After Sirius dies Harry inherits a beach house in England somewhere", "idea": "Canon Divergence"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpieg3",
+    "fandom": "Harry Potter/High School DxD",
+    "pairing": null,
+    "characters": ["Harry", "Rias"],
+    "wants": [
+      {"phrase": "Harry Potter becomes an obscurous at like 7 or 8 years old", "idea": "Canon Divergence"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wphz42",
+    "fandom": "Harry Potter/Percy Jackson",
+    "pairing": null,
+    "characters": ["Harry"],
+    "wants": [
+      {"phrase": "Harry goes to camp halfblood", "idea": "Alternate Universe"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wphvpx",
+    "fandom": "Harry Potter",
+    "pairing": null,
+    "characters": ["Harry", "Ron", "Hermione", "Voldemort"],
+    "wants": [
+      {"phrase": "harry cannot kill voldemort in a 1v1 but he unlike voldmort has actual ride or die friends who jump in right along side him", "idea": "Found Family"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wphpgh",
+    "fandom": "The Hobbit",
+    "pairing": "Bilbo/Thorin",
+    "characters": ["Bilbo", "Thorin", "Dain", "Dis"],
+    "wants": [
+      {"phrase": "Bilbo and Thorin are already married for some time out of necessity of some sort", "idea": "Fake/Pretend Relationship"},
+      {"phrase": "They don't know about each other's feelings which produces a lot of tension and friction", "idea": "Slow Burn"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wph8wb",
+    "fandom": "Harry Potter",
+    "pairing": "Harry/Ginny or Harry/Hermione",
+    "characters": ["Harry", "Ginny", "Hermione"],
+    "wants": [
+      {"phrase": "rewrite Harry as more akin to Anakin Skywalker—the Chosen One, insanely talented from a young age", "idea": "Alternate Universe"}
+    ],
+    "excludes": [],
+    "length": "long",
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpgx0b",
+    "fandom": "ATEEZ",
+    "pairing": null,
+    "characters": [],
+    "wants": [],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpfvl2",
+    "fandom": "Stranger Things",
+    "pairing": "Steve/Eddie",
+    "characters": ["Steve", "Eddie"],
+    "wants": [
+      {"phrase": "steve saved Eddie by cauterizing his wounds", "idea": "Hurt/Comfort"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpehsv",
+    "fandom": "Harry Potter",
+    "pairing": null,
+    "characters": ["Harry", "Regulus Black"],
+    "wants": [
+      {"phrase": "his lungs are messed up, he needs an inhaler that he constantly gets jelly beans stuck in", "idea": "Hurt/Comfort"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  },
+  {
+    "post_id": "t3_1wpe8sp",
+    "fandom": "Lord of the Rings",
+    "pairing": null,
+    "characters": ["Arwen", "Elrond"],
+    "wants": [
+      {"phrase": "some original ideas not just a walk through canon events", "idea": "Canon Divergence"}
+    ],
+    "excludes": [
+      {"phrase": "I do not really enjoy the hobbit or dwarf centred fanfictions", "idea": null}
+    ],
+    "length": null,
+    "status": null,
+    "is_lost_fic": false
+  },
+  {
+    "post_id": "t3_1wpci8g",
+    "fandom": "Harry Potter",
+    "pairing": "Harry/Arcturus",
+    "characters": ["Harry", "Hermione", "Tom Riddle", "Arcturus"],
+    "wants": [
+      {"phrase": "harry and Hermione travels back to raise tom riddle, but Hermione turns to a baby", "idea": "Time Travel"}
+    ],
+    "excludes": [],
+    "length": null,
+    "status": null,
+    "is_lost_fic": true
+  }
+]
