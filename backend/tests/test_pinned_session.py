@@ -1031,3 +1031,76 @@ def test_the_bigram_sample_is_capped_at_what_the_box_survives():
     src = inspect.getsource(tag_hints.mine_bigrams)
     assert "min(BIGRAM_SAMPLE_PCT, BIGRAM_MAX_PCT)" in src, \
         "a caller must not be able to discover the limit by taking the site down"
+
+
+# ---- the Maze Runner post ------------------------------------------------
+#
+# A real post whose FIRST LINE was the archive's own name for the pairing --
+# "Newt/Thomas (Maze Runner)" -- and which came out as
+#     char:"Newt Scamander" char:"Thomas (Maze Runner)"
+# Newt Scamander is a Fantastic Beasts character, so the two had never appeared
+# together and the search returned ZERO works. Five separate faults stacked:
+
+def test_a_relationship_leads_the_query_not_its_loose_halves():
+    """`pair_chars` seeded the query with the characters either side of the
+    slash, so a relationship the n-gram pass had already matched arrived third
+    and was ANDed on the end."""
+    import inspect
+    from api import search as S
+    src = inspect.getsource(S.extract)
+    assert "_ship_in_terms" in src
+    # Scoped to the `kept` seeding block. There is an EARLIER `elif pair_chars`
+    # that reorders `terms`, which is a different stage and not what this
+    # asserts about.
+    seed = src[src.index("kept: list[ExtractedTerm] = []"):]
+    assert seed.index("elif _ship_in_terms is not None") < seed.index("elif pair_chars")
+
+
+def test_a_one_word_fandom_that_is_an_ordinary_word_is_not_evidence():
+    """`After` is a real fandom, so "watching the movies after nearly a decade"
+    named it. That is not merely a wrong clause: _post_fandom is what every
+    character is then judged against, so one preposition read as a fandom
+    DELETES the right characters for disagreeing with it."""
+    from api.search import _COMMON_WORD_FANDOMS
+    assert "after" in _COMMON_WORD_FANDOMS
+    assert "the maze runner" not in _COMMON_WORD_FANDOMS
+
+
+def test_a_characters_own_bracket_names_the_fandom():
+    """The reader writes "Maze Runner"; the vocabulary has "The Maze Runner
+    Series - James Dashner". No exact n-gram finds it -- but `Thomas (Maze
+    Runner)` matched, and archives disambiguate characters by appending the
+    fandom, so the character is naming it."""
+    import inspect
+    from api import search as S
+    assert "_parens" in inspect.getsource(S.extract)
+
+
+def test_belonging_to_a_fandom_takes_more_than_one_crossover(db):
+    """EXISTS was too weak by exactly the margin that matters: crossovers
+    exist, so Newt Scamander really does appear in a Maze Runner work
+    somewhere, and one accident licensed him."""
+    from api.search import _FANDOM_FIT_MIN, _character_fits_fandom
+    assert _FANDOM_FIT_MIN > 1
+    # No fandom named means no judgement to make.
+    assert _character_fits_fandom(db, "Anyone", set()) is True
+
+
+def test_a_term_is_judged_by_what_it_costs_not_only_what_survives():
+    """tag:"The Maze Runner Spoilers" cleared the absolute floor comfortably
+    and took a pairing with 3,529 works down to twelve, three of them at zero
+    kudos. A weak term bought with a huge cut is a bad trade however many works
+    survive it."""
+    from api.search import _PROBE_MIN_RETAIN, _RATIO_CAP, _PROBE_CAP
+    assert 0 < _PROBE_MIN_RETAIN < 1
+    # The probe must still be counting at the top of its range, or every ratio
+    # is 1.0: at a cap of 20 both 3,529 and 38 come back 20.
+    assert _RATIO_CAP > _PROBE_CAP * 5
+
+
+def test_a_tag_that_restates_the_pairing_adds_nothing():
+    from api.search import _restates_pairing
+    assert _restates_pairing("Newt/Thomas (Maze Runner)",
+                             "Thomas Loves Newt (Maze Runner)")
+    assert not _restates_pairing("Newt/Thomas (Maze Runner)", "Newt Whump")
+    assert not _restates_pairing("Solo Character", "Anything")

@@ -225,19 +225,37 @@ async def enrich(limit: int, dry_run: bool, maxlen: int = 60,
                     failed += 1
                     continue
                 if r.status_code in (301, 302, 303, 307, 308):
-                    # Registered-users-only: a permanent answer. Recorded so
-                    # the next pass does not queue it again, and so the hubs --
-                    # which already filter on this column -- stop offering a
-                    # work nobody can open.
-                    if "/users/login" in r.headers.get("location", ""):
+                    dest = r.headers.get("location", "")
+                    if "/users/login" in dest:
+                        # Registered-users-only: a permanent answer. Recorded
+                        # so the next pass does not queue it again, and so the
+                        # hubs -- which already filter on this column -- stop
+                        # offering a work nobody can open.
                         with db_session() as db:
                             db.execute(sql_text(
                                 "UPDATE stories SET source_restricted_at = "
                                 "COALESCE(source_restricted_at, now()) "
                                 "WHERE id = :i"), {"i": sid})
                             db.commit()
-                    failed += 1
-                    continue
+                        failed += 1
+                        continue
+                    # ANY OTHER redirect is followed, and this is not optional.
+                    #
+                    # AO3 sends every multi-chapter work to its first chapter --
+                    # /works/19196995 -> /works/19196995/chapters/45636496 --
+                    # so declining all redirects to save the login round trip
+                    # threw away the majority of the queue instead. Measured
+                    # after that change shipped: "1 enriched, 119 skipped", then
+                    # "0 enriched, 120 skipped", while the pass went on spending
+                    # AO3's allowance to learn nothing.
+                    if not dest:
+                        failed += 1
+                        continue
+                    await ao3_budget.await_slot()
+                    r = await client.get(dest if dest.startswith("http")
+                                         else f"https://archiveofourown.org{dest}")
+                    ao3_budget.note_response(r.status_code,
+                                             r.headers.get("retry-after"))
                 if r.status_code != 200:
                     failed += 1
                     continue

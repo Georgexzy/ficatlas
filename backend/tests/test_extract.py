@@ -1113,13 +1113,21 @@ def test_a_bare_first_name_resolves_inside_the_post_s_fandom(punctuated):
     fandom writes them. That is the whole reason this asks the index instead of
     reading the bracket in the name.
     """
+    # ENOUGH works, not one. Belonging to a fandom is now a question of how
+    # often a character is written in it, because one work is what a CROSSOVER
+    # cameo looks like: `Newt Scamander` really does appear in a Maze Runner
+    # work somewhere, and a single accident was enough to license a Fantastic
+    # Beasts character on a Maze Runner post. See _character_fits_fandom.
+    from api.search import _FANDOM_FIT_MIN
     for i, char in enumerate(["Gwen Stacy | Spider-Gwen", "Peter Parker"]):
-        punctuated.execute(text("""
-            INSERT INTO stories (site, site_id, url, title, author,
-                                 fandoms, characters)
-            VALUES ('ao3', :sid, :url, 'x', 'y',
-                    ARRAY['Spider-Man - All Media Types'], ARRAY[:c])
-        """), {"sid": f"gw{i}", "url": f"https://example.test/gw{i}", "c": char})
+        for j in range(_FANDOM_FIT_MIN):
+            punctuated.execute(text("""
+                INSERT INTO stories (site, site_id, url, title, author,
+                                     fandoms, characters)
+                VALUES ('ao3', :sid, :url, 'x', 'y',
+                        ARRAY['Spider-Man - All Media Types'], ARRAY[:c])
+            """), {"sid": f"gw{i}_{j}",
+                   "url": f"https://example.test/gw{i}_{j}", "c": char})
     punctuated.commit()
     out = extract(text="a good spiderman fic with Peter and Gwen", db=punctuated)
     values = [t.value for t in out.terms]

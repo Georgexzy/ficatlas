@@ -353,7 +353,20 @@ def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
         dest = r.headers.get("location", "")
         if "/users/login" in dest:
             return RESTRICTED
-        return None
+        # Every other redirect is followed. AO3 sends multi-chapter works to
+        # their first chapter -- /works/123 -> /works/123/chapters/456 -- and
+        # treating that as a dead end discards most of the queue. The login
+        # round trip is the only one worth declining.
+        if not dest:
+            return None
+        ao3_budget.wait()
+        try:
+            r = client.get(dest if dest.startswith("http")
+                           else f"https://archiveofourown.org{dest}",
+                           timeout=45, follow_redirects=False)
+        except Exception:
+            return None
+        ao3_budget.note_response(r.status_code, r.headers.get("retry-after"))
     if r.status_code != 200:
         return None
     return parse_work_page(r.text)
