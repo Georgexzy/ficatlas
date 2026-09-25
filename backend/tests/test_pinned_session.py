@@ -1136,3 +1136,26 @@ def test_the_gap_recount_is_rare_and_says_why():
     src = inspect.getsource(worker._fandom_gaps_loop)
     assert "FANDOM_GAPS_INTERVAL_HOURS" in src
     assert "168" in src, "weekly, not per pass"
+
+
+def test_backfill_keeps_the_order_the_gap_query_gave_it():
+    """Re-sorting by least-walked threw the gap ordering away. The big gaps are
+    all ~1,180 pages deep because they have been visited before, so Fairy Tail
+    at page 485 won every time and went on yielding 25-34 enrichments per 160
+    works while Harry Potter sat on 300,647 missing summaries.
+
+    Least-walked is a fairness rule, and fairness is the wrong goal here.
+    Rotation comes from the weekly gap recount: a fandom stops being first when
+    its gap drops below another's."""
+    import inspect
+    import worker
+    src = inspect.getsource(worker._listing_harvest_loop)
+    # Anchored past the mode toggle at the top of the loop, which is also
+    # spelled `if mode == "backfill"` and is not the branch this is about.
+    anchor = 'pending = [(f, n, get_cursor(db, f, mode)) for f, n in fandoms]'
+    assert anchor in src
+    back = src[src.index(anchor):]
+    assert "pending[0]" in back, "backfill must take the head of the gap order"
+    assert "sorted(" in back, "discover must still spread by least-walked"
+    # And the head must be taken for backfill, the sort reserved for discover.
+    assert back.index("pending[0]") < back.index("sorted(")
