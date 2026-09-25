@@ -810,11 +810,29 @@ async def _listing_harvest_loop() -> None:
             # One fandom per pass, rotating by how far behind each one is, so a
             # 25,000-page fandom cannot monopolise the queue.
             with db_session() as db:
-                pending = sorted(
-                    ((f, n, get_cursor(db, f, mode)) for f, n in fandoms),
-                    key=lambda t: (t[2], -t[1]),      # least-walked, then biggest
-                )
-            fandom, works, start = pending[0]
+                pending = [(f, n, get_cursor(db, f, mode)) for f, n in fandoms]
+
+            if mode == "backfill":
+                # The order next_fandoms gave us, which is BY MISSING SUMMARY
+                # COUNT. Re-sorting by least-walked threw that away: the big
+                # gaps are all about 1,180 pages deep because they have been
+                # visited before, so a fandom like Fairy Tail at page 485 won
+                # every time and went on yielding 25-34 enrichments per 160
+                # works while Harry Potter sat on 300,647 missing summaries.
+                #
+                # Least-walked is a fairness rule and fairness is the wrong
+                # goal here. Rotation comes from the weekly gap recount
+                # instead: once a fandom's gap drops below another's it stops
+                # being first, which is rotation driven by what is left to do
+                # rather than by whose turn it is.
+                fandom, works, start = pending[0]
+            else:
+                # DISCOVER still spreads. It is looking for works that are new
+                # to us across the whole archive, and there is no gap count to
+                # aim it with -- a fandom nobody has visited lately is exactly
+                # where unseen works accumulate.
+                fandom, works, start = sorted(
+                    pending, key=lambda t: (t[2], -t[1]))[0]
 
             # The two queues walk from opposite ends, which is what the cursor
             # key has always claimed and what the code did not actually do: both
