@@ -1883,6 +1883,36 @@ async def _ao3_stub_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _fandom_gaps_loop() -> None:
+    """Recount, per fandom, how many works still have no summary.
+
+    This is what tells the listing harvest where to go, and getting it wrong is
+    expensive in the one currency that matters here: a tag listing returns
+    twenty works per request where a work page returns one, so the cheap path
+    pointed at an already-filled fandom wastes the best requests we have.
+
+    It used to be pointed by total works held, on the reasoning that every AO3
+    row arrived without a summary so the two were the same list. 81% lack one
+    now and unevenly, so they are not: a measured Fairy Tail pass reported "86
+    complete" of 160 while Harry Potter sat on 300,647 missing summaries.
+
+    Weekly, because the recount unnests the fandom array over 14M rows -- 89
+    seconds, measured -- and the answer moves far more slowly than that.
+    """
+    from db.session import db_session
+    from ao3_listing_harvest import refresh_gaps
+
+    interval = _num("FANDOM_GAPS_INTERVAL_HOURS", 168) * 3600
+    await asyncio.sleep(_num("FANDOM_GAPS_START_DELAY_SEC", 300))
+    while True:
+        try:
+            with db_session() as db:
+                await asyncio.to_thread(refresh_gaps, db)
+        except Exception as e:
+            log.warning(f"fandom gap refresh failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _supervised(name: str, factory) -> None:
     """Run one background loop for ever, surviving its own bugs.
 
@@ -1989,6 +2019,11 @@ async def main() -> None:
     if _flag("LISTING_HARVEST", "true"):
         tasks.append(asyncio.create_task(_supervised("listing_harvest_loop", _listing_harvest_loop)))
         log.info("AO3 listing harvest enabled (20 works per request)")
+
+    if _flag("FANDOM_GAPS", "true"):
+        tasks.append(asyncio.create_task(
+            _supervised("fandom_gaps_loop", _fandom_gaps_loop)))
+        log.info("fandom gap recount enabled (aims the listing harvest)")
 
     if _flag("AO3_STUB_ENRICH", "true"):
         tasks.append(asyncio.create_task(

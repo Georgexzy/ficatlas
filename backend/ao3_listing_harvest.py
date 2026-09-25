@@ -96,11 +96,25 @@ PAGES_PER_VISIT = int(os.getenv("LISTING_PAGES_PER_VISIT", "8"))
 # barely covered — RPF, K-pop, Marvel — so a pass there is nearly all new works
 # and closes the post-2024 gap the dump cannot.
 #
-# BACKFILL walks the fandoms WE hold the most of, which is where the missing
-# summaries actually are: 100% of AO3 rows arrived without one, so "most of our
-# works" is also "most of our gaps". Restricted to names that exist as canonical
-# AO3 tags, since that is what the tag URL needs — our own facet list contains
-# FF.net spellings like "Harry Potter" that AO3 has no tag page for.
+# BACKFILL walks the fandoms with the most MISSING SUMMARIES, which is not the
+# same as the fandoms we hold the most of.
+#
+# It used to be. This ordered by total works on the reasoning that "100% of AO3
+# rows arrived without a summary, so most of our works is also most of our
+# gaps", and that was true when it was written. It is not now: 81% lack one and
+# the distribution is uneven, so ordering by total sent the harvest back
+# through fandoms it had already filled -- measured, a Fairy Tail pass
+# reporting "86 complete" out of 160 -- while Harry Potter sat on 77,209
+# missing summaries in a three-million-row sample.
+#
+# The gap comes from `fandom_gaps`, materialised by refresh_gaps, because
+# asking it live means unnesting the fandom array over 14M rows. That is worth
+# the table: a tag listing returns TWENTY works per request against one for a
+# work page, so where this path points is the cheapest throughput available.
+#
+# Restricted to names that exist as canonical AO3 tags, since that is what the
+# tag URL needs — our own facet list contains FF.net spellings like "Harry
+# Potter" that AO3 has no tag page for.
 DISCOVER_SQL = sql_text("""
     SELECT value, count
     FROM facets
@@ -113,8 +127,13 @@ BACKFILL_SQL = sql_text("""
     SELECT f.value, f.count
     FROM facets f
     JOIN facets a ON a.kind = 'fandom_ao3' AND a.value = f.value
+    LEFT JOIN fandom_gaps g ON g.fandom = f.value
     WHERE f.kind = 'fandom' AND f.count >= :min_works
-    ORDER BY f.count DESC
+    -- Biggest gap first. NULLS LAST rather than first: a fandom absent from
+    -- fandom_gaps has fewer than the table's floor of missing summaries, so it
+    -- is nearly done, not unmeasured. Total works breaks the tie and is what
+    -- this used to order by alone.
+    ORDER BY g.no_summary DESC NULLS LAST, f.count DESC
     LIMIT :lim
 """)
 
@@ -147,3 +166,43 @@ def get_cursor(db, fandom: str, mode: str = "discover") -> int:
 def set_cursor(db, fandom: str, page: int, mode: str = "discover") -> None:
     from api.settings import put_setting
     put_setting(db, cursor_key(fandom, mode), str(page))
+
+
+# ── where the summary gaps actually are ────────────────────────────────────
+
+GAP_REFRESH_SQL = """
+TRUNCATE fandom_gaps;
+INSERT INTO fandom_gaps (fandom, no_summary, works)
+SELECT f,
+       count(*) FILTER (WHERE missing) AS no_summary,
+       count(*) AS works
+  FROM (
+    SELECT unnest(fandoms) AS f,
+           (summary IS NULL OR summary = '') AS missing
+      FROM stories
+     WHERE site = 'ao3' AND cardinality(fandoms) > 0
+  ) t
+ GROUP BY f
+HAVING count(*) FILTER (WHERE missing) >= 200;
+"""
+
+
+def refresh_gaps(db) -> int:
+    """Recount, per fandom, how many works still have no summary.
+
+    Expensive on purpose and rarely: unnesting the fandom array over 14M rows
+    is not a question to ask per pass, and the answer moves slowly. What it
+    buys is pointing the cheap path at the real work -- a tag listing returns
+    twenty works per request where a work page returns one, so sending the
+    harvest to a fandom it has already filled wastes the most valuable requests
+    this project has.
+    """
+    from db.session import lift_statement_timeout
+    lift_statement_timeout(db)
+    for stmt in GAP_REFRESH_SQL.split(";"):
+        if stmt.strip():
+            db.execute(sql_text(stmt))
+    n = db.execute(sql_text("SELECT count(*) FROM fandom_gaps")).scalar() or 0
+    db.commit()
+    log.info("fandom gaps: %s fandoms with 200+ missing summaries", f"{n:,}")
+    return int(n)

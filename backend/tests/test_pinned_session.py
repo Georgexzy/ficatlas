@@ -1104,3 +1104,35 @@ def test_a_tag_that_restates_the_pairing_adds_nothing():
                              "Thomas Loves Newt (Maze Runner)")
     assert not _restates_pairing("Newt/Thomas (Maze Runner)", "Newt Whump")
     assert not _restates_pairing("Solo Character", "Anything")
+
+
+# ---- aiming the cheap path -----------------------------------------------
+
+def test_the_backfill_walks_the_gaps_not_the_biggest_fandoms():
+    """It ordered by total works held, on the reasoning that every AO3 row
+    arrived without a summary so "most of our works" was also "most of our
+    gaps". True when written; 81% lack one now, unevenly -- so that ordering
+    sent the harvest back through fandoms it had already filled. Measured: a
+    Fairy Tail pass reporting "86 complete" of 160 while Harry Potter sat on
+    300,647 missing summaries.
+
+    It matters because of the exchange rate: a tag listing returns twenty works
+    per request where a work page returns one.
+    """
+    import ao3_listing_harvest as H
+    sql = str(H.BACKFILL_SQL)
+    assert "fandom_gaps" in sql
+    assert "g.no_summary DESC" in sql
+    # NULLS LAST, not first: a fandom absent from the table is below its floor
+    # of missing summaries, so it is nearly done rather than unmeasured.
+    assert "NULLS LAST" in sql
+
+
+def test_the_gap_recount_is_rare_and_says_why():
+    """It unnests the fandom array over 14M rows -- 89 seconds measured -- and
+    the answer moves far more slowly than that."""
+    import inspect
+    import worker
+    src = inspect.getsource(worker._fandom_gaps_loop)
+    assert "FANDOM_GAPS_INTERVAL_HOURS" in src
+    assert "168" in src, "weekly, not per pass"
