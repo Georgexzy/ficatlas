@@ -226,6 +226,11 @@ services:
       # unset, the panel says it is not connected. NOT the tunnel token; needs
       # its own token with Zone > Analytics > Read. See .env.example.
       CLOUDFLARE_API_TOKEN: ${FICATLAS_CF_API_TOKEN:-}
+      # OFFLINE ONLY, for backend/extractor_teacher.py. Nothing in a request
+      # path reads it: the teacher labels Reddit posts so the deterministic
+      # extractor can learn from them, and is switched off once that is done.
+      # Unset, the script says so and exits; every other job is unaffected.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLOUDFLARE_ZONE_ID: ${FICATLAS_CF_ZONE_ID:-}
       # See backend/ratelimit.py — marks our own SSR traffic so it is not
       # counted as one very busy client. Same value in both services.
