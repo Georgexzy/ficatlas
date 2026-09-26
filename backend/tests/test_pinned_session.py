@@ -1182,3 +1182,23 @@ def test_the_stale_refresh_does_not_scan_rows_that_cannot_win():
     # It must be a WHERE condition, not a change to the score itself: the
     # ordering is what makes the exclusion lossless.
     assert "ln(1 + COALESCE(kudos,0) + COALESCE(hits,0))" in src
+
+
+def test_every_caller_of_fetch_work_handles_the_restricted_sentinel():
+    """RESTRICTED was added to fetch_work and only one of its two callers was
+    updated. It is a truthy object and not THROTTLED, so in the other it fell
+    straight through to apply_work and raised "'object' object has no attribute
+    'get'".
+
+    That only surfaced after the statement-timeout fix above, because until then
+    the pass died before it ever reached a fetch. One bug was hiding the next,
+    which is the argument for fixing the loud one first.
+    """
+    import inspect
+    import worker
+    for fn in (worker._refresh_stale_loop, worker._title_repair_loop):
+        src = inspect.getsource(fn)
+        if "fetch_work(" not in src:
+            continue
+        assert "RESTRICTED" in src, (
+            f"{fn.__name__} calls fetch_work without handling RESTRICTED")
