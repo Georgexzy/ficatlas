@@ -315,7 +315,8 @@ async def _refresh_stale_loop() -> None:
     from sqlalchemy import text as sql_text
     from db.session import db_session
     from models.story import Story
-    from ao3_title_repair import RateLimiter, THROTTLED, fetch_work, apply_work, UA
+    from ao3_title_repair import (RESTRICTED, RateLimiter, THROTTLED,
+                                  apply_work, fetch_work, UA)
     import httpx
 
     # Which WIP is worth a request right now?
@@ -453,6 +454,7 @@ async def _refresh_stale_loop() -> None:
             limiter = RateLimiter(delay)
             stats: dict[str, int] = {}
             checked = 0
+            restricted: list = []
 
             def _run() -> int:
                 nonlocal checked
@@ -460,6 +462,21 @@ async def _refresh_stale_loop() -> None:
                     for sid, work_id in rows:
                         limiter.wait()
                         data = fetch_work(client, work_id, limiter)
+                        if data is RESTRICTED:
+                            # Registered-users-only, and a PERMANENT answer.
+                            # Recorded so neither this pass nor any other asks
+                            # again -- the same treatment the title repair pass
+                            # gives it.
+                            #
+                            # This caller was missed when RESTRICTED was added.
+                            # It is a truthy object and not THROTTLED, so it
+                            # fell straight through to apply_work and raised
+                            # "'object' object has no attribute 'get'" -- which
+                            # only surfaced once the statement timeout above was
+                            # fixed, because until then the pass never reached
+                            # a fetch at all. One bug was hiding the next.
+                            restricted.append(sid)
+                            continue
                         if data is THROTTLED or not data:
                             continue
                         checked += 1
@@ -474,8 +491,17 @@ async def _refresh_stale_loop() -> None:
                 return checked
 
             await asyncio.to_thread(_run)
+            if restricted:
+                with db_session() as db:
+                    db.execute(sql_text(
+                        "UPDATE stories SET source_restricted_at = COALESCE("
+                        "source_restricted_at, now()) WHERE id = ANY(:ids)"),
+                        {"ids": restricted})
+                    db.commit()
             changed = " ".join(f"{k}={v}" for k, v in sorted(stats.items(), key=lambda kv: -kv[1]))
-            log.info(f"stale refresh: {checked}/{len(rows)} re-read — {changed or 'no changes'}")
+            log.info(f"stale refresh: {checked}/{len(rows)} re-read — "
+                     f"{changed or 'no changes'}"
+                     + (f" ({len(restricted)} locked)" if restricted else ""))
         except Exception as e:
             log.warning(f"stale refresh failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
