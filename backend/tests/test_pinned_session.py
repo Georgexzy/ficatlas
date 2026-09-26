@@ -1159,3 +1159,26 @@ def test_backfill_keeps_the_order_the_gap_query_gave_it():
     assert "sorted(" in back, "discover must still spread by least-walked"
     # And the head must be taken for backfill, the sort reserved for discover.
     assert back.index("pending[0]") < back.index("sorted(")
+
+
+# ---- the stale refresh that was dying every pass -------------------------
+
+def test_the_stale_refresh_does_not_scan_rows_that_cannot_win():
+    """Its score multiplies by ln(1 + kudos + hits), so a work with neither
+    figure scores EXACTLY ZERO and can never survive the ORDER BY. 4.9M of the
+    6.35M in_progress AO3 rows are in that state, so scanning them was 78% of
+    the cost -- and that cost exceeded the 60s statement timeout, so the pass
+    died with QueryCanceled every single time.
+
+    In the log that is one warning among thousands. In the index it is nothing
+    happening for months, which is the failure mode this whole session keeps
+    turning up.
+    """
+    import inspect
+    import worker
+    src = inspect.getsource(worker._refresh_stale_loop)
+    assert "COALESCE(kudos, 0) > 0 OR COALESCE(hits, 0) > 0" in src, \
+        "the zero-score rows are still being scanned"
+    # It must be a WHERE condition, not a change to the score itself: the
+    # ordering is what makes the exclusion lossless.
+    assert "ln(1 + COALESCE(kudos,0) + COALESCE(hits,0))" in src

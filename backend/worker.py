@@ -372,6 +372,18 @@ async def _refresh_stale_loop() -> None:
             WHERE site = 'ao3'
               AND site_id ~ '^[0-9]+$'
               AND status = 'in_progress'
+              -- A work with no engagement scores EXACTLY ZERO, because the
+              -- formula above multiplies by ln(1 + kudos + hits). Such a row
+              -- can never survive the ORDER BY, so scanning it is pure cost --
+              -- and it is most of the cost: 4.9M of the 6.35M in_progress AO3
+              -- rows have neither figure.
+              --
+              -- This is not a tuning change, it is why the job worked at all.
+              -- The unfiltered scan exceeded the 60s statement timeout and the
+              -- pass died with QueryCanceled every time, which in the log reads
+              -- as one warning line among thousands and in the index reads as
+              -- nothing happening for months.
+              AND (COALESCE(kudos, 0) > 0 OR COALESCE(hits, 0) > 0)
               AND (crawled_at IS NULL
                    OR crawled_at < now() - (:min_age || ' days')::interval)
         )
