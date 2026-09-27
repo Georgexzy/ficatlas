@@ -21,7 +21,27 @@ router = APIRouter()
 # and should follow them to their phone. Without it a reader who curates a
 # shelf on their laptop arrives at their phone with an empty Offline tab and no
 # idea what they had picked.
-ALLOWED_KEYS = {"bookmarks", "progress", "recents", "settings", "explicit", "offline"}
+# "saved" is the reader's KEPT searches, as opposed to "recents", which is a log
+# of what was typed, capped at 50 and overwritten without asking. A saved search
+# is something somebody decided to keep, so it is unioned and never capped away.
+#
+# "dismissed" is whether they have already declined to add an email address.
+# EmailPrompt kept that on the device and reasoned that recording it server-side
+# would mean writing to the user row of somebody who has just said no. That is
+# right about the USER ROW and wrong about this table: per-device, the prompt
+# asked again on every device the reader used, which breaks the component's own
+# stated promise that "a dismissal is remembered for good" — and a prompt that
+# keeps coming back after you have answered it reads as the site not listening.
+#
+# "mutes" is the never-show-me list: {tags, relationships, fandoms, characters,
+# authors}, each an array. It was deliberately device-only — lib/mutelist.ts
+# argues that a standing list of ships, tropes and authors somebody refuses to
+# read is more revealing than any search — and now syncs on the operator's
+# instruction, for consistency with the dozen preferences beside it in Settings.
+# The privacy argument is answered rather than ignored: /privacy names this list
+# among what is stored, and no screen promises any more that it stays put.
+ALLOWED_KEYS = {"bookmarks", "progress", "recents", "settings", "explicit",
+                "offline", "saved", "dismissed", "mutes"}
 MAX_BYTES    = 2 * 1024 * 1024   # 2 MB per key
 
 
@@ -31,6 +51,13 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
     - bookmarks: array of story objects/ids → union, dedup by id (or by value)
     - offline:   same shape and same union — the shelf of works chosen for
                  offline reading, deliberately WITHOUT the chapters
+    - saved:     same union — searches the reader chose to keep
+    - dismissed: monotonic flag → either side having set it wins
+    - mutes:     dict of arrays → union per field, so one device cannot wipe
+                 another's list. NOTE the cost, which it shares with bookmarks:
+                 a union cannot express a REMOVAL, so un-muting something on one
+                 device is undone by the next sync from a device that still has
+                 it. Both devices converge once each has synced after the edit.
     - recents:   array → union preserving recency, cap at 50
     - progress:  dict keyed by story id → per-story keep the most-recently-updated
     - settings:  dict of unrelated preferences → merged per key, client winning
@@ -42,10 +69,38 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
     if client is None:
         return server
 
-    if key in ("bookmarks", "offline"):
+    if key in ("bookmarks", "offline", "saved"):
         # Union, so a device that has not downloaded a work does not erase it
-        # from the shelf for the device that has.
+        # from the shelf for the device that has. Saved searches are the same
+        # shape and the same argument: a search kept on a laptop must not be
+        # deleted by a phone that has never seen it.
         return _merge_id_array(client, server)
+
+    if key == "mutes":
+        # An OBJECT of arrays, so the union is per FIELD. Merging it as a whole
+        # object (client wins) would mean a phone that has never muted an author
+        # wiping the author list built on a laptop — the same cross-device loss
+        # the `settings` branch below exists to prevent, and worse here because
+        # the result is works reappearing that the reader had hidden.
+        if not isinstance(client, dict) or not isinstance(server, dict):
+            return client
+        out = dict(server)
+        for field in set(client) | set(server):
+            c, sv = client.get(field), server.get(field)
+            if isinstance(c, list) or isinstance(sv, list):
+                out[field] = _merge_id_array(c, sv)
+            elif field in client:
+                out[field] = c
+        return out
+
+    if key == "dismissed":
+        # MONOTONIC, not last-write-wins. "I have already said no" is an answer
+        # that only ever goes one way, and a device that has never been prompted
+        # sends nothing at all — so the safe merge is "either of us said yes".
+        # Client-wins happens to give the same answer today, because the only
+        # values written are the flag and its absence; this states the rule so a
+        # second value later cannot quietly un-dismiss it.
+        return client or server
 
     if key == "recents":
         # recents are usually arrays of strings or {q, at} objects; union, cap 50

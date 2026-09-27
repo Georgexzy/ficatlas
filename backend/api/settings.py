@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from db.session import get_db
-from api.auth import require_admin
+from api.auth import require_admin, get_current_user
 
 router = APIRouter()
 
@@ -96,12 +96,56 @@ def put_setting(db: Session, key: str, value: str) -> None:
     db.commit()
 
 
+# What an anonymous reader is allowed to read back, and nothing else.
+#
+# This endpoint returned the WHOLE `app_settings` table to anybody, unauthenticated
+# — measured on the live instance, 140 keys, of which 6 are the reader-facing
+# defaults the Settings page actually wants. The other 134 are operator state:
+# crawl mode and rotation cursors, the per-site circuit breakers, `archive_page:*`
+# and `listing_page:*` harvest watermarks, the admin panel's growth samples.
+#
+# None of it is a credential today. The problem is the DIRECTION of the default:
+# the table is a general key/value store that server-side code writes to
+# (put_setting, the scheduler's breaker, the popularity pass's evidence), so
+# "everything is public unless someone remembers to think about it" means the next
+# key somebody adds is published by accident. An allowlist inverts that — a new
+# key is private until it is deliberately named here.
+#
+# These six are safe and necessary: they are the INSTANCE DEFAULTS a first-time
+# visitor's search and reader start from, they are chosen by the operator to be
+# seen, and every one of them is already visible in the UI they configure.
+PUBLIC_KEYS = {
+    "default_sites", "default_sort", "results_per_page",
+    "show_explicit", "reader_font", "reader_width",
+}
+
+
+def _may_see_all(user, db: Session) -> bool:
+    """Whether this caller gets the operator keys as well.
+
+    Mirrors _require_role's unclaimed-instance rule deliberately: POST here falls
+    open until the instance has its first account, so a fresh install can be
+    configured before anyone signs up, and a GET that stayed shut would show that
+    operator an admin form they could save but not read back.
+    """
+    from models.user import ROLE_ADMIN
+    if user is not None:
+        return bool(user.at_least(ROLE_ADMIN))
+    return db.execute(text("SELECT 1 FROM users LIMIT 1")).first() is None
+
+
 @router.get("")
-def all_settings(db: Session = Depends(get_db)):
+def all_settings(db: Session = Depends(get_db),
+                 user=Depends(get_current_user)):
+    """Instance settings. An admin sees all of them; everyone else sees the six
+    reader-facing defaults — see PUBLIC_KEYS for why that is an allowlist."""
     _ensure_table(db)
     rows = db.execute(text("SELECT key, value FROM app_settings")).fetchall()
     stored = {r[0]: r[1] for r in rows}
-    return {**DEFAULTS, **stored}
+    merged = {**DEFAULTS, **stored}
+    if _may_see_all(user, db):
+        return merged
+    return {k: v for k, v in merged.items() if k in PUBLIC_KEYS}
 
 
 @router.post("")

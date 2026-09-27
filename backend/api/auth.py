@@ -787,8 +787,54 @@ def set_view_as(role: str = Form(""), sat: Optional[str] = Cookie(default=None, 
     return {"view_as": role, "real_role": user.role}
 
 
+def confirm_identity(user: User, password: str, confirm: str) -> None:
+    """Prove this really is the account holder before a dangerous change.
+
+    A PASSWORD, normally. For an account that HAS NO PASSWORD — one created
+    through Google sign-in, where having none is the point — a typed username
+    instead.
+
+    Why that is necessary rather than a convenience: `password_hash` is NULL for
+    those accounts and `check_password` correctly refuses a null hash, so every
+    endpoint gated on a password was simply unreachable for them. Measured
+    against the two that matter: a Google-only reader could not change their
+    email address, and **could not delete their account at all** — while
+    /privacy promises in as many words that they can, and the account page
+    rendered a form whose button could never become enabled. A promise the code
+    cannot keep is worse than a missing feature, and "delete my account" is the
+    one it is least acceptable to break.
+
+    Why a typed username is enough there, and not a lowering of the bar:
+
+      * there is nothing else to ask for. The session IS the credential for a
+        passwordless account, exactly as it is on Google's own surfaces.
+      * it buys no new power. Anyone holding such a session can already call
+        /set-password and mint a password, and then satisfy the password gate
+        with it. The gate was therefore stopping the account's owner and not an
+        attacker — the worst shape a security check can have.
+      * typing your own name is a deliberate act, which is what a confirmation
+        is for. It is the standard "type the name to confirm" pattern, and it
+        cannot be clicked through by accident.
+
+    An account WITH a password is unaffected and still needs it: there the gate
+    does real work, because /set-password refuses when a hash already exists.
+    """
+    if user.password_hash:
+        if not check_password(password, user.password_hash):
+            raise HTTPException(403, "That password is not correct")
+        return
+    # Compared case-insensitively. Usernames are unique case-sensitively here, but
+    # asking somebody to reproduce their own capitals under a red Delete button is
+    # a trap, not a check.
+    if (confirm or "").strip().lower() != (user.username or "").lower():
+        raise HTTPException(
+            403,
+            "This account has no password, so type your username to confirm.")
+
+
 @router.post("/email")
-def set_email(password: str = Form(...), email: str = Form(""),
+def set_email(password: str = Form(""), email: str = Form(""),
+                    confirm: str = Form(""),
                     user: User = Depends(require_user), db: Session = Depends(get_db)):
     """Add, change or clear the account's contact address.
 
@@ -797,11 +843,15 @@ def set_email(password: str = Form(...), email: str = Form(""),
     take the account permanently — turning a stolen session into a stolen
     account.
 
+    An account with NO password confirms with its username instead; see
+    confirm_identity for why that is the honest equivalent rather than a weaker
+    check, and note that such an account could not change its address at all
+    before this.
+
     An empty value clears it, which has to stay possible: the address is
     optional, and someone who added one should be able to take it back.
     """
-    if not check_password(password, user.password_hash):
-        raise HTTPException(403, "That password is not correct")
+    confirm_identity(user, password, confirm)
 
     email = email.strip().lower()
     if email:
@@ -876,14 +926,20 @@ def logout_all(
 @router.post("/delete-account")
 def delete_account(
     response: Response,
-    password: str = Form(...),
+    password: str = Form(""),
+    confirm: str = Form(""),
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ):
     """Permanently delete the account and all associated data (sessions + userdata
-    cascade via FK ON DELETE CASCADE). Requires the password as confirmation."""
-    if not check_password(password, user.password_hash):
-        raise HTTPException(401, "Password is incorrect")
+    cascade via FK ON DELETE CASCADE).
+
+    Confirmed with the password, or with a typed username for an account that has
+    none — which is every account made through Google sign-in, and which could not
+    be deleted at all before that (see confirm_identity). /privacy promises this
+    works; it has to work for everybody it is promised to.
+    """
+    confirm_identity(user, password, confirm)
     # Explicitly remove children first so deletion works whether or not the ORM
     # relationship cascade is configured (the DB FK is ON DELETE CASCADE, but the
     # ORM session may not know that).
