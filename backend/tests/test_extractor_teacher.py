@@ -187,3 +187,25 @@ def test_the_teacher_is_still_out_of_every_request_path():
     root = pathlib.Path(__file__).resolve().parents[1]
     for name in ("api/search.py", "main.py", "worker.py"):
         assert "extractor_teacher" not in (root / name).read_text()
+
+
+def test_a_possessive_is_a_suffix_not_a_character_set():
+    """str.strip("'s") removes every leading and trailing ' and s, so "sirius"
+    arrived at the character check as "iriu" and matched nothing -- which is
+    how `sirius -> Canon Divergence` survived the guard written to stop it,
+    while `aizawa` was caught and looked like proof the guard worked."""
+    def key(word):
+        return word[:-2] if word.endswith("'s") else word
+    assert key("sirius") == "sirius"
+    assert key("batman's") == "batman"
+    assert key("brothers") == "brothers"
+    assert "sirius".strip("'s") != "sirius", "the old behaviour, for the record"
+
+
+def test_a_name_is_matched_inside_a_full_character_name():
+    """The vocabulary holds `Sirius Black` and `Aizawa Shouta`, never the bare
+    first name a reader writes, so an exact match caught nothing useful."""
+    import inspect
+    src = inspect.getsource(T._is_character_word)
+    assert "~*" in src and "\\m" in src, "needs a word-boundary match"
+    assert "lower(value) = lower(:w)" not in src
