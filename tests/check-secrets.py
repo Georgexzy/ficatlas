@@ -68,6 +68,13 @@ ALLOWED = [
     (".env.example", "database URL with a password"),
     (".env.example", "password= literal"),
     ("IMPROVEMENTS.md", "hardcodes"),
+
+    # Test fixtures for set-password and change-password, which cannot be
+    # exercised without a literal to pass in. Narrow to the one test file and
+    # the one value, not the directory: a blanket exemption on tests/ would
+    # exempt the place a real credential is most likely to be pasted while
+    # somebody reproduces a login bug.
+    ("backend/tests/test_pinned_session.py", "_PW = "),
     ("IMPROVEMENTS.md", "password="),
 
     # A test for DSN handling has to contain a DSN. Narrowed to the one file
@@ -147,6 +154,38 @@ _CREDENTIAL_KEY = re.compile(r"(PASSWORD|PASSWD|TOKEN|SECRET|_KEY|APIKEY)$", re.
 SKIPPED = []
 
 
+# Keys in .env whose VALUE is public by definition, so finding one in a tracked
+# file is not a leak and must not be reported as one.
+#
+# Added when PUBLIC_BASE_URL went into .env for Google sign-in and the scanner
+# reported 17 "possible credentials" — every one of them the string
+# "https://ficatlas.com", in the README, the deploy notes and six modules that
+# build links with it. The site's own address is the least secret fact about it.
+#
+# This list is deliberately about the KEY, not a pattern over the value: a scanner
+# that decided for itself which values look public would start excusing real
+# secrets. Each entry needs a reason, and the reason has to be that the value is
+# meant to be seen by strangers.
+PUBLIC_ENV_KEYS = {
+    # The canonical public URL. Printed in the README, used to build every
+    # outbound link, and served to every visitor.
+    "PUBLIC_BASE_URL",
+    # Identifies which Cloudflare zone, not who may change it. Useless without
+    # FICATLAS_CF_API_TOKEN, which IS a secret and is not in this set.
+    "FICATLAS_CF_ZONE_ID",
+    # Published on purpose at /<key>.txt — that is how the IndexNow protocol
+    # proves the submitter owns the domain.
+    "INDEXNOW_KEY",
+    # Which signup mode the instance is in ("open"/"invite"), not the code.
+    # SIGNUP_CODE is the secret and is not in this set.
+    "SIGNUP_MODE",
+    # An OAuth CLIENT ID is public by design: it is sent to the browser on every
+    # sign-in and appears in the consent screen URL. GOOGLE_CLIENT_SECRET is the
+    # secret half and is NOT in this set.
+    "GOOGLE_CLIENT_ID",
+}
+
+
 def env_values():
     """Live secret values, longest first so the report names the specific one."""
     env = ROOT / ".env"
@@ -165,6 +204,8 @@ def env_values():
         # POSTGRES_PASSWORD is well within what someone sets by hand, and a
         # flat 12-character floor skipped it silently.
         key = key.strip()
+        if key in PUBLIC_ENV_KEYS:
+            continue
         floor = 6 if _CREDENTIAL_KEY.search(key) else 12
         if len(value) >= floor:
             out.append((key, value))
