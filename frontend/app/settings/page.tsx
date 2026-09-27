@@ -142,7 +142,7 @@ const PREF_FALLBACK: Prefs = {
 }
 
 export default function SettingsPage() {
-  const { user, loading: authLoading } = useAuth()
+  const { user, loading: authLoading, forgetRemote } = useAuth()
   const isAdmin = !!user?.can_manage
 
   // Which tab, from the address so it can be linked and survives Back. Read
@@ -667,7 +667,11 @@ export default function SettingsPage() {
                     // Confirmed because these are not recoverable and one of
                     // them is your place in every story you are reading.
                     if (!confirm(`Clear ${g.name.toLowerCase()}? This cannot be undone.`)) return
-                    clearGroup(g); refreshSizes()
+                    clearGroup(g)
+                    // And on the server, or it comes straight back on the next
+                    // sync — see forgetRemote in lib/auth.tsx.
+                    void forgetRemote(g.keys)
+                    refreshSizes()
                     if (g.id === "mutes") setMutes(EMPTY_MUTES)
                   }}>
                   Clear

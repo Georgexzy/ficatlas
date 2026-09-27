@@ -108,6 +108,26 @@ describe("the storage registry is the only list", () => {
     expect(DEVICE_ONLY_KEYS).toContain("me")
   })
 
+  it("puts every synced key somewhere a reader can clear it, or marks it internal", () => {
+    // A key that is stored on the SERVER and belongs to no data group is one
+    // the reader can never clear without deleting the whole account — and
+    // /privacy states that individual categories can be cleared separately.
+    //
+    // This is the invariant behind the bug that prompted it: Clear used to
+    // remove the local copy only, so for a signed-in reader the server kept
+    // everything and a single window-focus sync pulled it straight back.
+    // Verified in a browser, in both directions. The fix (forgetRemote in
+    // lib/auth.tsx) can only reach a key that a group actually owns, so a
+    // synced key outside every group silently opts out of it.
+    const clearable = new Set(DATA_GROUPS.flatMap(g => g.keys))
+    for (const k of STORED_KEYS) {
+      if (k.scope !== "sync") continue
+      if (k.group === "internal") continue     // deliberate; goes with the account
+      expect(clearable, `${k.key} syncs but no Clear button can reach it`)
+        .toContain(`ficatlas:${k.key}`)
+    }
+  })
+
   it("groups only keys that exist", () => {
     for (const group of ["prefs", "history", "progress", "bookmarks", "mutes",
                          "internal"] as const) {

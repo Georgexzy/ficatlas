@@ -45,6 +45,9 @@ interface AuthContextType {
    *  accounts could not be deleted at all; see confirm_identity in
    *  backend/api/auth.py. */
   deleteAccount: (password: string, confirm?: string) => Promise<void>
+  /** Delete the server-side copy of whatever these storage keys belong to.
+   *  Pass the keys of a data group; clearing locally is the caller's job. */
+  forgetRemote: (storageKeys: string[]) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
@@ -405,6 +408,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // CLEARING HAS TO REACH THE SERVER, or it clears nothing.
+  //
+  // The data page's Clear button called clearGroup(), which removes the
+  // localStorage keys and stops there. For a signed-out reader that is the whole
+  // story. For a signed-in one it was theatre: snapshot() skips a key with no
+  // local value, so the cleared key is not sent, the server still holds it,
+  // _merge_value returns the server copy when the client has none — and the
+  // data is back within sixty seconds, on the next interval sync.
+  //
+  // A delete button that does not delete is bad on any screen. On the page whose
+  // whole purpose is "see what is held and remove it", and under a privacy
+  // policy that says individual categories can be cleared, it is a false
+  // statement rendered as a button.
+  //
+  // Takes the STORAGE keys a data group owns and deletes whichever of them are
+  // synced. The hash is reset afterwards so the next sync is a genuine one
+  // rather than being skipped as unchanged.
+  const forgetRemote = useCallback(async (storageKeys: string[]) => {
+    if (!loggedInRef.current) return
+    const owned = new Set(storageKeys.map(k => k.replace(/^ficatlas:/, "")))
+    const targets = (Object.keys(STORAGE_KEY) as SyncKey[]).filter(
+      sk => owned.has(STORAGE_KEY[sk]))
+    // `settings` is synthesised from the individual preference keys rather than
+    // stored under one of them, so it is never matched by the loop above.
+    if (storageKeys.some(k => (PREF_KEYS as readonly string[])
+          .includes(k.replace(/^ficatlas:/, "")))) {
+      targets.push("settings" as SyncKey)
+    }
+    await Promise.all(targets.map(k =>
+      fetch(`/api/userdata/${k}`, { method: "DELETE", credentials: "include" })
+        .catch(() => {})))
+    // Whatever is local now IS the truth, so record it as synced. Without this
+    // the next merge compares against the pre-clear hash, decides nothing has
+    // changed, and skips — leaving the two sides disagreeing until something
+    // else happens to be edited.
+    lastSyncedHashRef.current = JSON.stringify(snapshot())
+  }, [snapshot])
+
   const deleteAccount = useCallback(async (password: string, confirm = "") => {
     const fd = new FormData()
     fd.append("password", password)
@@ -420,7 +461,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, loading, syncing, lastSyncAt,
-      login, signup, logout, syncNow, changePassword, deleteAccount,
+      login, signup, logout, syncNow, changePassword, deleteAccount, forgetRemote,
     }}>
       {children}
     </AuthContext.Provider>
