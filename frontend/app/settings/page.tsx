@@ -371,11 +371,18 @@ export default function SettingsPage() {
           reading progress all follow you between devices, which is most of the
           reason to have one. Saying otherwise talked readers out of the feature.
           What IS device-only is now named, because that is the part worth a
-          promise. */}
+          promise.
+
+          This then named the mute list as the exception — and was left behind
+          when the mute list started syncing, while five other screens were
+          updated with it. Spotted by the operator on the live site. The lesson
+          is the one lib/storageKeys.ts exists for: a claim about what syncs
+          must be read off that registry, not written from memory, because these
+          sentences are scattered across six files and nothing links them. */}
       <p className="settings-lede">
         {user
-          ? <>These are yours. Most of them follow you to your other devices;
-              your never-show-me list stays on this one.</>
+          ? <>These are yours, and they follow you to your other devices —
+              including your never-show-me list.</>
           : <>These are yours and stay on this device — no account needed.
               Nothing here changes what anybody else sees.</>}
       </p>
