@@ -116,83 +116,79 @@ def _weighted(path: Path, size: int, weight: int) -> ImageFont.FreeTypeFont:
     return f
 
 
+def _kite(d, cx, cy, ux, uy, length, half, gold, cream):
+    """One point of the rose: a kite from the centre out along (ux, uy).
+
+    Split down its own axis — the half on one side of the direction vector in
+    gold, the other in cream. That is how a cartographer's rose reads as light
+    and shadow, and here it is also the wordmark's two colours.
+
+    Built from the direction vector and its perpendicular rather than from
+    hand-written coordinates per compass point. The first attempt wrote the four
+    diagonals out by hand and got the shoulder signs wrong, which produced
+    overlapping shards through the middle of the mark — obvious once rendered
+    and invisible in the source.
+    """
+    px_, py_ = -uy, ux                       # perpendicular
+    tip = (cx + ux * length, cy + uy * length)
+    right = (cx + px_ * half, cy + py_ * half)
+    left = (cx - px_ * half, cy - py_ * half)
+    d.polygon([tip, right, (cx, cy)], fill=gold)
+    d.polygon([tip, left, (cx, cy)], fill=cream)
+
+
+def _rose(d, cx, cy, R, gold, cream, minor=True):
+    """A cartographer's compass rose, drawn as flat polygons.
+
+    Flat fills, no gradient: the mark has to survive being 16 pixels wide, and a
+    gradient at that size is a smudge. The two-tone facets do the same job with
+    geometry, which downsamples cleanly.
+
+    The diagonals are drawn FIRST so the cardinals sit on top of them — on a
+    real rose the cardinal points are the dominant feature and the intercardinals
+    tuck behind them.
+    """
+    k = 0.7071067811865476
+    if minor:
+        # Shorter and much narrower than the cardinals. At small sizes they are
+        # dropped entirely: they only fill the gaps between the cardinals and
+        # turn a clean four-pointed star into a blob.
+        for ux, uy in ((k, -k), (k, k), (-k, k), (-k, -k)):
+            _kite(d, cx, cy, ux, uy, R * 0.52, R * 0.085, gold, cream)
+    for ux, uy in ((0, -1), (1, 0), (0, 1), (-1, 0)):
+        _kite(d, cx, cy, ux, uy, R, R * 0.155, gold, cream)
+
+
 def draw_icon(px: int, fonts: dict[str, Path]) -> Image.Image:
+    """The app icon: a compass rose on the site's dark ground.
+
+    NOT the letters, and NOT a framed tile. The first cut of this was "FA" in
+    Playfair inside a gold ring, which is faithful to the wordmark and was
+    rejected on sight — the ring was the loudest thing in it whatever the
+    opacity, and two didone capitals turn to mud at favicon size however they
+    are cut. A mark that only works above 32px is not an icon.
+
+    A compass rose instead, because an atlas is a book of maps and this one
+    indexes three archives — the mark says "find your way through it" without a
+    single letterform, reads at 16px as a four-pointed star, and is the one
+    piece of cartographic furniture that is not already spoken for in
+    SiteIcon.tsx (bookmark = AO3, book = FanFiction.net, scroll = FictionAlley).
+
+    No outline. The tile is a plain rounded square of the site's own ground, so
+    the mark is the only thing in it.
+    """
     S = px * SS
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    small = px <= 64          # see the note on the type size below
-
-    # The tile. Radius is 22% of the side — the same soft-square the rest of the
-    # site uses for cards, and short of the 50% that would read as a circle.
-    pad = round(S * 0.055)
+    pad = round(S * 0.045)
     d.rounded_rectangle([pad, pad, S - pad - 1, S - pad - 1],
                         radius=round(S * 0.22), fill=BG)
 
-    # A hairline gold frame, composited rather than drawn straight on. ImageDraw
-    # REPLACES pixels instead of blending them, so passing an alpha colour to
-    # `outline` leaves a half-transparent ring rather than a faint one — which
-    # read as a full-strength gold band, exactly the mistake the old periwinkle
-    # icon made. Drawn opaque on its own layer and blended at 30%, it does the
-    # one job it has: stop the tile dissolving into a dark browser chrome. 0.55 was
-    # arrived at by looking: 0.30 vanished, and full strength was the loud band.
-    ring = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    ImageDraw.Draw(ring).rounded_rectangle(
-        [pad, pad, S - pad - 1, S - pad - 1], radius=round(S * 0.22),
-        outline=GOLD + (255,), width=max(1, round(S * (0.016 if px <= 64 else 0.010))))
-    img = Image.alpha_composite(img, Image.blend(
-        Image.new("RGBA", (S, S), (0, 0, 0, 0)), ring, 0.55))
-    d = ImageDraw.Draw(img)
-
-    # 0.38, not 0.46. At the larger size the pair very nearly touched the frame,
-    # and a mark with no air around it reads as cramped at every size.
-    #
-    # SMALL SIZES GET A HEAVIER, LARGER CUT, and this is the whole reason the
-    # script renders per-size instead of downsampling one master. Playfair is a
-    # didone: its hairlines are a fifth the width of its stems, and at a 16px
-    # favicon those hairlines land on a fraction of a pixel and disappear — the
-    # F loses its arms and the pair turns to mud. Looked at on a contact sheet
-    # at real size, which is the only way to see it. Weight 700 and a slightly
-    # bigger setting keep the thin strokes on the grid; at 192px and up the
-    # lighter, more elegant cut is what the wordmark actually looks like.
-    # BELOW ~20px, ONE LETTER. Looked at on a contact sheet at 16/24/32/48: at
-    # 48 and 32 "FA" is clean, at 24 it is marginal, and at 16 it is mud — two
-    # didone capitals cannot survive sixteen pixels, and the previous icon had
-    # exactly the same problem. A tab icon's whole job is to be picked out of a
-    # strip of twenty tabs, and mud fails it.
-    #
-    # The letter kept is the gold italic A, not the F: "Atlas" is the accented
-    # half of the wordmark, gold-on-dark is the site's colour signature, and the
-    # italic lean is distinctive where a roman F is just a serif F.
-    if px <= 20:
-        f = _weighted(fonts["italic"], round(S * 0.62), 700)
-        b = d.textbbox((0, 0), "A", font=f)
-        d.text(((S - (b[2] - b[0])) / 2 - b[0], (S - (b[3] - b[1])) / 2 - b[1]),
-               "A", font=f, fill=GOLD)
-        return img.resize((px, px), Image.LANCZOS)
-
-    size = round(S * (0.42 if small else 0.38))
-    weight = 700 if small else 600
-    f_roman = _weighted(fonts["roman"], size, weight)
-    f_ital = _weighted(fonts["italic"], size, weight)
-
-    # Measured, not guessed: Playfair's italic A has a different advance and
-    # bearing from the roman F, so a fixed nudge would sit wrong at some sizes.
-    fb, ab = d.textbbox((0, 0), "F", font=f_roman), d.textbbox((0, 0), "A", font=f_ital)
-    fw, aw = fb[2] - fb[0], ab[2] - ab[0]
-    # Tracking. The italic A leans INTO the F, so the two need more metric gap
-    # than they look like they need — at 0.012 they were all but touching.
-    gap = round(S * 0.035)
-    total = fw + gap + aw
-    x = (S - total) / 2
-    # Vertically centred on the CAP HEIGHT of the pair rather than on the font's
-    # line box, which carries descender space neither letter uses.
-    top = min(fb[1], ab[1])
-    bot = max(fb[3], ab[3])
-    y = (S - (bot - top)) / 2 - top
-
-    d.text((x - fb[0], y), "F", font=f_roman, fill=CREAM)
-    d.text((x + fw + gap - ab[0], y), "A", font=f_ital, fill=GOLD)
+    # Bigger at small sizes: with no frame to hold the composition there is no
+    # reason to hold the mark back, and at 16px it wants every pixel it can get.
+    R = S * (0.40 if px <= 32 else 0.355)
+    _rose(d, S / 2, S / 2, R, GOLD, CREAM, minor=px > 32)
 
     return img.resize((px, px), Image.LANCZOS)
 
@@ -247,6 +243,13 @@ def draw_og(fonts: dict[str, Path]) -> Image.Image:
     # Clear of the body text: at the first spacing the domain sat four pixels
     # under the second line and read as a third line of the sentence.
     d.text((x, H * S - 78 * S), "ficatlas.com", font=small_f, fill=GOLD)
+
+    # The same compass rose as the icon, balancing the left-aligned text block.
+    # Not decoration for its own sake — it is the one thing that makes a shared
+    # card and a browser tab read as the same site, which the old card's floating
+    # bars never did.
+    _rose(d, W * S - 250 * S, H * S / 2, 128 * S, GOLD, CREAM, minor=True)
+
     return img.resize((W, H), Image.LANCZOS)
 
 
