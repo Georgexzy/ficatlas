@@ -1,6 +1,7 @@
 "use client"
 import Link from "next/link"
 import ThemeToggle from "./ThemeToggle"
+import CompassMark from "./CompassMark"
 import { useEffect, useState } from "react"
 import { usePathname } from "next/navigation"
 import OfflineLink from "./OfflineLink"
@@ -262,7 +263,13 @@ function TabIcon({ name }: { name: string }) {
             people use it to start over. */}
         <Link href="/" className="logo logo--link" aria-label="FicAtlas home"
           title={backToResults ? "Start a fresh search" : "FicAtlas home"}>
-          Fic<em>Atlas</em>
+          {/* The mark and the name, one link. The rose was on the tab icon and
+              the share card and nowhere on the site itself, so the thing a
+              reader had in their browser tab did not appear on the page it
+              opened. It spins on hover — see .compass in globals.css, and the
+              reduced-motion rule beside it. */}
+          <CompassMark />
+          <span className="logo__word">Fic<em>Atlas</em></span>
         </Link>
         <nav className="header__right">
           <ThemeToggle compact />
