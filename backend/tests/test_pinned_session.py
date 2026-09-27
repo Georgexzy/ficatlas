@@ -1260,3 +1260,60 @@ def test_the_warmer_goes_through_the_real_endpoint():
     import cache_warm
     src = inspect.getsource(cache_warm.warm)
     assert '"/api/search"' in src
+
+
+# ---- accounts: a Google account could never add a password ----------------
+#
+# One literal, reused, so the secret scanner has a single thing to exempt. Two
+# separate strings meant two allowlist entries, and an allowlist that grows per
+# test drifts towards a blanket exemption on tests/ -- which would exempt the
+# place a real credential is most likely to be pasted while somebody reproduces
+# a login bug.
+_PW = "hunter22"
+
+def test_a_passwordless_account_can_set_one(db):
+    """An account created by Google sign-in has no password, deliberately. But
+    there was no way to ADD one: change-password verifies the current password
+    and check_password returns False for an absent hash, so a reader who signed
+    up with Google was locked into Google for ever -- and losing that Google
+    account meant losing this one."""
+    from api.auth import set_password
+    from models.user import User
+
+    u = User(username="googleonly", password_hash=None, role="reader",
+             google_sub="sub-123")
+    db.add(u); db.commit()
+    out = set_password(new_password=_PW, user=u, sat=None, db=db)
+    assert out["ok"] is True
+    assert u.password_hash, "no hash was stored"
+
+
+def test_set_password_refuses_when_one_already_exists(db):
+    """The security property, not tidiness: without this check the endpoint is
+    change-password minus the check on the current password, which is the whole
+    thing change-password exists to enforce."""
+    import pytest
+    from fastapi import HTTPException
+    from api.auth import hash_password, set_password
+    from models.user import User
+
+    u = User(username="haspw", password_hash=hash_password(_PW), role="reader")
+    db.add(u); db.commit()
+    with pytest.raises(HTTPException) as e:
+        set_password(new_password=_PW + "x", user=u, sat=None, db=db)
+    assert e.value.status_code == 400
+    from api.auth import check_password
+    assert check_password(_PW, u.password_hash), "the old one was replaced"
+
+
+def test_sso_adopts_an_existing_account_only_on_a_verified_address(db):
+    """Attaching a Google identity to the local account holding that email is
+    how an old account gets linked. It has to require Google's verified flag:
+    without it anybody able to create a Google account claiming an address could
+    walk into the local account holding it, and on this instance that is the
+    owner seat."""
+    import inspect
+    from api import google_sso
+    src = inspect.getsource(google_sso._resolve_account)
+    assert "if email and verified:" in src
+    assert src.index("google_sub == sub") < src.index("if email and verified:")
