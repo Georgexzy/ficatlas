@@ -238,6 +238,21 @@ services:
       DB_MAX_OVERFLOW: ${PUBLIC_DB_MAX_OVERFLOW:-12}
       # HTTPS-only session cookies: the tunnel always terminates TLS.
       COOKIE_SECURE: "true"
+      # Account email: password reset and address confirmation. Unset, those
+      # features report themselves unavailable rather than failing silently --
+      # see api/mailer.py. Cloudflare Email Routing forwards INBOUND mail only,
+      # so sending needs a real SMTP relay.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      # Google sign-in. The redirect URI Google is told to use is derived from
+      # PUBLIC_BASE_URL, so it must match what is registered in the Google
+      # console exactly -- scheme, host and path.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://ficatlas.com}
       # Cloudflare overwrites CF-Connecting-IP on every proxied request and
       # strips any inbound copy, so it is safe to believe — but ONLY because
       # nginx is not published to the host. If it ever were, this must go back
