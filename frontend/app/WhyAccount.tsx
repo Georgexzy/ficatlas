@@ -15,8 +15,10 @@ import Link from "next/link"
  * emailed. An update is a comparison made at read time — see the header of
  * backend/api/follows.py — so the copy says "shows which have gained chapters
  * since you last looked", which is what it does.
- * `follows` is backend/api/follows.py, the sync buckets are DATA_GROUPS in
- * lib/localdata.ts, and the email field is optional at signup and only ever
+ * `follows` is backend/api/follows.py, WHAT SYNCS AND WHAT DOES NOT is
+ * STORED_KEYS in lib/storageKeys.ts — check a claim here against that list and
+ * nothing else, because it is the only list — and the email field is optional
+ * at signup and only ever
  * used for a reset (backend/api/password_reset.py). If a feature is removed,
  * remove the line — a list of promises that has drifted is worse than no list,
  * because this is the screen where a reader decides whether the site is honest.
@@ -53,9 +55,20 @@ const REASONS: { title: string; body: string }[] = [
         + "paragraph on a phone.",
   },
   {
-    title: "Your searches and filters, kept",
-    body: "Recent searches, the archives you prefer, and your never-show-me "
-        + "list travel with the account instead of living in one browser.",
+    // This claimed the never-show-me list travels with the account. It does
+    // NOT, deliberately — a standing list of ships, tropes and authors somebody
+    // refuses to read is revealing in a way a search query is not, so
+    // lib/mutelist.ts keeps it on the device and the Settings page says so in as
+    // many words. Two screens promising opposite things about the same list, and
+    // this was the one on the page where a reader decides whether to trust the
+    // site. Fixed by saying what is true, and saying the local one is a choice
+    // rather than an omission — which is a better pitch than the false version.
+    title: "Searches you keep, kept",
+    body: "Save a standing search — complete Drarry over 100k, say — and it "
+        + "follows you, along with your recent searches, the archives you "
+        + "prefer, and the never-show-me list of ships, tropes and authors you "
+        + "have ruled out. Building that list again on a new phone is the kind "
+        + "of work nobody should have to repeat.",
   },
   {
     title: "Reader settings that stay put",

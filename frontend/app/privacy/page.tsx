@@ -63,21 +63,64 @@ export default function Privacy() {
       </p>
 
       <h2>If you do make an account</h2>
+      {/* "and only this" makes this list a PROMISE, so it has to be complete,
+          and the first version was not. It said an email address was used "for
+          signing in" (you sign in with a username; the address is optional and
+          only ever used for a reset), described follows as "fandoms and
+          pairings" (you follow WORKS), and omitted session records — which
+          include the browser string of each device — along with everything the
+          reader's own data actually covers.
+
+          Checked against the schema rather than written from memory:
+          models/user.py for User and UserSession, api/userdata.py ALLOWED_KEYS
+          and lib/storageKeys.ts for the synced data, api/follows.py for follows.
+          Re-check it against those four whenever any of them changes: an
+          incomplete list under "and only this" is not a rough edge in a privacy
+          page, it is a false statement in the one document that exists to be
+          exact. */}
       <p>Then the following is stored, and only this:</p>
       <ul>
-        <li>a username you choose;</li>
-        <li>an email address, used for signing in and password resets;</li>
+        <li>a username you choose, and the date the account was made;</li>
+        <li>
+          an email address <em>only if you give one</em> — it is optional, you
+          sign in with your username, and the address is used for nothing but
+          sending yourself a password reset;
+        </li>
         <li>
           a password <em>hash</em> — never the password, so nobody here can read
-          or recover it;
+          or recover it. An account made with Google has no password at all
+          unless you add one;
         </li>
         <li>
           if you sign in with Google, the account identifier Google returns.
           Google tells this site your email address and nothing else — not your
           contacts, your files, or anything in your Google account;
         </li>
-        <li>anything you save: followed fandoms and pairings, saved searches.</li>
+        <li>
+          whether the account is a reader, an administrator or the owner;
+        </li>
+        <li>
+          one record per signed-in device, so you can see them and sign them out
+          from your account page: when it signed in, when it was last used, when
+          it expires, and the browser-and-platform string your browser sends
+          (&ldquo;Chrome on Android&rdquo;). No IP address;
+        </li>
+        <li>
+          the reading data you build up: the works you follow, your bookmarks,
+          your place in each story, the searches you save and the ones you ran
+          recently, which works you keep offline, and your reader and search
+          preferences.
+        </li>
       </ul>
+      <p>
+        That last item includes your never-show-me list — the ships, tropes,
+        fandoms, characters and authors you have ruled out of every search. It is
+        called out separately because it is the most revealing thing here: a
+        standing list of what somebody refuses to read says more than any single
+        search does. It is stored so that it follows you between devices, it is
+        used for nothing but filtering your own results, it is never shown to
+        anyone else, and it goes when the account goes.
+      </p>
       <p>
         One cookie is set, holding your session so you stay signed in. There are
         no advertising or tracking cookies, because there is no advertising.
@@ -115,7 +158,7 @@ export default function Privacy() {
       <h2>Deleting your account</h2>
       <p>
         You can delete your account from{" "}
-        <Link href="/account">your account settings</Link>, which removes it and
+        <Link href="/settings?tab=account">your account settings</Link>, which removes it and
         everything saved against it. If anything there does not work, email{" "}
         <a href="mailto:help@ficatlas.com">help@ficatlas.com</a> and it will be
         done by hand.

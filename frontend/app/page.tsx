@@ -14,6 +14,8 @@ import SiteIcon from "./SiteIcon"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
 import { rememberSearch } from "@/lib/lastSearch"
+import { saveSearch, removeSaved, isSaved, noteRun, searchId, loadSaved,
+         newSince, SAVED_CHANGED, type SavedSearch } from "@/lib/savedSearches"
 import { saveScroll, restoreScroll, clearScroll } from "@/lib/scrollMemory"
 import { describeError, type Failure } from "@/lib/errors"
 import { readAllPrefs, type Prefs } from "@/lib/prefs"
@@ -809,11 +811,19 @@ function StoryCard({ story }: { story: StoryCard }) {
 // Focus-triggered is how every search box on the web behaves, so it needs no
 // explaining: click into an empty box and your recent searches are there;
 // start typing and they get out of the way.
+//
+// SAVED searches share this dropdown rather than getting a page of their own,
+// and that is the point of putting them here. They answer the same question the
+// recents list answers — "what was I looking for?" — so a second surface would
+// be a second place to look for one thing, and a reader would have to know
+// which. Here, clicking into an empty box shows what you kept above what you
+// merely typed, which is also the right order: the kept ones were a decision.
 function RecentSearches(
   { open, onPick, onDismiss }:
   { open: boolean; onPick: (q: string) => void; onDismiss: () => void },
 ) {
   const [recents, setRecents] = useState<string[]>([])
+  const [saved, setSaved] = useState<SavedSearch[]>([])
 
   useEffect(() => {
     if (!open) return
@@ -821,6 +831,7 @@ function RecentSearches(
       const raw = JSON.parse(localStorage.getItem("ficatlas:recent-searches") ?? "[]")
       setRecents(Array.isArray(raw) ? raw.filter(x => typeof x === "string").slice(0, 8) : [])
     } catch { setRecents([]) }
+    setSaved(loadSaved())
   }, [open])
 
   const clear = () => {
@@ -829,29 +840,78 @@ function RecentSearches(
     onDismiss()
   }
 
-  if (!open || !recents.length) return null
+  // A recent search that is also saved is shown once, under Saved. Listing it
+  // twice in one menu is the redundancy this shared dropdown exists to avoid,
+  // and the saved row is the more useful of the two — it can be removed.
+  const savedIds = new Set(saved.map(s => s.id))
+  const unsavedRecents = recents.filter(q => !savedIds.has(searchId(q)))
+
+  if (!open || (!unsavedRecents.length && !saved.length)) return null
   return (
-    <div className="recent-drop" role="listbox" aria-label="Recent searches">
-      <div className="recent-drop__head">
-        <span className="recent-drop__label">Recent searches</span>
-        <button className="recent-drop__clear" onMouseDown={e => e.preventDefault()}
-          onClick={clear}>Clear</button>
-      </div>
-      {recents.map(q => (
-        <button
-          key={q}
-          role="option"
-          aria-selected={false}
-          className="recent-drop__item"
-          // mousedown, not click: the input's blur fires first and would close
-          // the dropdown out from under the pointer before click ever lands.
-          onMouseDown={e => { e.preventDefault(); onPick(q) }}
-          title={q}
-        >
-          <span className="recent-drop__icon" aria-hidden="true">↻</span>
-          <span className="recent-drop__text">{q}</span>
-        </button>
-      ))}
+    <div className="recent-drop" role="listbox" aria-label="Your searches">
+      {saved.length > 0 && (
+        <>
+          <div className="recent-drop__head">
+            <span className="recent-drop__label">Saved</span>
+          </div>
+          {saved.map(s => (
+            // A row, not a button, because it holds TWO actions — run it and
+            // forget it — and a button inside a button is not valid HTML and does
+            // not work with a keyboard.
+            <div key={s.id} className="recent-drop__row" role="option" aria-selected={false}>
+              <button
+                className="recent-drop__item recent-drop__item--grow"
+                // mousedown, not click: the input's blur fires first and would
+                // close the dropdown out from under the pointer.
+                onMouseDown={e => { e.preventDefault(); onPick(s.q) }}
+                title={s.q}
+              >
+                <span className="recent-drop__icon" aria-hidden="true">★</span>
+                <span className="recent-drop__text">{s.q}</span>
+                {/* What it matched last time you looked. Not a promise about
+                    now — see the note in lib/savedSearches.ts on why nothing
+                    re-runs these in the background. */}
+                {s.last_total != null && (
+                  <span className="recent-drop__count">
+                    {s.last_total.toLocaleString()}
+                  </span>
+                )}
+              </button>
+              <button
+                className="recent-drop__x"
+                aria-label={`Remove "${s.q}" from your saved searches`}
+                title="Remove from saved"
+                onMouseDown={e => {
+                  e.preventDefault()
+                  setSaved(removeSaved(s.id))
+                }}
+              >✕</button>
+            </div>
+          ))}
+        </>
+      )}
+      {unsavedRecents.length > 0 && (
+        <>
+          <div className="recent-drop__head">
+            <span className="recent-drop__label">Recent</span>
+            <button className="recent-drop__clear" onMouseDown={e => e.preventDefault()}
+              onClick={clear}>Clear</button>
+          </div>
+          {unsavedRecents.map(q => (
+            <button
+              key={q}
+              role="option"
+              aria-selected={false}
+              className="recent-drop__item"
+              onMouseDown={e => { e.preventDefault(); onPick(q) }}
+              title={q}
+            >
+              <span className="recent-drop__icon" aria-hidden="true">↻</span>
+              <span className="recent-drop__text">{q}</span>
+            </button>
+          ))}
+        </>
+      )}
     </div>
   )
 }
@@ -1407,6 +1467,11 @@ function SearchPageInner() {
   // because of a search.
   const readAsRef = useRef<string>("")
   const [copied, setCopied] = useState(false)
+  // Whether the search on screen is one the reader kept. Held in state rather
+  // than read during render because it lives in localStorage, and reading that
+  // while rendering makes the server HTML and the first client render disagree —
+  // the same reason EmailPrompt waits for mount.
+  const [searchSaved, setSearchSaved] = useState(false)
   // doSearch calls itself to run an interpretation, and a useCallback cannot
   // name itself in its own dependency list. The ref is the usual way out and
   // is more honest than disabling the lint rule.
@@ -2133,6 +2198,12 @@ function SearchPageInner() {
       if (seq !== searchSeqRef.current) return   // a newer search superseded this one
       setResults(data)
       setStale(null)
+      // If this search is one the reader kept, record what it matched, so the
+      // next run can say what has appeared since. A no-op for the overwhelming
+      // majority of searches, which nobody saved. Capped totals are skipped:
+      // 5001 means "more than 5000" and differencing two ceilings would invent
+      // a number.
+      if (!data.count_is_capped) noteRun(effectiveQuery.trim(), data.total)
       // THEY TYPED A SENTENCE, NOT A SEARCH.
       //
       // Re-run it as the search the vocabulary read out of it, and say so. The
@@ -2327,6 +2398,21 @@ function SearchPageInner() {
       setCountSeries(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query])
+
+  // Is the search on screen one the reader kept? Re-checked whenever the bar
+  // changes, and on the sync pull, so a search saved on a phone lights up here
+  // without a reload. `storage-pulled` is dispatched by lib/auth.tsx after a
+  // merge adopts the server's copy.
+  useEffect(() => {
+    const check = () => setSearchSaved(isSaved(query))
+    check()
+    window.addEventListener(SAVED_CHANGED, check)
+    window.addEventListener("ficatlas:storage-pulled", check)
+    return () => {
+      window.removeEventListener(SAVED_CHANGED, check)
+      window.removeEventListener("ficatlas:storage-pulled", check)
+    }
   }, [query])
 
   // When a sidebar filter changes: mirror the full filter state into the search
@@ -3106,6 +3192,43 @@ function SearchPageInner() {
                   title="Copy a link to this search">
                   {copied ? "Link copied" : "Copy link"}
                 </button>
+                {/* KEEP THE QUESTION, not just the answer.
+                    Beside Copy link because they are the same kind of act — do
+                    something with this search rather than with a result — and
+                    the reader is already looking here for the count.
+
+                    What gets saved is the BAR TEXT, and that is the whole
+                    request rather than half of it: the sidebar mirrors its full
+                    filter state into the bar on every change ("the bar is the
+                    single visible source of truth", the effect above), so the
+                    string already carries the filters, the status, the word
+                    count and the sort. Saving anything narrower would drop them
+                    silently, which is the failure shape this file has hit twice
+                    before — the extractor's status and word count, and the
+                    outreach panel reading `query` and dropping three fields
+                    beside it. */}
+                {query.trim() && (
+                  <button type="button"
+                    className={`results-bar__share${searchSaved ? " results-bar__share--on" : ""}`}
+                    aria-pressed={searchSaved}
+                    onClick={() => {
+                      if (searchSaved) {
+                        removeSaved(searchId(query.trim()))
+                        setSearchSaved(false)
+                      } else {
+                        // The total goes in at save time so the first re-run has
+                        // something to compare against instead of starting blind.
+                        saveSearch(query.trim(),
+                          shown.count_is_capped ? undefined : shown.total)
+                        setSearchSaved(true)
+                      }
+                    }}
+                    title={searchSaved
+                      ? "Remove this from your saved searches"
+                      : "Keep this search. It appears when you click into an empty search box."}>
+                    {searchSaved ? "★ Saved" : "☆ Save search"}
+                  </button>
+                )}
                 <span className="results-bar__count">
                   {/* The backend counts to a ceiling of 5000 and stops, so a
                       capped total literally arrives as 5001. Printing that as

@@ -180,17 +180,6 @@ input, select { font-family: inherit; }
   min-width: 0; flex-wrap: nowrap; justify-content: flex-end;
 }
 
-/* ── Explicit toggle ───────────────────────────────────────────────────────── */
-.toggle-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); user-select: none; }
-.toggle-track {
-  width: 32px; height: 18px;
-  background: var(--surface3); border: 1px solid var(--border2);
-  border-radius: 8px; position: relative; transition: background 0.18s; flex-shrink: 0;
-}
-.toggle-thumb {
-  width: 12px; height: 12px; background: var(--text); border-radius: 50%;
-  position: absolute; top: 2px; left: 2px; transition: left 0.18s;
-}
 input:checked + .toggle-track { background: var(--accent); }
 input:checked + .toggle-track .toggle-thumb { left: 16px; }
 
@@ -620,8 +609,6 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 .index-status__btn:hover { color: var(--text);
 }
 .index-status__btn--active { border-color: var(--accent-dim); color: var(--accent); }
-.crawl-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); display: inline-block; flex-shrink: 0; }
-.crawl-dot--pulse { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }
 .index-status__panel {
   position: absolute; top: calc(100% + 8px); right: 0; width: 290px;
@@ -653,21 +640,9 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   }
 }
 .index-status__heading { font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 10px; }
-.index-status__row { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
-.index-status__row:last-of-type { border-bottom: none; margin-bottom: 0; }
-.index-status__site-header { display: flex; justify-content: space-between; margin-bottom: 5px; }
 .index-status__site { font-size: 13px; font-weight: 500; color: var(--text); }
-.index-status__interval { font-size: 11px; font-family: var(--font-mono); color: var(--text-faint); }
-.index-status__active { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--accent); }
 .index-status__active > span:first-child { display: flex; align-items: center; gap: 6px; }
-.index-status__bar { height: 2px; background: var(--surface3); border-radius: 1px; overflow: hidden; }
-.index-status__bar-fill { height: 100%; background: var(--accent); border-radius: 1px; }
-.index-status__bar-fill--indeterminate { width: 40%; animation: slide 1.6s ease-in-out infinite; }
 @keyframes slide { 0% { transform: translateX(-200%); } 100% { transform: translateX(350%); } }
-.index-status__idle { display: flex; flex-direction: column; gap: 3px; }
-.index-status__last { font-size: 12px; color: var(--text-dim); }
-.index-status__last--none { color: var(--text-faint); font-style: italic; }
-.index-status__next { font-size: 11px; font-family: var(--font-mono); color: var(--text-faint); }
 .index-status__hint { margin-top: 10px; font-size: 11px; color: var(--text-faint); line-height: 1.5; }
 .index-status__hint code { font-family: var(--font-mono); background: var(--surface3); padding: 1px 4px; border-radius: 2px; font-size: 10px; }
 
@@ -984,6 +959,13 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   font-size: 11px; font-family: var(--font-mono);
   background: var(--accent-bg); color: var(--accent); padding: 1px 6px; border-radius: 3px;
 }
+/* The one count here that means "go and look", rather than "this is how many
+   there are". Every other tab badge is a total the reader already knows; this
+   one appeared while they were away. */
+.library-tab__count--new {
+  background: var(--accent); color: var(--bg);
+  font-weight: 600;
+}
 
 /* Lists stay at a readable measure even though the shell is wide for covers —
    a bookmark title stretched across 1180px is harder to scan, not easier. The
@@ -1007,15 +989,6 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   font-size: 14px; padding: 4px 8px;
 }
 .library-item__remove:hover { color: var(--red); }
-/* .library-empty is defined once, further down — this duplicate had drifted
-   to different padding and colour, so which one won depended on source order. */
-.library-clear {
-  background: var(--surface2); border: 1px solid var(--border2);
-  border-radius: var(--radius); padding: 4px 10px; font-size: 11px;
-  font-family: var(--font-mono); color: var(--text-dim);
-  margin-bottom: 8px; align-self: flex-start;
-}
-.library-clear:hover { color: var(--red); border-color: var(--red); }
 
 /* ── Site badge for FictionAlley ──────────────────────────────────────────────── */
 .badge--site-fictionalley {
@@ -1442,6 +1415,41 @@ kbd {
 .settings-lede {
   font-size: 13px; line-height: 1.6; color: var(--text-dim);
   margin: -14px 0 22px;
+}
+
+/* ── Settings tabs ─────────────────────────────────────────────────────────
+   /settings and /account merged, so the page holds 17 sections. Tabs rather
+   than one scroll or collapsed blocks — this file's own note says a collapsed
+   section on a phone is a section that does not exist.
+
+   The row SCROLLS sideways on a narrow screen instead of wrapping: five labels
+   wrap to three lines on a phone, and a tab bar taller than the content it
+   labels is worse than one you push. `scrollbar-width: none` because a visible
+   horizontal bar under five buttons reads as a fault. */
+.settings-tabs {
+  display: flex; gap: 2px; margin: 0 0 4px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto; scrollbar-width: none;
+}
+.settings-tabs::-webkit-scrollbar { display: none; }
+.settings-tab {
+  background: none; border: 0; cursor: pointer; white-space: nowrap;
+  padding: 9px 13px; font-size: 13px; color: var(--text-dim);
+  /* The indicator is a border on the element itself, not a pseudo-element, so
+     the selected tab cannot drift out of line with the bottom rule when the row
+     is scrolled. Transparent when off so selecting a tab does not move the row
+     by two pixels. */
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.settings-tab:hover { color: var(--text); }
+.settings-tab--on {
+  color: var(--text); border-bottom-color: var(--accent); font-weight: 500;
+}
+.settings-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.settings-panel__hint {
+  font-size: 12px; color: var(--text-faint); line-height: 1.5;
+  margin: 12px 0 18px;
 }
 
 /* The seam between "yours" and "the site's". A heading alone did not carry it:
@@ -2150,7 +2158,6 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   background: var(--green-bg); border: 1px solid var(--green);
   border-radius: var(--radius); padding: 9px 12px;
 }
-.perm-manage-link { font-size: 13px; color: var(--text-dim); margin-top: 18px; }
 .perm-manage-link a { color: var(--accent); text-decoration: underline; }
 .perm-bulk { margin: 4px 0 22px; }
 .perm-works { list-style: none; padding: 0; margin: 0 0 22px; }
@@ -2348,26 +2355,11 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 .skel-line--meta  { width: 45%; height: 10px; }
 @keyframes skel { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
 
-/* Active-filter chips summary above results */
-.active-filters {
-  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  margin-bottom: 16px;
-}
-.active-filter-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: var(--surface2); border: 1px solid var(--border2);
-  border-radius: 999px; padding: 4px 10px 4px 12px; font-size: 12px;
-  color: var(--text-dim);
-}
 .active-filter-chip button {
   background: none; border: none; color: var(--text-faint); cursor: pointer;
   font-size: 14px; line-height: 1; padding: 0; transition: color 0.15s;
 }
 .active-filter-chip button:hover { color: var(--accent); }
-.active-filters__clear {
-  background: none; border: none; color: var(--accent); cursor: pointer;
-  font-size: 12px; text-decoration: underline; padding: 4px;
-}
 
 /* ── Reader themes (sepia / dark) ────────────────────────────────────────── */
 /* The shell is a centered 760px column, so painting its background alone leaves
@@ -2691,12 +2683,6 @@ body:has(.reader-shell[data-theme="default"]) {
   .back-link { max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
-/* ── Account page ────────────────────────────────────────────────────────── */
-.back-link-plain {
-  display: inline-block; color: var(--text-dim); text-decoration: none;
-  font-size: 13px; margin-bottom: 16px;
-}
-.back-link-plain:hover { color: var(--text); }
 
 .account-identity { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
 .account-avatar {
@@ -3948,7 +3934,12 @@ body.is-resizing * { cursor: col-resize !important; }
 .traffic-table th {
   text-align: left; font-size: 10.5px; text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--text-faint); font-weight: 500;
-  padding: 0 12px 6px 0; border-bottom: 1px solid var(--border);
+  /* No bottom padding: the heading is a real <button> (.traffic-sort) and it
+     supplies its own vertical padding, so adding any here double-spaces the row.
+     This used to be `0 12px 6px 0` with a second `.traffic-table th` rule 40
+     lines below overriding it back — one property, two rules, which is what
+     tests/check-css.py flags and is a trap for whoever edits the first one. */
+  padding: 0 12px 0 0; border-bottom: 1px solid var(--border);
 }
 .traffic-table td {
   padding: 6px 12px 6px 0; color: var(--text);
@@ -3984,8 +3975,7 @@ body.is-resizing * { cursor: col-resize !important; }
    The heading is a real <button> inside the <th>, not a click handler on the
    th: it is a control, so it should be tabbable, pressable with Enter and
    announced as a button. `aria-sort` on the th is the half a screen reader
-   reads out. */
-.traffic-table th { padding: 0 12px 0 0; }
+   reads out. The th's own padding is set once, where the rest of its styles are. */
 .traffic-sort {
   display: inline-flex; align-items: baseline; gap: 4px;
   background: none; border: 0; padding: 6px 0;
@@ -4130,28 +4120,33 @@ body.is-resizing * { cursor: col-resize !important; }
 .recent-drop__icon { color: var(--text-faint); font-size: 11px; flex-shrink: 0; }
 .recent-drop__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ── Recent searches (under the search bar) ────────────────────────────────── */
-.recent-searches {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  margin-top: 10px;
+/* A saved row holds two actions — run it, forget it — so the row is the flex
+   container and the run half grows. `min-width: 0` on the growing child is what
+   lets the ellipsis in .recent-drop__text actually happen: without it a flex
+   item refuses to shrink below its content and a long query pushes the ✕ out of
+   the menu. Same rule as the header's `min-width: 0`. */
+.recent-drop__row { display: flex; align-items: center; gap: 2px; }
+.recent-drop__item--grow { flex: 1; min-width: 0; }
+/* The count sits at the far end and is the one number here, so it is the only
+   thing in the row allowed tabular figures — a column of right-aligned totals
+   that do not jitter as the list scrolls. */
+.recent-drop__count {
+  margin-left: auto; padding-left: 10px; flex-shrink: 0;
+  font-size: 11px; font-family: var(--font-mono); color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
-.recent-searches__label {
-  font-size: 10px; font-family: var(--font-mono); text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--text-faint); margin-right: 2px;
+.recent-drop__x {
+  background: none; border: 0; cursor: pointer; flex-shrink: 0;
+  padding: 7px 8px; font-size: 11px; line-height: 1;
+  color: var(--text-faint); border-radius: var(--radius);
 }
-.recent-searches__item {
-  max-width: min(340px, 60vw);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  background: var(--surface2); border: 1px solid var(--border2);
-  border-radius: 999px; padding: 4px 11px;
-  font-size: 12px; color: var(--text-dim); cursor: pointer;
-}
-.recent-searches__item:hover { border-color: var(--accent); color: var(--accent); }
-.recent-searches__clear {
-  background: none; border: 0; cursor: pointer; padding: 4px 2px;
-  font-size: 11px; color: var(--text-faint); text-decoration: underline;
-}
-.recent-searches__clear:hover { color: var(--accent); }
+.recent-drop__x:hover { background: var(--surface3); color: var(--text); }
+.recent-drop__x:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* The star on the results bar when a search is kept. It reuses
+   .results-bar__share for shape, so this only says "on". */
+.results-bar__share--on { color: var(--accent); border-color: var(--accent); }
+
 
 @media (max-width: 560px) {
   .recent-searches__item { max-width: 100%; }
@@ -6132,12 +6127,17 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   background: var(--surface2); border: 1px solid var(--border);
   border-radius: 9px; padding: 13px 15px;
 }
+/* One definition each. These were defined twice — here and again ~90 lines below,
+   in a later pass over the same component — so the values here were overridden
+   and dead while reading as if they applied. tests/check-css.py had been
+   reporting it, and a check that is permanently red is a check nobody reads.
+   The surviving values are the ones that were actually winning. */
 .queue-item__head {
-  display: flex; gap: 12px; align-items: baseline;
+  display: flex; gap: 10px; align-items: baseline;
   justify-content: space-between; flex-wrap: wrap;
 }
 .queue-item__title {
-  font-size: 14.5px; font-weight: 600; color: var(--text); text-decoration: none;
+  font-size: 13.5px; font-weight: 600; color: var(--text); text-decoration: none;
 }
 .queue-item__title:hover { text-decoration: underline; }
 .queue-item__works {
@@ -6153,19 +6153,13 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   color: var(--danger, #d9534f);
 }
 .queue-item__meta { margin: 4px 0 0; font-size: 11.5px; color: var(--text-faint); }
-.queue-item__query {
-  margin: 7px 0 0; font-size: 12px; color: var(--text-dim);
-  font-family: var(--font-mono, ui-monospace, monospace);
-  word-break: break-word;
+.queue-item__acts {
+  margin: 0; padding: 0 13px 10px; display: flex; gap: 10px;
+  align-items: center; font-size: 11.5px;
 }
-.queue-item__body {
-  margin: 7px 0 0; font-size: 12.5px; color: var(--text-dim);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.queue-item__acts { margin: 10px 0 0; display: flex; gap: 8px; }
+.queue-item__acts a { color: var(--text-faint); }
 .queue-item__acts button {
-  font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px;
+  font: inherit; font-size: 11.5px; padding: 2px 9px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--surface);
   color: var(--text); cursor: pointer;
 }
@@ -6234,14 +6228,6 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   display: block; width: 100%; text-align: left; background: none;
   border: none; padding: 11px 13px 7px; cursor: pointer; font: inherit;
 }
-.queue-item__head { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
-.queue-item__title { font-size: 13.5px; font-weight: 600; color: var(--text); }
-.queue-item__acts {
-  margin: 0; padding: 0 13px 10px; display: flex; gap: 10px; align-items: center;
-  font-size: 11.5px;
-}
-.queue-item__acts a { color: var(--text-faint); }
-.queue-item__acts button { padding: 2px 9px; font-size: 11.5px; }
 
 /* ── Needs attention ──────────────────────────────────────────────────────
    The Index tab had every one of these figures and ranked none of them, which

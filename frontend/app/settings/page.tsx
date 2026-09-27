@@ -1,7 +1,7 @@
 "use client"
 
 import ThemeToggle from "../ThemeToggle"
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import Link from "next/link"
 import BackLink from "../BackLink"
 import SiteHeader from "../SiteHeader"
@@ -11,8 +11,58 @@ import { fetchJson } from "@/lib/errors"
 import { EMPTY_MUTES, loadMutes, muteCount, saveMutes, type MuteList } from "@/lib/mutelist"
 import { DATA_GROUPS, clearGroup, downloadExport, groupSize } from "@/lib/localdata"
 import { fmtBytes, storageEstimate, type StorageEstimate } from "@/lib/offline"
+import AccountTab from "./AccountTab"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
+
+// ONE destination for everything about you, in tabs.
+//
+// There were two pages. /settings held theme, reader font, search defaults, the
+// content toggles, the mute list and the data controls; /account held identity,
+// email, password, Google, devices and deletion. Both rendered
+// `.settings-group` sections in a `.settings-shell` — visually the same page,
+// split down the middle by whether a thing happens to need an account.
+//
+// That split is not a distinction a reader has: "change my password" and "stop
+// showing me this ship" are both "settings", and nothing on either page said
+// the other existed. The user menu offered "Account & sync" and no Settings link
+// at all, so the larger half was reachable only from the main nav — two doors
+// to one room, each hiding the other.
+//
+// Tabs rather than one long scroll, and rather than collapsing sections: 17
+// sections in a column is a page nobody reaches the end of, and this file
+// already records why collapsing is worse ("a collapsed section on a phone is a
+// section that does not exist"). A tab in the address bar is also linkable,
+// which is what /settings?tab=account and the #content anchor below need.
+type TabId = "reading" | "hidden" | "account" | "data" | "site"
+
+const TABS: { id: TabId; label: string; hint: string; adminOnly?: boolean }[] = [
+  { id: "reading", label: "Reading & search",
+    hint: "How stories look, and what a search starts from." },
+  { id: "hidden", label: "Never show me",
+    hint: "Ships, tropes, fandoms and authors kept out of every search." },
+  { id: "account", label: "Account",
+    hint: "Who you are signed in as, and how you get back in." },
+  { id: "data", label: "Your data",
+    hint: "What is stored, where, and how to remove it." },
+  // Not about the person reading — it changes what the instance indexes, for
+  // everybody. Rendered only for an account that can actually save it, the same
+  // rule the Import tab and the Admin link follow: a control that 403s teaches
+  // a reader the site is broken rather than that it is not theirs.
+  { id: "site", label: "This site", adminOnly: true,
+    hint: "What this instance crawls and keeps. Affects every visitor." },
+]
+
+// Deep links that predate the tabs. The search page sends readers to
+// `/settings#content` from the "N works hidden" notice, and an anchor is no use
+// if the element is inside a tab that is not open — so a known hash picks the
+// tab as well as the scroll target. Getting this wrong would silently break the
+// one link that brings readers here with a job to do.
+const HASH_TAB: Record<string, TabId> = {
+  "#content": "reading",
+  "#mutes": "hidden",
+  "#data": "data",
+}
 
 // Settings, split by who a setting belongs to rather than by topic.
 //
@@ -95,11 +145,66 @@ export default function SettingsPage() {
   const { user, loading: authLoading } = useAuth()
   const isAdmin = !!user?.can_manage
 
+  // Which tab, from the address so it can be linked and survives Back. Read
+  // once on mount rather than through useSearchParams, because switching tabs
+  // must not re-run the page's data loads — a tab change is not a navigation.
+  const [tab, setTab] = useState<TabId>("reading")
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    const wanted = url.searchParams.get("tab") as TabId | null
+    const fromHash = HASH_TAB[url.hash]
+    const pick = (fromHash ?? wanted) as TabId | undefined
+    if (pick && TABS.some(t => t.id === pick)) setTab(pick)
+    // The hash still has to do its own job once the right tab is mounted.
+    if (url.hash) {
+      requestAnimationFrame(() => {
+        document.querySelector(url.hash)?.scrollIntoView({ block: "start" })
+      })
+    }
+  }, [])
+
+  // Keep the address in step, so a reader can bookmark or share the tab they
+  // are on. replaceState rather than router.replace: this is the same page and a
+  // Next navigation would remount it, losing every form in progress — an email
+  // half-typed, a password field mid-edit.
+  const show = (id: TabId) => {
+    setTab(id)
+    const url = new URL(window.location.href)
+    url.searchParams.set("tab", id)
+    url.hash = ""
+    window.history.replaceState(null, "", url.toString())
+    // Tabs are taller than the screen; leaving the scroll where it was means
+    // clicking a tab appears to do nothing at all.
+    window.scrollTo({ top: 0 })
+  }
+
+  const visibleTabs = useMemo(
+    () => TABS.filter(t => !t.adminOnly || isAdmin), [isAdmin])
+
+  // A tab the reader cannot see is not a tab they can be left on. `?tab=site`
+  // in a shared link, or an admin who signs out with that tab open, would
+  // otherwise render an empty panel with every tab unselected — which looks
+  // exactly like a broken page. Fall back rather than clearing the state, so an
+  // admin whose `me` fetch is still in flight lands on their tab when it
+  // arrives instead of being bounced to the first one.
+  const activeTab: TabId =
+    visibleTabs.some(t => t.id === tab) ? tab : "reading"
+
   // The standing mute list. Saved on every edit, like the rest of this side of
   // the page — there is no Save button for a reader's own settings.
   const [mutes, setMutes] = useState<MuteList>(EMPTY_MUTES)
   const [muteDrafts, setMuteDrafts] = useState<Record<string, string>>({})
-  useEffect(() => { setMutes(loadMutes()) }, [])
+  // Re-read on the sync pull as well as on mount. Now that the list travels, a
+  // reader can open Settings, have their list arrive from another device a
+  // second later, and be looking at the stale one — editing from there would
+  // then write the stale version back over it. `storage-pulled` is dispatched by
+  // lib/auth.tsx once a merge has been adopted locally.
+  useEffect(() => {
+    const read = () => setMutes(loadMutes())
+    read()
+    window.addEventListener("ficatlas:storage-pulled", read)
+    return () => window.removeEventListener("ficatlas:storage-pulled", read)
+  }, [])
   const muteTotal = muteCount(mutes)
 
   const addMute = (key: keyof MuteList) => {
@@ -125,6 +230,10 @@ export default function SettingsPage() {
   useEffect(() => {
     refreshSizes()
     storageEstimate().then(setStorage).catch(() => {})
+    // A sync pull changes what is on the device, so the "how much is here"
+    // figures beside each Clear button are wrong until they are re-read.
+    window.addEventListener("ficatlas:storage-pulled", refreshSizes)
+    return () => window.removeEventListener("ficatlas:storage-pulled", refreshSizes)
   }, [])
 
   const removeMute = (key: keyof MuteList, value: string) => {
@@ -256,11 +365,45 @@ export default function SettingsPage() {
       <BackLink fallback="/" fallbackLabel="Back to search" />
       <h1 className="settings-title">Settings</h1>
 
+      {/* The lede used to say these settings "live on this device — no account
+          needed". Half true, and the wrong half was the reassuring one: with an
+          account, your reader font, search defaults, content toggles, shelf and
+          reading progress all follow you between devices, which is most of the
+          reason to have one. Saying otherwise talked readers out of the feature.
+          What IS device-only is now named, because that is the part worth a
+          promise. */}
       <p className="settings-lede">
-        These are yours and live on this device — no account needed, and nothing
-        here changes what anybody else sees.
+        {user
+          ? <>These are yours. Most of them follow you to your other devices;
+              your never-show-me list stays on this one.</>
+          : <>These are yours and stay on this device — no account needed.
+              Nothing here changes what anybody else sees.</>}
       </p>
 
+      {/* A tablist, with the roles spelled out: these switch what is rendered
+          below without navigating, so a screen reader is told that rather than
+          being handed five links that appear to go nowhere. */}
+      <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+        {visibleTabs.map(t => (
+          <button key={t.id} role="tab" id={`tab-${t.id}`}
+            aria-selected={activeTab === t.id}
+            aria-controls={`panel-${activeTab}`}
+            className={`settings-tab${activeTab === t.id ? " settings-tab--on" : ""}`}
+            onClick={() => show(t.id)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="settings-panel" role="tabpanel" id={`panel-${activeTab}`}
+        aria-labelledby={`tab-${activeTab}`}>
+      <p className="settings-panel__hint">
+        {visibleTabs.find(t => t.id === activeTab)?.hint}
+      </p>
+
+      {activeTab === "account" && <AccountTab />}
+
+      {activeTab === "reading" && <>
       <section className="settings-group">
         <h2 className="settings-group__title">Appearance</h2>
 
@@ -406,6 +549,10 @@ export default function SettingsPage() {
         </div>
       </section>
 
+      </>}
+
+      {activeTab === "hidden" && <>
+      <div id="mutes" />
       {/* ── Never show me ───────────────────────────────────────────────────
           Exclusions have always existed, but only for the search you are
           running: type them, get results, and they are gone next time. What a
@@ -418,10 +565,21 @@ export default function SettingsPage() {
           not, and the safest place for it is a machine we cannot see. */}
       <section className="settings-group">
         <h2 className="settings-group__title">Never show me</h2>
+        {/* This promised the list was "kept on this device only ... never
+            uploaded". It now syncs, so the promise is gone rather than quietly
+            false — the screen that tells somebody their list is private is the
+            last place to let a claim go stale. What IS still true, and is the
+            half that mattered most, is that it never enters a shared link: see
+            OutreachPanel and the gated-terms rules in CLAUDE.md. */}
         <p className="settings-group__hint">
           Anything listed here is filtered out of every search, automatically.
-          Kept on this device only — it is never uploaded, and it is not included
-          when you share a search link.
+          {user
+            ? <> It is stored with your account so it follows you between
+                devices, and it is used for nothing but filtering your own
+                results.</>
+            : <> It is kept on this device. Sign in and it follows you to your
+                other devices.</>}
+          {" "}It is never included when you share a search link.
           {muteTotal > 0 && <> Currently hiding <strong>{muteTotal}</strong>{" "}
             {muteTotal === 1 ? "thing" : "things"}.</>}
         </p>
@@ -451,6 +609,10 @@ export default function SettingsPage() {
         ))}
       </section>
 
+      </>}
+
+      {activeTab === "data" && <>
+      <div id="data" />
       {/* ── Your data ───────────────────────────────────────────────────────
           This site is account-optional: progress, bookmarks, searches, reader
           preferences and the mute list all live on this device, and saved works
@@ -462,9 +624,23 @@ export default function SettingsPage() {
           being able to see it and delete it. */}
       <section className="settings-group">
         <h2 className="settings-group__title">Your data</h2>
+        {/* This said "stored on this device and never uploaded", which was
+            true when nothing synced and is now false for most of what it
+            lists — bookmarks, reading progress, saved and recent searches, the
+            offline shelf and every preference all go to the account when there
+            is one. A privacy promise that is wrong is worse than none, because
+            it is believed. So: name what syncs, name what never does, and be
+            exact about which is which. */}
         <p className="settings-group__hint">
-          Everything below is stored on this device and never uploaded. Clearing
-          your browser data removes it too.
+          {user
+            ? <>Stored on this device, and — because you are signed in — mirrored
+                to your account so it follows you: your shelf, your place in each
+                story, your saved and recent searches, your never-show-me list,
+                and the preferences on the other tabs. Clearing your browser data
+                removes the copy on this device; the account keeps its own, and
+                deleting the account removes that.</>
+            : <>Stored on this device and never uploaded — there is no account to
+                upload it to. Clearing your browser data removes it.</>}
         </p>
 
         {DATA_GROUPS.map(g => {
@@ -525,10 +701,14 @@ export default function SettingsPage() {
         </div>
       </section>
 
+      </>}
+
       {/* ── the site's own settings ─────────────────────────────────────────
-          Below the fold and visibly separate, because these are not about the
-          person reading — they change what the instance indexes, for everyone. */}
-      {isAdmin && admin && (
+          Its own tab, not a section below the fold, because these are not about
+          the person reading — they change what the instance indexes, for
+          everybody, and a reader scrolling to the end of their own preferences
+          should not arrive at crawler scheduling. */}
+      {activeTab === "site" && isAdmin && admin && (
         <>
           <div className="settings-divider">
             <span className="settings-divider__label">Site administration</span>
@@ -742,13 +922,17 @@ export default function SettingsPage() {
         </>
       )}
 
-      {/* Signed out, nothing above needed an account — so this is an offer,
-          not a gate. Says what signing in adds rather than what it unlocks. */}
-      {!authLoading && !user && (
+      </div>
+
+      {/* Signed out, nothing above needed an account — so this is an offer, not
+          a gate. It says what signing in ADDS rather than what it unlocks, and
+          it is suppressed on the Account tab, which makes the same case at
+          length: two pitches on one screen reads as nagging. */}
+      {!authLoading && !user && activeTab !== "account" && (
         <p className="settings-footnote">
           <Link href="/login" className="library-signin-note__link">Sign in</Link>{" "}
-          to sync bookmarks and reading progress across your devices. Everything
-          on this page works without one.
+          and these settings follow you to your other devices, along with your
+          shelf and your place in every story. Everything here works without one.
         </p>
       )}
     </div>

@@ -1,5 +1,6 @@
 "use client"
 import { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from "react"
+import { SYNCED_PREF_KEYS } from "./storageKeys"
 
 export interface User {
   username: string
@@ -39,13 +40,18 @@ interface AuthContextType {
   logout: () => Promise<void>
   syncNow: () => Promise<void>
   changePassword: (current: string, next: string) => Promise<void>
-  deleteAccount: (password: string) => Promise<void>
+  /** `confirm` is the typed username, used INSTEAD of a password by an account
+   *  that has none — every account made through Google sign-in. Without it those
+   *  accounts could not be deleted at all; see confirm_identity in
+   *  backend/api/auth.py. */
+  deleteAccount: (password: string, confirm?: string) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
 
 // Keys mirrored between localStorage and the server.
-const SYNC_KEYS = ["bookmarks", "progress", "recents", "settings", "offline"] as const
+const SYNC_KEYS = ["bookmarks", "progress", "recents", "settings", "offline",
+                   "saved", "dismissed", "mutes"] as const
 type SyncKey = typeof SYNC_KEYS[number]
 
 const LS = (k: string) => `ficatlas:${k}`
@@ -97,6 +103,16 @@ const STORAGE_KEY: Record<SyncKey, string> = {
   // saved or removed, so the choice travels between devices while the megabytes
   // stay where they were downloaded.
   offline:   "offline-shelf",
+  // Searches the reader chose to keep. Distinct from `recents`, which is a log
+  // of what was typed and is capped and overwritten; a saved search is a thing
+  // somebody decided to keep and expects to still be there.
+  saved:     "saved-searches",
+  // Whether they have already declined to add an email address. Per-device it
+  // asked again on every device, which reads as the site not listening.
+  dismissed: "email-prompt-dismissed",
+  // The never-show-me list. An OBJECT of arrays rather than a flat one, so the
+  // server merges it field by field — see _merge_value in api/userdata.py.
+  mutes:     "mutes",
 }
 
 // Preferences are stored one key per setting, which is convenient for the
@@ -104,10 +120,13 @@ const STORAGE_KEY: Record<SyncKey, string> = {
 // They are gathered into a single `settings` object on the way out and fanned
 // back out on the way in, so a reader's font size follows them between devices
 // without every component having to know about sync.
-const PREF_KEYS = [
-  "reader_font", "reader_width", "reader_theme", "reader_lineheight",
-  "reader-fontsize", "reader_justify", "default_sites", "sidebar_w",
-] as const
+//
+// The list itself comes from lib/storageKeys.ts and must NOT be re-typed here.
+// It was a local copy, and it had drifted from the list the Settings page
+// offers: `default_sort`, `results_per_page`, `show_explicit` and
+// `show_underage` were all settings a reader could change and none of them
+// travelled. See the measurement in that file.
+const PREF_KEYS = SYNCED_PREF_KEYS
 
 function readLocal(key: SyncKey): any {
   try {
@@ -386,9 +405,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const deleteAccount = useCallback(async (password: string) => {
+  const deleteAccount = useCallback(async (password: string, confirm = "") => {
     const fd = new FormData()
     fd.append("password", password)
+    fd.append("confirm", confirm)
     const r = await fetch("/api/auth/delete-account", { method: "POST", body: fd, credentials: "include" })
     if (!r.ok) {
       const e = await r.json().catch(() => ({}))
