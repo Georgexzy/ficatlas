@@ -171,13 +171,18 @@ export default function PermissionsClient() {
       <SiteHeader />
       <BackLink fallback="/" fallbackLabel="Back to search" />
 
-      <h1>Your work, your call</h1>
+      <h1>For authors</h1>
+      {/* The count was written out here as "~19.9 million" against an index of
+          20.8M — the cost of stating a figure in three places, which is what
+          consolidating the author policy onto this page is meant to end. It is
+          not restated at all now: the exact number is on the home page and in
+          the index status, and nothing on this page turns on it. */}
       <p>
-        FicAtlas indexes ~19.9 million works as a listing — title, summary, tags
-        and a link out. For a few thousand it also{" "}
-        <strong>keeps a complete copy of the text</strong> so it can be read here
-        without leaving the site. This page is where you see what it holds under
-        your name, and decide which of those may happen to yours.
+        FicAtlas indexes fanworks as listings — title, summary, tags and a link
+        to the archive that hosts them. For a small number it also{" "}
+        <strong>holds a complete copy of the text</strong>, so that the work can
+        be read here directly. This page shows what is held under your name and
+        lets you decide which of those applies to your work.
       </p>
 
       {/* Removal as an action, above everything else.
@@ -189,24 +194,24 @@ export default function PermissionsClient() {
           nothing of them. */}
       <div className="perm-urgent">
         <p>
-          <strong>Want your work taken down?</strong> You do not need to verify
-          anything, explain yourself, or finish this page. The text comes down as
-          soon as you ask, and nothing is ever deleted, so a mistake can always
-          be undone.
+          <strong>To have your work removed,</strong> you do not need to verify
+          anything, give a reason, or complete this page. The text stops being
+          readable as soon as you submit the form. Nothing is deleted, so a
+          request made in error can be reversed.
         </p>
         <Link href="/takedown" className="btn btn--primary">Remove my work</Link>
       </div>
 
       <div className="perm-note">
         <p>
-          Everything below is the <em>other</em> direction — telling FicAtlas
-          what it may do, rather than asking it to stop. You can also take down
-          individual works from the list further down, without proving anything.
+          Everything below concerns the opposite direction: stating what FicAtlas
+          may do with your work, rather than asking it to stop. Individual works
+          can also be removed from the list further down, without verification.
         </p>
         <p>
-          Proof is only needed for one thing: saying <em>yes</em>. Anyone can
-          type an author&apos;s name into a form, so permission that has not been
-          verified would not be worth anything — least of all to you.
+          Verification is required for one thing only — granting permission.
+          Anyone can enter an author&apos;s name into a form, so an unverified
+          grant would carry no weight, least of all for you.
         </p>
       </div>
 
@@ -350,19 +355,21 @@ export default function PermissionsClient() {
 
       {step === "prove" && (
         <>
-          <h2>Show us it&apos;s your account</h2>
+          <h2>Verify the account</h2>
           <div className="perm-explain">
             <p className="perm-explain__head">What verifying involves</p>
             <p>
-              You paste a short code into your own archive profile, we read that
-              public page once and see it there, and that is the whole of it. It
-              proves you can edit that profile, which only its owner can.
+              You add a short code to your own archive profile; FicAtlas reads
+              that public page once and confirms the code is present. That is the
+              whole process. It demonstrates that you can edit the profile, which
+              only its owner can do.
             </p>
             <ul>
-              <li><strong>No password.</strong> You are never asked for your archive
-                login, and there is nothing to sign in to. AO3 tells its users never
-                to give a third-party app their password, and this does not ask you to.</li>
-              <li><strong>No access to your account.</strong> We cannot post, edit,
+              <li><strong>No password.</strong> You are never asked for your
+                archive credentials and there is nothing to sign in to. AO3
+                advises its users never to give a third-party service their
+                password; this process does not require one.</li>
+              <li><strong>No access to your account.</strong> FicAtlas cannot post, edit,
                 read your drafts, or see anything not already on your public profile.</li>
               <li><strong>One request</strong>, when you press check. Not on a
                 schedule, not afterwards.</li>
@@ -380,7 +387,7 @@ export default function PermissionsClient() {
 
           <p className="perm-token"><code>{token}</code></p>
           <p className="perm-why">
-            When the check passes we record: your archive and username, the choice
+            When the check passes, FicAtlas records your archive and username, the choice
             you made, the code, the address of the page it was found on, and a
             short snippet of the surrounding text — so the permission can be shown
             to have been given rather than merely asserted. No password, no email
@@ -390,7 +397,7 @@ export default function PermissionsClient() {
           <label className="perm-email">
             <span>Email (optional)</span>
             <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-              placeholder="Only so we can reach you if something changes" />
+              placeholder="Optional — only used to contact you about this record" />
           </label>
 
           <div className="btn-row">

@@ -34,8 +34,8 @@ export default function About() {
         searching each one and missing the other two.
       </p>
       <p>
-        It is a personal, non-commercial project. There are no adverts, no
-        trackers, and nothing is sold.
+        It is an independent, non-commercial project. There is no advertising,
+        no third-party tracking, and no data is sold.
       </p>
 
       <h2>Where the writing lives</h2>
@@ -47,85 +47,66 @@ export default function About() {
         they posted them.
       </p>
       <p>
-        A small number of stories can be read here directly. These come from{" "}
-        <strong>FictionAlley</strong>, an archive that shut down, and were preserved
-        so they would not disappear. If you wrote one of them, the section below
-        is for you.
+        A small number of stories can be read here in full. These come from{" "}
+        <strong>FictionAlley</strong>, an archive that closed, and were preserved
+        so that they would not be lost. If you wrote one of them, see the section
+        below.
       </p>
 
-      <h2 id="takedown">Asking for a story to be removed</h2>
-      <p>
-        If you are the author of a story whose text can be read on FicAtlas and
-        you would rather it were not, you can have it removed. You do not need to
-        explain yourself, and you do not need to prove anything first.
-      </p>
-      <p>
-        <strong>The text comes down straight away</strong>, as soon as the form is
-        submitted — not after a review. The story stays listed as a title, author
-        and link, so people can still find your work where you publish it now.
-      </p>
-      <p>
-        <Link href="/takedown" className="card-btn card-btn--primary">
-          Request a takedown
-        </Link>
-      </p>
-      <p className="page-prose__muted">
-        You will not be asked to prove that the work is yours. Fandom runs on pen
-        names, and most of what is hosted here came from an archive that no
-        longer exists, so there is nothing to prove it against. Nothing is
-        deleted either — the text stops being readable, and stays recoverable in
-        case a request was mistaken.
-      </p>
-      <p className="page-prose__muted">
-        If you want the listing removed as well, there is a box on the form for
-        that. The form is the surest way to reach whoever maintains this: it
-        arrives in the same queue the takedowns do, so nothing depends on an
-        inbox being watched.
-      </p>
+      {/* THE AUTHOR POLICY IS NOT WRITTEN HERE ANY MORE.
+          It was, at length — a takedown section and a terms section, roughly
+          forty lines — and the same four facts were also on /permissions and
+          again on /takedown. Three statements of one policy in three voices,
+          which is how /permissions came to be quoting "~19.9 million" against
+          an index of 20.8M: nothing keeps three copies honest.
 
-      {/* Placed immediately after the takedown section on purpose. An author
-          reading this page is usually here because they found their work and
-          want it gone; the other options only make sense once they know that
-          door is open and costs them nothing. */}
-      <h2 id="authors">If you would rather set your own terms</h2>
+          /permissions is the single author page now. This one keeps the route
+          to it, because an author who has found their work somewhere they did
+          not put it must be able to reach the door from here without reading a
+          policy first, and that is the most important link on this page for the
+          person most likely to need it. */}
+      <h2 id="takedown">For authors</h2>
       <p>
-        Removal is not the only option. You can see everything FicAtlas holds
-        under your name, take down individual works, or set a standing choice
-        that applies to your whole back catalogue{" "}
-        <strong>and anything you post later</strong> — so you only say it once.
+        If your work appears here and you would rather it did not, you can have
+        it removed. No account, no explanation and no proof are required, and the
+        text stops being readable as soon as you ask rather than after a review.
       </p>
       <p>
-        The choice that matters most is whether FicAtlas may keep{" "}
-        <strong>a complete copy of your stories&apos; text</strong> on this
-        server and let people read it here, rather than only listing the work and
-        linking you to the archive. That is the one thing worth being asked
-        about, and the one thing this site will not do on the strength of an
-        unverified form.
+        You can also review everything held under your name, remove individual
+        works, or set a standing preference that applies to your whole catalogue
+        and to anything you publish later.
       </p>
-      <p>
-        <strong>None of that needs proof</strong>, with one exception. Saying{" "}
-        <em>no</em> — don&apos;t store my text, don&apos;t index me — is taken at
-        face value, because a request that only ever removes permission cannot be
-        used to take anything from anyone. Saying <em>yes</em> is different:
-        anyone can type an author&apos;s name into a form, so permission to host
-        your work is only recorded once you have shown you control the account it
-        was posted from, by putting a one-time code in your own profile.
-      </p>
-      {/* One button. These were two — "See what is held under my name" and "Set
-          my terms" — pointing at the two author pages that have since become
-          one, so they now lead to the same place. And the first went via
-          /permissions/manage, which is only a redirect now: our own navigation
-          should not bounce through one, those exist for bookmarks and inbound
-          links. */}
       <p>
         <Link href="/permissions" className="card-btn card-btn--primary">
-          See my work and set my terms
+          Review and manage my work
         </Link>
       </p>
       <p className="page-prose__muted">
-        Verifying works for Archive of Our Own only. FanFiction.net blocks
-        automated requests outright, so their profiles cannot be read to check a
-        code — FF.net authors can still restrict and remove, just not grant.
+        Removal is immediate and needs no verification; granting permission —
+        allowing FicAtlas to keep a complete copy of your text and serve it
+        here — is the one action that does, because an unverified grant would be
+        worth nothing to you. The full policy, and the form, are on that page.
+      </p>
+
+      {/* The page's own title has said "About & contact" since it was written,
+          and until now the contact route was a sentence inside the takedown
+          section — which went when that section was consolidated onto
+          /permissions, leaving a page that promised contact details and gave
+          none. Its own section now, so it cannot be lost to an edit elsewhere.
+
+          The form is named first deliberately: it writes to the same queue an
+          operator works, so it does not depend on an inbox being watched. */}
+      <h2 id="contact">Contact</h2>
+      <p>
+        For anything concerning a specific work — removal, or setting your terms
+        as its author — the{" "}
+        <Link href="/permissions">author page</Link> is the fastest route, and
+        it records the request directly rather than relying on mail being read.
+      </p>
+      <p>
+        For anything else, including questions about this site or a problem with
+        it, write to{" "}
+        <a href="mailto:help@ficatlas.com">help@ficatlas.com</a>.
       </p>
 
       <h2>Source code</h2>
@@ -137,62 +118,59 @@ export default function About() {
         </a>.
       </p>
       <p className="page-prose__muted">
-        Licensed for non-commercial use. You are welcome to run it for yourself
-        or your corner of fandom; you may not sell it or run it with adverts.
-        That restriction exists for the authors whose work it indexes, not for
-        me — they published for free, on archives that promised not to profit
-        from them.
+        Licensed for non-commercial use: you may run your own copy, but you may
+        not sell it or run it with advertising. That restriction is there for the
+        authors whose work it indexes, who published for free on archives that
+        undertook not to profit from them.
       </p>
 
-      <h2 id="ai">AI, crawling, and your work</h2>
+      <h2 id="ai">AI and automated collection</h2>
       <p>
-        Fandom has good reasons to be wary of anything that looks like another
-        scrape of AO3 for someone else&apos;s model. So here is what FicAtlas is,
-        and what it is not, stated plainly.
+        Fanfiction archives have been scraped for model training without their
+        authors&apos; consent, and readers are right to ask where any new index
+        stands on it. FicAtlas&apos;s position:
       </p>
       <ul>
         <li>
-          <strong>No generative AI acts on fanfiction here.</strong> Nothing in
-          the index is fed to a model that writes, rewrites, summarises, or
-          &ldquo;continues&rdquo; stories. There is no chatbot over your fic, no
-          auto-generated recommendations trained on full text, and no feature
-          that remixes someone else&apos;s prose.
+          <strong>No generative model is applied to indexed work.</strong>{" "}
+          Nothing in the index is passed to a model that writes, rewrites,
+          summarises or continues stories. There is no chat interface over
+          indexed text, no recommendations generated from full text, and no
+          feature that reproduces or adapts an author&apos;s prose.
         </li>
         <li>
-          <strong>This is not a training dataset.</strong> FicAtlas does not
-          publish bulk dumps of works, does not sell access to the index for
-          machine learning, and does not hand stories to AI companies. Training
-          crawlers are refused in{" "}
-          <a href="/robots.txt">robots.txt</a> — the same stance the OTW takes
-          for AO3.
+          <strong>The index is not a training corpus.</strong> FicAtlas does not
+          publish bulk exports, does not license the index for machine learning,
+          and does not supply works to AI companies. Known training crawlers are
+          disallowed in <a href="/robots.txt">robots.txt</a>, the same position
+          the OTW takes for AO3.
         </li>
         <li>
-          <strong>Almost everything is metadata and a link.</strong> For the
-          vast majority of works we store title, author, summary, tags, length
-          and where to read it on the original archive. The story itself stays
-          where you posted it. Full text here is limited to a small preserved
-          set from a dead archive (see above), and authors can have that text
-          taken down immediately.
+          <strong>Almost all of it is metadata and a link.</strong> For the great
+          majority of works FicAtlas holds the title, author, summary, tags,
+          length and a link to the original archive; the work itself remains
+          where its author published it. Full text is limited to the preserved
+          FictionAlley set described above, and any author may have that text
+          removed immediately.
         </li>
         <li>
-          <strong>Building the site is not the same as mining fic.</strong>{" "}
-          Parts of FicAtlas&apos;s own code and search tooling were written with
-          ordinary programming help — the way many open-source projects are
-          built. That help never trained on, and never runs against, the
-          fanworks in the index. The stories are data for a search engine, not
-          fuel for a model.
+          <strong>AI assistance in building the software is not the same
+          thing.</strong> Parts of FicAtlas&apos;s own code and search tooling
+          were written with AI programming assistance, as much open-source
+          software now is. No indexed work formed part of that, and no such tool
+          is run against the index. The distinction is between writing a search
+          engine and training on its contents.
         </li>
         <li>
-          <strong>Collection is slow and bounded.</strong> Metadata is gathered
-          politely, with rate limits and backoff, and from the Internet Archive
-          wherever that keeps load off live archives. It is indexing for
-          readers, not harvesting corpora.
+          <strong>Collection is rate-limited and bounded.</strong> Metadata is
+          gathered slowly, with backoff, and is taken from the Internet Archive
+          wherever that avoids load on a live archive.
         </li>
       </ul>
       <p>
-        If something here still feels wrong for your work, use the{" "}
-        <Link href="/takedown">takedown form</Link> — it reaches whoever
-        maintains this, and it asks nothing of you. Authors come first.
+        If any of this is still not what you want for your work, the{" "}
+        <Link href="/takedown">removal form</Link> asks nothing of you and takes
+        effect immediately.
       </p>
     </div>
   )
