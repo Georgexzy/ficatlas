@@ -1202,3 +1202,32 @@ def test_every_caller_of_fetch_work_handles_the_restricted_sentinel():
             continue
         assert "RESTRICTED" in src, (
             f"{fn.__name__} calls fetch_work without handling RESTRICTED")
+
+
+# ---- search cache: what an expensive query earns -------------------------
+
+def test_an_expensive_search_earns_hours_not_minutes():
+    """The factor was 0.15 against a 30-minute ceiling, so a four-second search
+    earned ten minutes. Cold latency tracks the result count -- 64 results in
+    0.5s, 2,188 in 1.9s, popular terms at the 5,000 ceiling in 3 to 5 -- and
+    those popular terms are exactly what a ten-minute window fails to cover. On
+    a low-traffic site a term searched every twenty minutes was cold every
+    time, so every reader paid full price."""
+    from api.search import _cost_ttl, SEARCH_CACHE_SECONDS
+    assert _cost_ttl(4000) >= 3600, "a four-second search must earn at least an hour"
+    assert _cost_ttl(500) < _cost_ttl(4000), "cost must still decide the TTL"
+
+
+def test_a_cheap_search_stays_fresh():
+    """Freshness matters where a work is NEW, and a reader looking for one
+    published this morning searches its title -- narrow, fast, and so barely
+    cached. The floor is what protects that."""
+    from api.search import _cost_ttl, SEARCH_CACHE_SECONDS
+    assert _cost_ttl(10) == SEARCH_CACHE_SECONDS
+    assert SEARCH_CACHE_SECONDS <= 300, "the floor is meant to be short"
+
+
+def test_the_ceiling_bounds_how_stale_anything_can_get():
+    from api.search import _cost_ttl, SEARCH_CACHE_MAX_SECONDS
+    assert _cost_ttl(10_000_000) == SEARCH_CACHE_MAX_SECONDS
+    assert SEARCH_CACHE_MAX_SECONDS <= 86400, "a day is the most defensible bound"

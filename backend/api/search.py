@@ -136,12 +136,31 @@ SEARCH_WORK_MEM = os.getenv("SEARCH_WORK_MEM", "64MB")
 # read is a row in an UNLOGGED table that gets swept anyway.
 SEARCH_PREFETCH_PAGES = int(os.getenv("SEARCH_PREFETCH_PAGES", "5"))
 
-SEARCH_CACHE_MAX_SECONDS = int(os.getenv("SEARCH_CACHE_MAX_SECONDS", "1800"))
-SEARCH_CACHE_COST_FACTOR = float(os.getenv("SEARCH_CACHE_COST_FACTOR", "0.15"))
+SEARCH_CACHE_MAX_SECONDS = int(os.getenv("SEARCH_CACHE_MAX_SECONDS", "21600"))
+SEARCH_CACHE_COST_FACTOR = float(os.getenv("SEARCH_CACHE_COST_FACTOR", "2.0"))
 
 
 def _cost_ttl(elapsed_ms: float) -> int:
-    """Cache time earned by what the search actually cost to compute."""
+    """Cache time earned by what the search actually cost to compute.
+
+    The factor was 0.15 against a 30-minute ceiling, so a four-second search
+    earned ten minutes. Measured on the live site, cold latency tracks the
+    result count almost exactly -- 64 results in 0.5s, 2,188 in 1.9s, and the
+    popular terms that reach the 5,000 candidate ceiling in 3 to 5 -- and those
+    popular terms are precisely the ones a ten-minute window fails to cover.
+    On a site with little traffic, a term searched every twenty minutes was
+    cold EVERY time, so essentially every reader paid full price.
+    
+    The trade is lopsided and worth stating in both directions. What staleness
+    costs is bounded by how fast the index moves: about 8,000 new AO3 works a
+    day, which is 0.3% of an hour against a broad result set of thousands --
+    invisible. What caching saves is the entire query cost, for every reader
+    inside the window. So expensive searches earn hours.
+    
+    Cheap searches keep the 120s floor untouched, and that is where freshness
+    actually matters: a reader looking for a work published this morning is
+    searching its title, which is narrow, fast, and therefore barely cached.
+    """
     return max(SEARCH_CACHE_SECONDS,
                min(SEARCH_CACHE_MAX_SECONDS, int(elapsed_ms * SEARCH_CACHE_COST_FACTOR)))
 from query_parser import STATUS_WORDS, parse_query, parsed_to_search_params
