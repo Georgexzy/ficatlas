@@ -686,6 +686,52 @@ def change_password(
     return {"ok": True, "message": "Password changed. Other devices were signed out."}
 
 
+@router.post("/set-password")
+def set_password(
+    new_password: str = Form(...),
+    user: User = Depends(require_user),
+    sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+    db: Session = Depends(get_db),
+):
+    """Give a passwordless account a password, without asking for the old one.
+
+    An account created by Google sign-in has no password at all -- that is
+    deliberate, since a password nobody set is a password nobody can lose. But
+    it left no way to ADD one, and `change-password` cannot help: it verifies
+    the current password, and check_password returns False for an absent hash.
+    So a reader who signed up with Google was locked into Google for ever, and
+    losing that Google account meant losing this one.
+
+    The escape route that did exist was worse than none. `forgot` issues a
+    reset, and `reset` sets a hash without consulting an old one -- so it works,
+    but it means asking a reader to recover a password they never had, using an
+    auto-generated username they have probably never seen, through an email
+    channel that has to be configured for it. This endpoint is what
+    google_sso's own comment said already existed.
+
+    Refuses when a password IS set, and that is the security property rather
+    than tidiness: without the check this would be `change-password` minus the
+    check on the current password, which is exactly the thing that endpoint
+    exists to enforce.
+    """
+    if user.password_hash:
+        raise HTTPException(
+            400, "This account already has a password — use Change password.")
+    if len(new_password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    user.password_hash = hash_password(new_password)
+    # Every other session goes, as when a password is changed: from here on
+    # there is a second way into this account, and any older session was opened
+    # when there was only one.
+    q = db.query(UserSession).filter(UserSession.user_id == user.id)
+    if sat:
+        q = q.filter(UserSession.token.notin_(_token_lookups(sat)))
+    q.delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True,
+            "message": "Password set. You can now sign in without Google."}
+
+
 @router.post("/view-as")
 def set_view_as(role: str = Form(""), sat: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
                       db: Session = Depends(get_db)):
