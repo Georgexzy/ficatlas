@@ -1969,6 +1969,33 @@ async def _fandom_gaps_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _cache_warm_loop() -> None:
+    """Run the searches people actually search, so a reader never runs them cold.
+
+    Cold latency tracks the result count -- 5,000-result queries take 3 to 5
+    seconds -- and the terms that reach that ceiling are the popular ones. So
+    the reader who waits longest is the one searching the most obvious thing on
+    the site, which is the worst possible place for the worst latency.
+
+    Cost-scaled TTLs already give an expensive search hours of cache, but
+    somebody still pays full price at the start of every window. It does not
+    have to be a reader.
+
+    Slightly inside the TTL an expensive query earns, so a popular term is
+    re-warmed before it lapses rather than after.
+    """
+    from cache_warm import warm
+
+    interval = _num("WARM_INTERVAL_MIN", 90) * 60
+    await asyncio.sleep(_num("WARM_START_DELAY_SEC", 120))
+    while True:
+        try:
+            await asyncio.to_thread(warm)
+        except Exception as e:
+            log.warning(f"cache warm failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _supervised(name: str, factory) -> None:
     """Run one background loop for ever, surviving its own bugs.
 
@@ -2075,6 +2102,11 @@ async def main() -> None:
     if _flag("LISTING_HARVEST", "true"):
         tasks.append(asyncio.create_task(_supervised("listing_harvest_loop", _listing_harvest_loop)))
         log.info("AO3 listing harvest enabled (20 works per request)")
+
+    if _flag("CACHE_WARM", "true"):
+        tasks.append(asyncio.create_task(
+            _supervised("cache_warm_loop", _cache_warm_loop)))
+        log.info("search cache warming enabled (popular terms stay warm)")
 
     if _flag("FANDOM_GAPS", "true"):
         tasks.append(asyncio.create_task(
