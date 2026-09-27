@@ -70,7 +70,7 @@ export default function TakedownClient() {
         <p>{sent.message}</p>
         {!sent.hidden && !sent.delisted && (
           <p className="page-prose__muted">
-            We could not match that address to a story whose text we host — it may
+            That address did not match a story whose text is held here — it may
             already be listing-only, in which case there is no text to remove. We
             will still read your message.
           </p>
@@ -121,17 +121,18 @@ export default function TakedownClient() {
           demand they out themselves, and anyone considering abusing the form
           should know it does not delete anything. */}
       <div className="takedown-note">
-        <p><strong>We will not ask you to prove it.</strong> Fandom runs on pen
-        names, and asking someone to document their identity to reclaim their own
-        writing gets it backwards. Most of the stories hosted here came from
-        FictionAlley, an archive that closed — there is no account left to prove
-        anything with even if we wanted it.</p>
-        <p><strong>Nothing is deleted.</strong> A request hides the text
-        immediately and permanently as far as readers are concerned, but it stays
-        recoverable, so a mistaken or malicious request can be undone. That is
-        also why the form cannot be used to wipe the library: hiding is
-        reversible, and a burst of requests is reviewed by a person instead of
-        acted on automatically.</p>
+        <p><strong>No proof of identity is required.</strong> Fanfiction is
+        published under pen names, and requiring an author to document their
+        identity in order to reclaim their own writing would place the burden in
+        the wrong place. Most of the text held here came from FictionAlley, an
+        archive that has closed, so in most cases there is no longer an account
+        against which anything could be checked.</p>
+        <p><strong>Nothing is deleted.</strong> A request withdraws the text
+        immediately and permanently from readers, but it remains recoverable, so
+        a request made in error or in bad faith can be reversed. For the same
+        reason the form cannot be used to empty the library: withdrawal is
+        reversible, and an unusual volume of requests is reviewed by a person
+        rather than applied automatically.</p>
       </div>
 
       {/* Check first, ask second.
@@ -141,9 +142,10 @@ export default function TakedownClient() {
           before asking them to fill anything in. */}
       <div className="author-check">
         <p className="author-check__lead">
-          <strong>Not sure if anything of yours is here?</strong> Type the name
-          you write under. This only lists stories whose full text can be read on
-          FicAtlas — not the millions we merely link to.
+          <strong>Not sure whether anything of yours is here?</strong> Enter the
+          name you publish under. This lists only stories whose full text can be
+          read on FicAtlas, not the works that are indexed as a listing and a
+          link.
         </p>
         <div className="author-check__row">
           <input value={penName} onChange={e => setPenName(e.target.value)}
@@ -195,7 +197,7 @@ export default function TakedownClient() {
         <label>
           <span>Your email</span>
           <input name="email" type="email" required
-            placeholder="In case we need to ask you something" />
+            placeholder="Optional — only used if we need to ask a question" />
         </label>
 
         <label>
