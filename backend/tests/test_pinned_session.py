@@ -1317,3 +1317,33 @@ def test_sso_adopts_an_existing_account_only_on_a_verified_address(db):
     src = inspect.getsource(google_sso._resolve_account)
     assert "if email and verified:" in src
     assert src.index("google_sub == sub") < src.index("if email and verified:")
+
+
+# ---- works with no summary ------------------------------------------------
+
+def test_surprise_me_never_offers_a_work_with_no_summary():
+    """"Surprise me" hands somebody a work they did not ask for, so the card has
+    to carry enough to judge it by. 81.2% of the AO3 rows here have no summary,
+    so without this the feature mostly deals out bare titles -- which is not a
+    recommendation, it is a dare."""
+    import inspect
+    from api import search as S
+    src = inspect.getsource(S.random_stories)
+    assert "summary IS NOT NULL" in src
+    # And on the ORM fallback too: a fallback that quietly drops a rule is how
+    # the rule stops being true, which the content-gate comment on this very
+    # endpoint records happening already.
+    assert "Story.summary.isnot(None)" in src
+
+
+def test_a_summaryless_work_is_demoted_but_still_reachable():
+    """Deliberately weaker than the outright exclusion in Surprise me. There the
+    reader asked for nothing; in search they asked for something specific, and a
+    thin row that matches it beats a rich row that does not."""
+    from api.search import THIN_PENALTY
+    # Decisive between otherwise comparable works: it has to outweigh the
+    # popularity vote (1.0 on a text query) so a bare row cannot win on
+    # readership alone.
+    assert THIN_PENALTY >= 1.0
+    # But not so large it beats a genuine title match (w_title is 3.0).
+    assert THIN_PENALTY < 3.0

@@ -839,7 +839,25 @@ def _resolve_or_split(db, col_name: str, csv_val):
 # choices for it are in the commit; the failure it must not cause is a work
 # being unfindable, which is why it is subtracted from a score rather than added
 # to a WHERE.
-THIN_PENALTY = float(os.getenv("SEARCH_THIN_PENALTY", "0.6"))
+# How far a work with NO SUMMARY is pushed down the results.
+#
+# Was 0.6, against a popularity weight of 3.5 on a category query and an exact
+# bonus of 4.0 -- so it was worth roughly a sixth of one other signal and a
+# summary-less row could still lead. That matters more than it sounds: 81.2% of
+# the AO3 rows in this index have no summary, so the thing being demoted is
+# four rows in five, and a result page of bare titles is what a first-time
+# visitor judges the whole site by.
+#
+# 2.0 is chosen to be decisive between OTHERWISE COMPARABLE works and no more.
+# A summary-less work that genuinely matches better on title or text still
+# wins, which is right: the reader asked for something, and a thin row that is
+# what they asked for beats a rich row that is not. What it no longer does is
+# win on popularity alone.
+#
+# Harsher in "Surprise me", where such works are excluded outright -- nobody
+# asked for that one, so a card with nothing to judge by is not a
+# recommendation. See random_stories.
+THIN_PENALTY = float(os.getenv("SEARCH_THIN_PENALTY", "2.0"))
 
 # The tag `reddit_recs_import.py` writes on a work the community recommends,
 # and the prefix of the tag carrying how many times. Same shape as
@@ -7215,7 +7233,18 @@ def random_stories(
     min_w = min_words or 1000
     fandom_pat = f"%{fandom.strip()}%" if fandom else None
 
-    where = ["word_count > :min_w", "delisted_at IS NULL"]
+    # A SUMMARY IS REQUIRED HERE, and only here.
+    #
+    # "Surprise me" hands somebody a work they did not ask for, so the card has
+    # to carry enough to judge it by. A card with a title and nothing else is
+    # not a recommendation, it is a dare -- and 81.2% of the AO3 rows in this
+    # index have no summary, so without this the feature mostly deals out blanks.
+    #
+    # Deliberately harsher than search, where the same works are ranked DOWN but
+    # still reachable: there a reader asked for something specific and may want
+    # a thin row that matches it. Nobody asked for this one.
+    where = ["word_count > :min_w", "delisted_at IS NULL",
+             "summary IS NOT NULL", "summary <> ''"]
     params: dict = {"min_w": min_w, "count": count}
     # Raw SQL, so the ORM filter cannot reach it — and "Surprise me" is on the
     # landing page, which makes it the likeliest place for this content to be
@@ -7267,8 +7296,14 @@ def random_stories(
     # landing page, for a reader who asked for nothing. A second code path that
     # answers the same question is a second place the rule has to be written,
     # which is the whole argument for four gate checks rather than one.
+    # The same requirement on the fallback pass. It exists because a narrow
+    # sample can match nothing, and a fallback that quietly drops a rule is how
+    # the rule stops being true -- exactly what the content-gate comment above
+    # records happening on this very endpoint.
     q = db.query(Story).filter(Story.word_count > min_w,
-                               Story.delisted_at.is_(None))
+                               Story.delisted_at.is_(None),
+                               Story.summary.isnot(None),
+                               Story.summary != "")
     if UNDERAGE_FILTER_ON:
         q = q.filter(Story.gate_underage.is_(False),
                      not_(Story.warnings.op("&&")(cast(_UNDERAGE_WARNINGS, PG_ARRAY(Text)))),

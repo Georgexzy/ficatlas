@@ -640,6 +640,17 @@ def me(user: Optional[User] = Depends(get_current_user)):
         # this person by email, rather than leaving them to find out at the
         # moment they are locked out.
         "email": user.email,
+        # Whether a password EXISTS, never anything about it. The account page
+        # cannot otherwise tell which control to offer: an account created by
+        # Google sign-in has no password, and showing it "Change password" --
+        # which demands a current one it does not have -- is a dead end. See
+        # set_password.
+        "has_password": bool(user.password_hash),
+        # And whether Google is attached, so settings can offer linking rather
+        # than only the login page. Linking an existing account from settings is
+        # the safer direction: the reader is already authenticated here, so
+        # there is no question about which account the identity should join.
+        "google_linked": bool(getattr(user, "google_sub", None)),
         # The UI needs these to decide what to SHOW, not just what to allow.
         # Rendering an Import tab that 403s on every button is worse than not
         # rendering it: the reader learns the app is broken rather than that

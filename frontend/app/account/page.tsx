@@ -338,7 +338,89 @@ export default function AccountPage() {
         )}
       </section>
 
-      {/* Change password */}
+      {/* GOOGLE, for linking an existing account rather than only signing in.
+          Linking from settings is the safer direction: the reader is already
+          authenticated here, so there is no question about which account the
+          Google identity should join. At the login page it has to be inferred
+          from a verified email address, which is why that path insists on
+          Google reporting the address verified. */}
+      <section className="settings-group">
+        <h2 className="settings-group__title">Google sign-in</h2>
+        {user?.google_linked ? (
+          <>
+            <p className="account-help">
+              Linked. You can sign in with Google on any device.
+              {!user?.has_password && (
+                <> Set a password below first if you want to unlink — otherwise
+                   there would be no way back in.</>
+              )}
+            </p>
+            <button className="btn btn--ghost"
+              disabled={busy || !user?.has_password}
+              onClick={async () => {
+                setBusy(true)
+                try {
+                  await fetch("/api/auth/google/unlink",
+                              { method: "POST", credentials: "include" })
+                  location.reload()
+                } finally { setBusy(false) }
+              }}>
+              Unlink Google
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="account-help">
+              Link your Google account and you can sign in with one tap, without
+              a password.
+            </p>
+            <a className="btn btn--primary"
+               href="/api/auth/google/start?link=1">Link Google account</a>
+          </>
+        )}
+      </section>
+
+      {/* SET a password, for an account that has never had one. Only shown when
+          there is none: an account created by Google sign-in cannot use Change
+          password below, because that verifies a current password it does not
+          have. Without this the reader was locked into Google for ever. */}
+      {user && !user.has_password && (
+        <section className="settings-group">
+          <h2 className="settings-group__title">Add a password</h2>
+          <p className="account-help">
+            This account signs in with Google and has no password. Adding one
+            gives you a second way in, so losing access to Google does not lose
+            you the account.
+          </p>
+          <div className="account-form">
+            <input type="password" className="setting-input"
+              placeholder="New password (6+ chars)" value={newPw}
+              onChange={e => setNewPw(e.target.value)} autoComplete="new-password" />
+            <button className="btn btn--primary" disabled={busy || newPw.length < 6}
+              onClick={async () => {
+                setBusy(true); setPwErr(""); setPwMsg("")
+                try {
+                  const body = new URLSearchParams({ new_password: newPw })
+                  const r = await fetch("/api/auth/set-password",
+                    { method: "POST", credentials: "include", body })
+                  const d = await r.json().catch(() => ({}))
+                  if (!r.ok) throw new Error(d.detail || "Could not set password")
+                  setPwMsg(d.message || "Password set.")
+                  setNewPw("")
+                } catch (e: any) {
+                  setPwErr(e.message || "Could not set password")
+                } finally { setBusy(false) }
+              }}>
+              {busy ? "Working…" : "Set password"}
+            </button>
+          </div>
+          {pwMsg && <p className="account-success">{pwMsg}</p>}
+          {pwErr && <p className="account-error">{pwErr}</p>}
+        </section>
+      )}
+
+      {/* Change password — only where there is one to change. */}
+      {user?.has_password && (
       <section className="settings-group">
         <h2 className="settings-group__title">Change password</h2>
         <div className="account-form">
@@ -353,6 +435,7 @@ export default function AccountPage() {
         {pwMsg && <p className="account-success">{pwMsg}</p>}
         {pwErr && <p className="account-error">{pwErr}</p>}
       </section>
+      )}
 
       {/* Sign out + danger zone */}
       <section className="settings-group">

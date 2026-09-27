@@ -18,6 +18,14 @@ export interface User {
       rather than that the feature is not theirs. */
   can_import?: boolean
   can_manage?: boolean
+  /** Whether a password EXISTS -- never anything about it. The account page
+      cannot otherwise tell which control to offer: an account created by
+      Google sign-in has none, and offering it "Change password", which demands
+      a current one, is a dead end. */
+  has_password?: boolean
+  /** Whether a Google identity is attached, so settings can offer linking
+      rather than only the login page. */
+  google_linked?: boolean
 }
 
 interface AuthContextType {

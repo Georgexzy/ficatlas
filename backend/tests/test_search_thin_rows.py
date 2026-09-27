@@ -54,11 +54,38 @@ def test_the_penalty_cannot_outweigh_an_exact_title_match():
     assert THIN_PENALTY < 4.0
 
 
-def test_the_penalty_cannot_outweigh_readership():
-    """`pop` is 0..1 scaled by `w_pop`, which is 1.0 on a title query and 3.5
-    on a category one. The penalty settles ties among the flat tail; it must
-    not reorder works that readers have actually separated."""
-    assert THIN_PENALTY <= 1.0
+def test_the_penalty_cannot_outweigh_a_real_title_match():
+    """This bound used to be `<= 1.0`, on the reasoning that `pop` is 0..1
+    scaled by w_pop (1.0 on a title query, 3.5 on a category one) and that the
+    penalty should settle ties among the flat tail without reordering works
+    readers have actually separated.
+
+    Sound reasoning, and the data does not support the fear. Missing summaries
+    are almost perfectly confined to works with no recorded readership at all:
+
+        kudos > 5000          4 of      6,326    0.1%
+        kudos 1001-5000     143 of     76,255    0.2%
+        kudos 101-1000    7,035 of    819,349    0.9%
+        kudos 1-100      72,605 of  1,804,283    4.0%
+        kudos 0 or none  11,357,511 of 11,502,541   98.7%
+
+    11.36M of the 11.5M summary-less rows have zero kudos. Well-read works are
+    re-encountered and enriched, so what this penalty demotes is the unread
+    tail -- not anything readers have separated. All the Young Dudes, the
+    most-read work here at 322,055 kudos, has a summary.
+
+    The 143 works in the 1k-5k band are the real cost of this, and they are
+    0.2% of that band. That is the trade, stated plainly.
+
+    So the penalty was raised to be decisive between otherwise comparable works,
+    which is what it is for: 81.2% of AO3 rows here have no summary, and a
+    result page of bare titles is what a first-time visitor judges the site by.
+
+    What it must still not do is beat a genuine match. w_title is 3.0, so a
+    summary-less work that really is what the reader typed still wins -- a thin
+    row that matches beats a rich row that does not.
+    """
+    assert 1.0 <= THIN_PENALTY < 3.0
 
 
 def test_the_penalty_is_configurable_without_a_deploy():
