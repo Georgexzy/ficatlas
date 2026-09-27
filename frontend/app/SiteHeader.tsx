@@ -71,13 +71,24 @@ function UserMenu() {
           <p className="user-menu__hint">
             {syncing
               ? "⟳ Syncing your data…"
-              : "Bookmarks, reading progress, recent searches and reader settings sync to this account."}
+              // Named rather than summarised, and kept in step with
+              // lib/storageKeys.ts — an incomplete list here is how a reader
+              // concludes a feature does not exist. Saved searches and the
+              // offline shelf were both missing from it.
+              : "Your shelf, your place in each story, saved and recent searches, "
+                + "the works you keep offline and your reader settings all sync to "
+                + "this account."}
           </p>
-          <Link href="/follows" className="user-menu__link" onClick={() => setOpen(false)}>
+          {/* Straight to the tab rather than through the /follows redirect: a
+              menu item should not cost a round trip to find out where it goes. */}
+          <Link href="/library?tab=following" className="user-menu__link" onClick={() => setOpen(false)}>
             Following
             {unread > 0 && <span className="user-menu__link-count">{unread} new</span>}
           </Link>
-          <Link href="/account" className="user-menu__link" onClick={() => setOpen(false)}>Account &amp; sync</Link>
+          {/* "Account & sync" used to point at /account while Settings lived
+              only in the main nav — two doors to one room, each hiding the
+              other. One entry now, to the merged page. */}
+          <Link href="/settings" className="user-menu__link" onClick={() => setOpen(false)}>Settings &amp; account</Link>
           <OfflineLink href="/library" className="user-menu__link" onClick={() => setOpen(false)}>My library</OfflineLink>
           {/* The admin page had exactly one link into it, buried in Settings
               below Appearance, Reading and Search — so for the person who owns

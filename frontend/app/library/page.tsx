@@ -10,6 +10,7 @@ import {
   type PersistState, type StorageEstimate,
 } from "@/lib/offline"
 import SiteHeader from "../SiteHeader"
+import FollowingTab from "./FollowingTab"
 import { useAuth } from "@/lib/auth"
 import { pollJob } from "@/lib/pollJob"
 
@@ -112,7 +113,11 @@ interface ProgressEntry { chapter: number; at: string; title: string }
 interface HostedStory { id: string; title: string; author: string; site: string; word_count: number; chapter_count: number; summary?: string; tags: string[]; indexed_at?: string | null; added_at?: string | null }
 // "searches" is gone — recent searches now sit under the search bar, which is
 // where you are when you want to re-run one.
-type Tab = "hosted" | "mine" | "bookmarks" | "reading" | "offline" | "import"
+// "following" leads, and it is the only one of these lists that changes on its
+// own — the rest move when the reader moves them. It was a page of its own at
+// /follows, which split the reader's works across two destinations neither of
+// which mentioned the other.
+type Tab = "following" | "hosted" | "mine" | "bookmarks" | "reading" | "offline" | "import"
 
 // Shelf ordering, in the shape Apple Books uses — and for the same reason: a
 // shelf of covers has no inherent order, so whatever it defaults to IS the
@@ -208,6 +213,28 @@ export default function LibraryPage() {
   // offline should not have the tab moved under them when a flaky connection
   // reappears.
   const [tab, setTab] = useState<Tab>("hosted")
+  // How many followed works have moved, for the tab's badge. The same endpoint
+  // the header badge reads, and it answers 0 rather than 401 for a signed-out
+  // reader, so there is nothing to guard.
+  const [followUnread, setFollowUnread] = useState(0)
+  useEffect(() => {
+    let live = true
+    fetch("/api/follows/count", { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (live && d) setFollowUnread(d.unread || 0) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [tab])
+
+  // The tab comes from the address when one is named, so /library?tab=following
+  // works — which is what /follows now redirects to, and what the header badge
+  // links at. Read once on mount for the same reason the offline switch below is:
+  // reading it during render would disagree with the server HTML.
+  useEffect(() => {
+    const wanted = new URL(window.location.href).searchParams.get("tab") as Tab | null
+    if (wanted && ["following", "hosted", "mine", "bookmarks", "reading",
+                   "offline", "import"].includes(wanted)) setTab(wanted)
+  }, [])
   // Switched AFTER mount, not in the initialiser. Reading navigator.onLine
   // during render makes the server ("hosted", since there is no navigator) and
   // the client ("offline") disagree, which is a hydration mismatch — React then
@@ -215,6 +242,9 @@ export default function LibraryPage() {
   // pass is lost. The effect runs once, so someone who opened this deliberately
   // while offline still keeps the tab if a flaky connection returns.
   useEffect(() => {
+    // Not when a tab was asked for by name: someone following a link to their
+    // Following list on a flaky connection meant to go there.
+    if (new URL(window.location.href).searchParams.get("tab")) return
     if (!navigator.onLine) setTab("offline")
   }, [])
   const [offlineStories, setOfflineStories] = useState<any[]>([])
@@ -929,13 +959,26 @@ export default function LibraryPage() {
       )}
 
       <div className="library-tabs">
+        {/* "Following" first: it is the only list here that changes without the
+            reader touching it, so it is the only one worth checking on arrival. */}
+        <button className={`library-tab ${tab === "following" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("following")}>
+          Following{followUnread > 0 && (
+            <span className="library-tab__count library-tab__count--new"
+              title={`${followUnread} followed work${followUnread === 1 ? "" : "s"} updated`}>
+              {followUnread} new</span>
+          )}
+        </button>
+        {/* "Hosted" was jargon for the one thing this tab means — stories whose
+            text is on this site — and the button a reader clicks to get at them
+            says "Read here". Same words for the same thing. */}
         <button className={`library-tab ${tab === "hosted" ? "library-tab--on" : ""}`} onClick={() => setTab("hosted")}>
-          Hosted <span className="library-tab__count">{hostedTotal || hosted.length}</span>
+          Read here <span className="library-tab__count">{hostedTotal || hosted.length}</span>
         </button>
         {user && (
           <button className={`library-tab ${tab === "mine" ? "library-tab--on" : ""}`}
             onClick={() => setTab("mine")} title="Stories only you can read">
-            My shelf <span className="library-tab__count">{mineTotal || mine.length}</span>
+            Your imports <span className="library-tab__count">{mineTotal || mine.length}</span>
           </button>
         )}
         <button className={`library-tab ${tab === "bookmarks" ? "library-tab--on" : ""}`} onClick={() => setTab("bookmarks")}>
@@ -959,6 +1002,8 @@ export default function LibraryPage() {
         <ShelfSort value={sortKey} onChange={chooseSort}
           hasProgress={Object.keys(progress).length > 0} />
       )}
+
+      {tab === "following" && <FollowingTab />}
 
       {tab === "hosted" && (
         <div className="books-shelf">

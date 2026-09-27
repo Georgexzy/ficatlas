@@ -26,10 +26,15 @@ import { useAuth } from "@/lib/auth"
 //     backend/api/password_reset.py, where a request without SMTP still creates
 //     a code an operator can pass on by hand.
 //
-// Storage is localStorage rather than the account, deliberately: recording the
-// dismissal on the server would mean writing to the user row of somebody who
-// has just declined to give you something, and the setting is a per-device
-// convenience rather than a fact about the person.
+// Storage is localStorage, and it now SYNCS through lib/auth.tsx like the rest
+// of the reader's own data. The original reasoning — that recording a dismissal
+// server-side means writing to the user row of somebody who has just declined to
+// give you something — is right about the USER ROW and was wrong to stop there:
+// per-device, this prompt asked again on every device the reader owned, which
+// breaks the promise three comments up that "a dismissal is remembered for
+// good", and a prompt that returns after you have answered it reads as the site
+// not listening. `userdata` is the reader's own keyspace, not a column on them,
+// and the merge is monotonic so no device can un-dismiss it.
 const KEY = "ficatlas:email-prompt-dismissed"
 
 export default function EmailPrompt() {
@@ -58,7 +63,7 @@ export default function EmailPrompt() {
       <span className="email-prompt__text">
         This account has no email address, so there is no way to get back into it
         if you forget your password.{" "}
-        <Link href="/account" className="email-prompt__link">Add one</Link> — it is
+        <Link href="/settings?tab=account" className="email-prompt__link">Add one</Link> — it is
         used for nothing else.
       </span>
       <button type="button" className="email-prompt__x" onClick={dismiss}

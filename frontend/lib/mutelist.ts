@@ -6,14 +6,20 @@
 // read, a trope they bounce off, an author they would rather not see — applied
 // to every search without being retyped.
 //
-// Per device, in localStorage, matching every other reader setting here: it
-// works signed-out, it needs no account, and a list of ships someone refuses to
-// read never leaves their machine. That last part is the reason to prefer this
-// even though it does not follow you to your phone — it is a genuinely
-// revealing list, and the safest place to keep it is nowhere we can see.
+// In localStorage, so it works signed-out and needs no account. With an account
+// it SYNCS, like everything else in Settings — see lib/storageKeys.ts.
 //
-// Stored as one object under one key so a later "sync to account" can lift it
-// whole without a migration.
+// It did not, originally, and the argument for that is worth keeping on the
+// record because it was a real one: a standing list of ships, tropes and authors
+// somebody refuses to read is more revealing than any single search, and the
+// safest place for it was nowhere we could see. It syncs now by decision, for
+// consistency and because rebuilding a curated list on a new phone is losing
+// work. What the old argument bought instead is that the list is now named
+// explicitly on /privacy rather than lumped in with "your settings", and it
+// still never enters a shared search link.
+//
+// One object under one key, which is what made that change a one-line edit
+// rather than a migration.
 
 export interface MuteList {
   tags: string[]
@@ -29,7 +35,13 @@ export const EMPTY_MUTES: MuteList = {
 
 const KEY = "ficatlas:mutes"
 
-/** Fired when the list changes, so an open search page can re-run. */
+/** Fired when the list changes.
+ *
+ *  Nothing listens for it today, and that is not a gap: lib/api.ts calls
+ *  loadMutes() on every search, so the next search always uses the current list.
+ *  The event exists for a mute control placed ON the search page, where the
+ *  results already on screen would need re-running — it is an extension point,
+ *  not a wire that came loose. */
 export const MUTES_CHANGED = "ficatlas:mutes-changed"
 
 export function loadMutes(): MuteList {

@@ -37,6 +37,18 @@ export default function SiteFooter() {
           before it mentions anything else. */}
       <Link href="/permissions">Remove or manage my work</Link>
       <span className="site-footer__sep">·</span>
+      {/* /privacy had NO inbound link from anywhere on the site — it was
+          written and never hung off anything, so the only way to reach it was to
+          know the address. A privacy page nobody can find is the same half-promise
+          the data controls were built to close ("it never leaves your device" is
+          only half a promise; the other half is being able to see it). It also has
+          to be reachable for the Google sign-in consent screen, which names it.
+
+          Next to the crawler policy rather than up beside About, because these
+          two are the same kind of thing: what this site does with data, human and
+          machine. */}
+      <Link href="/privacy">Privacy</Link>
+      <span className="site-footer__sep">·</span>
       <a href="/robots.txt">Crawler policy</a>
       <span className="site-footer__sep">·</span>
       <a href="https://github.com/Georgexzy/ficatlas" target="_blank" rel="noopener noreferrer">Source</a>

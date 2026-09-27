@@ -10,6 +10,8 @@
 // "It never leaves your device" is only half a privacy promise. The other half
 // is being able to see it and delete it.
 
+import { keysForGroup } from "./storageKeys"
+
 export interface DataGroup {
   id: string
   name: string
@@ -21,39 +23,45 @@ export interface DataGroup {
 // preferences and reading progress are both "reader" data internally and are
 // completely different things to lose: one is a setting, the other is your place
 // in forty stories.
+//
+// The KEYS come from lib/storageKeys.ts and are not listed here. They used to
+// be, and the list had drifted from the one the Settings page writes: "Clear
+// preferences" left `default_sites`, `default_sort`, `results_per_page`,
+// `show_explicit`, `show_underage` and `shelf_sort` standing, so a reader who
+// pressed it kept six of their fourteen settings — including both content
+// toggles — with nothing to say it had only half worked. It also cleared
+// `ficatlas:settings`, which nothing has ever written.
 export const DATA_GROUPS: DataGroup[] = [
   {
     id: "history",
     name: "Recent searches",
-    hint: "The list that appears under the search box.",
-    keys: ["ficatlas:recent-searches", "ficatlas:recents", "ficatlas:last-search"],
+    hint: "The list that appears under the search box, and any searches you kept.",
+    keys: keysForGroup("history"),
   },
   {
     id: "progress",
     name: "Reading progress",
     hint: "Where you had got to in each story, and remembered scroll positions.",
-    keys: ["ficatlas:progress", "ficatlas:scroll-memory"],
+    keys: keysForGroup("progress"),
   },
   {
     id: "bookmarks",
     name: "Bookmarks",
-    hint: "Works you saved to your shelf.",
-    keys: ["ficatlas:bookmarks", "ficatlas:shelf_sort"],
+    hint: "Works you saved to your shelf, and the ones kept for offline reading.",
+    keys: keysForGroup("bookmarks"),
   },
   {
     id: "mutes",
     name: "Never-show-me list",
     hint: "Everything you have chosen to hide from search.",
-    keys: ["ficatlas:mutes"],
+    keys: keysForGroup("mutes"),
   },
   {
     id: "prefs",
     name: "Preferences",
-    hint: "Theme, reader font, text size, line width, default archives.",
-    keys: ["ficatlas:settings", "ficatlas:theme", "ficatlas:reader_font",
-           "ficatlas:reader-fontsize", "ficatlas:reader_justify",
-           "ficatlas:reader_lineheight", "ficatlas:reader_theme",
-           "ficatlas:reader_width", "ficatlas:sidebar_w"],
+    hint: "Theme, reader font, text size, line width, default archives, sort, "
+        + "results per page and both content toggles.",
+    keys: keysForGroup("prefs"),
   },
 ]
 
@@ -83,8 +91,15 @@ export function clearGroup(group: DataGroup): void {
 export function exportAll(): string {
   const out: Record<string, unknown> = {
     exported_at: new Date().toISOString(),
-    note: "FicAtlas keeps this on your device only. Saved offline works are "
-        + "stored separately in IndexedDB and are not included here.",
+    // The note travels inside the downloaded file, so it has to be true on its
+    // own without the page around it. It said "on your device only", which is
+    // right for a signed-out reader and wrong for a signed-in one — most of
+    // this is mirrored to the account. It cannot ask who is reading it, so it
+    // says both.
+    note: "Everything FicAtlas keeps about you in this browser. With an account "
+        + "most of it is also mirrored to the account so it follows you between "
+        + "devices; signed out, this browser is the only copy. Saved offline "
+        + "works are stored separately in IndexedDB and are not included here.",
   }
   const data: Record<string, unknown> = {}
   for (let i = 0; i < localStorage.length; i++) {
