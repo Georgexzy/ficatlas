@@ -53,11 +53,19 @@ export const metadata: Metadata = {
     template: "%s · FicAtlas",
   },
   description:
-    // "19+ million", not a precise figure: this string is baked at build time
+    // "20+ million", not a precise figure: this string is baked at build time
     // and cannot read the live count the way the landing page does, and the
-    // index only ever grows — so a "+" stays true indefinitely where "19.8M"
+    // index only ever grows — so a "+" stays true indefinitely where "20.8M"
     // starts going stale the moment a worker adds a row.
-    "Search 19+ million fanworks across Archive of Our Own, FanFiction.net and "
+    //
+    // It does have to be RAISED occasionally, and was not: it read "19+" against
+    // a measured 20,814,412. The floor is not wrong when it lags, but it
+    // undersells the index by more than a million works, and this string is the
+    // search-result snippet and the share-card subtitle — the two places a
+    // stranger meets the site before clicking. Round DOWN to the current
+    // million, and re-check it when the share card is regenerated (both are
+    // written by frontend/tools/make-icons.py's sibling copy of this sentence).
+    "Search 20+ million fanworks across Archive of Our Own, FanFiction.net and "
     + "FictionAlley in one place, then read them on the archive that hosts them. "
     + "No adverts, no tracking, no AI trained on fic.",
   manifest: "/manifest.json",
@@ -99,7 +107,7 @@ export const metadata: Metadata = {
     url: "/",
     title: "FicAtlas — search AO3, FanFiction.net and FictionAlley at once",
     description:
-      "Search 19+ million fanworks across three archives in one place, then "
+      "Search 20+ million fanworks across three archives in one place, then "
       + "read them on the archive that hosts them.",
     images: "/og.png",
   },
@@ -107,7 +115,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "FicAtlas — search AO3, FanFiction.net and FictionAlley at once",
     description:
-      "Search 19+ million fanworks across three archives in one place, then "
+      "Search 20+ million fanworks across three archives in one place, then "
       + "read them on the archive that hosts them.",
     images: "/og.png",
   },
@@ -171,7 +179,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             "@type": "WebSite",
             name: "FicAtlas",
             url: SITE,
-            description: "Search 19+ million fanworks across Archive of Our Own, FanFiction.net and FictionAlley.",
+            description: "Search 20+ million fanworks across Archive of Our Own, FanFiction.net and FictionAlley.",
             potentialAction: {
               "@type": "SearchAction",
               target: {
