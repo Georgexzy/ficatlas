@@ -1231,3 +1231,32 @@ def test_the_ceiling_bounds_how_stale_anything_can_get():
     from api.search import _cost_ttl, SEARCH_CACHE_MAX_SECONDS
     assert _cost_ttl(10_000_000) == SEARCH_CACHE_MAX_SECONDS
     assert SEARCH_CACHE_MAX_SECONDS <= 86400, "a day is the most defensible bound"
+
+
+def test_the_warmer_warms_what_readers_search_not_what_we_do():
+    """It reads visit_events_public, which excludes our own admin queries.
+    Warming the Outreach panel's machine-built operator queries would spend the
+    effort on searches no reader will ever repeat -- and there were 1,925 of
+    those in the history."""
+    import cache_warm
+    assert "visit_events_public" in cache_warm.POPULAR
+    assert "visit_events " not in cache_warm.POPULAR
+
+
+def test_popularity_is_counted_in_people_not_searches():
+    """Searches alone let one visitor -- or one paging session -- nominate the
+    whole list. "Bts jin and jimin" is 474 searches from 24 people, and it is
+    the people that make it popular."""
+    import cache_warm
+    assert "count(DISTINCT visitor) >= :min_people" in cache_warm.POPULAR
+    assert cache_warm.MIN_PEOPLE >= 2
+
+
+def test_the_warmer_goes_through_the_real_endpoint():
+    """A warmer populating the cache by another route would warm a key the real
+    request never looks under -- which makes it worse than nothing, because it
+    costs the work and saves none of it."""
+    import inspect
+    import cache_warm
+    src = inspect.getsource(cache_warm.warm)
+    assert '"/api/search"' in src
