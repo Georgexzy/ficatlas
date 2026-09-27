@@ -226,6 +226,21 @@ services:
       # unset, the panel says it is not connected. NOT the tunnel token; needs
       # its own token with Zone > Analytics > Read. See .env.example.
       CLOUDFLARE_API_TOKEN: ${FICATLAS_CF_API_TOKEN:-}
+      # Account email: password reset and address confirmation. Unset, those
+      # features report themselves unavailable rather than failing silently --
+      # see api/mailer.py. Cloudflare Email Routing forwards INBOUND mail only,
+      # so sending needs a real SMTP relay.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      # Google sign-in. The redirect URI Google is told to use is derived from
+      # PUBLIC_BASE_URL, so it must match what is registered in the Google
+      # console exactly -- scheme, host and path.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://ficatlas.com}
       # OFFLINE ONLY, for backend/extractor_teacher.py. Nothing in a request
       # path reads it: the teacher labels Reddit posts so the deterministic
       # extractor can learn from them, and is switched off once that is done.
