@@ -2848,6 +2848,50 @@ body:has(.reader-shell[data-theme="default"]) {
 .logo--link { text-decoration: none; color: inherit; }
 .logo--link:hover em { filter: brightness(1.15); }
 
+/* ── The compass rose, beside the wordmark ─────────────────────────────────
+   Same mark as the tab icon and the share card (app/CompassMark.tsx keeps the
+   geometry in step with tools/make-icons.py). It was on both of those and
+   nowhere on the site itself, so what sat in a reader's tab strip did not
+   appear on the page it opened.
+
+   Sized in em off .logo, so it tracks the wordmark at every breakpoint instead
+   of needing its own media query. Nudged down a hair: the rose is optically
+   centred on its own box while the wordmark sits on a baseline, and aligning
+   the two boxes leaves the star floating above the cap height. */
+.logo--link { display: inline-flex; align-items: center; gap: 0.42em; }
+.logo__word { line-height: 1; }
+.compass {
+  flex-shrink: 0;
+  /* 1.06em, not 0.92: at the smaller setting the rose was noticeably shorter
+     than the cap height of the F and read as a light accent beside a bold
+     serif rather than as half a lockup. Judged on a 5x screenshot, which is the
+     only way to see a 20px mark. */
+  font-size: 1.06em;
+  transform: translateY(0.04em);
+  /* The spin. Long and eased-out so it settles like a needle finding north
+     rather than snapping — a compass that stops dead reads as a loading
+     spinner. It does NOT reverse on mouse-out: unwinding looks like an
+     undo, and leaving it where it landed is what a real one does. */
+  transition: transform 1.1s cubic-bezier(0.22, 0.9, 0.24, 1);
+}
+.logo--link:hover .compass,
+.logo--link:focus-visible .compass {
+  transform: translateY(0.04em) rotate(360deg);
+}
+.compass__gold { fill: var(--accent); }
+/* The cream half follows the TEXT colour, so in the light theme it darkens with
+   the wordmark rather than staying near-white on parchment. */
+.compass__cream { fill: var(--text); }
+
+@media (prefers-reduced-motion: reduce) {
+  /* No spin at all, not a faster one. This is decoration on a link somebody
+     clicks to go home, and for a reader who has asked for less movement a
+     360-degree turn under the pointer is exactly what they asked to be spared. */
+  .compass { transition: none; }
+  .logo--link:hover .compass,
+  .logo--link:focus-visible .compass { transform: translateY(0.04em); }
+}
+
 /* The current page is shown but not linked, so you always know where you are. */
 .header__link--current { color: var(--accent); cursor: default; position: relative; }
 .header__link--current::after {
