@@ -702,7 +702,20 @@ def list_hosted(limit: int = 100, offset: int = 0, db: Session = Depends(get_db)
     labelled its tab "100" — the page size presented as the whole shelf, with
     the other 29,877 unreachable.
     """
-    total = db.query(func.count(Story.id)).filter(Story.is_hosted == True).scalar() or 0
+    # count(), not count(Story.id), and the difference is 66x.
+    #
+    # `count(id)` names a column, so the planner must visit the heap for every
+    # matching row to read it — 30,069 heap pages for 29,951 answers, measured
+    # at 9,829ms, which is past the 60s pool timeout often enough that this
+    # endpoint was intermittently 500ing and taking the whole hosted browse
+    # with it. `count()` names nothing, so `ix_stories_is_hosted` can answer it
+    # as an Index Only Scan: **149ms**, same plan shape, same number.
+    #
+    # The index was there the whole time and was being used; it was the
+    # aggregate's argument that forced the heap. Worth remembering before
+    # reaching for a new index — this file's notes already record a zero-scan
+    # index that was a bug and two that were the design working.
+    total = db.query(func.count()).select_from(Story).filter(Story.is_hosted == True).scalar() or 0
     q = (db.query(Story)
          .filter(Story.is_hosted == True)
          .order_by(Story.indexed_at.desc())
