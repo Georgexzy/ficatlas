@@ -579,7 +579,9 @@ def signup(
     db.add(user); db.commit(); db.refresh(user)
     token = _create_session(db, user, request.headers.get("user-agent"), remember)
     _set_session_cookie(response, token, remember)
-    return {"username": user.username, "id": str(user.id)}
+    # The SAME shape /me returns — see user_payload for what went wrong
+    # when this was its own two-field dict.
+    return user_payload(user)
 
 
 @router.post("/login")
@@ -605,7 +607,9 @@ def login(
     token = _create_session(db, user, request.headers.get("user-agent"), remember)
     _set_session_cookie(response, token, remember)
     db.commit()
-    return {"username": user.username, "id": str(user.id)}
+    # The SAME shape /me returns — see user_payload for what went wrong
+    # when this was its own two-field dict.
+    return user_payload(user)
 
 
 @router.post("/logout")
@@ -626,12 +630,28 @@ def logout(
     return {"ok": True}
 
 
-@router.get("/me")
-def me(user: Optional[User] = Depends(get_current_user)):
-    if not user:
-        return {"user": None}
+def user_payload(user: User) -> dict:
+    """Everything the UI needs to know about who is signed in.
+
+    ONE builder, used by /me, /login and /signup, because they had drifted and
+    the drift was a live bug. /login returned `{"username", "id"}` and nothing
+    else, and lib/auth.tsx does `setUser(d); cacheUser(d)` with exactly what came
+    back — so the moment an owner signed in, `can_manage` was undefined, the
+    Admin link vanished from their own menu, and the impoverished object was
+    written to the identity cache. An admin lost the Import tab the same way.
+
+    Reported by the operator after a password reset: the reset ends every
+    session by design, they signed in again, and the site came back without
+    admin. Nothing was wrong with the account — role was still owner, no session
+    was stuck previewing, and /me returned can_manage true throughout. The login
+    response simply never carried it.
+
+    A page reload repaired it, because the bootstrap fetches /me — which is
+    exactly why this survived: it looks like a caching glitch that fixes itself,
+    rather than three endpoints disagreeing about what a user is.
+    """
     from models.user import ROLE_ADMIN, ROLE_OWNER
-    return {"user": {
+    return {
         "username": user.username,
         "id": str(user.id),
         "created_at": user.created_at.isoformat() if user.created_at else None,
@@ -665,7 +685,14 @@ def me(user: Optional[User] = Depends(get_current_user)):
         # So the UI can show an unmissable banner. Forgetting you are in preview
         # and concluding a feature is broken is the obvious failure mode.
         "previewing": bool(getattr(user, "_previewing", False)),
-    }}
+    }
+
+
+@router.get("/me")
+def me(user: Optional[User] = Depends(get_current_user)):
+    if not user:
+        return {"user": None}
+    return {"user": user_payload(user)}
 
 
 @router.post("/change-password")
