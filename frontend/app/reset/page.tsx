@@ -2,20 +2,19 @@ import ForgotClient from "./../forgot/ForgotClient"
 
 // THE ADDRESS IN THE RESET EMAIL.
 //
-// backend/api/password_reset.py builds `{SITE_URL}/reset?code=…`, and until now
-// that route did not exist — every reset email pointed at a 404. It had never
-// mattered because the site could not send mail at all; the moment outbound was
-// switched on, the one link in the one email it sends was broken.
+// password_reset.py builds `{SITE_URL}/reset#code=…`, and until recently this
+// route did not exist at all — every reset email pointed at a 404. It had never
+// mattered because the site could not send mail and SITE_URL was unset, so no
+// link was ever generated.
 //
-// Renders the same component as /forgot, with the code from the query string
-// filled in, so somebody following the link lands on "choose a new password"
-// rather than being asked for a username they have already proved.
-export default async function ResetPage(
-  { searchParams }: { searchParams: Promise<{ code?: string | string[] }> },
-) {
-  const { code } = await searchParams
-  // A repeated ?code= yields an array; take the first rather than rendering
-  // "a,b" into the field.
-  const one = Array.isArray(code) ? code[0] : code
-  return <ForgotClient initialCode={one ?? ""} />
+// THE CODE ARRIVES IN THE FRAGMENT, so this component cannot read it and
+// deliberately does not try. A fragment is never sent to a server: not in the
+// request line, not in Referer, not to a CDN. That is the point of using one —
+// nginx logs full query strings (verified in today's access log) and this site
+// loads Google Fonts, so `?code=` would have written a live single-use token
+// into the access log and handed it to a third party in a Referer header.
+//
+// ForgotClient reads location.hash on mount instead.
+export default function ResetPage() {
+  return <ForgotClient fromHash />
 }

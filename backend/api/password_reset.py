@@ -93,51 +93,68 @@ def _send_email(to: str, code: str, username: str) -> bool:
     # unconfigured.
     if not SMTP_HOST or not SMTP_FROM:
         return False
-    link = f"{SITE_URL}/reset?code={code}" if SITE_URL else None
-    # THE LINK FIRST, THE CODE AS THE FALLBACK.
+    # THE CODE GOES IN THE FRAGMENT, NOT THE QUERY STRING.
     #
-    # It was the other way round, from when there was no /reset page to link at
-    # and the code was all there was. Following a link is one action; copying a
-    # code out of an email, finding the site and pasting it is four, and this is
-    # read by somebody already locked out and irritated.
+    # `?code=` puts a live single-use token everywhere a URL is recorded. Checked
+    # rather than assumed: nginx logs the full request line with its query string
+    # (`"GET /takedown?url=%2Fstory%2F… HTTP/1.1"` is in today's access log), and
+    # this site loads Google Fonts, so the whole URL would also travel to a third
+    # party in the Referer header of the first stylesheet request.
     #
-    # The code stays, and is not merely a duplicate: mail clients mangle long
-    # URLs, corporate scanners follow links and burn single-use tokens, and some
-    # people read mail on a device they are not signed in on.
+    # A fragment is never sent to a server by anything: not in the request line,
+    # not in Referer, not to the CDN. The page reads it from location.hash
+    # instead — the same reason OAuth's implicit flow returned tokens that way.
+    link = f"{SITE_URL}/reset#code={code}" if SITE_URL else None
+    # THE COPY. Written against how this is done elsewhere rather than from
+    # taste, after two drafts the operator rejected. The elements every guide
+    # agrees on, and which the earlier versions were missing pieces of:
     #
-    # NO "SOMEONE ASKED TO RESET…". That opening described the REQUEST rather
-    # than telling the reader what to do, and it reads as an alarm — "someone"
-    # is a stranger — in a message that is almost always the reader themselves,
-    # thirty seconds after clicking the button. The instruction leads instead,
-    # and the did-not-ask-for-this case is answered lower down where it belongs,
-    # with the reason it is safe rather than only the instruction to ignore it.
+    #   * say WHO it is for at the top — one address can hold several accounts
+    #   * ONE call to action, with nothing competing for the click
+    #   * the copyable fallback, for when the link is mangled or unclickable
+    #   * expiry stated plainly
+    #   * a reassurance line for somebody who did not ask
+    #   * a way to reach a person
     #
-    # Plain text only. An HTML part is a second body to keep in step, and every
-    # claim here is one sentence — there is nothing for markup to do but add
-    # ways to render badly. Indented blocks instead: every mail client on earth
+    # What is deliberately NOT here: "Someone asked to reset the password on
+    # your account". It describes the REQUEST rather than telling the reader what
+    # to do, and "someone" reads as a stranger in a message that is almost always
+    # the reader themselves, seconds after clicking the button.
+    #
+    # Plain text, no HTML part: a second body to keep in step, for a message
+    # whose every claim is one sentence. Indented blocks instead — every client
     # renders those, and they make the link and the code selectable as a unit.
-    # Wrapped at 72 so no client re-flows it into something ragged.
+    # Wrapped under 72 so nothing re-flows ragged.
+    bare = (SITE_URL or "https://ficatlas.com").replace("https://", "")
     body = (
-        f"Choose a new password for your FicAtlas account, {username}.\n"
+        f"Hi {username},\n"
+        "\n"
+        "Use the link below to choose a new password for your FicAtlas\n"
+        "account.\n"
         "\n"
         + (f"    {link}\n"
            "\n"
-           "If that link does not open, enter this code on the site instead:\n"
+           f"The link expires in {TOKEN_TTL_MIN} minutes and can be used once.\n"
+           "\n"
+           f"If it does not open, go to {bare}/reset and enter this code:\n"
            "\n"
            f"    {code}\n"
            if link else
-           "Enter this code on the site to set a new one:\n"
+           f"Go to {bare}/reset and enter this code:\n"
            "\n"
-           f"    {code}\n")
+           f"    {code}\n"
+           "\n"
+           f"It expires in {TOKEN_TTL_MIN} minutes and can be used once.\n")
         + "\n"
-        f"It expires in {TOKEN_TTL_MIN} minutes and can be used once.\n"
+        "If you did not request this, you can ignore this email. Your\n"
+        "password has not been changed, and the link cannot be used by\n"
+        "anyone without access to this mailbox.\n"
         "\n"
-        "If you did not ask for this, no action is needed. The password has\n"
-        "not been changed, and the code is of no use to anyone who cannot\n"
-        "also read this mailbox.\n"
+        "Need help? Write to help@ficatlas.com.\n"
         "\n"
         "-- \n"
-        "FicAtlas \u2014 search AO3, FanFiction.net and FictionAlley at once\n"
+        "FicAtlas\n"
+        "Search AO3, FanFiction.net and FictionAlley at once\n"
         f"{SITE_URL or 'https://ficatlas.com'}\n"
     )
 
