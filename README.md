@@ -81,6 +81,13 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
 - **FF.net discovery via Wayback Machine CDX** — FFN is Cloudflare-walled from VPS IPs, but archive.org's index isn't; we enumerate FFN URLs from Wayback and import on-demand
 - **Fast paginated results** — result count capped at "5000+" for speed on large indexes; GIN indexes on the facet arrays keep fandom/tag filtering fast
 
+- **Saved searches** — a search is a standing question ("complete Drarry over
+  100k"), not a one-off. Keep one from the results bar and it comes back in the
+  search box's own dropdown and in **Library → Saved searches**; re-running it
+  says how many works have appeared since you last looked. The whole request
+  travels as one string — filters, status, word count and sort are all bar
+  syntax — so a saved search is shareable and survives a paste
+
 ### Reading & library
 - **One-click "Import & Read"** — every search result for AO3/FFN with `is_hosted=false` shows an "Import & Read" button that fetches the full EPUB via FicHub and drops you into the reader
 - **Result cards** — labelled dates (`Updated 3 days ago`, falling back to
@@ -187,9 +194,13 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   renders a code box or hides the tab accordingly. Note that **searching needs
   no account at all**, so this gates bookmarks, follows and sync rather than
   access to the index. The first account created becomes `owner`
-- **Following a work** — follow any unfinished story from a result card or its
-  own page, and `/follows` lists everything you follow with new-chapter counts,
-  updates first. The unread count sits on the avatar in the header
+- **Following a work** — follow any unfinished story from a result card or its own page, and
+  **Library → Following** lists everything you follow with new-chapter counts,
+  updates first. The unread count sits on the avatar in the header. `/follows`
+  still resolves and redirects there. The control is shown to signed-out readers
+  too, linking to sign-in with `?next=` back to the story — it used to render
+  only for an account, so the one feature built to bring people back was
+  invisible to everybody who had not already come back
 - **Optional accounts** — username + password (bcrypt), no email required. 90-day httponly cookie sessions.
   Session tokens are stored as a SHA-256 digest, not verbatim: the table would
   otherwise be a list of working credentials, and a backup or a stray `pg_dump`
@@ -199,11 +210,38 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   two routes reached only from Settings, each re-implementing the same shell and
   the same "not an operator" gate; two copies of an access check is one too many,
   since the one that drifts laxer is the bug
-- **Cross-device sync with merge** — bookmarks, reading progress, recents and settings sync to your account and **merge** across devices rather than overwriting: bookmarks union, progress keeps the most recently updated per story, recents union (capped). Using your phone and laptop together never silently drops data
+- **Cross-device sync with merge** — bookmarks, reading progress, recent
+  searches, **saved searches**, the offline shelf, the never-show-me list and
+  every preference sync to your account and **merge** across devices rather
+  than overwriting: arrays union, progress keeps the most recently updated per
+  story and unions the per-chapter positions, settings merge per key. Using
+  your phone and laptop together never silently drops data. What syncs and what
+  deliberately does not is one list — `frontend/lib/storageKeys.ts` — with a
+  test that fails if a consumer grows its own copy
 - **Resilient sync engine** — dirty-key retry queue, request coalescing, re-sync on tab focus / network reconnect / 60s interval, and a `sendBeacon` flush on page unload
-- **Account management** (`/account`) — active sessions list (see every signed-in device), change password (signs out other devices), sign out all other devices, delete account (password-confirmed, cascades)
-- **Security** — login rate limiting (8 fails → 5-minute lock), opportunistic expired-session cleanup
-- **Works signed-out too** — bookmarks, recents and progress still work locally in localStorage with no account
+- **Account management** (**Settings → Account**; `/account` redirects there) —
+  everything about signing in in one section: password, Google link, and the
+  contact address. Plus the active-session list (every signed-in device),
+  sign out all other devices, and delete account. Confirmed with a password, or
+  with a typed username for an account that has none — a Google-only account
+  could not be deleted at all before that
+- **Sign in with Google** — optional, alongside passwords rather than instead of
+  them. Non-sensitive scopes only (`openid email profile`), so it needs no
+  verification review. An existing account can link Google from Settings, and a
+  Google-only account can add a password later
+- **Password reset by email** — a code and a one-tap link, sent through an SMTP
+  relay from `help@ficatlas.com` (DKIM-signed, DMARC-aligned). The reset link
+  carries its token in the URL **fragment**, never the query string: nginx logs
+  full request lines and the page loads Google Fonts, so `?code=` would have
+  written a live single-use token into the access log and handed it to a third
+  party in a `Referer` header. Reset accepts a username *or* an email address,
+  and refuses a new password identical to the old one
+- **Security** — login rate limiting (8 fails → 5-minute lock), opportunistic
+  expired-session cleanup
+- **Works signed-out too** — bookmarks, recents, saved searches, the mute list
+  and progress all work locally in localStorage with no account. A
+  [privacy page](https://ficatlas.com/privacy) sets out exactly what is stored
+  either way, written from the code rather than a template
 
 ### Data seeds
 - **HuggingFace FFN metadata dump** — 6.6M FFnet rows (IDs 1–10.9M, 2014-era). The single biggest free seed. Auto-downloads via `huggingface_hub` from inside the backend container. Uses Postgres `ON CONFLICT DO NOTHING` for idempotent batched inserts. It carries **no completion status and no dates**, so rows import as `status=unknown` rather than being asserted unfinished — a `complete` search treats unknown permissively, so they stay findable
