@@ -57,3 +57,33 @@ def test_a_real_name_is_never_in_the_set():
     # The failure this set could cause: suppressing somebody real.
     for name in ("harry", "hermione", "draco", "elena", "sirius", "loki"):
         assert name not in _NON_ENTITIES, name
+
+
+# ── Reader shorthand for a character the archives spell out ─────────────────
+
+def test_the_original_character_abbreviations_are_mapped():
+    """`char:"OFC"` asked for a 28-times-smaller set than the reader meant.
+
+    Measured against the vocabulary:
+
+        Original Female Character(s)  218,317      OFC   7,668
+        Original Male Character(s)    147,800      OMC   5,385
+
+    So a post saying "Tom Riddle/OFC" searched 7,668 works instead of 218,317
+    and threw away 96% of what it was describing. Not derivable —
+    _canonical_character matches an exact value or a prefix, and "OFC" is
+    neither a prefix nor a substring of the long form — which is why it is
+    written out, exactly as _TAG_ABBREV argues for SI and OC.
+    """
+    from api.search import _CHAR_ALIASES
+    assert _CHAR_ALIASES["ofc"] == "Original Female Character(s)"
+    assert _CHAR_ALIASES["omc"] == "Original Male Character(s)"
+    for k in ("ofcs", "omcs", "oc", "ocs"):
+        assert k in _CHAR_ALIASES, k
+
+
+def test_every_alias_is_lowercased_on_the_left():
+    # The lookup is against a lowercased name, so a capitalised key would never
+    # be found — silent, and indistinguishable from the alias not existing.
+    from api.search import _CHAR_ALIASES
+    assert all(k == k.lower() for k in _CHAR_ALIASES)
