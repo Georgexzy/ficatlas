@@ -91,8 +91,22 @@ RULES = [
     ("password= literal",
      # The exclusion sits inside the quotes: PGPASSWORD="$USER" is a variable
      # being passed, not a password being written down.
-     re.compile(r"""(?:password|passwd|pgpassword)\s*[=:]\s*
-                    ['"] (?!\$|<|%s|\{\{) [^'"\n]{3,} ['"]""", re.X | re.I)),
+     # `hash_password("…")` counts. GitGuardian flagged
+     #     User(username=…, password_hash=hash_password("pytest-value"))
+     # and this pattern did not, because it required the quote to follow the
+     # `=` immediately and there was a function call in between. A credential
+     # wrapped in a call is still a credential written down — that is how most
+     # of them appear in real code — so an optional `identifier(` is allowed
+     # before the literal.
+     #
+     # ALL-CAPS literals are excluded alongside the interpolation forms:
+     # `password=os.environ["PGPASSWORD"]` names a variable rather than
+     # spelling out a secret, and flagging it would train people to ignore this
+     # scanner — the only failure mode that really matters for a checker.
+     re.compile(r"""(?:password|passwd|pgpassword)\w*\s*[=:]\s*
+                    (?:[A-Za-z_][\w.]*\s*\(\s*)?
+                    ['"] (?!\$|<|%s|\{\{) (?![A-Z_]+['"]) [^'"\n]{3,} ['"]""",
+                    re.X | re.I)),
     ("private key block",
      re.compile(r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----")),
     ("opaque token",
