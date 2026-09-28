@@ -11,6 +11,7 @@ import {
 } from "@/lib/offline"
 import SiteHeader from "../SiteHeader"
 import FollowingTab from "./FollowingTab"
+import SavedSearchesTab from "./SavedSearchesTab"
 import { useAuth } from "@/lib/auth"
 import { pollJob } from "@/lib/pollJob"
 
@@ -117,7 +118,7 @@ interface HostedStory { id: string; title: string; author: string; site: string;
 // own — the rest move when the reader moves them. It was a page of its own at
 // /follows, which split the reader's works across two destinations neither of
 // which mentioned the other.
-type Tab = "following" | "hosted" | "mine" | "bookmarks" | "reading" | "offline" | "import"
+type Tab = "following" | "saved" | "hosted" | "mine" | "bookmarks" | "reading" | "offline" | "import"
 
 // Shelf ordering, in the shape Apple Books uses — and for the same reason: a
 // shelf of covers has no inherent order, so whatever it defaults to IS the
@@ -217,6 +218,20 @@ export default function LibraryPage() {
   // the header badge reads, and it answers 0 rather than 401 for a signed-out
   // reader, so there is nothing to guard.
   const [followUnread, setFollowUnread] = useState(0)
+  // Read on mount and on a sync pull, for the same reason the offline count is:
+  // a badge that reads 0 until you click the tab is the one number whose whole
+  // job is to tell you there is something in there without clicking.
+  const [savedCount, setSavedCount] = useState(0)
+  useEffect(() => {
+    const read = () => { import("@/lib/savedSearches").then(m => setSavedCount(m.loadSaved().length)) }
+    read()
+    window.addEventListener("ficatlas:saved-changed", read)
+    window.addEventListener("ficatlas:storage-pulled", read)
+    return () => {
+      window.removeEventListener("ficatlas:saved-changed", read)
+      window.removeEventListener("ficatlas:storage-pulled", read)
+    }
+  }, [])
   useEffect(() => {
     let live = true
     fetch("/api/follows/count", { credentials: "include" })
@@ -232,7 +247,7 @@ export default function LibraryPage() {
   // reading it during render would disagree with the server HTML.
   useEffect(() => {
     const wanted = new URL(window.location.href).searchParams.get("tab") as Tab | null
-    if (wanted && ["following", "hosted", "mine", "bookmarks", "reading",
+    if (wanted && ["following", "saved", "hosted", "mine", "bookmarks", "reading",
                    "offline", "import"].includes(wanted)) setTab(wanted)
   }, [])
   // Switched AFTER mount, not in the initialiser. Reading navigator.onLine
@@ -969,6 +984,13 @@ export default function LibraryPage() {
               {followUnread} new</span>
           )}
         </button>
+        {/* Saved searches had no home at all — the focus dropdown was the only
+            way to reach one, which is fine for re-running the search you just
+            made and useless for finding one you kept in March. */}
+        <button className={`library-tab ${tab === "saved" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("saved")}>
+          Saved searches <span className="library-tab__count">{savedCount}</span>
+        </button>
         {/* "Hosted" was jargon for the one thing this tab means — stories whose
             text is on this site — and the button a reader clicks to get at them
             says "Read here". Same words for the same thing. */}
@@ -1004,6 +1026,8 @@ export default function LibraryPage() {
       )}
 
       {tab === "following" && <FollowingTab />}
+
+      {tab === "saved" && <SavedSearchesTab />}
 
       {tab === "hosted" && (
         <div className="books-shelf">

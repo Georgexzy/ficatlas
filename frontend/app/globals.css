@@ -1485,6 +1485,26 @@ kbd {
 .tips__x:hover { background: var(--surface3); color: var(--text); }
 .tips__x:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
+/* A saved search is a query string, not a title: monospace so the operators read
+   as operators, and wrapping rather than ellipsis because the tail of a query is
+   where the filters live — truncating it hides exactly what distinguishes two
+   saved searches from each other. */
+.library-item__title--query {
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5;
+  word-break: break-word;
+}
+
+/* What a saved search has gained since it was last run. The accent, because it
+   is the one number on this bar that is about the reader rather than the index —
+   everything else says what the search matches, this says what changed for
+   them. */
+.results-bar__since {
+  font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  padding: 2px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text); font-variant-numeric: tabular-nums;
+}
+
 /* ── Google sign-in mark ───────────────────────────────────────────────────
    Never recoloured, never given currentColor, and deliberately excluded from
    the theme tokens: a monochrome Google G is a modified Google G, which their

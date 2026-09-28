@@ -1474,6 +1474,10 @@ function SearchPageInner() {
   // while rendering makes the server HTML and the first client render disagree —
   // the same reason EmailPrompt waits for mount.
   const [searchSaved, setSearchSaved] = useState(false)
+  // How many works this saved search has gained since it was last run. Null
+  // when the search is not saved, has never been run, or has not grown — see
+  // newSince, which clamps rather than showing a negative.
+  const [sinceLast, setSinceLast] = useState<number | null>(null)
   // doSearch calls itself to run an interpretation, and a useCallback cannot
   // name itself in its own dependency list. The ref is the usual way out and
   // is more honest than disabling the lint rule.
@@ -2200,12 +2204,23 @@ function SearchPageInner() {
       if (seq !== searchSeqRef.current) return   // a newer search superseded this one
       setResults(data)
       setStale(null)
-      // If this search is one the reader kept, record what it matched, so the
-      // next run can say what has appeared since. A no-op for the overwhelming
-      // majority of searches, which nobody saved. Capped totals are skipped:
-      // 5001 means "more than 5000" and differencing two ceilings would invent
-      // a number.
-      if (!data.count_is_capped) noteRun(effectiveQuery.trim(), data.total)
+      // If this search is one the reader kept, work out what has appeared since
+      // they last ran it, THEN record the new total. Order matters: noteRun
+      // overwrites last_total, so reading the delta afterwards always gives
+      // zero — which is why this was written, imported, and silently never
+      // showed anything.
+      //
+      // A no-op for the overwhelming majority of searches, which nobody saved.
+      // Capped totals are skipped: 5001 means "more than 5000", and
+      // differencing two ceilings would invent a number.
+      if (!data.count_is_capped) {
+        const q0 = effectiveQuery.trim()
+        const kept = loadSaved().find(x => x.id === searchId(q0))
+        setSinceLast(kept ? newSince(kept, data.total) : null)
+        noteRun(q0, data.total)
+      } else {
+        setSinceLast(null)
+      }
       // THEY TYPED A SENTENCE, NOT A SEARCH.
       //
       // Re-run it as the search the vocabulary read out of it, and say so. The
@@ -3239,6 +3254,22 @@ function SearchPageInner() {
                       : "Keep this search. It appears when you click into an empty search box."}>
                     {searchSaved ? "★ Saved" : "☆ Save search"}
                   </button>
+                )}
+                {/* WHAT HAS APPEARED SINCE YOU LAST LOOKED — the whole reason to
+                    keep a search rather than retype it, and until now it was
+                    computed by nothing: newSince was written, imported, and
+                    never called, so the promise the site makes about saved
+                    searches was not one the code kept.
+
+                    Beside the star rather than in the count, because it is
+                    about this reader's history and not about the index — the
+                    count says what the search matches, this says what changed
+                    for them. */}
+                {sinceLast != null && sinceLast > 0 && (
+                  <span className="results-bar__since"
+                    title="Since the last time you ran this saved search">
+                    +{sinceLast.toLocaleString()} new
+                  </span>
                 )}
                 <span className="results-bar__count">
                   {/* The backend counts to a ceiling of 5000 and stops, so a
