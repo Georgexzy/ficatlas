@@ -69,13 +69,41 @@ UPDATE visit_events e SET internal = TRUE
 """
 
 
+# OUR OWN BROWSER AUTOMATION, which is neither an audience nor a crawler.
+#
+# `is_bot` already flags these at write time — tracking._BOT_RE names the
+# automation drivers and the client libraries — so they never counted as
+# readers. But `bot` means "a crawler" everywhere the reports use it, and the
+# traffic panel prints crawler pageviews and searches as their own figure, on
+# the argument that "nobody visited" and "nobody except crawlers visited" are
+# different facts. Our own test runs are neither: they are this project driving
+# its own site, and they inflate the one number that is meant to say whether
+# anything out there is indexing us.
+#
+# Only the two kinds that can be nothing else. `bot_kind = 'bot'` is the broad
+# user-agent match and catches real crawlers, so it is deliberately not here.
+#
+#   headless   Playwright/headless Chrome — this repo's UI checks
+#   curl       shell smoke tests
+#
+# Flagged rather than deleted, like everything else in this file: the rows are
+# true, somebody did make those requests. They were just us.
+OURS_SQL = """
+UPDATE visit_events SET internal = TRUE
+ WHERE NOT internal
+   AND bot_kind IN ('headless', 'curl')
+"""
+
+
 def run() -> int:
     """Idempotent: only ever sets the flag, and skips rows already carrying it."""
     with db_session() as db:
         n = db.execute(sql_text(SQL), {"min_searches": MIN_SEARCHES}).rowcount or 0
+        m = db.execute(sql_text(OURS_SQL)).rowcount or 0
         db.commit()
-    log.info("marked %s searches as internal", f"{n:,}")
-    return n
+    log.info("marked %s searches and %s automation rows as internal",
+             f"{n:,}", f"{m:,}")
+    return n + m
 
 
 if __name__ == "__main__":
