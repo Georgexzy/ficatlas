@@ -99,31 +99,48 @@ def _send_email(to: str, code: str, username: str) -> bool:
     # It was the other way round, from when there was no /reset page to link at
     # and the code was all there was. Following a link is one action; copying a
     # code out of an email, finding the site and pasting it is four, and this is
-    # a message read by somebody who is already locked out and irritated.
+    # read by somebody already locked out and irritated.
     #
     # The code stays, and is not merely a duplicate: mail clients mangle long
     # URLs, corporate scanners follow links and burn single-use tokens, and some
-    # people read mail on a device they are not signed in on. Both routes, with
-    # the easier one first.
+    # people read mail on a device they are not signed in on.
     #
-    # Plain text only. An HTML part would mean a second body to keep in step,
-    # and every claim here is one sentence — there is nothing for markup to do
-    # but add ways to render badly.
+    # NO "SOMEONE ASKED TO RESET…". That opening described the REQUEST rather
+    # than telling the reader what to do, and it reads as an alarm — "someone"
+    # is a stranger — in a message that is almost always the reader themselves,
+    # thirty seconds after clicking the button. The instruction leads instead,
+    # and the did-not-ask-for-this case is answered lower down where it belongs,
+    # with the reason it is safe rather than only the instruction to ignore it.
+    #
+    # Plain text only. An HTML part is a second body to keep in step, and every
+    # claim here is one sentence — there is nothing for markup to do but add
+    # ways to render badly. Indented blocks instead: every mail client on earth
+    # renders those, and they make the link and the code selectable as a unit.
+    # Wrapped at 72 so no client re-flows it into something ragged.
     body = (
-        "Someone asked to reset the password on the FicAtlas account "
-        f"'{username}'.\n\n"
-        + (f"To choose a new one, open:\n\n    {link}\n\n"
-           f"Or enter this code on the site:\n\n    {code}\n\n"
+        f"Choose a new password for your FicAtlas account, {username}.\n"
+        "\n"
+        + (f"    {link}\n"
+           "\n"
+           "If that link does not open, enter this code on the site instead:\n"
+           "\n"
+           f"    {code}\n"
            if link else
-           f"To choose a new one, enter this code on the site:\n\n    {code}\n\n")
-        + f"The code expires in {TOKEN_TTL_MIN} minutes and can be used once.\n\n"
-        "If you did not request this, no action is needed. The password has not\n"
-        "been changed, and the code above is useless to anyone who cannot also\n"
-        "read this mailbox.\n\n"
+           "Enter this code on the site to set a new one:\n"
+           "\n"
+           f"    {code}\n")
+        + "\n"
+        f"It expires in {TOKEN_TTL_MIN} minutes and can be used once.\n"
+        "\n"
+        "If you did not ask for this, no action is needed. The password has\n"
+        "not been changed, and the code is of no use to anyone who cannot\n"
+        "also read this mailbox.\n"
+        "\n"
         "-- \n"
-        "FicAtlas - a search engine for fanfiction\n"
+        "FicAtlas \u2014 search AO3, FanFiction.net and FictionAlley at once\n"
         f"{SITE_URL or 'https://ficatlas.com'}\n"
     )
+
     try:
         import smtplib
         from email.message import EmailMessage
