@@ -60,7 +60,18 @@ SMTP_PASS = os.getenv("SMTP_PASS", "")
 # sent from an address that cannot receive bounces and would likely be
 # rejected outright. Mail is off unless a deployment configures both.
 SMTP_FROM = os.getenv("SMTP_FROM", "")
-SITE_URL = os.getenv("SITE_URL", "")
+# Where this site lives, for the clickable link in the reset mail.
+#
+# Falls back to PUBLIC_BASE_URL, which google_sso.py already reads and which is
+# set in .env and both compose files. SITE_URL was set NOWHERE — so every reset
+# mail would have gone out with the bare code and no link, which is the
+# difference between "paste this into the site" and "click here" at the moment
+# somebody is already locked out and frustrated.
+#
+# Not a new variable, deliberately. A third spelling of the same fact
+# (PUBLIC_SITE_URL is a fourth, on the frontend) is how these drift apart, and
+# this repo has spent real time on exactly that kind of duplication.
+SITE_URL = os.getenv("SITE_URL", "") or os.getenv("PUBLIC_BASE_URL", "")
 
 
 def _hash(token: str) -> str:
