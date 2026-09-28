@@ -998,6 +998,13 @@ CREATE TABLE IF NOT EXISTS reddit_answers (
 CREATE INDEX IF NOT EXISTS ix_reddit_answers_story ON reddit_answers (story_id)
     WHERE story_id IS NOT NULL;
 ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS answers_checked_at TIMESTAMPTZ;
+-- The fetched comment thread, kept rather than discarded once the link regex
+-- has run over it. Reddit is the rate-limited half of that job — a pass reads
+-- one post and then takes a 429 — so the fetch is the expensive resource, and
+-- the commonest shape of answer ("it's Manacled by SenLinYu", no link at all)
+-- is exactly what a URL regex cannot see. Stored so a better parser can read it
+-- again without costing another request. See backend/reddit_answers.py.
+ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS comments TEXT;
 
 CREATE TABLE IF NOT EXISTS ffnet_captures (
     site_id     BIGINT PRIMARY KEY,

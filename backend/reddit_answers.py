@@ -216,6 +216,37 @@ def harvest(db, limit: int = 20, sleep=time.sleep) -> dict:
             log.info("reddit answers: %s, stopping this pass", e)
             break
         op = entries[0]["author"] if entries else None
+
+        # KEEP THE THREAD, not just the links we could parse out of it.
+        #
+        # Reddit is the rate-limited half of this job — a pass reads ONE post
+        # and then takes an HTTP 429 — so the fetch is the expensive resource
+        # and it was being thrown away the moment `fic_links` had run over it.
+        # Anything that regex misses is lost until the post is fetched again,
+        # which in practice is never.
+        #
+        # And it misses the commonest shape of answer there is. `fic_links`
+        # finds URLs; a great many replies are "it's Manacled by SenLinYu" with
+        # no link at all, because the person answering is typing from memory on
+        # a phone. Those are exactly the answers worth having: a title and an
+        # author resolve against this index perfectly well.
+        #
+        # Stored so a later pass can read them again without costing another
+        # request — by a better parser, or by a model, whichever turns out to
+        # find more. Capped at 40k because a long thread is mostly people
+        # thanking each other, and the answers are near the top.
+        try:
+            db.execute(sql_text("""
+                UPDATE reddit_posts SET comments = :c WHERE id = :p
+            """), {"p": post_id,
+                   "c": "\n\n---\n\n".join(
+                       f"{e.get('author', '?')}: {e.get('body', '')}"
+                       for e in entries)[:40000]})
+        except Exception:
+            # Never fail a harvest pass over the archive copy — the links are
+            # the job, this is the bonus.
+            log.debug("could not store comments for %s", post_id, exc_info=True)
+
         for a in answers_in(entries, op):
             stats["links"] += 1
             sid = _resolve(db, a["site"], a["site_id"])
