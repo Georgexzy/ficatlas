@@ -5222,6 +5222,26 @@ _NON_ENTITIES = {
     "myself", "me", "you", "reader", "the reader", "everyone", "others",
     "various", "all", "unknown", "nobody", "no one", "someone", "character",
     "characters", "protagonist", "narrator", "mc",
+    # THIRD-PERSON PRONOUNS AND BARE NOUNS. The set already held "me" and "you"
+    # and stopped there, so the words prose is actually written in went
+    # straight through. Every one of these is a real facet value with a real
+    # count, found by asking the vocabulary rather than by thinking of them:
+    #
+    #   HE 554   man 184   Girl 116   People 94   Him 91   Woman 88   Boy 88
+    #   Her 78   One 57    them 56    Two 31      they 23   she 23
+    #
+    # `HE` alone is on more works than most named characters, so it outranks
+    # them whenever a post contains the word "he" — which is every post.
+    #
+    # Found from a real reader's search. Somebody pasted a line they remembered
+    # from a fic, "Elena looked at Ethan's way for a second, a hint of sadness
+    # seeing her son", got nothing, and was offered the interpretation
+    # `char:"Her"` — 78 works about a character called Her, from the pronoun.
+    # They tried four times over two days and left.
+    "he", "him", "his", "she", "her", "hers", "they", "them", "their",
+    "it", "we", "us", "himself", "herself", "themselves", "itself",
+    "one", "two", "boy", "girl", "man", "woman", "people", "anyone",
+    "everybody", "somebody", "thing", "things",
 }
 
 # Real wants that identify no FANDOM. "an oc or a character that is different
