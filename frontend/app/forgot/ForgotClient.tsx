@@ -110,13 +110,22 @@ export default function ForgotClient(
       {step === "ask" && (
         <>
           <p>
-            Enter your username and a reset code will be created for the account.
-            If it has an email address, the code is sent there.
+            Enter your username or your email address, and a reset code will be
+            created for the account. If it has an address on file, the code is
+            sent there.
           </p>
           <form onSubmit={request} className="takedown-form">
             <label>
-              <span>Username</span>
-              <input name="username" required autoFocus autoComplete="username" />
+              <span>Username or email address</span>
+              {/* Either, because somebody who has forgotten their password has
+                  usually also forgotten which they signed up with — and on this
+                  site the address is optional and sign-in uses the username, so
+                  the one a reader remembers is very often not the one the form
+                  used to accept. The field name stays `username`: it is what the
+                  endpoint has always received, and what changed is what that
+                  endpoint will match. */}
+              <input name="username" required autoFocus autoComplete="username"
+                placeholder="Whichever you remember" />
             </label>
             {error && <p className="takedown-form__error">{error}</p>}
             <button type="submit" className="card-btn card-btn--primary" disabled={busy}>

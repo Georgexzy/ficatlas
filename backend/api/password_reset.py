@@ -40,12 +40,12 @@ import secrets
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from sqlalchemy import text as sql_text
+from sqlalchemy import and_, func, or_, text as sql_text
 from sqlalchemy.orm import Session
 
 from db.session import get_db
 from models.user import User, UserSession
-from api.auth import hash_password, require_admin
+from api.auth import check_password, hash_password, require_admin
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -182,8 +182,29 @@ def _send_email(to: str, code: str, username: str) -> bool:
 
 @router.post("/forgot")
 def forgot_password(username: str = Form(...), db: Session = Depends(get_db)):
-    """Start a reset. Always reports success."""
-    user = db.query(User).filter(User.username == username.strip().lower()).first()
+    """Start a reset. Always reports success.
+
+    The field takes a USERNAME OR AN EMAIL ADDRESS. It is still named
+    `username` because that is what the form has always posted and renaming it
+    would break any client mid-deploy — what changed is what it accepts.
+
+    Somebody who has forgotten their password has usually also forgotten which
+    of the two they signed up with, and this site makes that worse than most:
+    the username is chosen, the address is optional, and sign-in uses the
+    username — so the identifier a reader actually remembers is very often the
+    one the old form refused. Asking for the one thing they cannot produce is
+    how a reset form becomes a support request.
+
+    Matched case-insensitively on both. Usernames and addresses are both stored
+    lower-cased, so lower() on the column compares like with like rather than
+    papering over a mismatch.
+    """
+    ident = (username or "").strip().lower()
+    user = (db.query(User)
+              .filter(or_(func.lower(User.username) == ident,
+                          and_(User.email.isnot(None),
+                               func.lower(User.email) == ident)))
+              .first())
 
     if user:
         token = secrets.token_urlsafe(24)
@@ -229,6 +250,25 @@ def reset_password(code: str = Form(...), new_password: str = Form(...),
     user = db.query(User).filter(User.id == row[1]).first()
     if not user:
         raise HTTPException(400, "That reset code is not valid.")
+
+    # THE SAME PASSWORD IS NOT A RESET.
+    #
+    # Checked AFTER the code is validated, never before: answering "that is your
+    # current password" to an unvalidated code would make this endpoint an
+    # oracle for testing passwords against an account somebody does not hold.
+    #
+    # Refused rather than quietly accepted, because of what a reset MEANS here.
+    # It ends every session for the account, on the reasoning that a password
+    # being reset may have leaked. Setting the same one back signs the reader
+    # out of everything, burns the code, and leaves the leaked password working
+    # — the worst of both. The message says what to do instead, not only what
+    # went wrong.
+    if check_password(new_password, user.password_hash):
+        raise HTTPException(
+            400,
+            "That is already your password. Choose a different one - a reset "
+            "signs you out everywhere, and reusing the old password would "
+            "leave it working.")
 
     user.password_hash = hash_password(new_password)
     db.execute(sql_text("UPDATE password_resets SET used_at = now() WHERE id = :i"),
