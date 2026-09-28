@@ -1417,6 +1417,27 @@ kbd {
   margin: -14px 0 22px;
 }
 
+/* ── Account: the sign-in group ────────────────────────────────────────────
+   Password, Google and the contact address were three separate .settings-group
+   sections spread down the page in build order, with Devices & sessions wedged
+   between them — so "how do I get into this account" was answered in four
+   places and you had to scroll past a device list to find the other half.
+
+   One section now, with the four controls as parts of it. They keep a rule
+   between them rather than a gap: a gap at this size reads as four sections
+   again, which is the thing being fixed. */
+.account-signin {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px 18px; margin: 0 0 18px;
+}
+.account-signin__part + .account-signin__part {
+  margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);
+}
+.account-signin__sub {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  margin: 0 0 8px; letter-spacing: 0;
+}
+
 /* ── Settings tabs ─────────────────────────────────────────────────────────
    /settings and /account merged, so the page holds 17 sections. Tabs rather
    than one scroll or collapsed blocks — this file's own note says a collapsed
