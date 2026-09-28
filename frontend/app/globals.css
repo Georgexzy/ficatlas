@@ -4229,13 +4229,110 @@ body.is-resizing * { cursor: col-resize !important; }
 
 /* Shelf ordering control. Sits above the covers, wraps on a phone. */
 .shelf-sort {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  display: flex; align-items: center; gap: 6px;
   margin: 0 0 16px;
+}
+
+/* ── The merged shelf ──────────────────────────────────────────────────────
+   Bookmarks / Reading / Offline / Your imports were four tabs over one set of
+   works (measured: 32 works, 43 listings). They are filters now, and a work
+   carries its states as badges instead of appearing in three places. */
+.shelf-filters {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 0 0 10px;
+}
+.shelf-filters__n {
+  font-family: var(--font-mono); font-size: 10px;
+  opacity: 0.7; margin-left: 2px;
+}
+
+.shelf-row { align-items: stretch; }
+.shelf-row__main { display: block; padding: 0; text-decoration: none; flex: 1; }
+.shelf-row__main--off { opacity: 0.55; cursor: default; }
+.shelf-row__states {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
+}
+.shelf-state {
+  font-family: var(--font-mono); font-size: 10px; line-height: 1.6;
+  padding: 0 6px; border-radius: 3px;
+  border: 1px solid var(--border2); color: var(--text-faint);
+  white-space: nowrap;
+}
+/* Only one of these is coloured. "Where you got to" is the badge a reader is
+   actually looking for on a shelf; the rest are facts about the work, and
+   colouring all four would be colouring none. */
+.shelf-state--reading {
+  background: var(--accent-bg); border-color: transparent; color: var(--accent);
+}
+
+/* One menu per row rather than one ✕ per state — a work can be on the shelf
+   for up to four reasons and a single ✕ could not say which it would undo. */
+.shelf-row__menu { position: relative; flex-shrink: 0; align-self: flex-start; }
+.shelf-row__menu > summary {
+  list-style: none; cursor: pointer;
+  padding: 2px 8px; border-radius: 4px;
+  color: var(--text-faint); font-size: 15px; line-height: 1.4;
+}
+.shelf-row__menu > summary::-webkit-details-marker { display: none; }
+.shelf-row__menu > summary:hover { color: var(--text); background: var(--surface2); }
+.shelf-row__menu[open] > summary { color: var(--text); background: var(--surface2); }
+.shelf-row__menu-body {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30;
+  display: flex; flex-direction: column; min-width: 168px;
+  background: var(--surface); border: 1px solid var(--border2);
+  border-radius: 5px; padding: 4px; box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+}
+.shelf-row__menu-body button {
+  background: none; border: none; text-align: left;
+  padding: 7px 10px; border-radius: 3px; cursor: pointer;
+  font-size: 13px; color: var(--text-dim); white-space: nowrap;
+}
+.shelf-row__menu-body button:hover { background: var(--surface2); color: var(--text); }
+.shelf-row__menu-danger:hover { color: var(--red) !important; }
+
+.shelf-offline-notes { max-width: 760px; margin-top: 14px; }
+
+/* "Read here" and the import tools: destinations, not tabs. They are not this
+   reader's shelf, and one of them is 29,951 works belonging to nobody. */
+.shelf-elsewhere {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  max-width: 760px; margin-top: 28px;
+  padding-top: 18px; border-top: 1px solid var(--border);
+}
+.shelf-elsewhere__link {
+  flex: 1 1 240px; min-width: 0; text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 12px 14px; border-radius: 5px;
+  background: var(--surface); border: 1px solid var(--border);
+  transition: border-color 0.12s;
+}
+.shelf-elsewhere__link:hover { border-color: var(--accent); }
+.shelf-elsewhere__title { font-size: 13px; color: var(--text); }
+.shelf-elsewhere__note { font-size: 11px; color: var(--text-faint); line-height: 1.5; }
+
+.shelf-back {
+  background: none; border: none; cursor: pointer; padding: 0;
+  font-size: 12px; color: var(--text-dim); margin-bottom: 10px;
+}
+.shelf-back:hover { color: var(--accent); }
+.shelf-dest-note {
+  font-size: 12px; color: var(--text-faint); max-width: 620px;
+  margin: 0 0 14px; line-height: 1.6;
 }
 .shelf-sort__label {
   font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.12em; color: var(--text-faint); margin-right: 4px;
+  letter-spacing: 0.12em; color: var(--text-faint);
 }
+/* A native select, not five pills. They wrapped onto two rows above a
+   three-item shelf and looked identical to the filter pills directly above
+   while doing a different job — same argument as the chapter picker in the
+   reader: the browser brings typeahead and a real picker on a phone. */
+.shelf-sort__select {
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 5px 8px; font-size: 12px; font-family: inherit; cursor: pointer;
+}
+.shelf-sort__select:hover { border-color: var(--border2); }
 
 /* Live-ish counter in the index panel — the index grows while you use it. */
 .index-status__live { color: var(--accent); }

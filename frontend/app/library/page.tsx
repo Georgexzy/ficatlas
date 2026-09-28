@@ -1,5 +1,6 @@
 "use client"
 import { useEffect, useState, useRef } from "react"
+import { buildShelf, shelfHas, type ShelfItem, type ShelfFilter } from "@/lib/shelf"
 import Link from "next/link"
 import BackLink from "../BackLink"
 import OfflineLink from "../OfflineLink"
@@ -118,7 +119,32 @@ interface HostedStory { id: string; title: string; author: string; site: string;
 // own — the rest move when the reader moves them. It was a page of its own at
 // /follows, which split the reader's works across two destinations neither of
 // which mentioned the other.
-type Tab = "following" | "saved" | "hosted" | "mine" | "bookmarks" | "reading" | "offline" | "import"
+// Three destinations, not eight. "bookmarks", "reading", "offline" and "mine"
+// were four tabs over ONE set of works and are now filters within the shelf;
+// "hosted" and "import" are not the reader's shelf at all and have moved below
+// it, as destinations you go to rather than tabs you scroll past.
+type Tab = "shelf" | "following" | "saved" | "hosted" | "import"
+
+// The old tab names still arrive in ?tab= — from the header badge, from
+// /follows, and from any link a reader kept — so they are mapped rather than
+// dropped. A URL that worked last week must not land on a blank page.
+const TAB_ALIASES: Record<string, { tab: Tab; filter?: ShelfFilter }> = {
+  following:  { tab: "following" },
+  saved:      { tab: "saved" },
+  hosted:     { tab: "hosted" },
+  import:     { tab: "import" },
+  shelf:      { tab: "shelf" },
+  bookmarks:  { tab: "shelf", filter: "bookmarks" },
+  reading:    { tab: "shelf", filter: "reading" },
+  offline:    { tab: "shelf", filter: "offline" },
+  mine:       { tab: "shelf", filter: "mine" },
+}
+
+// The shelf's filters and the merge itself live in lib/shelf.ts, which is
+// pure and is tested against the real account's export — see lib/shelf.test.ts,
+// which asserts the 32-works-in-43-listings measurement this redesign rests on
+// rather than restating it in a comment. Defining ShelfItem here as well would
+// be the drift this file's notes keep recording.
 
 // Shelf ordering, in the shape Apple Books uses — and for the same reason: a
 // shelf of covers has no inherent order, so whatever it defaults to IS the
@@ -213,7 +239,14 @@ export default function LibraryPage() {
   // in the false direction, and someone who came here deliberately while
   // offline should not have the tab moved under them when a flaky connection
   // reappears.
-  const [tab, setTab] = useState<Tab>("hosted")
+  // The shelf, not the 29,951-work hosted browse.
+  //
+  // "My Library" used to open on "Read here", which is every story whose text
+  // lives on this site — a public browse surface with a five-figure count,
+  // filed between "Saved searches 1" and "Bookmarks 2" and reached first. The
+  // page's own title says whose it is; the first thing in it should be theirs.
+  const [tab, setTab] = useState<Tab>("shelf")
+  const [shelfFilter, setShelfFilter] = useState<ShelfFilter>("all")
   // How many followed works have moved, for the tab's badge. The same endpoint
   // the header badge reads, and it answers 0 rather than 401 for a signed-out
   // reader, so there is nothing to guard.
@@ -246,9 +279,12 @@ export default function LibraryPage() {
   // links at. Read once on mount for the same reason the offline switch below is:
   // reading it during render would disagree with the server HTML.
   useEffect(() => {
-    const wanted = new URL(window.location.href).searchParams.get("tab") as Tab | null
-    if (wanted && ["following", "saved", "hosted", "mine", "bookmarks", "reading",
-                   "offline", "import"].includes(wanted)) setTab(wanted)
+    const wanted = new URL(window.location.href).searchParams.get("tab")
+    const m = wanted ? TAB_ALIASES[wanted] : null
+    if (m) {
+      setTab(m.tab)
+      if (m.filter) setShelfFilter(m.filter)
+    }
   }, [])
   // Switched AFTER mount, not in the initialiser. Reading navigator.onLine
   // during render makes the server ("hosted", since there is no navigator) and
@@ -260,7 +296,7 @@ export default function LibraryPage() {
     // Not when a tab was asked for by name: someone following a link to their
     // Following list on a flaky connection meant to go there.
     if (new URL(window.location.href).searchParams.get("tab")) return
-    if (!navigator.onLine) setTab("offline")
+    if (!navigator.onLine) { setTab("shelf"); setShelfFilter("offline") }
   }, [])
   const [offlineStories, setOfflineStories] = useState<any[]>([])
   // Loaded on mount, not when the Offline tab is opened.
@@ -375,14 +411,45 @@ export default function LibraryPage() {
   // same thing everywhere rather than being re-derived per shelf.
   const ts = (v?: string | null) => (v ? Date.parse(v) || 0 : 0)
   const readAt = (x: { id: string }) => ts(progress[x.id]?.at)
+  // Only the hosted browse still sorts a raw source list; the reader's own
+  // shelf is one merged list and sorts itself below.
   const hostedSorted  = sortShelf(hosted, sortKey, x => ts(x.indexed_at), readAt)
-  const mineSorted    = sortShelf(mine,   sortKey, x => ts(x.added_at),   readAt)
-  const offlineSorted = sortShelf(offlineStories as any[], sortKey,
-                                  x => (x as any).savedAt ?? 0, readAt)
   const removeOfflineStory = async (id: string) => {
     await deleteOfflineStory(id).catch(() => {})
     setOfflineStories(s => s.filter(x => x.id !== id))
   }
+
+  // ── The shelf is ONE list ─────────────────────────────────────────────────
+  //
+  // Bookmarks, Reading, Offline and Your imports were four sibling tabs, and
+  // they are four VIEWS OF ONE SET rather than four sets. Measured on the only
+  // account that has a shelf: **32 distinct works, listed 43 times**. Six of
+  // the nine works in progress are also imports, all four downloads are also
+  // in progress, and the single bookmark is in all three at once. So a reader
+  // who bookmarks a story, reads three chapters and saves it for the train
+  // then has to remember which of four tabs it was filed under, and the honest
+  // answer is "all of them" — which is exactly the shape of "ungainly and hard
+  // to navigate".
+  //
+  // Merged on the story id, which every source already keys on, so this is
+  // exact rather than a title match. Each work appears once and wears its
+  // states as badges; the old tabs survive as FILTERS that narrow this list.
+  const shelf: ShelfItem[] = buildShelf({
+    bookmarks, progress, offline: offlineStories, imports: mine,
+  })
+  const shelfCount = (f: ShelfFilter) => shelf.filter(it => shelfHas(it, f)).length
+  // "mine" means imports, which a signed-out reader cannot have — and whose
+  // chip is not drawn for them either, so honouring an old ?tab=mine link
+  // would show them an empty list with nothing on screen to explain it.
+  const activeFilter: ShelfFilter =
+    shelfFilter === "mine" && !user && !authLoading ? "all" : shelfFilter
+  // Same rule one level up: an old ?tab=import link in the hands of somebody
+  // who cannot import rendered nothing at all — a header, a sign-in note, and
+  // an empty page with no tab lit and no way to tell what had happened.
+  const activeTab: Tab =
+    tab === "import" && !user?.can_import && !authLoading ? "shelf" : tab
+  const shelfShown = sortShelf(shelf.filter(it => shelfHas(it, activeFilter)),
+                               sortKey, x => x.added, readAt)
   // Preface/mis-split chapter cleanup
   const [prefaceBusy, setPrefaceBusy] = useState(false)
   const [prefaceMsg, setPrefaceMsg] = useState<string | null>(null)
@@ -499,9 +566,9 @@ export default function LibraryPage() {
       setHosted(Array.isArray(d) ? d : (d.items ?? []))
       setHostedTotal(Array.isArray(d) ? d.length : (d.total ?? 0))
     }).catch(e => {
-      // Hosted is the tab the Library opens on, so this is the single most
-      // visible place the site could claim "nothing here" when it means
-      // "couldn't ask".
+      // "Nothing here" and "couldn't ask" look identical to a reader, and
+      // this list is the one that 500s when the box is busy — its count was a
+      // seq-scan-shaped query until 2026-09-28 (see api/library.py).
       if (!isAbort(e)) setHostedError(e?.kind ? e : describeError(e))
     })
   }
@@ -949,7 +1016,7 @@ export default function LibraryPage() {
           {bookmarks.length > 0 && Object.keys(progress).length > 0 && " and "}
           {Object.keys(progress).length > 0 && (
             <strong>
-              {Object.keys(progress).length} story{Object.keys(progress).length === 1 ? "" : " stories"} in progress
+              {Object.keys(progress).length} {Object.keys(progress).length === 1 ? "story" : "stories"} in progress
             </strong>
           )}
           {" "}live only in this browser.{" "}
@@ -973,10 +1040,23 @@ export default function LibraryPage() {
         </p>
       )}
 
-      <div className="library-tabs">
-        {/* "Following" first: it is the only list here that changes without the
-            reader touching it, so it is the only one worth checking on arrival. */}
-        <button className={`library-tab ${tab === "following" ? "library-tab--on" : ""}`}
+      {/* Three buttons, and on a phone they fit.
+          There were eight, in a row 704px wide inside a 430px viewport, so two
+          of them were off the right-hand edge with nothing to say they were
+          there — including "Import", which is the only one a reader cannot get
+          to any other way. The four shelf tabs are filters now (see the merge
+          above) and the two destinations are below the shelf. */}
+      <div className="library-tabs" role="tablist" aria-label="Library">
+        <button role="tab" aria-selected={activeTab === "shelf"}
+          className={`library-tab ${activeTab === "shelf" ? "library-tab--on" : ""}`}
+          onClick={() => setTab("shelf")}>
+          Shelf <span className="library-tab__count">{shelf.length}</span>
+        </button>
+        {/* Following keeps its place beside the shelf: it is the only list here
+            that changes without the reader touching it, so it is the only one
+            worth checking on arrival. */}
+        <button role="tab" aria-selected={activeTab === "following"}
+          className={`library-tab ${activeTab === "following" ? "library-tab--on" : ""}`}
           onClick={() => setTab("following")}>
           Following{followUnread > 0 && (
             <span className="library-tab__count library-tab__count--new"
@@ -984,52 +1064,294 @@ export default function LibraryPage() {
               {followUnread} new</span>
           )}
         </button>
-        {/* Saved searches had no home at all — the focus dropdown was the only
-            way to reach one, which is fine for re-running the search you just
-            made and useless for finding one you kept in March. */}
-        <button className={`library-tab ${tab === "saved" ? "library-tab--on" : ""}`}
+        <button role="tab" aria-selected={activeTab === "saved"}
+          className={`library-tab ${activeTab === "saved" ? "library-tab--on" : ""}`}
           onClick={() => setTab("saved")}>
           Saved searches <span className="library-tab__count">{savedCount}</span>
         </button>
-        {/* "Hosted" was jargon for the one thing this tab means — stories whose
-            text is on this site — and the button a reader clicks to get at them
-            says "Read here". Same words for the same thing. */}
-        <button className={`library-tab ${tab === "hosted" ? "library-tab--on" : ""}`} onClick={() => setTab("hosted")}>
-          Read here <span className="library-tab__count">{hostedTotal || hosted.length}</span>
-        </button>
-        {user && (
-          <button className={`library-tab ${tab === "mine" ? "library-tab--on" : ""}`}
-            onClick={() => setTab("mine")} title="Stories only you can read">
-            Your imports <span className="library-tab__count">{mineTotal || mine.length}</span>
-          </button>
-        )}
-        <button className={`library-tab ${tab === "bookmarks" ? "library-tab--on" : ""}`} onClick={() => setTab("bookmarks")}>
-          Bookmarks <span className="library-tab__count">{bookmarks.length}</span>
-        </button>
-        <button className={`library-tab ${tab === "reading" ? "library-tab--on" : ""}`} onClick={() => setTab("reading")}>
-          Reading <span className="library-tab__count">{Object.keys(progress).length}</span>
-        </button>
-        <button className={`library-tab ${tab === "offline" ? "library-tab--on" : ""}`} onClick={() => setTab("offline")}>
-          Offline <span className="library-tab__count">{offlineStories.length}</span>
-        </button>
-        {user?.can_import && (
-          <button className={`library-tab ${tab === "import" ? "library-tab--on" : ""}`}
-            onClick={() => setTab("import")}>
-            Import
-          </button>
-        )}
       </div>
 
-      {(tab === "hosted" || tab === "mine" || tab === "offline") && (
-        <ShelfSort value={sortKey} onChange={chooseSort}
-          hasProgress={Object.keys(progress).length > 0} />
+      {activeTab === "shelf" && (
+        <>
+          {/* Filters, not tabs. Every work is in this list once; these narrow
+              it. The counts sum to more than "All" on purpose — that overlap
+              IS the thing four separate tabs were hiding. */}
+          <div className="shelf-filters" role="group" aria-label="Filter shelf">
+            {([
+              { id: "all",       label: "All" },
+              { id: "reading",   label: "Reading" },
+              { id: "bookmarks", label: "Bookmarked" },
+              { id: "offline",   label: "Offline" },
+              ...(user ? [{ id: "mine", label: "Yours" }] : []),
+            ] as { id: ShelfFilter; label: string }[])
+              // A filter that would empty the list is not offered — except the
+              // one that is currently on, which has to stay visible or there is
+              // no way back from it.
+              .filter(f => f.id === "all" || f.id === activeFilter || shelfCount(f.id) > 0)
+              .map(f => (
+                <button key={f.id} className={`pill ${activeFilter === f.id ? "pill--on" : ""}`}
+                  aria-pressed={activeFilter === f.id}
+                  onClick={() => setShelfFilter(f.id)}>
+                  {f.label} <span className="shelf-filters__n">{shelfCount(f.id)}</span>
+                </button>
+              ))}
+          </div>
+
+          {shelf.length > 1 && (
+            <ShelfSort value={sortKey} onChange={chooseSort}
+              hasProgress={Object.keys(progress).length > 0} />
+          )}
+
+          {/* Kept from the old Offline tab, and kept unconditional: this warns
+              that saving for offline cannot work on this address at all, which
+              matters MOST to somebody who has saved nothing yet and is about to
+              try. */}
+          {blocker && (
+            <p className="offline-tab__broken" role="status">
+              <strong>The app can&apos;t be saved for offline use on this address.</strong>{" "}
+              {blocker.detail}
+            </p>
+          )}
+          {activeFilter === "mine" && (
+            <p className="library-note library-note--private">
+              <strong>Only you can read these.</strong> They are not in search, not
+              on the public shelf, and no other account — administrator or
+              otherwise — can open them. Removing one gives up your copy; it does
+              not delete anything anyone else relies on.
+            </p>
+          )}
+          {mineError && activeFilter === "mine" && (
+            <ShelfError failure={mineError} onRetry={() => setMineReload(n => n + 1)} />
+          )}
+
+          {shelfShown.length === 0 ? (
+            <div className="library-empty">
+              {shelf.length === 0 ? (
+                <>
+                  <p>Your shelf is empty.</p>
+                  <p className="library-empty__hint">
+                    Tap ☆ on any story to keep it here, start reading one to have
+                    your place remembered, or save one to read with no connection.
+                  </p>
+                  <Link href="/" className="card-btn card-btn--primary">Find something to read</Link>
+                </>
+              ) : (
+                <>
+                  <p>Nothing here under that filter.</p>
+                  <button className="card-btn" onClick={() => setShelfFilter("all")}>
+                    Show all {shelf.length}
+                  </button>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="library-list">
+              {shelfShown.map(it => {
+                const p = it.progress
+                const href = p?.chapter ? `/story/${it.id}/chapter/${p.chapter}`
+                                        : `/story/${it.id}`
+                // Offline, a work without a download cannot be opened at all,
+                // and offering it as a tap is how a reader concludes that
+                // offline saving is broken. Same rule the old Offline tab
+                // applied to works saved on another device.
+                const reachable = online || !!it.offline
+                const body = (
+                  <>
+                    <p className="library-item__title">{it.title}</p>
+                    <p className="library-item__meta">
+                      {[
+                        it.author ? `by ${it.author}` : null,
+                        it.site ? it.site.toUpperCase() : null,
+                        it.chapter_count ? `${it.chapter_count} ch` : null,
+                        it.word_count ? `${it.word_count.toLocaleString()} words` : null,
+                      ].filter(Boolean).join(" · ")}
+                    </p>
+                    {/* The states this work is in, all of them, on one row.
+                        This is what four tabs were spending four screens to
+                        say, and it says it without the reader choosing a tab
+                        first. */}
+                    <p className="shelf-row__states">
+                      {p?.chapter ? (
+                        <span className="shelf-state shelf-state--reading">
+                          {online || it.offline ? "Resume ch " : "Ch "}{p.chapter}
+                        </span>
+                      ) : null}
+                      {it.offline ? <span className="shelf-state shelf-state--offline">Offline</span> : null}
+                      {it.bookmark ? <span className="shelf-state shelf-state--mark">☆ Bookmarked</span> : null}
+                      {it.imported ? <span className="shelf-state shelf-state--mine">Yours</span> : null}
+                    </p>
+                  </>
+                )
+                return (
+                  <div key={it.id} className="library-item shelf-row">
+                    {!reachable ? (
+                      <div className="library-item__main shelf-row__main shelf-row__main--off"
+                        title="Not downloaded to this device — needs a connection">
+                        {body}
+                      </div>
+                    ) : it.offline ? (
+                      <OfflineLink href={href} className="library-item__main shelf-row__main">{body}</OfflineLink>
+                    ) : (
+                      <Link href={href} className="library-item__main shelf-row__main">{body}</Link>
+                    )}
+                    {/* One menu rather than one ✕ per state. A work can be on
+                        this shelf for up to four reasons and a single ✕ could
+                        not say which of them it was about to undo — which is
+                        the ambiguity the merge would otherwise have created. */}
+                    <details className="shelf-row__menu">
+                      <summary aria-label={`Actions for ${it.title}`}>⋯</summary>
+                      <div className="shelf-row__menu-body">
+                        {it.bookmark && (
+                          <button onClick={() => removeBookmark(it.id)}>Remove bookmark</button>
+                        )}
+                        {it.progress && (
+                          <button onClick={() => clearProgress(it.id)}>Forget my place</button>
+                        )}
+                        {it.offline && (
+                          <button onClick={() => removeOfflineStory(it.id)}>Delete download</button>
+                        )}
+                        {it.imported && (
+                          <button className="shelf-row__menu-danger"
+                            onClick={() => removeMine(it.id)}>Delete my copy</button>
+                        )}
+                      </div>
+                    </details>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Load more belongs to the imports source, so it shows when that is
+              the list being drawn from and there is more of it. */}
+          {(activeFilter === "all" || activeFilter === "mine") && mine.length < mineTotal && (
+            <div className="library-more">
+              <button className="btn btn--ghost" disabled={loadingMore}
+                onClick={async () => {
+                  setLoadingMore(true)
+                  try {
+                    const r = await fetch(
+                      `${API_BASE}/api/library/mine?limit=100&offset=${mine.length}`,
+                      { credentials: "include" })
+                    const d = await r.json()
+                    setMine(m => [...m, ...(d.items ?? [])])
+                    if (d.total) setMineTotal(d.total)
+                  } catch {} finally { setLoadingMore(false) }
+                }}>
+                {loadingMore ? "Loading…" : `Load more (${mine.length} of ${mineTotal.toLocaleString()})`}
+              </button>
+            </div>
+          )}
+
+          {/* Everything the old Offline tab said about durability, shown where
+              downloads are what you are looking at. */}
+          {(activeFilter === "offline" || activeFilter === "all") && offlineStories.length > 0 && (
+            <div className="shelf-offline-notes">
+              {broken.length > 0 && (
+                <p className="offline-tab__broken" role="status">
+                  <strong>{broken.length} saved {broken.length === 1 ? "story is" : "stories are"} incomplete.</strong>{" "}
+                  {broken.map(b => b.title).slice(0, 3).join(", ")}
+                  {broken.length > 3 ? ` and ${broken.length - 3} more` : ""} — the
+                  browser removed part of {broken.length === 1 ? "it" : "them"} to free space.
+                  Save {broken.length === 1 ? "it" : "them"} again while you have a connection.
+                </p>
+              )}
+              {offlineStories.some(s => (s.missingChapters?.length ?? 0) > 0) && (
+                <p className="offline-elsewhere__hint" role="status">
+                  Some downloads are unfinished — they stopped when the connection
+                  did, and will complete on their own next time you are online.
+                </p>
+              )}
+              <p className={`offline-tab__persist offline-tab__persist--${persist}`}>
+                {persist === "persisted"
+                  ? "✓ This browser has marked your downloads as protected — they won't be cleared to free up space."
+                  : persist === "denied"
+                  ? "⚠ Your downloads are not protected: your browser may clear them if the device runs low on space. Installing FicAtlas to your home screen usually earns protection."
+                  : "This browser doesn't report whether saved stories are protected from being cleared to free up space."}
+                {storage && ` · ${fmtBytes(storage.usage)} used of ${fmtBytes(storage.quota)} available.`}
+                {persist === "denied" && (
+                  <>{" "}<button className="btn btn--ghost btn--sm" disabled={protecting}
+                    onClick={async () => {
+                      setProtecting(true)
+                      const m = await import("@/lib/offline")
+                      setPersist(await m.requestPersistentStorage())
+                      setProtecting(false)
+                    }}>
+                    {protecting ? "Asking…" : "Protect them"}
+                  </button></>
+                )}
+              </p>
+            </div>
+          )}
+
+          {/* Saved on another device and not here. Kept out of the list proper
+              because these are works this device does NOT have — putting them
+              in the shelf would promise something no tap can deliver. */}
+          {elsewhere.length > 0 && (
+            <div className="offline-elsewhere">
+              <p className="offline-elsewhere__head">
+                {online
+                  ? "Saved on your other devices — not downloaded here yet"
+                  : "Saved on your other devices — not available offline here"}
+              </p>
+              <ul className="offline-elsewhere__list">
+                {elsewhere.map(e => (
+                  <li key={e.id}>
+                    {online
+                      ? <Link href={`/story/${e.id}`}>{e.title}</Link>
+                      : <span className="offline-elsewhere__unavailable">{e.title}</span>}
+                    {e.author ? <span className="offline-elsewhere__by"> by {e.author}</span> : null}
+                  </li>
+                ))}
+              </ul>
+              <p className="offline-elsewhere__hint">
+                {online
+                  ? "Open one and tap \u201c\u2913 Save offline\u201d to keep it on this device too."
+                  : "These aren\u2019t on this device yet, so they can\u2019t be opened until you have a connection."}
+              </p>
+            </div>
+          )}
+
+          {/* The two things that are NOT this reader's shelf, as destinations
+              rather than tabs. "Read here" is a public browse of every story
+              whose text is on this site — it was the library's default tab,
+              five figures of somebody else's works under a heading saying "My". */}
+          <nav className="shelf-elsewhere" aria-label="Elsewhere in the library">
+            <button className="shelf-elsewhere__link" onClick={() => setTab("hosted")}>
+              <span className="shelf-elsewhere__title">Stories readable here</span>
+              <span className="shelf-elsewhere__note">
+                {(hostedTotal || hosted.length).toLocaleString()} works whose full
+                text is on this site — read without leaving.
+              </span>
+            </button>
+            {user?.can_import && (
+              <button className="shelf-elsewhere__link" onClick={() => setTab("import")}>
+                <span className="shelf-elsewhere__title">Import &amp; archive tools</span>
+                <span className="shelf-elsewhere__note">
+                  Add a story by URL or EPUB, and run the archive harvests.
+                </span>
+              </button>
+            )}
+          </nav>
+        </>
       )}
 
-      {tab === "following" && <FollowingTab />}
+      {activeTab === "following" && <FollowingTab />}
 
-      {tab === "saved" && <SavedSearchesTab />}
+      {activeTab === "saved" && <SavedSearchesTab />}
 
-      {tab === "hosted" && (
+      {activeTab === "hosted" && (
+        <>
+          <button className="shelf-back" onClick={() => setTab("shelf")}>← Your shelf</button>
+          <p className="shelf-dest-note">
+            Every story whose full text is on this site. These are not yours —
+            anyone can read them here without leaving for the archive.
+          </p>
+          <ShelfSort value={sortKey} onChange={chooseSort}
+            hasProgress={Object.keys(progress).length > 0} />
+        </>
+      )}
+      {activeTab === "hosted" && (
         <div className="books-shelf">
           {hostedError
             ? <ShelfError failure={hostedError} onRetry={loadHosted} />
@@ -1075,225 +1397,9 @@ export default function LibraryPage() {
         </div>
       )}
 
-      {tab === "mine" && (
-        <div className="books-shelf">
-          <p className="library-note library-note--private">
-            <strong>Only you can read these.</strong> They are not in search, not
-            on the public shelf, and no other account — administrator or
-            otherwise — can open them. Removing one gives up your copy; it does
-            not delete anything anyone else relies on.
-          </p>
-          {mineError ? (
-            <ShelfError failure={mineError} onRetry={() => setMineReload(n => n + 1)} />
-          ) : mine.length === 0 ? (
-            <div className="library-empty">
-              <p>Nothing on your shelf yet.</p>
-              <p className="library-empty__hint">
-                Import a story to your own library from the <strong>Import</strong> tab,
-                or from any story page, and it will appear here.
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="books-grid">
-                {mineSorted.map(s => <BookCover key={s.id} story={s} onDelete={removeMine}
-                  progress={progress[s.id]} />)}
-              </div>
-              {mine.length < mineTotal && (
-                <div className="library-more">
-                  <button className="btn btn--ghost" disabled={loadingMore}
-                    onClick={async () => {
-                      setLoadingMore(true)
-                      try {
-                        const r = await fetch(
-                          `${API_BASE}/api/library/mine?limit=100&offset=${mine.length}`,
-                          { credentials: "include" })
-                        const d = await r.json()
-                        setMine(m => [...m, ...(d.items ?? [])])
-                        if (d.total) setMineTotal(d.total)
-                      } catch {} finally { setLoadingMore(false) }
-                    }}>
-                    {loadingMore ? "Loading…" : `Load more (${mine.length} of ${mineTotal.toLocaleString()})`}
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {tab === "bookmarks" && (
-        <div className="library-list">
-          {bookmarks.length === 0
-            ? <div className="library-empty">
-                <p>No bookmarks yet.</p>
-                <p className="library-empty__hint">Tap ☆ on any story to keep it here.</p>
-                <Link href="/" className="card-btn card-btn--primary">Find something to read</Link>
-              </div>
-            : bookmarks.map(b => (
-                <div key={b.id} className="library-item">
-                  <Link href={`/story/${b.id}`} className="library-item__main">
-                    <p className="library-item__title">{b.title}</p>
-                    <p className="library-item__meta">by {b.author} · {b.site.toUpperCase()} · saved {new Date(b.savedAt).toLocaleDateString()}</p>
-                  </Link>
-                  <button className="library-item__remove" onClick={() => removeBookmark(b.id)}>✕</button>
-                </div>
-              ))}
-        </div>
-      )}
-
-      {tab === "reading" && (
-        <div className="library-list">
-          {Object.keys(progress).length === 0
-            ? <div className="library-empty">
-                <p>Nothing in progress.</p>
-                <p className="library-empty__hint">
-                  Stories you start reading here appear in this tab, with your place kept.
-                </p>
-                <Link href="/" className="card-btn card-btn--primary">Find something to read</Link>
-              </div>
-            : Object.entries(progress).map(([id, p]) => (
-                <div key={id} className="library-item">
-                  <Link href={`/story/${id}/chapter/${p.chapter}`} className="library-item__main">
-                    <p className="library-item__title">{p.title}</p>
-                    <p className="library-item__meta">Chapter {p.chapter} · last read {new Date(p.at).toLocaleDateString()}</p>
-                  </Link>
-                  <button className="library-item__remove" onClick={() => clearProgress(id)}>✕</button>
-                </div>
-              ))}
-        </div>
-      )}
-
-      {tab === "offline" && (
-        <div className="library-list">
-          {/* Above the empty/non-empty split on purpose: this matters MOST to
-              someone with nothing saved yet, who is about to save a story that
-              will not be readable the way they expect. */}
-          {blocker && (
-            <p className="offline-tab__broken" role="status">
-              <strong>The app can&apos;t be saved for offline use on this address.</strong>{" "}
-              {blocker.detail}
-            </p>
-          )}
-          {offlineStories.some(s => (s.missingChapters?.length ?? 0) > 0) && (
-            <p className="offline-elsewhere__hint" role="status">
-              Some downloads are unfinished — they stopped when the connection
-              did, and will complete on their own next time you are online.
-            </p>
-          )}
-          {elsewhere.length > 0 && (
-            <div className="offline-elsewhere">
-              <p className="offline-elsewhere__head">
-                {online
-                  ? "Saved on your other devices — not downloaded here yet"
-                  : "Saved on your other devices — not available offline here"}
-              </p>
-              {/* Not links while offline.
-                  These are works this device does NOT have — downloading them
-                  needs a connection by definition. Offering them as taps in the
-                  Offline tab invites exactly the wrong conclusion: you tap a
-                  story you know you saved, get "not saved on this device", and
-                  reasonably decide offline saving is broken. Which section it
-                  was in is not something anyone should have to notice. */}
-              <ul className="offline-elsewhere__list">
-                {elsewhere.map(e => (
-                  <li key={e.id}>
-                    {online
-                      ? <Link href={`/story/${e.id}`}>{e.title}</Link>
-                      : <span className="offline-elsewhere__unavailable">{e.title}</span>}
-                    {e.author ? <span className="offline-elsewhere__by"> by {e.author}</span> : null}
-                  </li>
-                ))}
-              </ul>
-              <p className="offline-elsewhere__hint">
-                {online
-                  ? "Open one and tap \u201c\u2913 Save offline\u201d to keep it on this device too."
-                  : "These aren\u2019t on this device yet, so they can\u2019t be opened until you have a connection."}
-              </p>
-            </div>
-          )}
-          {offlineStories.length === 0
-            ? <p className="library-empty">
-                No stories saved offline yet. On any readable story&apos;s page, tap
-                &quot;⤓ Save offline&quot; to download its chapters to this device — then you
-                can read it with no connection (handy when you can&apos;t reach the server).
-              </p>
-            : <>
-                {broken.length > 0 && (
-                  <p className="offline-tab__broken" role="status">
-                    <strong>{broken.length} saved {broken.length === 1 ? "story is" : "stories are"} incomplete.</strong>{" "}
-                    {broken.map(b => b.title).slice(0, 3).join(", ")}
-                    {broken.length > 3 ? ` and ${broken.length - 3} more` : ""} — the
-                    browser removed part of {broken.length === 1 ? "it" : "them"} to free space.
-                    Save {broken.length === 1 ? "it" : "them"} again while you have a connection.
-                  </p>
-                )}
-                {persist === "denied" && (
-                  <p className="offline-tab__persist offline-tab__persist--denied">
-                    These downloads are not protected from being cleared.{" "}
-                    <button className="btn btn--ghost btn--sm" disabled={protecting}
-                      onClick={async () => {
-                        setProtecting(true)
-                        const m = await import("@/lib/offline")
-                        setPersist(await m.requestPersistentStorage())
-                        setProtecting(false)
-                      }}>
-                      {protecting ? "Asking…" : "Protect them"}
-                    </button>{" "}
-                    {/* Worth offering rather than assuming denial is final: the
-                        browser decides on heuristics that change as you use the
-                        site, and on iOS adding it to the Home Screen is itself
-                        one of them. */}
-                    Adding this site to your Home Screen makes it much more likely to be granted.
-                  </p>
-                )}
-                <p className="offline-tab__note">
-                  Saved on this device and readable with no connection. Stored in your browser —
-                  clearing site data removes them.
-                </p>
-                {/* What the browser will actually guarantee.
-                    "Stored in your browser" was true and insufficient: browsers
-                    evict storage under disk pressure, oldest origin first, and
-                    iOS clears it after seven days for a site that has not been
-                    added to the home screen. Someone who saved six novels for a
-                    flight is entitled to know which of those applies to them
-                    before they are on the plane. */}
-                <p className={`offline-tab__persist offline-tab__persist--${persist}`}>
-                  {persist === "persisted"
-                    ? "✓ This browser has marked these as protected — they won't be cleared to free up space."
-                    : persist === "denied"
-                    ? "⚠ These are not protected: your browser may clear them if the device runs low on space. Installing FicAtlas to your home screen usually earns protection."
-                    : "This browser doesn't report whether saved stories are protected from being cleared to free up space."}
-                  {storage && ` · ${fmtBytes(storage.usage)} used of ${fmtBytes(storage.quota)} available.`}
-                </p>
-                {offlineSorted.map((s: any) => {
-                  const p = progress[s.id]
-                  const href = p?.chapter ? `/story/${s.id}/chapter/${p.chapter}` : `/story/${s.id}/chapter/1`
-                  return (
-                  <div key={s.id} className="library-item offline-item">
-                    <OfflineLink href={href} className="offline-item__main">
-                      <p className="library-item__title">{s.title}</p>
-                      <p className="library-item__meta">
-                        by {s.author} · {s.chapter_count} ch · {(s.word_count || 0).toLocaleString()} words ·
-                        saved {new Date(s.savedAt).toLocaleDateString()}
-                        {/* Only shown when known: records saved before sizes
-                            were recorded have none, and inventing one would
-                            make the total not add up. */}
-                        {s.bytes ? ` · ${fmtBytes(s.bytes)}` : ""}
-                        {p?.chapter ? ` · resume ch ${p.chapter}` : ""}
-                      </p>
-                    </OfflineLink>
-                    <button className="offline-item__remove" title="Remove from this device"
-                      onClick={() => removeOfflineStory(s.id)}>✕</button>
-                  </div>
-                  )
-                })}
-              </>}
-        </div>
-      )}
-
-      {tab === "import" && user?.can_import && (
+      {activeTab === "import" && user?.can_import && (
         <div className="import-pane">
+          <button className="shelf-back" onClick={() => setTab("shelf")}>← Your shelf</button>
           <section className="import-section">
             <h3>Import from URL</h3>
             <p className="import-help">
@@ -1839,15 +1945,12 @@ function ShelfSort({ value, onChange, hasProgress }: {
   // broken, so it only appears once there is progress to sort by.
   const opts = SORTS.filter(o => o.id !== "read" || hasProgress)
   return (
-    <div className="shelf-sort" role="group" aria-label="Sort shelf">
-      <span className="shelf-sort__label">Sort</span>
-      {opts.map(o => (
-        <button key={o.id} onClick={() => onChange(o.id)}
-          aria-pressed={value === o.id}
-          className={`pill ${value === o.id ? "pill--on" : ""}`}>
-          {o.label}
-        </button>
-      ))}
+    <div className="shelf-sort">
+      <label className="shelf-sort__label" htmlFor="shelf-sort">Sort</label>
+      <select id="shelf-sort" className="shelf-sort__select" value={value}
+        onChange={e => onChange(e.target.value as SortKey)}>
+        {opts.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
     </div>
   )
 }
