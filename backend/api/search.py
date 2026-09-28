@@ -4602,6 +4602,24 @@ _TAG_ABBREV = {
     "oc": "Original Character(s)",
     "ocs": "Original Character(s)",
     "si-oc": "Self-Insert",
+    # OFC and OMC, which readers write constantly and the archives almost never
+    # do. Measured against the vocabulary rather than assumed:
+    #
+    #   Original Female Character(s)  218,317      OFC   7,668
+    #   Original Male Character(s)    147,800      OMC   5,385
+    #
+    # So `char:"OFC"` — which is what "Tom Riddle/OFC" produced — asked for a
+    # 28-times-smaller set than the reader meant, and threw away 96% of the
+    # works they were describing. Found by checking, per post, which term of a
+    # built query the known answer did not carry: `ofc` came up twice in a
+    # corpus of 93, against answers that carry the long spelling.
+    #
+    # The plural form is the canonical one on AO3 even for a single character,
+    # which is why the "(s)" is here and is not a guess.
+    "ofc": "Original Female Character(s)",
+    "ofcs": "Original Female Character(s)",
+    "omc": "Original Male Character(s)",
+    "omcs": "Original Male Character(s)",
     "poc": None,          # deliberately NOT expanded: it is people of colour
     "wbwl": "Boy-Who-Lived Sibling",
     "bamf": "BAMF",
@@ -5066,6 +5084,35 @@ _CHAR_CANDIDATES = 6
 _CHAR_FANDOM_CAP = 200
 
 
+# Reader shorthand for a character the archives file under a much longer name.
+#
+# NOT derivable, which is why it is written out: _canonical_character matches an
+# exact value or a prefix ("Damon" -> "Damon Salvatore"), and "OFC" is neither a
+# prefix nor a substring of "Original Female Character(s)". It is an
+# abbreviation of a concept, the same argument _TAG_ABBREV makes for SI and OC.
+#
+# Measured against the vocabulary rather than assumed:
+#
+#     Original Female Character(s)  218,317        OFC   7,668
+#     Original Male Character(s)    147,800        OMC   5,385
+#
+# So `char:"OFC"` — which is what a post saying "Tom Riddle/OFC" produced —
+# asked for a 28-times-smaller set than the reader meant and discarded 96% of
+# the works they were describing. Found by checking, per post, which term of a
+# built query the known answer did not carry; `ofc` came up twice in 93.
+#
+# The "(s)" is the canonical AO3 spelling even for one character, and is checked
+# against the facet table rather than guessed.
+_CHAR_ALIASES = {
+    "ofc": "Original Female Character(s)",
+    "ofcs": "Original Female Character(s)",
+    "omc": "Original Male Character(s)",
+    "omcs": "Original Male Character(s)",
+    "oc": "Original Character",
+    "ocs": "Original Character",
+}
+
+
 def _canonical_character(db, name: str,
                          fandom: Optional[str] = None) -> Optional[str]:
     """The character a first name most likely means, IN THE POST'S FANDOM.
@@ -5095,6 +5142,21 @@ def _canonical_character(db, name: str,
     genuinely absent from it (a crossover, a fandom-hopping OC) should still
     resolve to a name rather than to nothing.
     """
+    # Shorthand first, and ONLY EVER UP — the same rule the rest of this
+    # function follows. A canonical spelling with FEWER works than what the
+    # reader typed is not a canonicalisation, it is a different character who
+    # happens to share an abbreviation, and swapping to it would narrow the
+    # search rather than widen it.
+    alias = _CHAR_ALIASES.get((name or "").strip().lower())
+    if alias:
+        pair = db.execute(sql_text("""
+            SELECT value, count FROM facets
+             WHERE kind = 'character' AND lower(value) IN (lower(:a), lower(:n))
+             ORDER BY count DESC LIMIT 1
+        """), {"a": alias, "n": name}).first()
+        if pair and pair[0]:
+            return pair[0]
+
     rows = db.execute(sql_text("""
         SELECT value, count FROM facets
          WHERE kind = 'character'
