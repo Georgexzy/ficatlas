@@ -50,12 +50,30 @@ from sqlalchemy import text as sql_text  # noqa: E402
 
 from db.session import db_session  # noqa: E402
 
+# The answer must be SEARCHABLE, not merely present.
+#
+# 27 of the 93 answers in this corpus — 29% — are bare AO3 metadata-dump rows:
+# a title, and nothing else. No fandom, no tags but the provenance marker, no
+# summary, no word count, no kudos. NO query built from a post's words can ever
+# match one of those, because there is nothing in the row to match against.
+#
+# They were being scored as misses, so 29% of the denominator was measuring the
+# index's gaps rather than the extractor's reading. The docstring already said a
+# pair whose answer is not in this index is skipped, on exactly this reasoning;
+# it just tested for the row EXISTING rather than for it carrying anything.
+#
+# The bar is deliberately low — a fandom or a summary — rather than "well
+# enriched". This is asking whether a query could in principle find it, not
+# whether it would rank well.
 CORPUS_SQL = """
     SELECT p.id, p.title, COALESCE(p.body, ''), a.story_id, a.confirmed
       FROM reddit_answers a
       JOIN reddit_posts p ON p.id = a.post_id
+      JOIN stories s ON s.id = a.story_id
      WHERE a.story_id IS NOT NULL
        AND (:confirmed_only = FALSE OR a.confirmed)
+       AND (COALESCE(array_length(s.fandoms, 1), 0) > 0
+            OR (s.summary IS NOT NULL AND s.summary <> ''))
      ORDER BY p.posted_at DESC NULLS LAST
      LIMIT :lim
 """

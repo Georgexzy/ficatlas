@@ -4558,11 +4558,73 @@ def _is_crossover_word(value: str) -> bool:
 
 # Status, in the words readers write rather than the ones the filter uses.
 _STATUS_WORDS = [
-    (re.compile(r"\b(?:ongoing|in[-\s]progress|wip|unfinished|updating|"
-                r"still\s+(?:being\s+)?updat\w+)\b", re.I), "ongoing"),
+    # `wips?` and `w\.?i\.?p\.?s?`: the plural is at least as common as the
+    # singular in a fic-finder post ("no wips please") and `\bwip\b` does not
+    # match it, so that whole phrasing read as no status at all.
+    (re.compile(r"\b(?:ongoing|in[-\s]progress|w\.?i\.?p\.?s?|unfinished|"
+                r"updating|still\s+(?:being\s+)?updat\w+)\b", re.I), "ongoing"),
     (re.compile(r"\b(?:complete[d]?|finished|abandoned\s+is\s+fine)\b", re.I),
      "complete"),
 ]
+
+
+def _read_status(raw: str) -> str | None:
+    """Which completion status the post is ASKING FOR.
+
+    This was `for rx, value in _STATUS_WORDS: if rx.search(raw): break` — the
+    first pattern to match anywhere in the post won, and "ongoing" is listed
+    first. So one occurrence of "unfinished" beat "completed" however many times
+    the reader said it, wherever either appeared. Measured on a real post:
+
+        "I am looking for completed Tom Riddle romance fics ... Must be
+         completed - I am suffering from enough unfinished fics already"
+
+    said completed twice and insisted on it, and the extractor searched `wip`.
+    The answer the community gave that post has 32,966 kudos and is complete; no
+    reordering of results could have found it, because the query asked for the
+    opposite of what was written.
+
+    Two things were wrong and both are fixed here.
+
+    FIRST MATCH IS NOT A VOTE. Every mention is found and tallied, so a status
+    the post repeats beats one it mentions in passing. A tie reads as "no
+    preference stated", which is honest and leaves the filter off — a reader who
+    says "complete or ongoing, I do not mind" has told you not to filter.
+
+    A COMPLAINED-ABOUT STATUS IS A REFUSAL, NOT A REQUEST. "suffering from
+    enough unfinished fics", "tired of wips", "I hate unfinished fics": the word
+    is in the post either way, and only the words around it separate a want from
+    a grievance. Same lesson as "no harems" searching FOR harems and "no smut
+    thanks" excluding Thanksgiving — learned twice already for tags and never
+    applied to status. A refused mention votes for the OPPOSITE rather than
+    being dropped: somebody sick of unfinished fics has told you they want
+    finished ones.
+    """
+    OPPOSITE = {"ongoing": "complete", "complete": "ongoing"}
+    votes: dict[str, int] = {}
+    for rx, value in _STATUS_WORDS:
+        for m in rx.finditer(raw or ""):
+            # The clause this word sits in, cut at the nearest sentence end so a
+            # refusal two sentences back cannot reach forward and flip it.
+            before = re.split(r"[.!?;\n]", (raw or "")[:m.start()])[-1]
+            v = OPPOSITE[value] if _STATUS_REFUSAL.search(before) else value
+            votes[v] = votes.get(v, 0) + 1
+    if not votes:
+        return None
+    ranked = sorted(votes.items(), key=lambda kv: -kv[1])
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        return None
+    return ranked[0][0]
+
+
+# A status word sitting in a complaint or a refusal. Matched against the clause
+# before the word, so "no wips" flips that wip and a refusal in an earlier
+# sentence cannot reach across a full stop to flip this one.
+_STATUS_REFUSAL = re.compile(
+    r"\b(?:no|not|never|avoid|without|hate|hates|dislike|sick\s+of|tired\s+of|"
+    r"fed\s+up|suffering\s+from|enough|too\s+many|rather\s+not|"
+    r"do\s?n[o\u2019']?t\s+want|don[\u2019']?t\s+like|please\s+no|"
+    r"prefer\s+not)\b", re.I)
 
 
 # The words a reader uses to ask about LENGTH. Once the length has been read as
@@ -6054,11 +6116,7 @@ def extract(
                   wc_min, wc_max)
         wc_min = wc_max = None
 
-    status = None
-    for rx, value in _STATUS_WORDS:
-        if rx.search(raw):
-            status = value
-            break
+    status = _read_status(raw)
 
     # Crossovers: read from the post, never assumed.
     #
