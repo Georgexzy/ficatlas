@@ -22,6 +22,7 @@ import { readAllPrefs, type Prefs } from "@/lib/prefs"
 import WordCountSlider from "./WordCountSlider"
 import DlpStars, { dlpRating } from "./DlpStars"
 import SiteHeader from "./SiteHeader"
+import CompassMark from "./CompassMark"
 import { useAuth } from "@/lib/auth"
 
 // Last search results, keyed by the exact URL that produced them. Back/forward
@@ -3064,7 +3065,16 @@ function SearchPageInner() {
                   onDismiss={() => setSearchFocused(false)} />
               </div>
               <button className="search-btn" onClick={() => doSearch()} disabled={loading}>
-                {loading ? <span className="search-btn__spinner" /> : "Search"}
+                {/* THE COMPASS IS THE SPINNER.
+                    It was a generic CSS ring, which says nothing and could
+                    belong to any site. The rose turning while a search runs is
+                    the one place the mark does a job rather than decorate a
+                    hover: it means "finding it", it is the site's own shape,
+                    and this button is the biggest thing on the screen on a
+                    phone — which is where the mark was least visible, because
+                    the header is not sticky below 700px and scrolls away the
+                    moment you move. */}
+                {loading ? <CompassMark className="compass--spin" /> : "Search"}
               </button>
             </div>
             <TokenStrip tokens={parsedTokens} onRemove={raw => {

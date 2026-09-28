@@ -338,12 +338,42 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 }
 .search-btn:hover { opacity: 0.85; }
 .search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* The old generic ring, kept because .scrape-spinner and others still use the
+   `spin` keyframes below. The SEARCH button uses the compass instead — see
+   .compass--spin. */
 .search-btn__spinner {
   width: 14px; height: 14px; border: 2px solid var(--bg);
   border-top-color: transparent; border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* The compass turning while a search runs.
+   Slower than a loading ring on purpose — 1.6s, so it reads as a needle
+   settling rather than a busy-spinner, which is the same reason the hover spin
+   is eased over 1.1s. Both halves take the button's own text colour, because on
+   the accent-filled button the gold half would vanish into its background. */
+/* `.compass.compass--spin`, not `.compass--spin`. Equal specificity loses to
+   source order, and the base `.compass` rule (and its phone media query) sit
+   ~2,500 lines further down — so the first attempt set 1.6em and still rendered
+   at 18px. Doubling the class beats both without an !important. */
+.compass.compass--spin {
+  /* 1.6em: the button is ~48px tall on a phone and 1.15em rendered an 18px
+     rose in it, which read as a speck rather than as the thing telling you the
+     search is running. */
+  font-size: 1.6em;
+  animation: spin 1.6s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+  transform-origin: 50% 50%;
+}
+.compass.compass--spin .compass__gold,
+.compass.compass--spin .compass__cream { fill: currentColor; }
+.compass.compass--spin .compass__gold { opacity: 0.55; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still shown, not still spinning: it is the only thing telling the reader
+     the search is running, so it must not disappear — it just stops turning. */
+  .compass.compass--spin { animation: none; }
+}
 
 /* ── Token strip ───────────────────────────────────────────────────────────── */
 .token-strip { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
@@ -2903,6 +2933,14 @@ body:has(.reader-shell[data-theme="default"]) {
 /* The cream half follows the TEXT colour, so in the light theme it darkens with
    the wordmark rather than staying near-white on parchment. */
 .compass__cream { fill: var(--text); }
+
+/* Bigger on a phone. At 1.06em of a smaller wordmark the rose rendered 19px —
+   present, but reading as a speck beside a bold serif, and this is the only
+   place the mark appears on mobile at all: the header is not sticky below
+   700px, so it scrolls away the moment the reader moves. */
+@media (max-width: 700px) {
+  .compass { font-size: 1.25em; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   /* No spin at all, not a faster one. This is decoration on a link somebody
