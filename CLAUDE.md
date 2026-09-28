@@ -504,6 +504,23 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **`count(col)` visits the heap; `count()` does not, and here that was 66x.**
+  `/api/library/hosted` counted its shelf with
+  `db.query(func.count(Story.id)).filter(Story.is_hosted == True)`. Naming a
+  column obliges the planner to fetch every matching row from the heap to read
+  it — 30,069 heap pages for 29,951 answers, measured at **9,829ms**, past the
+  statement timeout often enough that the endpoint intermittently 500'd and
+  took the whole hosted browse down with it. `func.count()` with an explicit
+  `select_from` names nothing, so `ix_stories_is_hosted` answers it as an Index
+  Only Scan: **149ms**, identical number.
+  - **The index was there and was being used.** The plan said `Index Scan`, not
+    `Seq Scan`, so every "is there an index" check passed — it was the
+    AGGREGATE'S ARGUMENT forcing the heap, not a missing index. Read the plan
+    for `Heap Fetches` and the `read=` buffer count, not just the node type,
+    before concluding an index is absent or wrong.
+  - It failed intermittently, which is why it survived: the same query returned
+    in time on a quiet box and timed out while the crawler was writing. A 500
+    that only appears under load looks like flakiness and is arithmetic.
 - **The language filter seq-scanned 20.5M rows past an index that could have
   answered it in a millisecond.** `ix_stories_language` is a plain btree and the
   predicate was `ILIKE`, which cannot use one. Measured, same row, same box:
