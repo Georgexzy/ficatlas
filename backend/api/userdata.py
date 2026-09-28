@@ -41,7 +41,7 @@ router = APIRouter()
 # The privacy argument is answered rather than ignored: /privacy names this list
 # among what is stored, and no screen promises any more that it stays put.
 ALLOWED_KEYS = {"bookmarks", "progress", "recents", "settings", "explicit",
-                "offline", "saved", "dismissed", "mutes"}
+                "offline", "saved", "dismissed", "mutes", "tips"}
 MAX_BYTES    = 2 * 1024 * 1024   # 2 MB per key
 
 
@@ -53,6 +53,7 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
                  offline reading, deliberately WITHOUT the chapters
     - saved:     same union — searches the reader chose to keep
     - dismissed: monotonic flag → either side having set it wins
+    - tips:      same, for the one-off note under the search results
     - mutes:     dict of arrays → union per field, so one device cannot wipe
                  another's list. NOTE the cost, which it shares with bookmarks:
                  a union cannot express a REMOVAL, so un-muting something on one
@@ -93,7 +94,7 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
                 out[field] = c
         return out
 
-    if key == "dismissed":
+    if key in ("dismissed", "tips"):
         # MONOTONIC, not last-write-wins. "I have already said no" is an answer
         # that only ever goes one way, and a device that has never been prompted
         # sends nothing at all — so the safe merge is "either of us said yes".

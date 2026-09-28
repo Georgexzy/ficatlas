@@ -125,6 +125,11 @@ export const STORED_KEYS: StoredKey[] = [
   { key: "last-search", scope: "device", group: "history",
     why: "The query to restore when this tab comes back to the search page. "
        + "Per-tab continuity, not a record worth keeping." },
+  { key: "tips-dismissed", scope: "sync", group: "internal",
+    why: "Whether this reader has dismissed the one-off note under the results "
+       + "explaining what an account adds. Per-device it would reappear on "
+       + "every device they use, which is the behaviour EmailPrompt's comment "
+       + "already calls out as the site not listening." },
   { key: "email-prompt-dismissed", scope: "sync", group: "internal",
     why: "Whether this reader has said no to adding an email. Device-scoped, "
        + "it asked again on every device — which reads as the site not "

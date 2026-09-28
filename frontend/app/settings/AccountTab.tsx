@@ -1,5 +1,6 @@
 "use client"
 import { useEffect, useState, useCallback } from "react"
+import GoogleIcon from "../GoogleIcon"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth"
@@ -406,8 +407,10 @@ export default function AccountTab() {
               Link your Google account and you can sign in with one tap, without
               a password.
             </p>
-            <a className="btn btn--primary"
-               href="/api/auth/google/start?link=1">Link Google account</a>
+            <a className="btn btn--primary auth-google-inline"
+               href="/api/auth/google/start?link=1">
+              <GoogleIcon /> Link Google account
+            </a>
           </>
         )}
       </div>
