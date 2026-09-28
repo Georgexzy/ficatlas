@@ -1362,6 +1362,185 @@ def _split_ship_suggestions(db, terms: list, status, wc_min, wc_max,
     return out[:1]
 
 
+# Operators a reader might mistype. Taken from the parser's own alias table
+# rather than written out again, so a new operator cannot be missed here.
+def _known_operators() -> set[str]:
+    from query_parser import FIELD_ALIASES
+    return {k.lower() for k in FIELD_ALIASES}
+
+
+def _edit_distance_1(a: str, b: str) -> bool:
+    """Within one insertion, deletion or substitution. Deliberately not a
+    library: one edit is the whole rule, and the alternative is a dependency for
+    twelve lines."""
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if a == b:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) == 1
+    short, long_ = (a, b) if len(a) < len(b) else (b, a)
+    i = j = 0
+    skipped = False
+    while i < len(short) and j < len(long_):
+        if short[i] == long_[j]:
+            i += 1; j += 1
+        elif skipped:
+            return False
+        else:
+            skipped = True; j += 1
+    return True
+
+
+def _typed_rescues(db, q: str) -> list[Suggestion]:
+    """Two ways a search returns nothing for a reason the reader cannot see.
+    Both were found in the traffic log, in real readers' queries.
+
+    A MISTYPED OPERATOR. `shgip:"Regulus Black/James Potter" fandom:"Harry
+    Potter..."` was run twice and returned nothing both times. The parser only
+    knows `ship:`, so `shgip:` is not an operator at all — it becomes literal
+    text, every word of it is ANDed against the index, and the result is zero
+    with nothing on screen to say why. One letter, and the reader has no way to
+    tell a typo from an empty index.
+
+    A HYPHEN INSIDE A TITLE. `a-rose through time` returned nothing while
+    `a rose through time` finds the work first. Postgres builds
+    `'a-ros' <2> 'rose' & 'time'` for the first — a compound token the title
+    never contains — against `'rose' & 'time'` for the second. Readers type the
+    hyphen because that is how a URL slug or a half-remembered title looks.
+
+    Both are OFFERED, never applied. A correction is a guess about what somebody
+    meant, and `_did_you_mean` has always suggested rather than rewritten — the
+    reader can see both and pick. And both are PROBED first: a suggestion that
+    also returns nothing is worse than no suggestion, because it spends the
+    reader's last bit of patience.
+    """
+    out: list[Suggestion] = []
+    typed = (q or "").strip()
+    if not typed:
+        return out
+
+    ops = _known_operators()
+    fixed = typed
+    corrected: list[tuple[str, str]] = []
+    for m in re.finditer(r'\b([A-Za-z]{2,12}):', typed):
+        word = m.group(1).lower()
+        if word in ops:
+            continue
+        near = sorted(o for o in ops if _edit_distance_1(word, o))
+        if len(near) == 1:
+            corrected.append((m.group(1), near[0]))
+            fixed = fixed.replace(m.group(0), f"{near[0]}:", 1)
+    if corrected and fixed != typed:
+        # Probed against the VOCABULARY, not the text index. `_probe_total`
+        # counts free text, and a query made entirely of operators — which is
+        # exactly what a mistyped operator produces once corrected — has none,
+        # so it probed as zero and the suggestion was never offered. Asking
+        # `facets` whether the value exists answers the question that matters:
+        # is there anything under that term at all.
+        n = _probe_operator_value(db, fixed)
+        if n:
+            was, now = corrected[0]
+            out.append(Suggestion(
+                kind="operator", value=f"{now}:", count=n, query=fixed,
+                reason="spelling", works=n, drops=f"{was}:"))
+
+    # The hyphen, only where one sits between two word characters — a leading
+    # "-" is the exclusion operator and must not be touched.
+    if re.search(r"\w-\w", typed):
+        spaced = re.sub(r"(?<=\w)-(?=\w)", " ", typed)
+        if spaced != typed:
+            n = _probe_total(db, spaced)
+            if n:
+                out.append(Suggestion(
+                    kind="text", value=spaced, count=n, query=spaced,
+                    reason="spelling", works=n))
+    return out
+
+
+def _probe_operator_value(db, query: str) -> int:
+    """How many works carry the value of the first operator in this query.
+
+    A floor, not a total: a query with three operators returns fewer than any
+    one of them alone. It is enough for the only decision here — whether a
+    corrected operator leads anywhere at all, or whether the reader would click
+    through to a second empty page.
+    """
+    try:
+        from query_parser import parse_query
+        pq = parse_query(query)
+        # `author` is a scalar on ParsedQuery while the rest are lists — the
+        # field names were read off the class rather than guessed a second time.
+        groups = [pq.relationships, pq.fandoms, pq.characters, pq.tags,
+                  [pq.author] if pq.author else []]
+        for values in groups:
+            for v in (values or []):
+                if not str(v).strip():
+                    continue
+                n = db.execute(sql_text(
+                    "SELECT max(count) FROM facets WHERE lower(value) = lower(:v)"
+                ), {"v": str(v).strip()}).scalar()
+                if n:
+                    return int(n)
+        return 0
+    except Exception:
+        log.warning("operator probe failed for %r", query, exc_info=True)
+        return 0
+
+
+def _probe_total(db, query: str) -> int:
+    """How many works a candidate query would find, capped. Cheap enough to run
+    on a zero-result page and never on a successful one."""
+    try:
+        from query_parser import parse_query
+        pq = parse_query(query)
+        # Not named `text`: that is the sqlalchemy import in this module and
+        # shadowing it here would break the query two lines down.
+        words = (pq.clean_text or "").strip()
+        if not words:
+            return 0
+        # The same expression the search itself matches on — _story_tsv(),
+        # backed by ix_stories_doc_fts — rather than a hand-written predicate.
+        # This file has three recorded cases of a probe that approximated the
+        # real filter and answered a different question from the search it was
+        # predicting; the fix each time was to run the predicate the search runs.
+        #
+        # Gated the same way too, so a suggestion cannot promise works the
+        # reader's own settings will then hide from them.
+        # The regconfig is BOUND, not interpolated. `_REGCONFIG` is a
+        # SQLAlchemy ColumnClause rather than a string, so an f-string put
+        # `<sqlalchemy.sql.elements.ColumnClause object at 0x…>` into the SQL —
+        # which raised, and the except below swallowed it and returned 0. The
+        # probe reported "no results" for a query the live search answers with
+        # 5,000, and looked exactly like a query that genuinely finds nothing.
+        #
+        # The same expression the search matches on — _story_tsv(), backed by
+        # ix_stories_doc_fts — rather than a hand-written predicate. This file
+        # has three recorded cases of a probe approximating the real filter and
+        # answering a different question from the search it was predicting.
+        #
+        # Gated the same way too, so a suggestion cannot promise works the
+        # reader's own settings will then hide.
+        row = db.execute(sql_text("""
+            SELECT count(*) FROM (
+              SELECT 1 FROM stories s
+               WHERE to_tsvector(CAST(:cfg AS regconfig), fic_doc(
+                       s.title, s.summary, s.author, s.fandoms,
+                       s.characters, s.relationships, s.tags))
+                     @@ websearch_to_tsquery(CAST(:cfg AS regconfig), :q)
+                 AND s.delisted_at IS NULL
+                 AND NOT s.gate_underage AND NOT s.gate_adult
+               LIMIT 200) t
+        """), {"q": words, "cfg": "english"}).scalar()
+        return int(row or 0)
+    except Exception:
+        # WARNING, not debug. A silent 0 here is indistinguishable from a query
+        # that genuinely finds nothing, which is how the bug above survived
+        # being written and run.
+        log.warning("suggestion probe failed for %r", query, exc_info=True)
+        return 0
+
+
 def _did_you_mean(db, q: str, min_sim: float | None = None) -> list[Suggestion]:
     """What the reader might have meant, for a search that found nothing.
 
@@ -4028,7 +4207,11 @@ def search(          # NOT async — see below
     _suggestions: list[Suggestion] = []
     _typed = (q or "").strip()
     if _typed and total == 0 and not merged:
-        _suggestions = _did_you_mean(db, q)
+        # The typed rescues run FIRST and, when one lands, instead of the
+        # trigram pass rather than alongside it. A mistyped operator or a
+        # hyphen is a known cause with a known fix and a probed result count;
+        # offering it next to three fuzzy guesses buries the one that works.
+        _suggestions = _typed_rescues(db, q) or _did_you_mean(db, q)
     elif (_typed and 0 < total <= SUGGEST_MAX_RESULTS
             and len(_typed.split()) <= SUGGEST_MAX_WORDS):
         # A LOWER similarity floor than the zero-result path, and it is the
