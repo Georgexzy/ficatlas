@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react"
 import { usePathname, useSearchParams } from "next/navigation"
+import { fetchBackground } from "@/lib/net"
 import { recordPath } from "@/lib/navStack"
 
 // Writes down every page this tab visits, so "Back" can mean something — and
@@ -119,9 +120,15 @@ export default function NavRecorder() {
 
     // keepalive so the report survives the navigation that triggered it, and a
     // swallowed rejection because a page must never break over its own
-    // analytics — offline, this simply does not happen.
-    fetch("/api/traffic/hit", { method: "POST", body: fd, keepalive: true })
-      .catch(() => {})
+    // analytics.
+    //
+    // TIMED OUT, and that is the part that mattered. This fires on every
+    // navigation, and on a dead-but-associated connection an un-timed fetch
+    // holds one of the ~6 connections the browser allows per host until the
+    // platform gives up minutes later. A few page turns and the origin is
+    // wedged — including the requests the reader is actually waiting on. A
+    // pageview beacon must never be able to cost somebody their book.
+    fetchBackground("/api/traffic/hit", { method: "POST", body: fd, keepalive: true })
   }, [pathname, searchParams])
 
   return null

@@ -44,17 +44,35 @@ export const OFFLINE_ROUTER_PATIENCE_MS = 400
 
 type PushFn = (href: string) => void
 
-export function navigateTo(push: PushFn, href: string): void {
+export interface NavigateOptions {
+  /** Whether the network has DEMONSTRABLY answered this page's own request.
+   *
+   *  The caller knows something `navigator.onLine` does not. That flag reports
+   *  whether the machine has a network interface, so on a dead-but-associated
+   *  connection — wifi with no route, a captive portal, one bar of cell that
+   *  cannot carry data — it reads `true`, and every page turn then spent the
+   *  full 1200ms waiting for an RSC payload that was never going to arrive
+   *  before falling back to the document request that works. A caller that has
+   *  just watched its own fetch fail can say so and save the reader that wait
+   *  on every single page. */
+  networkAlive?: boolean
+}
+
+export function navigateTo(push: PushFn, href: string, opts: NavigateOptions = {}): void {
   if (typeof window === "undefined") return
 
   push(href)
 
-  // navigator.onLine is only trustworthy when false (see lib/errors.ts), which
-  // is the direction that matters here: a confident "offline" shortens the wait
-  // before the document-navigation fallback, rather than skipping the attempt.
-  const patience = navigator.onLine
-    ? ROUTER_PATIENCE_MS
-    : OFFLINE_ROUTER_PATIENCE_MS
+  // Trusted only where it is true: `navigator.onLine === false` really does
+  // mean offline (see lib/errors.ts), and an explicit `networkAlive: false`
+  // from a caller that watched a request fail is better evidence still.
+  // Neither skips the router attempt — a route already in its cache renders
+  // instantly and needs no network at all — they only shorten the wait before
+  // the fallback.
+  const looksDead = !navigator.onLine || opts.networkAlive === false
+  const patience = looksDead
+    ? OFFLINE_ROUTER_PATIENCE_MS
+    : ROUTER_PATIENCE_MS
 
   const target = href.split(/[?#]/)[0]
   window.setTimeout(() => {

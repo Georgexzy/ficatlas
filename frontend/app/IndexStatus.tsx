@@ -1,5 +1,6 @@
 "use client"
 import { useEffect, useState } from "react"
+import { fetchWithTimeout } from "@/lib/net"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -27,11 +28,11 @@ export default function IndexStatus() {
 
   useEffect(() => {
     if (!open) return
-    fetch(`${API_BASE}/api/stats/sites`).then(r => r.json()).then(setSites).catch(() => {})
+    fetchWithTimeout(`${API_BASE}/api/stats/sites`).then(r => r.json()).then(setSites).catch(() => {})
     // cache: "no-store" so this reports the BUILD THIS PAGE IS RUNNING, not
     // whatever the service worker has cached — the whole point is to tell a
     // stale bundle apart from a real bug.
-    fetch("/build.json", { cache: "no-store" })
+    fetchWithTimeout("/build.json", { cache: "no-store" })
       .then(r => r.json()).then(d => setBuilt(d.built)).catch(() => {})
   }, [open])
 

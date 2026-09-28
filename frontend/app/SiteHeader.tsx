@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation"
 import OfflineLink from "./OfflineLink"
 import IndexStatus from "./IndexStatus"
 import { useAuth } from "@/lib/auth"
+import { fetchWithTimeout } from "@/lib/net"
 import { lastSearchHref } from "@/lib/lastSearch"
 
 // The one header every page shares.
@@ -35,7 +36,7 @@ function UserMenu() {
   useEffect(() => {
     if (!user) { setUnread(0); return }
     let live = true
-    fetch("/api/follows/count", { credentials: "include" })
+    fetchWithTimeout("/api/follows/count", { credentials: "include" })
       .then(r => (r.ok ? r.json() : null))
       .then(d => { if (live && d) setUnread(d.unread || 0) })
       .catch(() => {})

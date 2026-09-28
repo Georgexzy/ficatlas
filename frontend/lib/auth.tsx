@@ -1,6 +1,7 @@
 "use client"
 import { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from "react"
 import { SYNCED_PREF_KEYS } from "./storageKeys"
+import { fetchWithTimeout } from "./net"
 
 export interface User {
   username: string
@@ -294,7 +295,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Bootstrap on mount.
   useEffect(() => {
     hookLocalStorage(scheduleSync)
-    fetch("/api/auth/me", { credentials: "include" })
+    // Timed out: this runs on every page load, and an un-timed request on a
+    // dead-but-associated connection holds one of the browser's ~6 per-host
+    // connections until the platform gives up minutes later. See lib/net.ts.
+    fetchWithTimeout("/api/auth/me", { credentials: "include" })
       .then(async r => {
         // 401 is an answer: this session is gone, and the cached identity must
         // go with it or a signed-out reader keeps seeing their old name.

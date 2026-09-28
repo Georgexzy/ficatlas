@@ -4,6 +4,21 @@ import { useParams, useRouter } from "next/navigation"
 import { describeError, type Failure } from "@/lib/errors"
 import { useAuth } from "@/lib/auth"
 import { navigateTo } from "@/lib/navigation"
+import { localFirst } from "@/lib/localFirst"
+// A STATIC import, and that is load-bearing.
+//
+// This was `await import("@/lib/offline")` inside the offline read — and a
+// dynamic import is a network fetch for a JS chunk. So the one code path whose
+// entire purpose is to work without a network could not start until the network
+// handed over a file. On a cold navigation over a dead-but-associated
+// connection, with the browser's ~6 connection slots already held by requests
+// that will never settle, that import never resolved: the reader sat on
+// "Loading…" and then "Couldn\u2019t load this chapter", over text sitting in
+// IndexedDB. Measured: chapter 1 in 0.6s, then every chapter after it failed.
+//
+// Nothing on the offline path may be lazily loaded. The saving here was one
+// small chunk on a route that is the reason the chunk exists.
+import { getOfflineStory } from "@/lib/offline"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -84,6 +99,11 @@ export default function ChapterPage() {
   const [chapter, setChapter] = useState<ChapterFull | null>(null)
   const [story, setStory] = useState<StoryMin | null>(null)
   const [loadError, setLoadError] = useState<Failure | null>(null)
+  // Whether the network is ANSWERING, as observed on this page's own request —
+  // not as `navigator.onLine` claims. Nothing may be prefetched on the strength
+  // of a flag that reads `true` on a connection carrying no packets; see the
+  // prefetch effect below for what that cost.
+  const [networkAlive, setNetworkAlive] = useState(false)
   // Bumped to re-run the chapter load without a navigation — used by the Retry
   // button and by coming back online.
   const [reloadKey, setReloadKey] = useState(0)
@@ -193,86 +213,80 @@ export default function ChapterPage() {
   // Failure is also classified now. Every failure used to render "Unavailable
   // offline", including a plain 404 on a chapter that does not exist — telling
   // someone with a perfectly good connection to check their connection.
+  // LOCAL FIRST. What this device holds is shown before the network is asked,
+  // never after it has given up.
+  //
+  // This used to read `if (!navigator.onLine && await fromOffline()) return`,
+  // and that flag reports whether the machine has a network INTERFACE, not
+  // whether packets arrive. On a dead-but-associated connection — wifi with no
+  // route, a captive portal, one bar of cell that cannot carry data — it is
+  // `true`, so the shortcut to the saved copy never fired in the one case it
+  // existed for. Two doomed fetches were raced instead and the saved text was
+  // reached only when the 20-second abort timer gave up. Measured against a
+  // chapter already in IndexedDB:
+  //
+  //     radio genuinely off   chapter shown in   <3s
+  //     dead but associated   chapter shown in    21s
+  //
+  // Twenty-one seconds, over text readable in single-digit milliseconds. That
+  // is what "offline reading doesn't work" was. See lib/localFirst.ts.
   useEffect(() => {
     if (!storyId || !num) return
     let cancelled = false
-    const ctl = new AbortController()
-    // Long enough for a genuinely slow search-index box, short enough that the
-    // saved copy is offered while the reader is still willing to wait for it.
-    const timer = setTimeout(() => ctl.abort(), 20_000)
 
     setChapter(null)
     setLoadError(null)
 
-    const fromOffline = async (): Promise<boolean> => {
-      const { getOfflineStory } = await import("@/lib/offline")
+    // Reads the saved copy, and has one deliberate side effect: it sets `story`
+    // even when THIS chapter is not among the saved ones, so the error screen
+    // can list the chapters the device does hold. Returning null means "this
+    // chapter is not here", not "this story is unknown".
+    const readSaved = async () => {
       const saved = await getOfflineStory(storyId)
-      if (!saved || cancelled) return false
+      if (!saved || cancelled) return null
       const ch = saved.chapters.find(c => c.number === Number(num))
-      // The story is set even when THIS chapter is not among the saved ones.
-      //
-      // It used to return early, leaving `story` null, and a null story means no
-      // chapter list — so the error screen had no idea which chapters the device
-      // actually holds and offered no way to reach them. Offline, on a partly
-      // saved work, that is a dead end: "not saved on this device" with no route
-      // back to the six chapters sitting in IndexedDB.
       setStory({
         id: saved.id, title: saved.title, author: saved.author,
-        // What is actually held, and the numbers held — see the note on
-        // prevNum/nextNum for why the numbers matter offline.
         chapter_count: saved.chapters.length,
         chapters: saved.chapters.map(c => ({ number: c.number, title: c.title })),
       } as any)
-      if (!ch) return false        // story known, this chapter not held
-      setChapter({
-        number: ch.number, title: ch.title, content: ch.content,
-        start_note: ch.start_note, end_note: ch.end_note, summary: ch.summary,
-      } as any)
-      return true
+      if (!ch) return null
+      return {
+        story: null,
+        chapter: {
+          number: ch.number, title: ch.title, content: ch.content,
+          start_note: ch.start_note, end_note: ch.end_note, summary: ch.summary,
+        } as ChapterFull,
+      }
     }
 
-    const load = async () => {
-      // Offline, go to the saved copy first instead of racing two fetches that
-      // cannot succeed. Both were doomed, the failures had to unwind before the
-      // fallback even started, and on a flaky connection — the case where
-      // navigator.onLine is most likely to be right — they could sit unresolved
-      // rather than failing fast. Reading IndexedDB directly is immediate.
-      //
-      // Only trusted in the false direction (see lib/errors.ts): if it claims
-      // to be online we still try the network, because it is often wrong about
-      // that. If it says offline and we hold nothing, the code below falls
-      // through to the network attempt anyway rather than declaring failure on
-      // the strength of a flag.
-      if (!navigator.onLine && await fromOffline()) return
-      if (cancelled) return
-
-      try {
+    localFirst<{ story: StoryMin | null; chapter: ChapterFull }>({
+      local: readSaved,
+      remote: async (signal) => {
         // A chapter warmed by the prefetch below is already in memory, so the
         // usual next-chapter tap renders without a round trip or a spinner.
         const warm = CHAPTER_CACHE.get(cacheKey(storyId, num))
-        const [s, c] = await Promise.all([
-          fetch(`${API_BASE}/api/stories/${storyId}`, { signal: ctl.signal })
+        const [story, chapter] = await Promise.all([
+          fetch(`${API_BASE}/api/stories/${storyId}`, { signal })
             .then(r => { if (!r.ok) throw describeError(null, r.status); return r.json() }),
-          warm ?? fetch(`${API_BASE}/api/stories/${storyId}/chapters/${num}`, { signal: ctl.signal })
+          warm ?? fetch(`${API_BASE}/api/stories/${storyId}/chapters/${num}`, { signal })
             .then(r => { if (!r.ok) throw describeError(null, r.status); return r.json() }),
         ])
-        if (cancelled) return
-        setStory(s)
-        setChapter(c)
-      } catch (e: any) {
-        if (cancelled) return
-        // Prefer the saved copy over any error message, whatever the cause: if we
-        // hold the text, showing it beats explaining why the server did not.
-        if (await fromOffline()) return
-        if (cancelled) return
-        setLoadError(e?.kind ? e : describeError(e))
-      } finally {
-        clearTimeout(timer)
-      }
-    }
-    load()
+        return { story, chapter }
+      },
+      onLocal: ({ chapter }) => setChapter(chapter),
+      // The network record carries what the saved copy cannot — kudos, the full
+      // chapter list, completion — so it replaces the local one when it lands.
+      onRemote: ({ story, chapter }) => {
+        setNetworkAlive(true)
+        if (story) setStory(story)
+        setChapter(chapter)
+      },
+      onFailure: (e: any) => { setNetworkAlive(false); setLoadError(e?.kind ? e : describeError(e)) },
+      isCancelled: () => cancelled,
+    })
 
-    return () => { cancelled = true; clearTimeout(timer); ctl.abort() }
+    return () => { cancelled = true }
   }, [storyId, num, reloadKey])
 
   // Paint the reader's page colour onto the ROOT element while the reader is open.
@@ -452,8 +466,8 @@ export default function ChapterPage() {
   // which is why the ✕ sometimes did nothing — see lib/navigation.ts.
   const navigate = useCallback((href: string) => {
     setSettingsOpen(false)
-    navigateTo(h => router.push(h), href)
-  }, [router])
+    navigateTo(h => router.push(h), href, { networkAlive })
+  }, [router, networkAlive])
 
   const goChapter = useCallback((n: number) => {
     navigate(`/story/${storyId}/chapter/${n}`)
@@ -518,7 +532,17 @@ export default function ChapterPage() {
   // connection on chapters they have not asked for.
   useEffect(() => {
     if (!storyId) return
-    if (!navigator.onLine) return          // nothing to warm a cache from
+    // Gated on a network that has DEMONSTRABLY answered, not on
+    // `navigator.onLine` — which is `true` on a dead-but-associated connection,
+    // so this guard never held in the case it existed for.
+    //
+    // It fired two router.prefetch() calls per chapter, and router.prefetch has
+    // no abort and no timeout: two sockets per page turn, held until the
+    // platform gave up minutes later, against the ~6 a browser allows per host.
+    // That is what made reading saved chapters in sequence fail after the
+    // first, with the text in IndexedDB the whole time. Measured: chapter 1 in
+    // 0.3s, chapter 2 never.
+    if (!networkAlive) return
     for (const n of [nextNum, prevNum]) {
       if (n != null) router.prefetch(`/story/${storyId}/chapter/${n}`)
     }
@@ -530,6 +554,10 @@ export default function ChapterPage() {
     const key = cacheKey(storyId, nextNum)
     if (CHAPTER_CACHE.has(key)) return
     const ctl = new AbortController()
+    // Bounded as well as abortable: the cleanup only runs on navigation, and a
+    // reader who stays on one chapter would otherwise hold this socket open
+    // indefinitely on a connection that is not answering.
+    const give_up = setTimeout(() => ctl.abort(), 10_000)
     // requestIdleCallback keeps this off the critical path on a phone; the
     // setTimeout fallback is for Safari, which still does not implement it.
     const idle = (cb: () => void) =>
@@ -544,13 +572,14 @@ export default function ChapterPage() {
     })
     return () => {
       ctl.abort()
+      clearTimeout(give_up)
       if (typeof (window as any).cancelIdleCallback === "function") {
         (window as any).cancelIdleCallback(handle)
       } else {
         clearTimeout(handle as number)
       }
     }
-  }, [storyId, nextNum, prevNum, router, chapter])
+  }, [storyId, nextNum, prevNum, router, chapter, networkAlive])
 
   // Keyboard navigation
   useEffect(() => {

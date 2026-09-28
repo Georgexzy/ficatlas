@@ -37,6 +37,39 @@ function isEssential(url) {
   return ESSENTIAL.some((p) => url === p || url.startsWith(p))
 }
 
+// A NETWORK THAT IS NOT ANSWERING MUST NOT BE ABLE TO BLOCK A CACHED RESPONSE.
+//
+// Everything below used to call bare `fetch()`. On a connection that is dead
+// but ASSOCIATED — wifi with no route, a captive portal, one bar of cell that
+// cannot carry data — fetch() does not reject. It hangs, for as long as the
+// platform allows, which on a phone can be a minute or more. So every
+// "network, fall back to cache" path in this file was really "network, or
+// nothing, for a very long time", and the cached copy sat unreachable the whole
+// while. This is the same fault the app had in `navigator.onLine` form; see
+// lib/localFirst.ts for the measurement (a saved chapter took 21 seconds).
+//
+// The timeout is deliberately short. It is not a request budget — it is how
+// long we are willing to make somebody wait before showing them what we already
+// have, and past about a second and a half a reader has decided the app is
+// broken. Where nothing is cached the caller passes a longer one, because there
+// the network is the only hope and giving up early helps nobody.
+const NET_TIMEOUT_MS = 1500
+
+// It must ABORT, not merely stop waiting. Clearing a timer and moving on leaves
+// the fetch running and the SOCKET HELD, and a browser allows about six
+// connections per host — so a worker that abandons one request per navigation
+// wedges the whole origin within a few pages. Measured before this was an
+// abort: reading saved chapters one after another on a dead-but-associated
+// connection gave chapter 1 in 0.3s and then nothing, ever, for every chapter
+// after it. A single-page test cannot see that, which is why it survived so
+// long.
+function fetchWithin(request, ms) {
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), ms)
+  return fetch(request, { signal: ctl.signal })
+    .finally(() => clearTimeout(timer))
+}
+
 // A precache that half-worked used to destroy a working one.
 //
 // The old install swallowed every failure — cache.add(u).catch(() => {}) — then
@@ -143,7 +176,10 @@ self.addEventListener("fetch", (event) => {
         const hit = await cache.match(request)
         if (hit) return hit
         try {
-          const res = await fetch(request)
+          // Longer than NET_TIMEOUT_MS: nothing is cached for this URL, so
+          // there is nothing better to fall back to and giving up early only
+          // turns a slow asset into a missing one.
+          const res = await fetchWithin(request, 10_000)
           if (res && res.status === 200) cache.put(request, res.clone()).catch(() => {})
           return res
         } catch {
@@ -154,9 +190,15 @@ self.addEventListener("fetch", (event) => {
     return
   }
 
-  // Other /_next/* (RSC/data) → network, fall back to cache.
+  // Other /_next/* (RSC/data) → network, fall back to cache — but BOUNDED.
+  // Unbounded, a hung connection made this a promise that never settled, and
+  // the app's boot waited on it behind a blank page.
   if (url.pathname.startsWith("/_next/")) {
-    event.respondWith(fetch(request).catch(() => caches.match(request)))
+    event.respondWith(
+      fetchWithin(request, NET_TIMEOUT_MS)
+        .catch(() => caches.match(request))
+        .then((r) => r || new Response("", { status: 504, statusText: "offline" })),
+    )
     return
   }
 
@@ -189,7 +231,9 @@ self.addEventListener("fetch", (event) => {
         // Refresh in the background; the reader is not made to wait for it.
         event.waitUntil((async () => {
           try {
-            const fresh = await fetch(request)
+            // Bounded too. Nobody is waiting on this, but an unsettled
+            // promise inside waitUntil keeps the worker alive indefinitely.
+            const fresh = await fetchWithin(request, 10_000)
             if (fresh && fresh.ok) {
               await cache.put(url.origin + url.pathname, fresh.clone())
               await cache.put(request, fresh)
@@ -198,8 +242,17 @@ self.addEventListener("fetch", (event) => {
         })())
         return cached
       }
-      // Nothing cached for this URL — the network is the only option.
-      return fetch(request)
+      // Nothing cached for THIS url — but for a story route there is always a
+      // shell that can render it, so the network is not the only option and
+      // must not be waited on as though it were.
+      //
+      // This is the path every chapter takes. /story/<id>/chapter/<n> is
+      // dynamic, so it is never in the cache by its own URL; the branch above
+      // could not help it, and this branch called an unbounded fetch(). On a
+      // hung connection the .catch() below — the one that serves the saved
+      // reader shell — simply never ran.
+      const budget = url.pathname.startsWith("/story/") ? NET_TIMEOUT_MS : 10_000
+      return fetchWithin(request, budget)
         .then((res) => {
           const copy = res.clone()
           caches.open(CACHE).then((c) => {
