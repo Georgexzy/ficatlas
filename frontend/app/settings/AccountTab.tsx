@@ -297,71 +297,87 @@ export default function AccountTab() {
       {/* Owner-only: list accounts and change roles. */}
       {user?.can_manage && !user?.previewing && <ManageAccounts selfId={user.id} />}
 
-      {/* Contact address — the only route back into a locked-out account */}
-      <section className="settings-group">
-        <h2 className="settings-group__title">Email address</h2>
-        <p className="account-help">
-          {user?.email
-            ? <>Password resets will be sent to <strong>{user.email}</strong>.</>
-            : <>Optional. Without one, resetting a forgotten password means asking
-               whoever runs this site to issue you a code by hand.</>}
-        </p>
-        <form className="account-form" onSubmit={saveEmail}>
-          <input type="email" placeholder="you@example.com" value={email}
-            onChange={e => setEmail(e.target.value)} autoComplete="email" />
-          {/* A Google-only account has no password to type, and asking for one
-              made this form unsatisfiable rather than merely awkward. It asks
-              for the username instead — the one thing only the account holder
-              knows they are — which is the same confirmation the delete button
-              below uses. */}
-          {hasPassword
-            ? <input type="password" placeholder="Your current password" value={emailPw}
-                onChange={e => setEmailPw(e.target.value)} autoComplete="current-password" />
-            : <input type="text" placeholder={`Type "${user.username}" to confirm`}
-                value={emailPw} onChange={e => setEmailPw(e.target.value)}
-                autoComplete="off" />}
-          <button type="submit" className="card-btn" disabled={emailBusy}>
-            {emailBusy ? "Saving…" : user?.email ? "Update" : "Add address"}
-          </button>
-        </form>
-        {emailMsg && <p className="account-help account-help--muted">{emailMsg}</p>}
-      </section>
+      {/* HOW YOU SIGN IN — one place, because it is one subject.
 
-      {/* Active sessions */}
-      <section className="settings-group">
-        <h2 className="settings-group__title">Devices &amp; sessions</h2>
-        {sessions.length === 0 ? (
-          <p className="account-help">No other active sessions.</p>
-        ) : (
-          <ul className="session-list">
-            {sessions.map((s, i) => (
-              <li key={i} className="session-item">
-                <div>
-                  <span className="session-device">
-                    {prettyAgent(s.user_agent)}
-                    {s.current && <span className="session-current">this device</span>}
-                  </span>
-                  <span className="session-time">Last active {timeAgo(s.last_used)}</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-        {sessions.length > 1 && (
-          <button className="btn btn--ghost" onClick={onLogoutAll} disabled={busy}>
-            Sign out all other devices
-          </button>
-        )}
-      </section>
+          These four were spread down the page in the order they were built: the
+          email address, then Devices & sessions, then Google, then the password
+          controls. So "how do I get into this account" was answered in four
+          places, with an unrelated section wedged through the middle of it, and
+          anyone changing their sign-in had to scroll past a list of devices to
+          find the other half of it.
 
+          Ordered by how a person reaches for them: the password, then the Google
+          link, then the address — which is not a way IN at all but the way BACK
+          in, and reads correctly as the fallback it is.
+
+          Devices & sessions moves below. It answers "who is signed in right
+          now", a different question from "how do I sign in", and it was the
+          thing splitting this group in two. */}
+      <div className="account-signin">
+        <h2 className="settings-group__title">How you sign in</h2>
+      {/* SET a password, for an account that has never had one. Only shown when
+          there is none: an account created by Google sign-in cannot use Change
+          password below, because that verifies a current password it does not
+          have. Without this the reader was locked into Google for ever. */}
+      {user && !user.has_password && (
+        <div className="account-signin__part">
+          <h3 className="account-signin__sub">Add a password</h3>
+          <p className="account-help">
+            This account signs in with Google and has no password. Adding one
+            gives you a second way in, so losing access to Google does not lose
+            you the account.
+          </p>
+          <div className="account-form">
+            <input type="password" className="setting-input"
+              placeholder="New password (6+ chars)" value={newPw}
+              onChange={e => setNewPw(e.target.value)} autoComplete="new-password" />
+            <button className="btn btn--primary" disabled={busy || newPw.length < 6}
+              onClick={async () => {
+                setBusy(true); setPwErr(""); setPwMsg("")
+                try {
+                  const body = new URLSearchParams({ new_password: newPw })
+                  const r = await fetch("/api/auth/set-password",
+                    { method: "POST", credentials: "include", body })
+                  const d = await r.json().catch(() => ({}))
+                  if (!r.ok) throw new Error(d.detail || "Could not set password")
+                  setPwMsg(d.message || "Password set.")
+                  setNewPw("")
+                } catch (e: any) {
+                  setPwErr(e.message || "Could not set password")
+                } finally { setBusy(false) }
+              }}>
+              {busy ? "Working…" : "Set password"}
+            </button>
+          </div>
+          {pwMsg && <p className="account-success">{pwMsg}</p>}
+          {pwErr && <p className="account-error">{pwErr}</p>}
+        </div>
+      )}
+      {/* Change password — only where there is one to change. */}
+      {user?.has_password && (
+      <div className="account-signin__part">
+        <h3 className="account-signin__sub">Change password</h3>
+        <div className="account-form">
+          <input type="password" className="setting-input" placeholder="Current password"
+            value={curPw} onChange={e => setCurPw(e.target.value)} autoComplete="current-password" />
+          <input type="password" className="setting-input" placeholder="New password (6+ chars)"
+            value={newPw} onChange={e => setNewPw(e.target.value)} autoComplete="new-password" />
+          <button className="btn btn--primary" onClick={onChangePw} disabled={busy || !curPw || !newPw}>
+            {busy ? "Working…" : "Change password"}
+          </button>
+        </div>
+        {pwMsg && <p className="account-success">{pwMsg}</p>}
+        {pwErr && <p className="account-error">{pwErr}</p>}
+      </div>
+      )}
       {/* GOOGLE, for linking an existing account rather than only signing in.
           Linking from settings is the safer direction: the reader is already
           authenticated here, so there is no question about which account the
           Google identity should join. At the login page it has to be inferred
           from a verified email address, which is why that path insists on
           Google reporting the address verified. */}
-      <section className="settings-group">
-        <h2 className="settings-group__title">Google sign-in</h2>
+      <div className="account-signin__part">
+        <h3 className="account-signin__sub">Google sign-in</h3>
         {user?.google_linked ? (
           <>
             <p className="account-help">
@@ -394,64 +410,64 @@ export default function AccountTab() {
                href="/api/auth/google/start?link=1">Link Google account</a>
           </>
         )}
-      </section>
-
-      {/* SET a password, for an account that has never had one. Only shown when
-          there is none: an account created by Google sign-in cannot use Change
-          password below, because that verifies a current password it does not
-          have. Without this the reader was locked into Google for ever. */}
-      {user && !user.has_password && (
-        <section className="settings-group">
-          <h2 className="settings-group__title">Add a password</h2>
-          <p className="account-help">
-            This account signs in with Google and has no password. Adding one
-            gives you a second way in, so losing access to Google does not lose
-            you the account.
-          </p>
-          <div className="account-form">
-            <input type="password" className="setting-input"
-              placeholder="New password (6+ chars)" value={newPw}
-              onChange={e => setNewPw(e.target.value)} autoComplete="new-password" />
-            <button className="btn btn--primary" disabled={busy || newPw.length < 6}
-              onClick={async () => {
-                setBusy(true); setPwErr(""); setPwMsg("")
-                try {
-                  const body = new URLSearchParams({ new_password: newPw })
-                  const r = await fetch("/api/auth/set-password",
-                    { method: "POST", credentials: "include", body })
-                  const d = await r.json().catch(() => ({}))
-                  if (!r.ok) throw new Error(d.detail || "Could not set password")
-                  setPwMsg(d.message || "Password set.")
-                  setNewPw("")
-                } catch (e: any) {
-                  setPwErr(e.message || "Could not set password")
-                } finally { setBusy(false) }
-              }}>
-              {busy ? "Working…" : "Set password"}
-            </button>
-          </div>
-          {pwMsg && <p className="account-success">{pwMsg}</p>}
-          {pwErr && <p className="account-error">{pwErr}</p>}
-        </section>
-      )}
-
-      {/* Change password — only where there is one to change. */}
-      {user?.has_password && (
-      <section className="settings-group">
-        <h2 className="settings-group__title">Change password</h2>
-        <div className="account-form">
-          <input type="password" className="setting-input" placeholder="Current password"
-            value={curPw} onChange={e => setCurPw(e.target.value)} autoComplete="current-password" />
-          <input type="password" className="setting-input" placeholder="New password (6+ chars)"
-            value={newPw} onChange={e => setNewPw(e.target.value)} autoComplete="new-password" />
-          <button className="btn btn--primary" onClick={onChangePw} disabled={busy || !curPw || !newPw}>
-            {busy ? "Working…" : "Change password"}
+      </div>
+      {/* Contact address — the only route back into a locked-out account */}
+      <div className="account-signin__part">
+        <h3 className="account-signin__sub">Email address</h3>
+        <p className="account-help">
+          {user?.email
+            ? <>Password resets will be sent to <strong>{user.email}</strong>.</>
+            : <>Optional. Without one, a forgotten password can only be reset by
+               contacting the site directly for a code.</>}
+        </p>
+        <form className="account-form" onSubmit={saveEmail}>
+          <input type="email" placeholder="you@example.com" value={email}
+            onChange={e => setEmail(e.target.value)} autoComplete="email" />
+          {/* A Google-only account has no password to type, and asking for one
+              made this form unsatisfiable rather than merely awkward. It asks
+              for the username instead — the one thing only the account holder
+              knows they are — which is the same confirmation the delete button
+              below uses. */}
+          {hasPassword
+            ? <input type="password" placeholder="Your current password" value={emailPw}
+                onChange={e => setEmailPw(e.target.value)} autoComplete="current-password" />
+            : <input type="text" placeholder={`Type "${user.username}" to confirm`}
+                value={emailPw} onChange={e => setEmailPw(e.target.value)}
+                autoComplete="off" />}
+          <button type="submit" className="card-btn" disabled={emailBusy}>
+            {emailBusy ? "Saving…" : user?.email ? "Update" : "Add address"}
           </button>
-        </div>
-        {pwMsg && <p className="account-success">{pwMsg}</p>}
-        {pwErr && <p className="account-error">{pwErr}</p>}
+        </form>
+        {emailMsg && <p className="account-help account-help--muted">{emailMsg}</p>}
+      </div>
+      </div>
+
+      {/* Active sessions */}
+      <section className="settings-group">
+        <h2 className="settings-group__title">Devices &amp; sessions</h2>
+        {sessions.length === 0 ? (
+          <p className="account-help">No other active sessions.</p>
+        ) : (
+          <ul className="session-list">
+            {sessions.map((s, i) => (
+              <li key={i} className="session-item">
+                <div>
+                  <span className="session-device">
+                    {prettyAgent(s.user_agent)}
+                    {s.current && <span className="session-current">this device</span>}
+                  </span>
+                  <span className="session-time">Last active {timeAgo(s.last_used)}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {sessions.length > 1 && (
+          <button className="btn btn--ghost" onClick={onLogoutAll} disabled={busy}>
+            Sign out all other devices
+          </button>
+        )}
       </section>
-      )}
 
       {/* Sign out + danger zone */}
       <section className="settings-group">

@@ -70,9 +70,9 @@ export default function TakedownClient() {
         <p>{sent.message}</p>
         {!sent.hidden && !sent.delisted && (
           <p className="page-prose__muted">
-            That address did not match a story whose text is held here — it may
-            already be listing-only, in which case there is no text to remove. We
-            will still read your message.
+            That address did not match a story whose text is held here. It may
+            already be listed without stored text, in which case there is
+            nothing to withdraw. The message will still be read.
           </p>
         )}
         {/* Does not promise an email, because none is sent.
@@ -106,7 +106,7 @@ export default function TakedownClient() {
       <h1>Request a takedown</h1>
       <p>
         If you wrote a story whose text can be read on FicAtlas and you would
-        rather it were not here, fill this in. The text comes down{" "}
+        rather it were not, complete this form. The text is withdrawn{" "}
         <strong>immediately</strong> — you do not have to wait for a reply, and
         you do not have to prove anything first.
       </p>
@@ -142,10 +142,9 @@ export default function TakedownClient() {
           before asking them to fill anything in. */}
       <div className="author-check">
         <p className="author-check__lead">
-          <strong>Not sure whether anything of yours is here?</strong> Enter the
-          name you publish under. This lists only stories whose full text can be
-          read on FicAtlas, not the works that are indexed as a listing and a
-          link.
+          <strong>To check whether anything of yours is held here,</strong> enter
+          the name you publish under. This lists only stories whose full text
+          can be read on FicAtlas, not those indexed as a listing and a link.
         </p>
         <div className="author-check__row">
           <input value={penName} onChange={e => setPenName(e.target.value)}
@@ -158,8 +157,8 @@ export default function TakedownClient() {
         {checked && (
           hosted.length === 0 ? (
             <p className="author-check__result">
-              Nothing under that name is readable here. If you write under a
-              different name, try that too.
+              No text is held under that name. If you also publish under another
+              name, that can be checked separately.
             </p>
           ) : (
             <div className="author-check__result">
@@ -173,8 +172,8 @@ export default function TakedownClient() {
                 ))}
               </ul>
               <p className="page-prose__muted">
-                Fill the form below to have them removed. You can paste any one of
-                the links, or just say &ldquo;all of them&rdquo; in the message.
+                Complete the form below to have them withdrawn. Any one of the links
+                will do, or write &ldquo;all of them&rdquo; in the message.
               </p>
             </div>
           )
@@ -219,8 +218,9 @@ export default function TakedownClient() {
             checked={delist} onChange={e => setDelist(e.target.checked)} />
           <span>
             <strong>Remove the listing too.</strong> By default the title,
-            author and a link to where you publish stay, so readers can still
-            find your work at its own home. Tick this and the entry disappears
+            author and a link to where you publish remain, so that readers can
+            still find your work on the archive that hosts it. Tick this and the
+            entry disappears
             from search entirely.
           </span>
         </label>
@@ -228,7 +228,7 @@ export default function TakedownClient() {
         <label>
           <span>Anything you want to add <em>(optional)</em></span>
           <textarea name="detail" rows={4}
-            placeholder="Anything you would like us to know." />
+            placeholder="Anything you would like recorded with the request." />
         </label>
 
         {error && <p className="takedown-form__error">{error}</p>}
@@ -243,7 +243,7 @@ export default function TakedownClient() {
           first — but "all of it, permanently, including anything I write later"
           is a thing people mean and this form cannot express. */}
       <p className="takedown-alt">
-        Want this to cover everything you write, not just one story? You can{" "}
+        To cover everything you write rather than a single story, you can{" "}
         <Link href="/permissions">see everything held under your name</Link>{" "}
         and set a standing choice. That needs no proof either, unless you are
         giving permission rather than withdrawing it.

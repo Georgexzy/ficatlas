@@ -150,7 +150,51 @@ RULES = [
                       'http.user_agent contains "Crawlee" or '
                       'http.user_agent contains "Firecrawl" or '
                       'http.user_agent contains "Jina-AI" or '
-                      'http.user_agent contains "Diffbot")',
+                      'http.user_agent contains "Diffbot" or '
+                      # THE FORGED BARE-ORIGIN REFERER, folded in here rather
+                      # than given a rule of its own: this phase is capped at
+                      # five on the current plan, and a sixth is refused
+                      # outright ("6 out of 5"). It belongs with these anyway —
+                      # same job, same `not cf.client.bot` guard.
+                      #
+                      # 2026-09-27, 04:00-11:00, over 24h of origin logs:
+                      #
+                      #   requests carrying Referer: https://ficatlas.com  47,792
+                      #     distinct client addresses                      47,755
+                      #     requests per address                             1.0008
+                      #     of those addresses, IPv6                        37,999
+                      #     assets, beacons or JS fetched by any of them          0
+                      #     overlap with addresses sending the REAL referer       0
+                      #
+                      # 29,241 to `/`, 7,735 to `/takedown`, 4,879 to
+                      # `/permissions`. The IPv6 sits in provider /32s —
+                      # 2a10:7b00::, 2a10:7b01::, 2a12:f544::, 2a12:f545::,
+                      # 2a13:f41::, 2a13:f42:: — ~1,100 addresses apiece, which
+                      # is a proxy pool and not an audience.
+                      #
+                      # WHY THE REFERER AND NOT THE AGENT OR THE ADDRESSES. It
+                      # rotated 65 user-agent strings in near-perfect round
+                      # robin (nine of them between 5,888 and 6,101 requests
+                      # each), so the agent is worthless; and 47,755 addresses
+                      # across six allocations is the exact shape an IP rule
+                      # cannot answer, as this file already says of Lightpanda.
+                      # What it got wrong is the one header it chose to forge.
+                      #
+                      # A browser's Referer is a URL, and for a document at the
+                      # root of this origin that URL is `https://ficatlas.com/`
+                      # — WITH the trailing slash. The bare origin form is what
+                      # you get from writing the header by hand. Both appear in
+                      # the logs and they do not mix: 2,658 requests from 91
+                      # addresses sent the real one, and those addresses also
+                      # fetch /sw.js, /api/auth/me and the pageview beacon,
+                      # because they are browsers. The 47,755 sending the bare
+                      # form fetched not one asset between them.
+                      #
+                      # A forged header is free, so this stops working the day
+                      # they add a slash. Worth having regardless: zero false
+                      # positives against a full day of real traffic, and
+                      # --remove reverses it.
+                      'http.referer eq "https://ficatlas.com")',
     },
     {
         "description": "Block meta-webindexer (ignores robots.txt; 26% of origin traffic)",

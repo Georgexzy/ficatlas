@@ -119,7 +119,7 @@ export default function PermissionsClient() {
       const r = await fetch("/api/permissions/restrict", { method: "POST", body: fd })
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || "Could not save that.")
-      setMsg("Saved. This applies to everything you post from now on too.")
+      setMsg("Saved. This also applies to anything you publish from now on.")
       lookup(data.site, data.author)
     } catch (e: any) { setError(e.message) }
     finally { setBusy(false) }
@@ -247,14 +247,14 @@ export default function PermissionsClient() {
               {data.verified
                 ? <>Verified — your standing choice is:{" "}
                     <strong>{POLICY_LABEL[data.policy] ?? data.policy}</strong>.</>
-                : <>This account is not verified, so FicAtlas will not store your
-                    text. You can still change that below, or take anything down
-                    without proving a thing.</>}
+                : <>This account is not verified, so FicAtlas does not store your
+text. That can be changed below, and individual works can be
+taken down without any verification at all.</>}
             </p>
           </div>
 
           <fieldset className="perm-choices">
-            <legend>What would you like FicAtlas to do with your work?</legend>
+            <legend>What FicAtlas may do with your work</legend>
             {POLICIES.map(pol => (
               <label key={pol.id} className={`perm-choice ${policy === pol.id ? "is-on" : ""}`}>
                 <input type="radio" name="policy" value={pol.id}
@@ -294,8 +294,8 @@ export default function PermissionsClient() {
               <p>
                 Removes the choice recorded under <strong>{data.author}</strong>,
                 returning your work to the default: listed with a link out, never
-                stored here. You do not have to prove anything, and you can set a
-                new choice at any time.
+                stored here. No verification is required, and a new choice can
+                be set at any time.
               </p>
               <p className="perm-revoke__note">
                 This governs what happens from now on. To remove text FicAtlas
@@ -309,8 +309,8 @@ export default function PermissionsClient() {
           )}
           {policy === "host" && !data.verified && (
             <p className="perm-shortcut">
-              This is the one option that needs proof — you will be asked to put a
-              short code in your own archive profile. No password, no account
+              This is the one option that requires verification: you will be
+              asked to place a short code in your own archive profile. No password, no account
               access.
             </p>
           )}
@@ -346,8 +346,8 @@ export default function PermissionsClient() {
             )}
 
           <p className="perm-why">
-            Nothing here is ever deleted, so anything you take down can be put
-            back. For anything this page cannot do, the{" "}
+            Nothing is deleted, so anything taken down can be restored. For
+            anything this page cannot do, the{" "}
             <Link href="/takedown">removal form</Link> reaches a person.
           </p>
         </>
@@ -402,7 +402,7 @@ export default function PermissionsClient() {
 
           <div className="btn-row">
             <button className="btn btn--primary" onClick={check} disabled={busy}>
-              {busy ? "Checking your profile…" : "I've added it — check now"}
+              {busy ? "Checking your profile…" : "I have added the code — check it"}
             </button>
             <button className="btn btn--ghost" onClick={() => setStep("review")} disabled={busy}>
               Back
