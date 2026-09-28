@@ -22,6 +22,7 @@ import { readAllPrefs, type Prefs } from "@/lib/prefs"
 import WordCountSlider from "./WordCountSlider"
 import DlpStars, { dlpRating } from "./DlpStars"
 import SiteHeader from "./SiteHeader"
+import WhatYouCanDo from "./WhatYouCanDo"
 import CompassMark from "./CompassMark"
 import { useAuth } from "@/lib/auth"
 
@@ -3545,6 +3546,12 @@ function SearchPageInner() {
                   shown.results.map(s => <StoryCard key={s.id} story={s} />)
                 )}
               </div>
+
+              {/* UNDER the results, and only once a search has returned
+                  something. That is the one moment the reader has evidence this
+                  is worth an account — and the moment they are about to leave
+                  for the archive. Not the landing page, which has one job. */}
+              <WhatYouCanDo shown={(shown.results?.length ?? 0) > 0} />
 
               {totalPages > 1 && (
                 <div className="pagination">

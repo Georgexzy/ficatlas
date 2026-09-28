@@ -555,10 +555,29 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
             )
           )}
 
-          {/* Only rendered once we know the answer. `null` means signed out or
-              the check failed, and a Follow button that cannot follow is worse
-              than none. */}
-          {following !== null && (
+          {/* FOLLOW IS SHOWN TO EVERYONE, and that is a change.
+              It used to render only when `following !== null`, which is null
+              for a signed-out reader — so the one feature built to bring people
+              back was invisible to every first-time visitor. Measured over two
+              weeks: 162 first-time readers, 25 back within a week, and 3
+              accounts. Nobody can want a feature they have never seen.
+
+              The old reasoning — "a Follow button that cannot follow is worse
+              than none" — is right about a button that silently fails and wrong
+              about this one. The offline control three blocks up already solves
+              it the honest way: say what it needs, and link to it. Same shape
+              here, and `?next=` brings them back to this story rather than the
+              home page, so following is one tap after signing in.
+
+              Still hidden when the check FAILED while signed in (`null` with a
+              user), which is the case the old comment was really about. */}
+          {!user && (
+            <a className="btn btn--ghost" href={`/login?next=/story/${story.id}`}
+              title="Follow this work and new chapters show up in your list — across AO3, FanFiction.net and FictionAlley">
+              ☆ Follow for updates
+            </a>
+          )}
+          {user && following !== null && (
             <button className={`btn ${following ? "btn--on" : "btn--ghost"}`}
               onClick={toggleFollow}
               title={following

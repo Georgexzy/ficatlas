@@ -1447,6 +1447,57 @@ kbd {
   margin: -14px 0 22px;
 }
 
+/* ── "What you can do here" ────────────────────────────────────────────────
+   Under the results, once, for a signed-out reader who has just seen a search
+   work. Styled as a quiet aside rather than a banner: it sits between the last
+   result and the pager, where somebody scrolling to page 2 passes it, and it
+   must not read as an advert interrupting the list. */
+.tips {
+  display: flex; align-items: flex-start; gap: 12px;
+  margin: 22px 0 4px; padding: 14px 16px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: 8px;
+}
+.tips__body { flex: 1; min-width: 0; }
+.tips__lead { margin: 0 0 8px; font-size: 13.5px; color: var(--text); }
+.tips__list {
+  margin: 0; padding-left: 18px;
+  display: grid; gap: 7px; font-size: 13px; color: var(--text-dim);
+  line-height: 1.5;
+}
+.tips__list strong { color: var(--text); font-weight: 600; }
+.tips__foot {
+  margin: 12px 0 0; display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap;
+}
+.tips__cta {
+  background: var(--accent); color: var(--bg); text-decoration: none;
+  padding: 6px 14px; border-radius: var(--radius); font-size: 13px;
+  font-weight: 600; white-space: nowrap;
+}
+.tips__cta:hover { filter: brightness(1.08); }
+.tips__note { font-size: 12px; color: var(--text-faint); }
+.tips__x {
+  background: none; border: 0; cursor: pointer; flex-shrink: 0;
+  padding: 2px 6px; font-size: 13px; line-height: 1;
+  color: var(--text-faint); border-radius: var(--radius);
+}
+.tips__x:hover { background: var(--surface3); color: var(--text); }
+.tips__x:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ── Google sign-in mark ───────────────────────────────────────────────────
+   Never recoloured, never given currentColor, and deliberately excluded from
+   the theme tokens: a monochrome Google G is a modified Google G, which their
+   guidelines do not permit, and the four colours are what a reader checks when
+   deciding whether a sign-in button is genuine. See app/GoogleIcon.tsx. */
+.google-icon { flex-shrink: 0; font-size: 1.05em; }
+
+/* The Link Google button on the account page, which had no mark at all while
+   the login page carried its own private copy of one. */
+.auth-google-inline {
+  display: inline-flex; align-items: center; gap: 0.55em;
+}
+
 /* ── Account: the sign-in group ────────────────────────────────────────────
    Password, Google and the contact address were three separate .settings-group
    sections spread down the page in build order, with Devices & sessions wedged

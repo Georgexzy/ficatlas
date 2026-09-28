@@ -1,6 +1,7 @@
 "use client"
 export const dynamic = "force-dynamic"
 import { useEffect, useState, Suspense } from "react"
+import GoogleIcon from "../GoogleIcon"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { useAuth } from "@/lib/auth"
@@ -192,13 +193,17 @@ function LoginPageInner() {
             <div className="auth-or"><span>or</span></div>
             <a className="auth-google"
                href={`/api/auth/google/start?next=${encodeURIComponent(nextUrl)}`}>
-              <svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true">
-                <path fill="#4285F4" d="M17.6 9.2c0-.6-.1-1.3-.2-1.9H9v3.5h4.8a4.1 4.1 0 0 1-1.8 2.7v2.2h2.9c1.7-1.6 2.7-3.9 2.7-6.5z"/>
-                <path fill="#34A853" d="M9 18c2.4 0 4.5-.8 6-2.2l-2.9-2.3c-.8.6-1.9.9-3.1.9-2.4 0-4.4-1.6-5.1-3.8H.9v2.3A9 9 0 0 0 9 18z"/>
-                <path fill="#FBBC05" d="M3.9 10.6a5.4 5.4 0 0 1 0-3.4V4.9H.9a9 9 0 0 0 0 8.1l3-2.4z"/>
-                <path fill="#EA4335" d="M9 3.6c1.3 0 2.5.5 3.4 1.3l2.6-2.6A9 9 0 0 0 .9 4.9l3 2.3C4.6 5.2 6.6 3.6 9 3.6z"/>
-              </svg>
-              Continue with Google
+              {/* The shared mark, not a private copy. This page had its own
+                  inline four-path SVG while the Link Google button on the
+                  account page had none at all — which is how two buttons for
+                  one identity provider end up looking like different features.
+                  See app/GoogleIcon.tsx for why it is never recoloured. */}
+              <GoogleIcon />
+              {/* Says what it will DO. "Continue with Google" is the generic
+                  label and it is vague at exactly the moment somebody is
+                  deciding whether to hand over an identity — on the Create
+                  account tab it is making them an account. */}
+              {mode === "signup" ? "Sign up with Google" : "Sign in with Google"}
             </a>
             <small className="auth-note auth-note--sso">
               If an account here already uses that Google address, this signs

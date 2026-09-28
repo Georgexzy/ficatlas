@@ -54,7 +54,7 @@ const AuthContext = createContext<AuthContextType | null>(null)
 
 // Keys mirrored between localStorage and the server.
 const SYNC_KEYS = ["bookmarks", "progress", "recents", "settings", "offline",
-                   "saved", "dismissed", "mutes"] as const
+                   "saved", "dismissed", "mutes", "tips"] as const
 type SyncKey = typeof SYNC_KEYS[number]
 
 const LS = (k: string) => `ficatlas:${k}`
@@ -116,6 +116,8 @@ const STORAGE_KEY: Record<SyncKey, string> = {
   // The never-show-me list. An OBJECT of arrays rather than a flat one, so the
   // server merges it field by field — see _merge_value in api/userdata.py.
   mutes:     "mutes",
+  // The "what you can do here" note, dismissed once and for all devices.
+  tips:      "tips-dismissed",
 }
 
 // Preferences are stored one key per setting, which is convenient for the
