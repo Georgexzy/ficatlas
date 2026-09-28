@@ -684,6 +684,13 @@ def change_password(
         raise HTTPException(401, "Current password is incorrect")
     if len(new_password) < 6:
         raise HTTPException(400, "New password must be at least 6 characters")
+    # Same rule as the reset path, so the two cannot disagree about what
+    # changing a password means. Here the cost is smaller — it signs out other
+    # devices rather than all of them — but "Password changed. Other devices
+    # were signed out." over an unchanged password is a plain lie, and somebody
+    # who just typed the same thing twice has made a mistake worth naming.
+    if check_password(new_password, user.password_hash):
+        raise HTTPException(400, "That is already your password. Choose a different one.")
     user.password_hash = hash_password(new_password)
     # Drop every session except the one making this request
     q = db.query(UserSession).filter(UserSession.user_id == user.id)
