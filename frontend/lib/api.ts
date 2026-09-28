@@ -1,4 +1,5 @@
 import type { SearchParams, SearchResponse } from "./types"
+import { fetchWithTimeout } from "./net"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -373,7 +374,8 @@ export function getIndexTotals(): Promise<IndexTotals | null> {
   if (c.value && Date.now() - c.at < TOTALS_TTL_MS) return Promise.resolve(c.value)
   if (c.inflight) return c.inflight        // someone else is already asking
 
-  c.inflight = fetch("/api/stats/totals")
+  // Timed out for the reason in lib/net.ts: it runs on every page load.
+  c.inflight = fetchWithTimeout("/api/stats/totals")
     .then(r => (r.ok ? r.json() : null))
     .then((d: IndexTotals | null) => {
       if (d) { c.value = d; c.at = Date.now() }
@@ -410,7 +412,7 @@ export function getTopHubs(limit = 12): Promise<TopHub[]> {
   if (c.value && Date.now() - c.at < HUBS_TTL_MS) return Promise.resolve(c.value)
   if (c.inflight) return c.inflight
 
-  c.inflight = fetch(`/api/hubs?limit=${limit}`)
+  c.inflight = fetchWithTimeout(`/api/hubs?limit=${limit}`)
     .then(r => (r.ok ? r.json() : []))
     .then((d: TopHub[]) => {
       // An empty list is a real answer (a fresh install has no hubs yet) but it

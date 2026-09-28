@@ -4,6 +4,7 @@ import { useParams } from "next/navigation"
 import Link from "next/link"
 import BackLink from "../../BackLink"
 import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory, getOfflineStory } from "@/lib/offline"
+import { localFirst } from "@/lib/localFirst"
 import { useAuth } from "@/lib/auth"
 import { describeError, type Failure } from "@/lib/errors"
 import OfflineLink from "@/app/OfflineLink"
@@ -115,20 +116,23 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
   // `Failed to fetch` or, worse, an empty string from `r.statusText` on an HTTP/2
   // response — where statusText is always empty — so a 500 rendered a blank
   // error box.
+  // LOCAL FIRST — same inversion as the reader, and for the same measurement.
+  //
+  // This page is the only route to a story's chapters, so while it waits on a
+  // network that is not answering, "saved for offline reading" is not true of
+  // anything. It gated the saved copy on `!navigator.onLine`, which is `true`
+  // on a dead-but-associated connection — wifi with no route, a captive portal,
+  // one bar of cell that cannot carry data — so the gate never opened in the
+  // case it existed for, and the saved copy arrived only after a 20-second
+  // abort timer gave up. See lib/localFirst.ts for the measurement.
   useEffect(() => {
     if (!id) return
-    // Abort on unmount or when the id changes, so a stale response for a
-    // previous story can never overwrite the current one mid-navigation.
-    const ctl = new AbortController()
-    const timer = setTimeout(() => ctl.abort(), 20_000)
     let done = false
 
-    const fromOffline = async () => {
+    const readSaved = async (): Promise<StoryDetail | null> => {
       const saved = await getOfflineStory(id)
-      if (!saved || done) return false
-      // Marked so the page can say the reader is looking at a saved copy rather
-      // than silently presenting a stale one as current.
-      setStory({
+      if (!saved || done) return null
+      return {
         ...(saved as any),
         chapter_count: saved.chapters.length,
         chapters: saved.chapters.map(c => ({
@@ -139,51 +143,35 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
         status: "unknown", language: "English", is_hosted: true,
         kudos: 0, hits: 0, bookmarks: 0, comments: 0,
         word_count: saved.word_count ?? 0,
-      } as StoryDetail)
-      setFromCache(true)
-      return true
+      } as StoryDetail
     }
 
-    ;(async () => {
-      // Offline, read the saved copy FIRST rather than racing a fetch that
-      // cannot succeed.
-      //
-      // The reader already did this; this page did not, and the difference is
-      // exactly the bug: tapping a story you have downloaded, with no
-      // connection, meant waiting on a doomed request and then — if it failed in
-      // a way the classifier did not read as "offline" — being told "Not saved
-      // on this device" about a story sitting in IndexedDB.
-      //
-      // navigator.onLine is trusted only in the false direction, as everywhere
-      // else here, and a miss falls through to the network attempt below rather
-      // than giving up on the strength of a flag.
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
-        if (await fromOffline()) { clearTimeout(timer); return }
-      }
-      try {
-        const r = await fetch(`${API_BASE}/api/stories/${id}`, { signal: ctl.signal })
+    localFirst<StoryDetail>({
+      local: readSaved,
+      remote: async (signal) => {
+        const r = await fetch(`${API_BASE}/api/stories/${id}`, { signal })
         if (!r.ok) throw describeError(null, r.status)
-        const data = await r.json()
-        if (done) return
-        setStory(data)
-        setFromCache(false)
-      } catch (e: any) {
-        if (done) return
-        if (await fromOffline()) return
-        if (done) return
-        setError(e?.kind ? e : describeError(e))
-      } finally {
-        clearTimeout(timer)
-      }
-    })()
+        return r.json()
+      },
+      // Marked, so the page says the reader is looking at a saved copy rather
+      // than silently presenting a stale one as current.
+      onLocal: (s) => { setStory(s); setFromCache(true) },
+      onRemote: (s) => { setStory(s); setFromCache(false) },
+      onFailure: (e: any) => setError(e?.kind ? e : describeError(e)),
+      isCancelled: () => done,
+    })
 
-    // Fetch similar stories in parallel (non-blocking; failures are silent)
-    fetch(`${API_BASE}/api/stories/${id}/similar?count=6`, { signal: ctl.signal })
+    // Similar stories are an extra, never a reason to wait: their own request,
+    // their own timeout, their own silence on failure.
+    const extra = new AbortController()
+    const extraTimer = setTimeout(() => extra.abort(), 20_000)
+    fetch(`${API_BASE}/api/stories/${id}/similar?count=6`, { signal: extra.signal })
       .then(r => r.ok ? r.json() : [])
-      .then(d => setSimilar(Array.isArray(d) ? d : []))
+      .then(d => { if (!done) setSimilar(Array.isArray(d) ? d : []) })
       .catch(() => {})
+      .finally(() => clearTimeout(extraTimer))
 
-    return () => { done = true; clearTimeout(timer); ctl.abort() }
+    return () => { done = true; clearTimeout(extraTimer); extra.abort() }
   }, [id, reloadKey])
 
   // Coming back online should get the real record rather than leave the reader

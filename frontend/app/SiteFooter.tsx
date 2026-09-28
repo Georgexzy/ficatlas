@@ -14,17 +14,26 @@ export default function SiteFooter() {
           pages were, and the whole exercise achieves nothing.
           It earns its place for readers too: the search box needs you to know
           what you are looking for, and this is the answer to "what's in here?" */}
-      <Link href="/fandoms">Browse fandoms</Link>
+      {/* prefetch={false} on every link here, and it is not a micro-optimisation.
+          Next prefetches a Link's RSC payload when it enters the viewport, and
+          the footer is in the viewport on any short page — five requests per
+          page, none of them abortable, against the ~6 connections a browser
+          allows per host. On a connection that is dead but associated those
+          five never settle, and they take the slots the READER needs: measured,
+          a saved chapter opened on the first page load and on no page load
+          after it. Nobody navigates to the privacy policy often enough to pay
+          for that. */}
+      <Link prefetch={false} href="/fandoms">Browse fandoms</Link>
       <span className="site-footer__sep">·</span>
       {/* Same job as the link above, for the other axis. /ships is reachable
           from /fandoms and vice versa, but a crawler that only ever sees a story
           page needs a root here too — and neither hub index should depend on the
           other being crawled first. */}
-      <Link href="/ships">Browse pairings</Link>
+      <Link prefetch={false} href="/ships">Browse pairings</Link>
       <span className="site-footer__sep">·</span>
-      <Link href="/about">About</Link>
+      <Link prefetch={false} href="/about">About</Link>
       <span className="site-footer__sep">·</span>
-      <Link href="/about#ai">AI policy</Link>
+      <Link prefetch={false} href="/about#ai">AI policy</Link>
       <span className="site-footer__sep">·</span>
       {/* One author link, not two.
           "Remove my story" and "I'm an author" sat side by side pointing at the
@@ -35,7 +44,7 @@ export default function SiteFooter() {
           to look, and that is the urgent case — so the label leads with
           "Remove", and the page it lands on opens with removal as a button
           before it mentions anything else. */}
-      <Link href="/permissions">Remove or manage my work</Link>
+      <Link prefetch={false} href="/permissions">Remove or manage my work</Link>
       <span className="site-footer__sep">·</span>
       {/* /privacy had NO inbound link from anywhere on the site — it was
           written and never hung off anything, so the only way to reach it was to
@@ -47,7 +56,7 @@ export default function SiteFooter() {
           Next to the crawler policy rather than up beside About, because these
           two are the same kind of thing: what this site does with data, human and
           machine. */}
-      <Link href="/privacy">Privacy</Link>
+      <Link prefetch={false} href="/privacy">Privacy</Link>
       <span className="site-footer__sep">·</span>
       <a href="/robots.txt">Crawler policy</a>
       <span className="site-footer__sep">·</span>
