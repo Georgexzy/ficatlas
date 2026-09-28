@@ -78,8 +78,14 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _send_email(to: str, code: str) -> bool:
-    """Best-effort delivery. Returns whether it actually went out."""
+def _send_email(to: str, code: str, username: str) -> bool:
+    """Best-effort delivery. Returns whether it actually went out.
+
+    `username` is named in the body deliberately. One address can hold several
+    accounts here, and "your FicAtlas account" leaves the reader guessing which
+    — while naming it also lets somebody who did NOT request this see at a
+    glance whether it concerns an account they recognise.
+    """
     # Both, not just the host. SMTP_FROM no longer defaults to a domain nobody
     # owns, so a deployment that sets a host and forgets the sender would
     # otherwise build a message with an empty From — rejected by most servers,
@@ -88,12 +94,35 @@ def _send_email(to: str, code: str) -> bool:
     if not SMTP_HOST or not SMTP_FROM:
         return False
     link = f"{SITE_URL}/reset?code={code}" if SITE_URL else None
+    # THE LINK FIRST, THE CODE AS THE FALLBACK.
+    #
+    # It was the other way round, from when there was no /reset page to link at
+    # and the code was all there was. Following a link is one action; copying a
+    # code out of an email, finding the site and pasting it is four, and this is
+    # a message read by somebody who is already locked out and irritated.
+    #
+    # The code stays, and is not merely a duplicate: mail clients mangle long
+    # URLs, corporate scanners follow links and burn single-use tokens, and some
+    # people read mail on a device they are not signed in on. Both routes, with
+    # the easier one first.
+    #
+    # Plain text only. An HTML part would mean a second body to keep in step,
+    # and every claim here is one sentence — there is nothing for markup to do
+    # but add ways to render badly.
     body = (
-        "Someone asked to reset the password on your FicAtlas account.\n\n"
-        f"Your reset code is:\n\n    {code}\n\n"
-        + (f"Or open:\n\n    {link}\n\n" if link else "")
-        + f"It stops working in {TOKEN_TTL_MIN} minutes and can only be used once.\n"
-        "If this was not you, ignore this message — nothing has changed.\n"
+        "Someone asked to reset the password on the FicAtlas account "
+        f"'{username}'.\n\n"
+        + (f"To choose a new one, open:\n\n    {link}\n\n"
+           f"Or enter this code on the site:\n\n    {code}\n\n"
+           if link else
+           f"To choose a new one, enter this code on the site:\n\n    {code}\n\n")
+        + f"The code expires in {TOKEN_TTL_MIN} minutes and can be used once.\n\n"
+        "If you did not request this, no action is needed. The password has not\n"
+        "been changed, and the code above is useless to anyone who cannot also\n"
+        "read this mailbox.\n\n"
+        "-- \n"
+        "FicAtlas - a search engine for fanfiction\n"
+        f"{SITE_URL or 'https://ficatlas.com'}\n"
     )
     try:
         import smtplib
@@ -130,7 +159,7 @@ def forgot_password(username: str = Form(...), db: Session = Depends(get_db)):
         """), {"uid": str(user.id), "th": _hash(token), "mins": TOKEN_TTL_MIN})
         db.commit()
 
-        delivered = bool(user.email) and _send_email(user.email, token)
+        delivered = bool(user.email) and _send_email(user.email, token, user.username)
         if delivered:
             db.execute(sql_text("UPDATE password_resets SET delivered = TRUE WHERE token_hash = :th"),
                        {"th": _hash(token)})
