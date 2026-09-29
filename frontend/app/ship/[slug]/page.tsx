@@ -20,9 +20,27 @@ import { escapeJsonLd } from "@/lib/jsonLd"
 const INTERNAL_API = process.env.INTERNAL_API_URL || "http://backend:8000"
 const SITE = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
 
-// A day. Hubs are rebuilt offline and change slowly; the withdrawal checks that
-// actually matter run at read time in the API, not off this cache.
-export const revalidate = 86400
+// An hour, not a day, and the change costs almost nothing.
+//
+// It was a day, on the reasoning that hubs are rebuilt offline and change
+// slowly. That stopped being true when "being recommended lately" landed on
+// this page: the work lists still change slowly, but the recommendations are
+// the point of being fresh, and a day-old cache could hold a fortnight-old
+// thread's worth of them back by another day.
+//
+// The cost was measured before it was spent. Over 24h of origin logs the hubs
+// took **1,524 requests across 1,376 distinct URLs** — 1.11 requests per URL
+// per day. A cache window only saves work when the same URL is asked for twice
+// INSIDE it, and at that repeat rate almost none are: nearly every hub request
+// is already a cold render whatever this number says. Shortening it therefore
+// buys freshness and costs, in practice, no extra renders at all. One render is
+// a single API call at 40-280ms, of which the recommendation query is 0.26ms.
+//
+// Next resolves this per ROUTE, not per slug, so it cannot be shortened only
+// for the hubs that have recommendations. Given the measurement there is no
+// reason to want to — and Cloudflare's own s-maxage=900 already caps the edge
+// at fifteen minutes, so an hour here is not the binding constraint anyway.
+export const revalidate = 3600
 
 interface Work {
   id: string
