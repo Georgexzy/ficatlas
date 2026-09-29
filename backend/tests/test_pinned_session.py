@@ -47,9 +47,12 @@ def test_the_popularity_pass_uses_it(db):
     reproduce and no unit test will arrange that reliably. Same shape as
     tests/test_maintenance_timeouts.py, and for the same reason."""
     import popularity_rank
-    src = inspect.getsource(popularity_rank.run)
+    # `run` is now a thin wrapper that takes the shared heavy-maintenance lock
+    # (maintenance_lock.py) and delegates; `_run_locked` is the pass itself,
+    # which is what these invariants are about.
+    src = inspect.getsource(popularity_rank._run_locked)
     assert "pinned_session()" in src, \
-        "popularity_rank.run must hold one connection: it builds temp tables"
+        "the popularity pass must hold one connection: it builds temp tables"
     assert "with db_session() as db:" not in src, \
         "a plain session hands the connection back on commit and loses them"
 
@@ -64,7 +67,7 @@ def test_two_popularity_passes_cannot_run_at_once(db):
     when that connection closes — including when the process is killed."""
     import inspect
     import popularity_rank
-    src = inspect.getsource(popularity_rank.run)
+    src = inspect.getsource(popularity_rank._run_locked)
     assert "pg_try_advisory_lock" in src, \
         "a pass this heavy must refuse to run beside another"
     # `try`, not `wait`: a second run has nothing to add and should leave.
@@ -419,7 +422,7 @@ def test_the_popularity_write_is_chunked_not_one_giant_transaction():
 
     assert ":after" in P.UPDATE_WRITE_SQL and ":upto" in P.UPDATE_WRITE_SQL, \
         "the write must be bounded by an id range"
-    src = inspect.getsource(P.run)
+    src = inspect.getsource(P._run_locked)
     assert "while True" in src, "the write must iterate slices"
     # A commit inside the loop is the whole point -- it is what releases the
     # locks other writers are waiting on.

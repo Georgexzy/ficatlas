@@ -1288,6 +1288,7 @@ async def _popularity_loop() -> None:
     """
     from db.session import db_session  # noqa: F401  (run() opens its own)
     import popularity_rank
+    from maintenance_lock import MaintenanceDeferred, RETRY_SECONDS
 
     interval = _num("POPULARITY_INTERVAL_HOURS", 168) * 3600
     await asyncio.sleep(_num("POPULARITY_START_DELAY_SEC", 900))
@@ -1295,6 +1296,13 @@ async def _popularity_loop() -> None:
         try:
             n = await asyncio.to_thread(popularity_rank.run)
             log.info(f"popularity recomputed: {n:,} works rescored")
+        except MaintenanceDeferred:
+            # Another bulk pass over `stories` has the slot. Come back in an
+            # hour rather than in a week — a deferral must not turn a weekly
+            # job into a fortnightly one.
+            log.info("popularity: deferred, retrying in %ss", RETRY_SECONDS)
+            await asyncio.sleep(RETRY_SECONDS)
+            continue
         except Exception as e:
             log.warning(f"popularity rebuild failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
@@ -1491,6 +1499,7 @@ async def _series_wordcount_loop() -> None:
     it should not.
     """
     import series_wordcount
+    from maintenance_lock import MaintenanceDeferred, RETRY_SECONDS
 
     interval = _num("SERIES_WC_INTERVAL_HOURS", 6) * 3600
     await asyncio.sleep(_num("SERIES_WC_START_DELAY_SEC", 900))
@@ -1499,6 +1508,10 @@ async def _series_wordcount_loop() -> None:
             stats = await asyncio.to_thread(series_wordcount.run)
             if stats.get("filled") or stats.get("cleared"):
                 log.info("series word counts: %s", stats)
+        except MaintenanceDeferred:
+            log.info("series word counts: deferred, retrying in %ss", RETRY_SECONDS)
+            await asyncio.sleep(RETRY_SECONDS)
+            continue
         except Exception:
             log.exception("series word count pass failed")
         await asyncio.sleep(interval)
@@ -1545,9 +1558,12 @@ async def _curation_loop() -> None:
     import reddit_recs_import
     import tropedia_recs_import
 
+    from maintenance_lock import MaintenanceDeferred, RETRY_SECONDS
+
     interval = _num("CURATION_INTERVAL_HOURS", 168) * 3600
     await asyncio.sleep(_num("CURATION_START_DELAY_SEC", 3600))
     while True:
+        deferred = False
         for name, fn in (("reddit recs", reddit_recs_import.run),
                          ("tropedia recs", tropedia_recs_import.run),
                          ("content gates", content_gates.run),
@@ -1555,11 +1571,19 @@ async def _curation_loop() -> None:
             try:
                 stats = await asyncio.to_thread(fn)
                 log.info("%s: %s", name, stats)
+            except MaintenanceDeferred:
+                # This loop starts 45 minutes into the popularity rebuild and
+                # both are weekly, so before the shared lock existed these two
+                # collided every week at the same offset. Retry the whole chain
+                # in an hour; the recs imports above are network-bound and
+                # idempotent, so re-running them costs pages, not correctness.
+                log.info("%s: deferred by another heavy pass", name)
+                deferred = True
             except Exception as e:
                 # One source failing must not stop the others, and must not
                 # stop the gate repair — which is the safety-relevant half.
                 log.warning("%s failed: %s: %s", name, type(e).__name__, e)
-        await asyncio.sleep(interval)
+        await asyncio.sleep(RETRY_SECONDS if deferred else interval)
 
 
 async def _indexnow_loop() -> None:

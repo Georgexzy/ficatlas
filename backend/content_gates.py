@@ -176,6 +176,21 @@ _LOCK_KEY = 0x6721C0DE
 
 
 def run(dry_run: bool = False) -> dict:
+    """Serialised against every other bulk rewrite of `stories`.
+
+    See maintenance_lock.py: the per-job key below excludes a second copy of
+    THIS pass and nothing else, and on a `db_session()` it is dropped at the
+    first batch commit anyway.
+    """
+    import maintenance_lock
+
+    if dry_run:
+        return _run_locked(dry_run=True)
+    with maintenance_lock.heavy_pass("content_gates"):
+        return _run_locked()
+
+
+def _run_locked(dry_run: bool = False) -> dict:
     with db_session() as db:
         if not dry_run and not db.execute(
                 text("SELECT pg_try_advisory_lock(:k)"), {"k": _LOCK_KEY}).scalar():

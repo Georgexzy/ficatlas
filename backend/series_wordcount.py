@@ -130,6 +130,21 @@ SELECT (SELECT id FROM todo ORDER BY id DESC LIMIT 1) AS next_after,
 
 
 def run(dry_run: bool = False) -> dict:
+    """Serialised against every other bulk rewrite of `stories`.
+
+    Six-hourly, so this is the pass most likely to wake up inside somebody
+    else's four-hour run — and the cheapest to defer, because a sweep that
+    finds nothing writes nothing either way.
+    """
+    import maintenance_lock
+
+    if dry_run:
+        return _run_locked(dry_run=True)
+    with maintenance_lock.heavy_pass("series_wordcount"):
+        return _run_locked()
+
+
+def _run_locked(dry_run: bool = False) -> dict:
     with db_session() as db:
         if not dry_run and not db.execute(
                 text("SELECT pg_try_advisory_lock(:k)"), {"k": _LOCK_KEY}).scalar():
