@@ -88,6 +88,16 @@ BACKOFF_MAX = float(os.getenv("REDDIT_BACKOFF_MAX", "21600"))       # 6 h
 _LAST = "reddit_last_request_at"
 _UNTIL = "reddit_backoff_until"
 _STEP = "reddit_backoff_step"
+# Who is currently probing whether the backoff can be lifted, and when they
+# started. See _claim_slot: a backoff that has expired is not the same as a
+# working connection, and three jobs discovering that simultaneously is what
+# made the penalty ratchet instead of recover.
+_PROBE = "reddit_probe_started_at"
+
+# A probe that never reports back — the process was killed, the container
+# restarted — must not wedge the budget for ever. Comfortably longer than any
+# single request can take, and far shorter than the backoff it is gating.
+PROBE_TIMEOUT = float(os.getenv("REDDIT_PROBE_TIMEOUT", "180"))
 
 
 def _now() -> datetime:
@@ -124,6 +134,7 @@ def budget_state() -> dict:
         until = _parse(_read(db, _UNTIL))
         last = _parse(_read(db, _LAST))
         step = float(_read(db, _STEP) or 0)
+        _probe = _parse(_read(db, _PROBE))
     now = _now()
     return {
         "last_request_at": last.isoformat() if last else None,
@@ -131,6 +142,7 @@ def budget_state() -> dict:
         "backed_off": bool(until and until > now),
         "backoff_seconds_left": int((until - now).total_seconds()) if until and until > now else 0,
         "backoff_step": step,
+        "probing": bool(_probe and (now - _probe).total_seconds() < PROBE_TIMEOUT),
     }
 
 
@@ -150,6 +162,31 @@ def _claim_slot() -> float:
         until = _parse(_read(db, _UNTIL))
         if until and until > now:
             raise Refused(f"backed off for another {int((until - now).total_seconds())}s")
+
+        # ── RECOVERY IS GENTLE, AND IT HAS TO BE ───────────────────────────
+        #
+        # A backoff EXPIRING is not evidence that the connection works. It is
+        # only permission to find out. With three jobs on timers, the instant a
+        # penalty lifted all three fired, the first got a fresh 429, the
+        # penalty doubled, and the cycle repeated — measured climbing
+        # 15min -> 30 -> 60 -> 120 without ever once succeeding. The backoff was
+        # working perfectly and the system still could not recover, because
+        # every recovery attempt was three simultaneous requests.
+        #
+        # So the first caller after a backoff takes a PROBE and everyone else
+        # is refused until it reports back. One request decides for everyone:
+        # success clears the penalty entirely, failure doubles it, and either
+        # way only ONE request was spent finding out.
+        probing = _parse(_read(db, _PROBE))
+        if until:                                   # a penalty is being served
+            if probing and (now - probing).total_seconds() < PROBE_TIMEOUT:
+                raise Refused("another job is probing whether we are forgiven")
+            _write(db, _PROBE, now.isoformat())
+            db.commit()
+            # The probe goes NOW, without waiting out MIN_GAP: the address has
+            # just been silent for the whole penalty, which is far longer.
+            return 0.0
+
         last = _parse(_read(db, _LAST))
         wait = 0.0
         if last:
@@ -170,16 +207,27 @@ def _penalise() -> None:
         step = BACKOFF_START if step <= 0 else min(step * 2, BACKOFF_MAX)
         _write(db, _STEP, str(step))
         _write(db, _UNTIL, (_now() + timedelta(seconds=step)).isoformat())
+        # The probe is over and it failed. Released so the NEXT expiry gets a
+        # fresh one rather than finding this still held.
+        _write(db, _PROBE, "")
         db.commit()
-    log.warning("reddit refused us; quiet for %.0f minutes", step / 60)
+    log.warning("reddit refused us, quiet for %.0f minutes", step / 60)
 
 
 def _forgive() -> None:
+    """A successful request clears the penalty for everyone.
+
+    Reset to zero rather than halved: the step is how hard we were refused
+    LAST time, and a request that just worked is evidence that none of it
+    applies any more. Halving would make a single bad afternoon cost the rest
+    of the day.
+    """
     with db_session() as db:
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext('reddit_budget'))"))
-        if _read(db, _STEP) not in (None, "0"):
+        if _read(db, _STEP) not in (None, "0") or _read(db, _PROBE):
             _write(db, _STEP, "0")
             _write(db, _UNTIL, "")
+            _write(db, _PROBE, "")
         db.commit()
 
 
