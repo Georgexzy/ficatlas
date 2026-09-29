@@ -209,7 +209,7 @@ def key_for_page(query_string: str, is_operator: bool, page: int) -> str:
 # arbitrary slice. Same URL, same shape, different order — and a very different
 # one: on `fandoms=Harry Potter` the first result changes from a work nobody
 # would name to the most-read work on the site.
-SCHEMA_VERSION = "v13"   # rescues can now name a specific work
+SCHEMA_VERSION = "v14"   # misspelt titles get a suggestion
 
 # Expired rows are swept probabilistically on write rather than by a scheduled
 # job: 1 write in 200 pays for the cleanup, which at any real request rate keeps

@@ -112,6 +112,10 @@ def install_trigger(db) -> None:
     def _arr(values: list[str]) -> str:
         inner = ",".join("'" + v.replace("'", "''") + "'" for v in values)
         return "ARRAY[" + inner + "]::text[]"
+    # Same guard as crossover.py, and for the same reason: this DDL touches
+    # `stories`, and a queued ACCESS EXCLUSIVE on that table blocks every
+    # reader behind it. Idempotent and weekly, so giving up is free.
+    db.execute(text("SET LOCAL lock_timeout = '5s'"))
     db.execute(text(_TRIGGER_SQL
                     .replace("CAST(:uw AS text[])", _arr(UNDERAGE_WARNINGS))
                     .replace("CAST(:ut AS text[])", _arr(UNDERAGE_TAGS))
