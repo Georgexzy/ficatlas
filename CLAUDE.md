@@ -1261,6 +1261,45 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   the underage toggle to reveal. Confirmed at the row level too: zero
   underage-gated works pass the predicate an `explicit=true` search applies.
 
+- **Every heavy pass said "one at a time" and each of them meant "one of ME at
+  a time".** `popularity_rank`, `content_gates`, `crossover` and
+  `series_wordcount` each took their own advisory key, so each excluded a
+  second copy of itself — while the thing any of them actually contends with
+  is whichever OTHER pass is walking the same 20M rows. Measured on the live
+  box, two of them rewriting `stories` at once:
+
+      576412  active  00:05:16  UPDATE stories s  SET popularity   = ...
+      585434  active  00:00:51  UPDATE stories st SET is_crossover = ...
+
+  with Postgres at 73% CPU, load average 6.9, and cold searches at **5-10s
+  against the 1.5-3.5s the same queries cost on a quiet box**. One popularity
+  slice that should take seconds was still running at 8m51s.
+  - **It needs no coincidence, which is why it had never been noticed as
+    intermittent.** `_popularity_loop` starts 15 minutes after the worker boots
+    and runs ~3h51m; `_curation_loop` starts 60 minutes after boot — i.e. 45
+    minutes INTO a four-hour pass — and both are weekly. They collide by
+    construction, every week, at the same offset. The same collision is what
+    took the Harry Potter hub down: crossover's `DROP TRIGGER ... ON stories`
+    queued behind the popularity pass for 5m15s, and a queued ACCESS EXCLUSIVE
+    blocks every reader behind it.
+  - **Three of the four locks did not hold anyway.** They take their key on a
+    `db_session()`, which hands its connection back to the pool on commit —
+    and those passes commit per batch, because the batch is the unit of
+    progress. So "ONE AT A TIME, ENFORCED" was released at the first batch
+    boundary. Only `popularity_rank`, pinned for its temp tables, ever really
+    held one.
+  - `maintenance_lock.heavy_pass()` is one shared key on its OWN connection,
+    opened for the pass and held until it ends, so no amount of committing
+    inside the pass can drop it. It gives both properties at once: no two
+    heavy passes, and self-exclusion that actually works.
+  - **`try`, never `wait`.** A deferred pass raises `MaintenanceDeferred` and
+    its loop retries in an hour instead of in a week. Waiting would hold a
+    pooled connection idle for up to four hours, against the server-wide
+    connection ceiling `api/stats.py` records an outage shape for.
+  - Dry runs deliberately do NOT take it: they write nothing, and a suite that
+    can be blocked by whatever the live worker is doing is a suite that goes
+    red for reasons nobody can reproduce.
+
 - **A derived column either has a TRIGGER or it drifts, and thirteen hours of
   running showed exactly which is which.** After the backfills finished clean,
   re-verified half a day later:

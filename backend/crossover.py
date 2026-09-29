@@ -169,6 +169,22 @@ log = logging.getLogger("crossover")
 
 
 def run(dry_run: bool = False) -> dict:
+    """Serialised against every other bulk rewrite of `stories`.
+
+    This is the pass whose DDL queued behind the popularity rebuild for 5m15s
+    on 2026-09-29 and took the biggest fandom hub down with it. The
+    `lock_timeout` below stops that statement blocking readers; this stops the
+    two passes overlapping in the first place.
+    """
+    import maintenance_lock
+
+    if dry_run:
+        return _run_locked(dry_run=True)
+    with maintenance_lock.heavy_pass("crossover"):
+        return _run_locked()
+
+
+def _run_locked(dry_run: bool = False) -> dict:
     """Bring `is_crossover` in line with the definition above.
 
     Batched and resumable, like its two siblings: the cheap half (a row with

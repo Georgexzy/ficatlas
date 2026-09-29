@@ -354,6 +354,20 @@ _LOCK_KEY = 8_531_197_402_664_219
 
 
 def run(dry_run: bool = False) -> int:
+    """Serialised against every other bulk rewrite of `stories`.
+
+    The longest of them — ~3h51m over 2.4M rows — so it is usually the one
+    holding the lock rather than the one deferred by it.
+    """
+    import maintenance_lock
+
+    if dry_run:
+        return _run_locked(dry_run=True)
+    with maintenance_lock.heavy_pass("popularity_rank"):
+        return _run_locked()
+
+
+def _run_locked(dry_run: bool = False) -> int:
     # PINNED, because this pass lives on its temp tables.
     #
     # It builds five of them, commits, and then writes `stories` from the last.
