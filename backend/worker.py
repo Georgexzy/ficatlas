@@ -1394,6 +1394,40 @@ async def _reddit_queue_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _rec_threads_loop() -> None:
+    """Keep mining what each fandom is recommending, fortnight after fortnight.
+
+    Six-hourly, which sounds eager for a source that posts every two weeks and
+    is not: the pace here is not set by this interval at all. Every request
+    goes through `reddit_fetch`'s single shared budget, so a pass takes what
+    the budget will give it, records what it read, and stops — and the next
+    pass resumes at the next unread thread rather than starting over. Running
+    often is how a backlog gets worked off without ever asking Reddit for more
+    than one request at a time.
+
+    Cheap when there is nothing to do: a pass with no unread threads makes one
+    search request per community and writes nothing.
+
+    On the WORKER and not the backend, like every other long job here — the
+    backend is the container that gets restarted to pick up a code change, and
+    a `docker exec` inside it dies with it. That cost this harvest two runs
+    before it was moved.
+    """
+    import rec_threads
+
+    interval = _num("REC_THREADS_INTERVAL_HOURS", 6) * 3600
+    await asyncio.sleep(_num("REC_THREADS_START_DELAY_SEC", 900))
+    while True:
+        try:
+            stats = await asyncio.to_thread(rec_threads.run)
+            if stats["mentions"] or stats["threads_read"]:
+                log.info("rec threads: read %s threads, %s new recommendations",
+                         f"{stats['threads_read']:,}", f"{stats['mentions']:,}")
+        except Exception as e:
+            log.warning(f"rec threads failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _stats_loop() -> None:
     """Recompute the index totals on a timer, so no request ever has to.
 
@@ -2164,6 +2198,7 @@ async def main() -> None:
     if _flag("RUN_REDDIT_QUEUE", "true"):
         tasks.append(asyncio.create_task(_supervised("reddit_queue_loop", _reddit_queue_loop)))
         tasks.append(asyncio.create_task(_supervised("reddit_answers_loop", _reddit_answers_loop)))
+        tasks.append(asyncio.create_task(_supervised("rec_threads_loop", _rec_threads_loop)))
         log.info("reddit fic-finder queue enabled (hourly, one feed at a time)")
 
     if _flag("RUN_SERIES_WORDCOUNT", "true"):

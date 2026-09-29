@@ -24,6 +24,12 @@ _TRUNCATE = (
     "fandom_hubs", "ship_hubs",
     "users", "user_sessions", "user_hosted", "takedowns", "source_gone",
     "search_cache_entries", "visit_events",
+    # Recommendation mining. `rec_mentions` has a uniqueness constraint on
+    # (comment_id, site, site_id), so a row left behind by one test makes the
+    # next run of that same test fail on an insert it has every right to make —
+    # which is the failure the note above describes, hit again the first time
+    # this list was not updated alongside a new table.
+    "rec_mentions", "rec_threads",
 )
 
 _engine = None

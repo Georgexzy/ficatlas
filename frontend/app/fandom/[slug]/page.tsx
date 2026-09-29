@@ -39,6 +39,24 @@ interface SiteSection { site: string; works: Work[]
    *  which is the per-archive cap. See hub_build.py. */
   total?: number }
 interface Quality { tag: string; works: number }
+/** A work this fandom has been recommending to each other lately.
+ *
+ *  A different measurement from everything else on this page. The archive
+ *  lists are ranked by READERSHIP — a percentile of kudos, bookmarks and hits.
+ *  This counts how many distinct PEOPLE told somebody else to read it inside a
+ *  window, which is the thing an archive cannot know about itself. */
+interface Recommended {
+  id: string
+  title: string
+  author?: string
+  summary?: string
+  site?: string
+  word_count?: number
+  complete?: boolean
+  people: number
+  last_at?: string
+  communities?: string[]
+}
 interface RelatedHub {
   kind: "fandom" | "ship"
   slug: string
@@ -55,6 +73,8 @@ interface Hub {
   related?: RelatedHub[]
   /** What works here tend to be — the refinement chips. */
   qualities?: Quality[]
+  recommended?: Recommended[]
+  recommended_days?: number
 }
 
 const SITE_LABELS: Record<string, string> = {
@@ -248,6 +268,54 @@ export default async function FandomHub(
           <li><Link rel="nofollow" href={`${searchHref(hub.name)}&sort=updated_desc`}>Recently updated</Link></li>
         </ul>
       </div>
+
+      {/* WHAT THE FANDOM IS RECOMMENDING, above the archive lists on purpose.
+          It is the only thing on this page that is not derivable from the
+          archives themselves, and the only part that changes week to week.
+          Absent for most hubs, and the section simply does not render — an
+          empty "recommended" heading would suggest the fandom has gone quiet
+          when it only means nobody has harvested its threads. */}
+      {!!hub.recommended?.length && (
+        <section className="hub__recs">
+          <h2 className="hub__heading">
+            Being recommended lately
+            {hub.recommended_days ? (
+              <span className="hub__recs-window">
+                {" "}· last {hub.recommended_days} days
+              </span>
+            ) : null}
+          </h2>
+          <p className="hub__recs-note">
+            Counted by how many different readers recommended each work in
+            {" "}{Array.from(new Set(hub.recommended.flatMap(r => r.communities ?? [])))
+                    .map(c => `r/${c}`).join(", ") || "fandom discussion threads"}
+            {" "}— not by kudos. It is what people are pressing on each other
+            now, which is the one thing an archive cannot tell you about itself.
+          </p>
+          <ol className="hub__recs-list">
+            {hub.recommended.map(r => (
+              <li key={r.id} className="hub__rec">
+                <Link href={`/story/${r.id}`} className="hub__rec-title">{r.title}</Link>
+                <p className="hub__rec-meta">
+                  {[
+                    r.author ? `by ${r.author}` : null,
+                    r.site ? SITE_LABELS[r.site] ?? r.site.toUpperCase() : null,
+                    r.word_count ? `${Math.round(r.word_count / 1000)}k words` : null,
+                    r.complete === true ? "Complete" : r.complete === false ? "In progress" : null,
+                  ].filter(Boolean).join(" · ")}
+                </p>
+                {/* Said plainly, including when it is one. A block headed
+                    "most recommended" over a count of one would be overclaiming
+                    — the honest version lets the reader weigh it. */}
+                <p className="hub__rec-count">
+                  {r.people === 1 ? "1 reader recommended it" : `${r.people} readers recommended it`}
+                </p>
+                {r.summary ? <p className="hub__rec-summary">{r.summary}</p> : null}
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
 
       {/* One section per archive rather than one merged list.
           A single ranking put AO3 in every slot on every hub, because kudos is
