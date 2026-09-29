@@ -4233,6 +4233,45 @@ body.is-resizing * { cursor: col-resize !important; }
   margin: 0 0 16px;
 }
 
+/* ── "Being recommended lately" on a fandom hub ────────────────────────────
+   Deliberately not a card grid like the archive lists below it. Those are
+   rankings of many works; this is a short, human list of what a handful of
+   readers actually pressed on each other, and making it look like the same
+   kind of object would invite it to be read as the same kind of measurement. */
+.hub__recs { margin: 0 0 32px; }
+.hub__recs-window { font-weight: 400; color: var(--text-faint); font-size: 0.75em; }
+.hub__recs-note {
+  font-size: 12px; color: var(--text-faint); line-height: 1.65;
+  max-width: 62ch; margin: 0 0 14px;
+}
+.hub__recs-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 10px;
+  max-width: 760px;
+}
+.hub__rec {
+  padding: 12px 14px; border-radius: 5px;
+  background: var(--surface); border: 1px solid var(--border);
+  /* The one accent on this page. It marks the block that is fresh, and there
+     is exactly one of them, so it reads as emphasis rather than decoration. */
+  border-left: 2px solid var(--accent);
+}
+.hub__rec-title {
+  font-family: var(--font-serif); font-size: 16px; color: var(--text);
+  text-decoration: none; display: inline-block; margin-bottom: 2px;
+}
+.hub__rec-title:hover { color: var(--accent); text-decoration: underline; }
+.hub__rec-meta {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
+  margin: 0 0 4px;
+}
+.hub__rec-count { font-size: 12px; color: var(--accent); margin: 0 0 4px; }
+.hub__rec-summary {
+  font-size: 13px; color: var(--text-dim); line-height: 1.6; margin: 0;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* ── The merged shelf ──────────────────────────────────────────────────────
    Bookmarks / Reading / Offline / Your imports were four tabs over one set of
    works (measured: 32 works, 43 listings). They are filters now, and a work

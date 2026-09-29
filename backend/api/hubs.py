@@ -11,6 +11,8 @@ get their own set rather than being a filter on a fandom hub.
 """
 from __future__ import annotations
 
+import os
+
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -21,6 +23,10 @@ from sqlalchemy.orm import Session
 from api.search import (_ADULT_TAGS, _ADULT_WARNINGS,
                         _UNDERAGE_TAGS, _UNDERAGE_WARNINGS)
 from db.session import get_db
+
+import logging
+
+log = logging.getLogger("hubs")
 
 router = APIRouter()
 ships_router = APIRouter()
@@ -48,6 +54,32 @@ class HubWork(BaseModel):
     kudos: Optional[int] = None
     site: Optional[str] = None
     complete: Optional[bool] = None
+
+
+class RecommendedWork(BaseModel):
+    """A work this fandom has been recommending to each other lately.
+
+    A different measurement from every other list on this page. `works` is
+    ranked by popularity — a percentile of kudos, bookmarks and hits, which
+    counts READERSHIP. This counts how many distinct people told somebody else
+    to read it, in a window, which is the thing an archive cannot know about
+    itself and the reason the whole table exists.
+    """
+    id: str
+    title: str
+    author: Optional[str] = None
+    summary: Optional[str] = None
+    site: Optional[str] = None
+    word_count: Optional[int] = None
+    complete: Optional[bool] = None
+    # DISTINCT PEOPLE, never mentions. One reader naming a favourite in every
+    # fortnightly thread is one reader — counting mentions would let the most
+    # talkative person in a subreddit decide what a fandom is reading.
+    people: int
+    last_at: Optional[str] = None
+    # Where it was said, so the page can credit the community rather than
+    # presenting a subreddit's opinion as the site's own.
+    communities: list[str] = []
 
 
 class SiteSection(BaseModel):
@@ -96,6 +128,12 @@ class HubDetail(BaseModel):
     # sideways: the index linked 11,190 hubs, each hub linked 100 story pages,
     # and no hub linked to any other.
     related: list[RelatedHub] = []
+    # Empty until the harvest has read a thread for this fandom, which is the
+    # normal state for most of 5,025 hubs — the section simply does not render.
+    recommended: list[RecommendedWork] = []
+    # The window the counts describe, so the page can say "in the last 30 days"
+    # rather than leaving a number to be read as all-time.
+    recommended_days: int = 0
     # What works here tend to BE. The page's refinement chips: real tags from
     # this hub's own works rather than a generic list, so "Slow Burn" appears
     # on the pairings that have it and not on the ones that do not. Empty on a
@@ -139,6 +177,70 @@ def _list(kind: str, response: Response, limit: int, offset: int, db: Session):
 # and a real choice for a reader; few enough that the page is still about the
 # thing it is about.
 RELATED_CAP = 8
+
+
+# How far back "lately" reaches, and how many works the block shows.
+#
+# 30 days because the source threads are FORTNIGHTLY: a shorter window can
+# catch only one of them and would make the block appear and vanish with the
+# posting schedule rather than with what people are reading.
+RECS_DAYS = int(os.getenv("HUB_RECS_DAYS", "30"))
+RECS_LIMIT = int(os.getenv("HUB_RECS_LIMIT", "6"))
+
+
+def _recommended(db, variants: list[str], days: int = RECS_DAYS,
+                 limit: int = RECS_LIMIT) -> list["RecommendedWork"]:
+    """What this fandom has been recommending, in the last `days`.
+
+    THE CONTENT GATES APPLY IN FULL, and this is the third surface to need
+    that argument written out: a hub has no Explicit toggle, because it is a
+    static page a search engine hands to a stranger, so the safe default is the
+    only setting it has. Both the indexed columns AND the arrays, for the reason
+    the work-list query above gives — the columns are a cache maintained by a
+    trigger, and a column that defaults to `false` reads as safe.
+
+    It is cheap for the same reason the work list is: the candidate set is what
+    a handful of threads mentioned in a month, which is tens of rows, not the
+    20.8M the search path has to defend against.
+    """
+    rows = db.execute(text("""
+        SELECT s.id, s.title, s.author, s.summary, s.site, s.word_count,
+               s.status,
+               count(DISTINCT m.recommender) AS people,
+               max(m.mentioned_at)           AS last_at,
+               array_agg(DISTINCT m.community) AS communities
+          FROM rec_mentions m
+          JOIN stories s ON s.id = m.story_id
+         WHERE m.mentioned_at > now() - make_interval(days => :days)
+           AND s.fandoms && CAST(:variants AS text[])
+           AND NOT s.gate_underage
+           AND NOT s.gate_adult
+           AND NOT (COALESCE(s.warnings,'{}') && CAST(:gate_uw AS text[]))
+           AND NOT (COALESCE(s.tags,'{}')     && CAST(:gate_ut AS text[]))
+           AND NOT (COALESCE(s.warnings,'{}') && CAST(:gate_aw AS text[]))
+           AND NOT (COALESCE(s.tags,'{}')     && CAST(:gate_at AS text[]))
+         GROUP BY s.id, s.title, s.author, s.summary, s.site, s.word_count, s.status
+         -- Most people first, then most recent. Recency breaks the tie rather
+         -- than leading, or a single mention today would outrank four last
+         -- week and the block would rewrite itself every day.
+         ORDER BY people DESC, last_at DESC
+         LIMIT :limit
+    """), {"days": days, "variants": variants, "limit": limit,
+           "gate_uw": _UNDERAGE_WARNINGS, "gate_ut": _UNDERAGE_TAGS,
+           "gate_aw": _ADULT_WARNINGS,    "gate_at": _ADULT_TAGS,
+           }).fetchall()
+    return [
+        RecommendedWork(
+            id=str(r[0]), title=r[1], author=r[2], summary=r[3], site=r[4],
+            word_count=r[5],
+            complete=(str(r[6]).lower() in ("complete", "completed")
+                      if r[6] is not None else None),
+            people=int(r[7] or 0),
+            last_at=r[8].isoformat() if r[8] else None,
+            communities=[c for c in (r[9] or []) if c],
+        )
+        for r in rows
+    ]
 
 
 def _related(db, kind: str, slug: str, name: str,
@@ -236,7 +338,7 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     response.headers["Cache-Control"] = CACHE
     hub = db.execute(text(
         f"SELECT slug, name, work_count, top_ids, top_by_site, site_counts, "
-        f"       qualities "
+        f"       qualities, variants "
         f"  FROM {table} WHERE slug = :s"
     ), {"s": slug}).fetchone()
     if not hub:
@@ -349,9 +451,20 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     qualities = [Quality(tag=q["tag"], works=int(q.get("works") or 0))
                  for q in (hub[6] or []) if q.get("tag")]
 
+    # What the fandom has been recommending lately. Never allowed to fail the
+    # page: this is a new table fed by a rate-limited harvest, so an empty or
+    # broken result must cost the block and nothing else.
+    try:
+        recommended = _recommended(db, list(hub[7] or []))
+    except Exception:
+        log.warning("hub %s: recommended block unavailable", hub[0], exc_info=True)
+        recommended = []
+
     return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2],
                      nicknames=nicknames, works=works, sections=sections,
-                     related=related, qualities=qualities)
+                     related=related, qualities=qualities,
+                     recommended=recommended,
+                     recommended_days=RECS_DAYS if recommended else 0)
 
 
 @router.get("", response_model=list[HubSummary])

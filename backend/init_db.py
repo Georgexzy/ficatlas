@@ -1006,6 +1006,84 @@ ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS answers_checked_at TIMESTAMPTZ
 -- again without costing another request. See backend/reddit_answers.py.
 ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS comments TEXT;
 
+-- WHAT A FANDOM IS RECOMMENDING LATELY.
+--
+-- The recs this index already had are ALL-TIME and static: `reddit_recs` comes
+-- from a community spreadsheet that stops in 2023, and `community_recs` from a
+-- wiki. Both answer "what does this fandom press on newcomers, ever", and
+-- neither can answer "what is being recommended now", which is the question a
+-- reader actually asks and the one no archive can answer either.
+--
+-- The time dimension is the whole reason this is a table rather than another
+-- tag. A tag on `stories` can say a work is recommended but not WHEN, by
+-- HOW MANY DISTINCT PEOPLE, or in WHICH community, and all three are needed to
+-- rank "this month" without a single enthusiast being able to set the order.
+CREATE TABLE IF NOT EXISTS rec_mentions (
+    id           BIGSERIAL PRIMARY KEY,
+    source       TEXT NOT NULL,          -- 'reddit'
+    community    TEXT NOT NULL,          -- the subreddit, lowercased
+    thread_id    TEXT NOT NULL,
+    comment_id   TEXT NOT NULL,
+    -- Who recommended it. Recommendations are counted per PERSON, never per
+    -- mention: one reader listing a favourite in every fortnightly thread is
+    -- one reader, and counting the mentions would let the most talkative
+    -- person in a subreddit decide what the fandom is reading. Same lesson as
+    -- the traffic panel's "read the PEOPLE column, not opens".
+    recommender  TEXT,
+    mentioned_at TIMESTAMPTZ NOT NULL,
+    -- Null when the linked work is not in the index. Kept anyway: an
+    -- unmatched link is a CRAWL TARGET, and a fandom's current favourites are
+    -- the best possible thing for the crawler to be told about.
+    -- NO foreign key, deliberately. Declaring one obliges Postgres to take a
+    -- lock on `stories` to install the trigger, and `stories` is 20.8M rows
+    -- with a crawler writing to it continuously. Measured: the CREATE TABLE
+    -- hit the 60s statement timeout and the table was never created, while
+    -- every statement around it succeeded and startup logged nothing but a
+    -- skipped-statement count. A waiting lock there is also an outage for
+    -- every reader queued behind it.
+    --
+    -- Nothing is lost. Every query that uses this column JOINS to `stories`,
+    -- so a mention whose work has been deleted simply stops matching -- which
+    -- is what ON DELETE CASCADE would have achieved, arrived at by the read
+    -- rather than by a trigger on the busiest table on the box.
+    story_id     UUID,
+    site         TEXT,
+    site_id      TEXT,
+    UNIQUE (comment_id, site, site_id)
+);
+-- The query this table exists to answer: most recommended in the last N days,
+-- narrowed to a fandom. Time leads because the window is always the first cut.
+CREATE INDEX IF NOT EXISTS ix_rec_mentions_recent
+    ON rec_mentions (mentioned_at DESC) WHERE story_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_rec_mentions_story ON rec_mentions (story_id);
+-- Unmatched links, for the crawler. Partial, so it costs nothing once the
+-- backlog is worked off.
+CREATE INDEX IF NOT EXISTS ix_rec_mentions_uncrawled
+    ON rec_mentions (site, site_id) WHERE story_id IS NULL;
+
+-- The threads already read, so the harvest is a resumable worklist rather than
+-- a re-read. Reddit is rate-limited to roughly one request a minute from this
+-- address (see backend/reddit_fetch.py), so a pass that re-read what it already
+-- had would spend the entire budget learning nothing.
+CREATE TABLE IF NOT EXISTS rec_threads (
+    id          TEXT PRIMARY KEY,        -- the reddit post id
+    community   TEXT NOT NULL,
+    title       TEXT,
+    posted_at   TIMESTAMPTZ,
+    read_at     TIMESTAMPTZ,
+    mentions    INTEGER NOT NULL DEFAULT 0,
+    -- The fetched thread, kept rather than discarded once the link regex has
+    -- run over it -- exactly as reddit_posts.comments is, and for the same
+    -- reason: the FETCH is the expensive resource, not the parse, so a better
+    -- parser must be able to read it again without costing another request.
+    -- Measured on the first thread read: 8 archive links against 8 bylines,
+    -- every one of which was also linked. If that stops being true, the answer
+    -- is in here already.
+    raw         TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_rec_threads_unread
+    ON rec_threads (community, posted_at DESC) WHERE read_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS ffnet_captures (
     site_id     BIGINT PRIMARY KEY,
     snapshot_ts VARCHAR(20) NOT NULL,
