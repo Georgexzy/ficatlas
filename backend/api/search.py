@@ -1392,6 +1392,60 @@ def _edit_distance_1(a: str, b: str) -> bool:
     return True
 
 
+def _names_one_work(db, typed: str) -> list[Suggestion]:
+    """The reader named a specific work. Find it, or say nothing.
+
+    Two shapes, both taken from real zero-result searches. Deliberately strict:
+    an exact title match and an exact id, because a near-miss here would put a
+    confident wrong answer where an honest empty page was — which this file
+    already argues is the worse trade (see `_resolve_or_split`, where substring
+    matching cut `fandom:Some Fandom Nobody Has` down to `fandom:Some`).
+    """
+    out: list[Suggestion] = []
+
+    # A bare archive id. Five digits or more, because shorter numbers are
+    # ordinary words in a title ("1984", "Chapter 100") and AO3/FFn ids are not.
+    if re.fullmatch(r"\d{5,9}", typed):
+        row = db.execute(sql_text("""
+            SELECT title, author, site FROM stories
+             WHERE site_id = :i ORDER BY COALESCE(kudos,0) DESC LIMIT 1
+        """), {"i": typed}).first()
+        if row and row[0]:
+            out.append(Suggestion(
+                kind="work", value=row[0], count=1, query=row[0],
+                reason="named", works=1))
+            return out
+
+    # "<title> by <author>". Split on the LAST " by ", because a title may
+    # contain one ("Gone by Morning by someone") and the author never does.
+    m = re.search(r"^(.{2,160}?)\s+by\s+([^\s].{0,60})$", typed, re.I)
+    if m:
+        title, author = m.group(1).strip(" \"'"), m.group(2).strip(" \"'")
+        rows = db.execute(sql_text("""
+            SELECT title, author FROM stories
+             WHERE lower(title) = lower(:t)
+             ORDER BY COALESCE(kudos,0) DESC LIMIT 20
+        """), {"t": title}).fetchall()
+        if rows:
+            exact = [r for r in rows if (r[1] or "").lower() == author.lower()]
+            # The author is what disambiguates, and the index holds five works
+            # called "Manacled" — so when the author does NOT match anything,
+            # the title alone is still the better search, and it is offered as
+            # exactly that rather than pretending to have identified the work.
+            if len(exact) == 1:
+                out.append(Suggestion(
+                    kind="work", value=f"{exact[0][0]} by {exact[0][1]}",
+                    count=1, query=f'{title} author:"{exact[0][1]}"',
+                    reason="named", works=1))
+            else:
+                n = _probe_total(db, title)
+                if n:
+                    out.append(Suggestion(
+                        kind="text", value=title, count=n, query=title,
+                        reason="named", works=n))
+    return out
+
+
 def _typed_rescues(db, q: str) -> list[Suggestion]:
     """Two ways a search returns nothing for a reason the reader cannot see.
     Both were found in the traffic log, in real readers' queries.
@@ -1418,6 +1472,31 @@ def _typed_rescues(db, q: str) -> list[Suggestion]:
     out: list[Suggestion] = []
     typed = (q or "").strip()
     if not typed:
+        return out
+
+    # ── A WORK NAMED OUTRIGHT ────────────────────────────────────────────────
+    #
+    # These two go first because they are not guesses about spelling: the
+    # reader has IDENTIFIED one work and the search simply had no way to hear
+    # it. Both were found in the traffic log returning zero.
+    #
+    #   "Battlefields by Aislin Avalban"  ->  0 works, while the title alone
+    #   finds 21. "Title by Author" is *the* way fanfiction is named — it is
+    #   how every recommendation thread writes one — and the words "by" and the
+    #   author's name are ANDed against the index as ordinary text, which no
+    #   work contains. Both columns are indexed (ix_stories_title_lower,
+    #   ix_stories_author_lower), so this costs two equality lookups.
+    #
+    #   "11834427"  ->  0 works. A bare FanFiction.net story id, pasted from a
+    #   URL or a rec list. `site_id` is indexed and the answer is exact.
+    #
+    # Offered rather than applied, like every other rescue here: see the note
+    # at the top of this function. What makes them worth putting FIRST is that
+    # they are checked against the index before being shown, so an offer means
+    # the work is really there.
+    for sug in (_names_one_work(db, typed) or []):
+        out.append(sug)
+    if out:
         return out
 
     ops = _known_operators()
