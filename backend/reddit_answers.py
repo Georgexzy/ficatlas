@@ -115,33 +115,35 @@ def _entries(xml: str) -> list[dict]:
     return out
 
 
-class Refused(Exception):
-    """Reddit declined to answer. Says nothing about the post.
-
-    Distinct from an empty reply list, and the distinction is the whole point:
-    conflating them marks a post as checked because we were rate-limited, and
-    it is then never asked about again. The FF.net enrichment lost queued
-    captures to exactly this shape -- a 429 returned the same value as "there
-    is nothing there" -- and it cost a day of throughput before anyone could
-    see it, because the logs said the archive was empty.
-    """
+# Refused means Reddit declined to answer, and says NOTHING about the post.
+#
+# Distinct from an empty reply list, and the distinction is the whole point:
+# conflating them marks a post as checked because we were rate-limited, and it
+# is then never asked about again. The FF.net enrichment lost queued captures to
+# exactly this shape -- a 429 returned the same value as "there is nothing
+# there" -- and it cost a day of throughput before anyone could see it, because
+# the logs said the archive was empty.
+#
+# It now comes from reddit_fetch, which owns the one budget every Reddit
+# consumer here shares, rather than being defined once per job.
+import reddit_fetch                      # noqa: E402
+from reddit_fetch import Refused          # noqa: E402
 
 
 def fetch_comments(subreddit: str, post_id: str) -> list[dict]:
-    """The post and its replies. Raises Refused when Reddit will not answer."""
+    """The post and its replies. Raises Refused when Reddit will not answer.
+
+    THROUGH THE SHARED BUDGET, and that is not a tidying-up. This paced itself
+    with its own sleep against a limit that is per-ADDRESS, as did the
+    fic-finder queue, as would the recommendation harvest — three jobs each
+    behaving impeccably on its own and together asking far too often. Observed
+    in the worker log before this changed: a 429 here every ~100 seconds,
+    indefinitely, which is not merely this job failing, it is this job spending
+    the allowance the other two need. See reddit_fetch.py.
+    """
     pid = post_id.split("_", 1)[-1]        # t3_abc123 -> abc123
     url = f"https://www.reddit.com/r/{subreddit}/comments/{pid}.rss"
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            return _entries(r.read().decode("utf-8", "replace"))
-    except urllib.error.HTTPError as e:
-        if e.code in (429, 503):
-            raise Refused(f"HTTP {e.code}") from e
-        log.info("reddit answers: HTTP %s on %s", e.code, pid)
-        return []                           # a real answer: gone, or private
-    except Exception as e:                  # noqa: BLE001 - never fail a pass
-        raise Refused(type(e).__name__) from e
+    return _entries(reddit_fetch.get(url))
 
 
 def answers_in(entries: list[dict], op: str | None) -> list[dict]:
@@ -269,5 +271,11 @@ def harvest(db, limit: int = 20, sleep=time.sleep) -> dict:
             "UPDATE reddit_posts SET answers_checked_at = now() WHERE id = :p"),
             {"p": post_id})
         db.commit()
-        sleep(GAP_SECONDS)
+        # No sleep here any more. reddit_fetch owns the pacing for every Reddit
+        # consumer in this project, and a second sleep on top of it is not
+        # belt-and-braces — it is a second opinion about a budget that only
+        # works if there is one. `sleep` stays in the signature because the
+        # tests inject it, and because a caller may still want to be gentler
+        # than the floor.
+        sleep(0)
     return stats

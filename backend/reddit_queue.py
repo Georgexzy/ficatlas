@@ -65,6 +65,7 @@ os.environ.setdefault("DATABASE_URL", default_database_url())
 from sqlalchemy import text  # noqa: E402
 
 from db.session import db_session  # noqa: E402
+import reddit_fetch  # noqa: E402
 
 log = logging.getLogger("reddit_queue")
 
@@ -228,17 +229,15 @@ def fetch(subreddit: str, flair: str | None) -> list[dict]:
     else:
         url = f"https://www.reddit.com/r/{subreddit}/{sort}.rss?limit=25"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            body = r.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:
-        # 429 is the expected outcome, not a fault: see the module note. It
-        # logs at info so a run that got nothing is visible without being
-        # alarming.
-        log.info("reddit: r/%s %s -> HTTP %s", subreddit, flair or "new", e.code)
-        return []
-    except Exception as e:
-        log.info("reddit: r/%s unreachable: %s", subreddit, type(e).__name__)
+        # Through the SHARED budget. This used to pace itself with its own
+        # sleep, as did reddit_answers, against a limit that is per-ADDRESS --
+        # three jobs each behaving impeccably alone and together asking far too
+        # often. See reddit_fetch.py.
+        body = reddit_fetch.get(url)
+    except reddit_fetch.Refused as e:
+        # The expected outcome, not a fault: see the module note. Logged at
+        # info so a run that got nothing is visible without being alarming.
+        log.info("reddit: r/%s %s -> %s", subreddit, flair or "new", e)
         return []
 
     out = []
@@ -302,8 +301,9 @@ def run(dry_run: bool = False, limit_feeds: int | None = None,
         feeds += [(s, f, CORPUS_STATE) for s, f in CORPUS_FEEDS]
     posts: list[dict] = []
     for i, (sub, flair, state) in enumerate(feeds):
-        if i:
-            time.sleep(GAP_SECONDS)
+        # No gap here any more: reddit_fetch waits for the shared budget inside
+        # fetch(), so sleeping again would only make this job slower without
+        # making the address quieter.
         got = fetch(sub, flair)
         for g in got:
             g["state"] = state
