@@ -1078,6 +1078,18 @@ class Suggestion(BaseModel):
 # suggesting. Two more works is noise; a page is the reason the reader is
 # looking at an empty screen.
 _RELAX_MIN_GAIN = int(os.getenv("SEARCH_RELAX_MIN_GAIN", "10"))
+
+# How well-read a work must be before its title is worth offering as a
+# correction. The same argument as _DYM_MIN_COUNT for facets: without a floor,
+# similarity alone suggests the reader's own misspelling back at them, because
+# this index holds millions of titles and some of them ARE the typo.
+_DYM_TITLE_MIN_KUDOS = int(os.getenv("SEARCH_DYM_TITLE_MIN_KUDOS", "50"))
+
+# What `%` means for the title rescue. NOT a post-filter: this is the operator's
+# own threshold, which is what makes the GIN index selective rather than making
+# it find a million rows and then throw them away. Measured on "the arithmancr":
+# 0.30 (the default) -> 1,253,555 index rows, 43s; 0.62 -> 139 rows, 364ms.
+_DYM_TITLE_SIM = float(os.getenv("SEARCH_DYM_TITLE_SIM", "0.62"))
 _RELAX_LIMIT = int(os.getenv("SEARCH_RELAX_LIMIT", "3"))
 # How high to count for a suggestion. The extractor's cap of 20 answers "are
 # there at least ten?"; a reader deciding whether to click needs a number, and
@@ -1618,6 +1630,101 @@ def _probe_total(db, query: str) -> int:
         # being written and run.
         log.warning("suggestion probe failed for %r", query, exc_info=True)
         return 0
+
+
+def _misspelt_title(db, q: str) -> list[Suggestion]:
+    """A reader who misspelt a TITLE gets nothing at all, and that is a hole.
+
+    `_did_you_mean` matches against `facets` -- tags, fandoms, characters,
+    pairings. A work's TITLE is in none of those, so the commonest thing anyone
+    types into a fanfiction search has never had a spelling rescue.
+
+    Found in the traffic log, in a RETURNING reader's session: they searched
+    `all the yung dudes` (54 works, the fuzzy-title arm caught it), `manacled`
+    (162), and then `the arithmancr` -- **0 works and no suggestion**, while
+    *The Arithmancer* sits in the index with 4,461 kudos at 0.72 trigram
+    similarity. Somebody who came back twice in a day met an empty page for a
+    work we hold.
+
+    THREE THINGS MAKE THIS AFFORDABLE, and the first draft had none of them.
+
+    1. `title %`, never `lower(title) %`. `ix_stories_title_trgm` is on the
+       PLAIN column and GIN gin_trgm_ops lowercases internally, so wrapping the
+       column in lower() puts the index out of reach and seq-scans 20.8M rows.
+       Measured: the lower() form did not finish inside a 120s timeout.
+
+    2. `pg_trgm.similarity_threshold` is raised for this query, rather than
+       filtering on `similarity(...) >= x` afterwards. The threshold is what
+       the `%` OPERATOR uses, so raising it makes the INDEX selective; a
+       filter only discards rows the index has already paid to find. Measured
+       on "the arithmancr": at the 0.3 default the index returns **1,253,555
+       rows and takes 43s**; at 0.62 it returns 139 and takes **364ms**, and
+       still finds the work (similarity 0.72).
+
+    3. A SAVEPOINT. The first version timed out, and a statement timeout
+       POISONS the transaction -- so `_did_you_mean`, which runs next and had
+       worked for months, then failed with "current transaction is aborted"
+       and every suggestion on the site silently disappeared. A new rescue must
+       not be able to take an old one down with it. Same reasoning as the
+       `fandom_aliases` lookup, which is wrapped for exactly this.
+
+    Ranked by `similarity * ln(kudos)`, as the facet rescue is ranked by
+    `similarity * ln(count)` and for the same reason: similarity alone suggests
+    the reader's own mistake back at them, because an index this size holds
+    millions of titles and some of them ARE the typo. Being well-read is what
+    makes a title worth offering.
+    """
+    q = (q or "").strip()
+    # Short strings are words rather than titles, and match half the index.
+    if len(q) < 6 or ":" in q:
+        return []
+    sp = db.begin_nested()
+    try:
+        # Inlined, not bound: SET does not take parameters. The value is a
+        # module constant parsed as a float, so it cannot carry anything else.
+        db.execute(sql_text(
+            f"SET LOCAL pg_trgm.similarity_threshold = {float(_DYM_TITLE_SIM)}"))
+        rows = db.execute(sql_text("""
+            SELECT title, author, COALESCE(kudos, 0) AS k
+              FROM stories
+             WHERE title % :q
+               -- A work nobody has read is not a plausible "did you mean".
+               AND COALESCE(kudos, 0) >= :minkudos
+               -- The reader asked for nothing in particular, so this is a
+               -- no-toggle surface like a hub: the safe default is the only
+               -- setting it has.
+               AND NOT gate_underage
+               AND NOT gate_adult
+             ORDER BY similarity(title, :q) * ln(COALESCE(kudos, 0) + 2) DESC
+             LIMIT 3
+        """), {"q": q, "minkudos": _DYM_TITLE_MIN_KUDOS}).fetchall()
+    except Exception:
+        # Never the reason a search fails, and never the reason the NEXT
+        # rescue fails either -- see point 3 above.
+        log.debug("title did-you-mean failed", exc_info=True)
+        rows = []
+    finally:
+        # Rolls the savepoint back whatever happened, which also undoes the
+        # SET LOCAL rather than leaving a raised threshold to surprise any
+        # later trigram query in this same request.
+        try:
+            sp.rollback()
+        except Exception:
+            log.debug("title did-you-mean savepoint rollback failed", exc_info=True)
+
+    out: list[Suggestion] = []
+    seen: set[str] = set()
+    for title, author, kudos in rows:
+        key = (title or "").casefold()
+        if not title or key in seen:
+            continue
+        seen.add(key)
+        # The TITLE is the suggestion, not title-plus-author: the reader typed
+        # a title and the correction they need is its spelling. The author
+        # rides along in `drops` so two same-named works can be told apart.
+        out.append(Suggestion(kind="title", value=title, count=int(kudos or 0),
+                              query=title, reason="spelling", drops=author or None))
+    return out
 
 
 def _did_you_mean(db, q: str, min_sim: float | None = None) -> list[Suggestion]:
@@ -4290,7 +4397,17 @@ def search(          # NOT async — see below
         # trigram pass rather than alongside it. A mistyped operator or a
         # hyphen is a known cause with a known fix and a probed result count;
         # offering it next to three fuzzy guesses buries the one that works.
-        _suggestions = _typed_rescues(db, q) or _did_you_mean(db, q)
+        # Titles before facets. A reader who misspells a work's name is
+        # asking about that work, and offering them a fandom whose letters
+        # happen to be close is a worse answer than the title they meant.
+        # Cheapest first. `_did_you_mean` is a lookup against `facets`, a
+        # small table; the title rescue scans a trigram index over 20.8M rows
+        # and costs ~360ms even tuned, so it runs only when the cheap pass
+        # found nothing. A misspelt TITLE is not in `facets` anyway, so
+        # nothing is hidden by the order.
+        _suggestions = (_typed_rescues(db, q)
+                        or _did_you_mean(db, q)
+                        or _misspelt_title(db, q))
     elif (_typed and 0 < total <= SUGGEST_MAX_RESULTS
             and len(_typed.split()) <= SUGGEST_MAX_WORDS):
         # A LOWER similarity floor than the zero-result path, and it is the

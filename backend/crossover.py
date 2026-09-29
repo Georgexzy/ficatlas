@@ -191,6 +191,20 @@ def run(dry_run: bool = False) -> dict:
         # already correct. The other way round leaves a window the length of
         # the repair — the same ordering content_gates.py uses and for the same
         # reason.
+        # A LOCK TIMEOUT BEFORE ANY DDL THAT TOUCHES `stories`.
+        #
+        # `DROP TRIGGER ... ON stories` needs ACCESS EXCLUSIVE, which queues
+        # behind any open transaction on the table -- and a queued ACCESS
+        # EXCLUSIVE blocks every READER behind it, so one waiting statement
+        # takes the whole site down. This file's own notes have warned about
+        # that shape for months; this DDL had no timeout on it.
+        #
+        # Measured 2026-09-29: the weekly popularity rebuild held `stories`,
+        # this statement waited 5m15s, and six reader queries serving
+        # ficatlas.com queued behind IT -- search at 20s and the Harry Potter
+        # hub answering 404. The trigger is idempotent and the pass is weekly,
+        # so giving up costs nothing and the next run installs it.
+        db.execute(_text("SET LOCAL lock_timeout = '5s'"))
         db.execute(_text(_TRIGGER_SQL))
         db.commit()
 

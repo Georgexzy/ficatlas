@@ -101,18 +101,46 @@ const SITE_LABELS: Record<string, string> = {
   fictionalley: "FictionAlley",
 }
 
-async function fetchHub(slug: string): Promise<Hub | null> {
+/** Three outcomes, not two.
+ *
+ *  Both hub routes used to collapse every failure into `null` and then call
+ *  `notFound()`. So a TIMEOUT produced a 404 — and because the route is
+ *  cached, Next then stored that 404 and served it for the whole revalidate
+ *  window. Observed on 2026-09-29: a maintenance job held a lock on `stories`,
+ *  /api/hubs/harry-potter timed out once, and the biggest fandom hub on the
+ *  site answered a hard, fast 404 to readers and to Google long after the
+ *  database was healthy again.
+ *
+ *  A 404 says "this never existed, stop asking". A 5xx says "try later". Only
+ *  the API saying 404 justifies the first. Exactly the distinction
+ *  `lookupStory` in app/story/[id]/page.tsx has made since it was written —
+ *  the hub routes simply never got it.
+ */
+type HubLookup =
+  | { kind: "found"; hub: Hub }
+  | { kind: "missing" }      // the API said 404: there is no such hub
+  | { kind: "unavailable" }  // timeout, 5xx, refused — say nothing permanent
+
+async function lookupHub(slug: string): Promise<HubLookup> {
   try {
     const r = await fetch(`${INTERNAL_API}/api/hubs/${encodeURIComponent(slug)}`, {
       next: { revalidate },
       headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
       signal: AbortSignal.timeout(10000),
     })
-    if (!r.ok) return null
-    return await r.json()
+    if (r.status === 404) return { kind: "missing" }
+    if (!r.ok) return { kind: "unavailable" }
+    return { kind: "found", hub: await r.json() }
   } catch {
-    return null
+    return { kind: "unavailable" }
   }
+}
+
+/** For generateMetadata, where there is nothing useful to say either way and a
+ *  missing title is not worth failing a render over. */
+async function fetchHub(slug: string): Promise<Hub | null> {
+  const r = await lookupHub(slug)
+  return r.kind === "found" ? r.hub : null
 }
 
 function searchHref(name: string, site?: string): string {
@@ -149,8 +177,16 @@ export default async function FandomHub(
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await params
-  const hub = await fetchHub(slug)
-  if (!hub) notFound()
+  const found = await lookupHub(slug)
+  // A 404 is permanent and gets cached; only the API saying 404 earns one.
+  // Anything else — a timeout, a 5xx, a refused connection — throws, which
+  // Next answers with a 500 and does NOT cache. See HubLookup above for the
+  // day this cost us the Harry Potter hub.
+  if (found.kind === "missing") notFound()
+  if (found.kind === "unavailable") {
+    throw new Error(`fandom hub ${slug} could not be loaded`)
+  }
+  const hub = found.hub
 
   // Fall back to one merged section if an older hub row has no per-site data,
   // so a page still renders between a deploy and the next rebuild.
