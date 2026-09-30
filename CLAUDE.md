@@ -1261,6 +1261,29 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   the underage toggle to reveal. Confirmed at the row level too: zero
   underage-gated works pass the predicate an `explicit=true` search applies.
 
+- **A derivative work QUOTES the original's title, so prefix matching hands
+  the reader the podfic.** "<Title> by <Author>" is how fanfiction is named,
+  and measured on the live index:
+
+      All the Young Dudes by MsKingBean89  ->  a podfic by CattleAbduction
+      Manacled by SenLinYu                 ->  a podfic by MondSchatten
+
+  The mechanism is `exact_bonus`. A podfic, translation or remix names the
+  original in its own title — "All the Young Dudes by MsKingBean89 - Chapter
+  1" — so it literally STARTS WITH what the reader typed and collects the
+  prefix half of that bonus, while the actual work, titled "All the Young
+  Dudes", is neither equal to the typed string nor a prefix of it and scores
+  zero. The derivative then wins on kudos.
+  - **`_names_one_work` already understood the shape and could not help**,
+    because it is a rescue gated on a search finding NOTHING and these find
+    320 and 28. Recognising a pattern is not the same as ranking by it; check
+    which one a feature actually does before assuming it is covered.
+  - **BOTH halves must match exactly, and that is the whole safety argument.**
+    A title carrying its own " by " ("Gone by Morning") splits into nonsense,
+    and the nonsense has to coincide with a real work by a real author of that
+    name before it can score. A bonus and not a tier, so even then it lifts
+    rather than overrules — the same reason `exact_bonus` is one.
+
 - **Two fandoms and "no crossovers" is not a narrow search, it is an EMPTY
   one, and the reader could not tell.** `is_crossover` means a work carrying
   more than one franchise, so the halves of `fandom:A fandom:B xover:exclude`

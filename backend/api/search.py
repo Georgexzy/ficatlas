@@ -3898,6 +3898,41 @@ def search(          # NOT async — see below
                            (title_l.like(q_norm + "%"), w_exact * 0.4),
                            else_=0.0)
 
+        # "<title> by <author>" must find the WORK, not the podfic of it.
+        #
+        # A podfic, translation or remix names the original in its own title —
+        # "All the Young Dudes by MsKingBean89 - Chapter 1" — so it literally
+        # starts with what the reader typed and collects the prefix half of
+        # `exact_bonus` above. The actual work is titled "All the Young Dudes",
+        # which is neither equal to the typed string nor a prefix of it, so it
+        # scores ZERO there. The reader names a work as precisely as it is
+        # possible to name one and is handed somebody else's reading of it:
+        #
+        #   All the Young Dudes by MsKingBean89  -> a podfic by CattleAbduction
+        #   Manacled by SenLinYu                 -> a podfic by MondSchatten
+        #
+        # `_names_one_work` already understands this shape, but only as a
+        # rescue for a search that found nothing, and these find hundreds. It
+        # was never a ranking signal.
+        #
+        # BOTH halves must match exactly, which is what makes it safe. A title
+        # containing its own " by " ("Gone by Morning") splits wrongly, and the
+        # wrong split then has to coincide with a real work by a real author of
+        # that name before it can score at all — and a bonus, not a tier, so
+        # even then it lifts rather than overrules. Above `w_exact` because
+        # naming the title AND the author is the most specific thing a reader
+        # can do, and the one case where they have told us exactly which of the
+        # five works called "Manacled" they mean.
+        named_work_bonus = literal_column("0.0")
+        _nw = re.search(r"^(.{2,160}?)\s+by\s+([^\s].{0,60})$", q.strip(), re.I)
+        if _nw and not is_category:
+            _nw_title = _nw.group(1).strip(" \"'").lower()
+            _nw_author = _nw.group(2).strip(" \"'").lower()
+            named_work_bonus = case(
+                (and_(title_l == _nw_title,
+                      func.lower(S.author) == _nw_author), w_exact * 1.25),
+                else_=0.0)
+
         # The site-normalised standing first, and the raw figure only where there
         # is no standing yet. This is the same argument popularity_rank.py makes
         # at length, applied to the one place that was still ignoring it.
@@ -4040,7 +4075,7 @@ def search(          # NOT async — see below
             (S.tags.op("&&")(cast([_RECS_MARKER], PG_ARRAY(Text))), RECS_BONUS),
             else_=0.0)
 
-        relevance = (w_title * title_sim + exact_bonus
+        relevance = (w_title * title_sim + exact_bonus + named_work_bonus
                      + w_text * text_rank + w_pop * pop
                      + ship_bonus + trope_bonus + rec_bonus
                      + describe_term
