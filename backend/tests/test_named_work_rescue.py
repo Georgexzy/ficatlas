@@ -85,3 +85,56 @@ class TestABareArchiveId:
         """"1984" and "Chapter 100" are titles, not ids."""
         assert S._names_one_work(db, "1984") == []
         assert S._names_one_work(db, "100") == []
+
+
+class TestTheNamedWorkOutranksItsPodfic:
+    """Naming a work must find the WORK, not somebody's reading of it.
+
+    A podfic, translation or remix names the original in its own title — "All
+    the Young Dudes by MsKingBean89 - Chapter 1" — so it literally starts with
+    what the reader typed and collects the prefix half of `exact_bonus`. The
+    original is titled "All the Young Dudes", which is neither equal to the
+    typed string nor a prefix of it, and scores zero there. Measured on the
+    live index before the fix:
+
+        All the Young Dudes by MsKingBean89  -> a podfic by CattleAbduction
+        Manacled by SenLinYu                 -> a podfic by MondSchatten
+
+    `_names_one_work` already understood the shape, but only as a rescue for a
+    search that found NOTHING, and both of those find hundreds.
+    """
+
+    def _client(self, db):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from db.session import get_db
+        app = FastAPI()
+        app.include_router(S.router, prefix="/api/search")
+        app.dependency_overrides[get_db] = lambda: db
+        return TestClient(app)
+
+    def test_the_original_beats_a_podfic_that_quotes_it(self, db):
+        t = f"Wandering Stars {uuid.uuid4().hex[:8]}"
+        a = f"RealAuthor{uuid.uuid4().hex[:6]}"
+        # The podfic is deliberately the more popular row, so kudos alone
+        # cannot be what puts the original first.
+        _work(db, t, a, kudos=10)
+        _work(db, f"{t} by {a} - Podfic", f"Reader{uuid.uuid4().hex[:6]}", kudos=5000)
+        r = self._client(db).get("/api/search", params={"q": f"{t} by {a}", "per_page": 5})
+        assert r.status_code == 200, r.text
+        rows = r.json()["results"]
+        assert rows, "the named work returned nothing at all"
+        assert rows[0]["title"] == t and rows[0]["author"] == a, \
+            f"podfic outranked the work it names: {[(x['title'], x['author']) for x in rows[:3]]}"
+
+    def test_both_halves_must_match(self, db):
+        """The guard that makes a wrong split harmless. A title carrying its own
+        " by " splits into nonsense, and the nonsense then has to coincide with
+        a real work by a real author of that name before it can score at all."""
+        t = f"Gone by Morning {uuid.uuid4().hex[:8]}"
+        a = f"Author{uuid.uuid4().hex[:6]}"
+        _work(db, t, a, kudos=50)
+        r = self._client(db).get("/api/search", params={"q": t, "per_page": 5})
+        rows = r.json()["results"]
+        assert rows and rows[0]["title"] == t, \
+            f"a title containing ' by ' stopped ranking for itself: {rows[:2]}"
