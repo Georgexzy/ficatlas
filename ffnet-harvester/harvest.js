@@ -205,26 +205,83 @@ async function harvestSection(browser, db, section) {
   await cursorSet(db, key, start + Math.max(pagesOk, 0))
   console.log(`listing[ffnet] ${section} pages ${start}-${start + pagesOk - 1}: `
             + `${seen} works, ${updated} updated`)
-  return { seen, updated }
+  // pagesOk is what the caller needs to tell "the site answered and there was
+  // nothing new" from "the site refused us" — 0 works updated means both.
+  return { seen, updated, pagesOk }
 }
+
+// How long a total refusal may last before this process gives up and lets
+// Docker start it again with a fresh browser. `restart: unless-stopped` in
+// docker-compose.yml is what makes exiting the cheapest possible repair.
+const WEDGE_MS = Number(process.env.FFNET_WEDGE_H || 6) * 3600 * 1000
+// A pass that achieved nothing sleeps for longer each time, to this ceiling.
+const IDLE_MIN_MS = 30000
+const IDLE_MAX_MS = Number(process.env.FFNET_IDLE_MAX_MIN || 60) * 60 * 1000
 
 async function main() {
   const once = process.argv.includes("--once")
   const db = new Client({ connectionString: process.env.DATABASE_URL })
   await db.connect()
+
+  // EVIDENCE, AND A WAY OUT OF A TOTAL REFUSAL.
+  //
+  // The design note on loadListing says FF.net's refusal is per SESSION and
+  // that a fresh context gets 200 immediately. That stopped being true: the
+  // site now answers 403 to every context, and to plain curl, and to a browser
+  // user agent, while still serving robots.txt. Measured in this container's
+  // own log: 41,717 consecutive 403s and not one other status code.
+  //
+  // Two things went wrong with that and neither was the block itself.
+  //
+  // It kept asking. Every section broke on its first page and the pass slept
+  // only 30s, so a site that had refused us tens of thousands of times was
+  // asked again twice a minute, for days. The delay between requests is
+  // described above as the unit of politeness; a refusal deserves the same
+  // respect, so an idle pass now backs off to an hour.
+  //
+  // And it went silent. The last line this container logged was four days
+  // before anyone looked, while the process was still alive and a headless
+  // Chromium sat resident the whole time. `page.goto` has a 45s timeout, so
+  // the wedge was elsewhere in the await chain — which is exactly why this
+  // watchdog is a TIMER and not a check inside the loop: a timer keeps firing
+  // when the loop is stuck, and a check inside the loop does not.
+  let lastOkAt = Date.now()
+  setInterval(() => {
+    if (Date.now() - lastOkAt > WEDGE_MS) {
+      console.error(`fatal: no listing page has succeeded in ${WEDGE_MS / 3600000}h `
+                  + `— exiting so the container restarts with a fresh browser`)
+      process.exit(1)
+    }
+  }, 60000).unref()
   // One browser for the process; each page load gets its own context inside
   // loadListing. Launching Chromium per page would cost seconds and gain
   // nothing — it is the cookie jar that has to be new, not the binary.
   const browser = await chromium.launch()
 
+  let idleMs = IDLE_MIN_MS
   do {
-    let seen = 0, updated = 0
+    let seen = 0, updated = 0, pages = 0
     for (const s of SECTIONS) {
       const r = await harvestSection(browser, db, s)
-      seen += r.seen; updated += r.updated
+      seen += r.seen; updated += r.updated; pages += r.pagesOk
     }
-    console.log(`PASS DONE — ${seen} works seen, ${updated} updated`)
-    if (!once) await sleep(30000)
+    if (pages > 0) {
+      lastOkAt = Date.now()
+      idleMs = IDLE_MIN_MS
+      // What the admin panel reads. A timestamp written only when a page
+      // actually answered — evidence that the live harvest achieved
+      // something, not a heartbeat saying the loop is turning. A loop that
+      // turns happily over a site refusing every request is precisely the
+      // failure this records.
+      await cursorSet(db, "ffnet_listing_ok_at", Math.floor(Date.now() / 1000))
+        .catch(() => {})
+    } else {
+      idleMs = Math.min(idleMs * 2, IDLE_MAX_MS)
+    }
+    console.log(`PASS DONE — ${seen} works seen, ${updated} updated, `
+              + `${pages} pages answered`
+              + (pages === 0 ? ` — nothing answered, sleeping ${Math.round(idleMs / 1000)}s` : ""))
+    if (!once) await sleep(pages > 0 ? IDLE_MIN_MS : idleMs)
   } while (!once)
 
   await browser.close()

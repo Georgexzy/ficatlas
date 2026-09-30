@@ -267,6 +267,27 @@ _JOB_EVIDENCE = [
     # of the site's intermittent slowness (see CLAUDE.md). The probe below stops
     # at the first matching row — 19 buffers while the crawler is healthy — and
     # a bounded window is all a staleness check ever needed.
+    # The FF.net LIVE listing harvest, which is a separate container and had no
+    # row here at all — so a third of the index quietly stopped receiving
+    # updates and nothing on this page said so.
+    #
+    # Measured 2026-09-30: FF.net carries 380 works with an update date in the
+    # last year against AO3's 883,281, and the harvester's own log held 41,717
+    # consecutive 403s and no other status code. The site refuses this server
+    # for content paths while still serving robots.txt, and the scheduler's
+    # circuit breaker had already tripped `crawl_disabled_ffnet`. All of that
+    # was true and none of it was visible as FRESHNESS.
+    #
+    # Evidence, not a heartbeat: written only when a listing page actually
+    # answered. A loop turning happily against a site that refuses every
+    # request is exactly what a heartbeat would call healthy.
+    ("ffnet_listing", "FanFiction.net live harvest",
+     "The separate harvester container that walks FF.net listings for updated "
+     "engagement figures. FF.net blocks this server at present, so a stale row "
+     "here is expected and is the honest statement of it — the Wayback passes "
+     "are what keep FF.net moving meanwhile.", 24,
+     "SELECT to_timestamp(NULLIF(value,'')::bigint) FROM app_settings "
+     " WHERE key = 'ffnet_listing_ok_at'"),
     ("crawler", "Crawler fetching",
      "Thirteen loops fetch works: AO3 stubs and recent works, the archive walks, "
      "the fandom listing harvest, title repair and both Wayback passes. They all "

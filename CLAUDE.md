@@ -1261,6 +1261,47 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   the underage toggle to reveal. Confirmed at the row level too: zero
   underage-gated works pass the predicate an `explicit=true` search applies.
 
+- **Index freshness is two different stories, and only one of them was a bug.**
+  Asked directly whether updates are captured close to when they land.
+  Measured 2026-09-30, for works whose archive-side `updated_at` is in the last
+  three days:
+
+  | site | works updated | we have seen the update | median lag |
+  |---|---:|---:|---:|
+  | ao3 | 9,950 | **99.0%** | 20h 26m |
+  | ffnet | 3 | **0%** | — |
+
+  AO3 is healthy. FF.net was not drifting — it had stopped. Updates with a date
+  in the last YEAR: **AO3 883,281, FF.net 380**, on an archive that is a third
+  of the index.
+  - **It is not missing data.** Sampled, 100% of FF.net rows carry
+    `updated_at` and only 18.7% of AO3 rows do — the opposite of the guess.
+    FF.net's dates are simply all old, because what we hold is the bulk dumps.
+  - **The site blocks this server**, and the scheduler had already noticed: the
+    circuit breaker in `scheduler.py` had tripped `crawl_disabled_ffnet` after
+    repeated `[blocked]` failures, exactly as designed. `robots.txt` still
+    returns 200 while content paths return 403 to curl, to a browser user
+    agent, and to Playwright.
+  - **The real bug was silence, twice over.** The harvester container had
+    logged **41,717 consecutive 403s and no other status code**, then stopped
+    logging entirely four days before anyone looked — process alive, headless
+    Chromium resident, asking a site that had refused it tens of thousands of
+    times, twice a minute. Nothing on the admin panel covered it, because it is
+    a separate container and every row there is a worker loop.
+  - **A restart fixed more than expected, which is the useful part.** The
+    design note on `loadListing` says the refusal is per SESSION; that is still
+    true, and a fresh container immediately got pages again — 1 to 3 per pass,
+    with works updating — against zero for four days. So the wedge, not the
+    block, was what had actually stopped FF.net. The watchdog is a TIMER and
+    not a check inside the loop, because `page.goto` already has a 45s timeout
+    and the wedge was elsewhere in the await chain: a timer keeps firing when
+    the loop is stuck and an in-loop check does not.
+  - An idle pass now backs off 30s → 1h. The service comment says the request
+    delay is "set by what is decent toward a live site"; a refusal deserves the
+    same respect, and asking 41,717 times does not.
+  - `ffnet_listing_ok_at` is written only when a page actually ANSWERED, and
+    the panel reads it. A heartbeat would have called all of this healthy.
+
 - **The commonest unhelped empty search is a SENTENCE, and the machine that
   reads sentences was only wired to the admin panel.** Measured by replaying
   every zero-result query real readers ran over fourteen days: 72 distinct
