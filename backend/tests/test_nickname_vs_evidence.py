@@ -150,3 +150,49 @@ class TestAWeakFandomMayNotEvictStrongCharacters:
         """Both observed cases are an order of magnitude clear of the
         threshold, so nothing near it has ever actually been seen."""
         assert 1 < S._FANDOM_OUTWEIGHED <= 5
+
+
+class TestOnlyAGuessMayBeOverruled:
+    """The evidence rule, pointed the other way, is the same mistake.
+
+    The overrule exists for ABBREVIATIONS standing in for a fandom -- "OP
+    Harry" -> One Piece, "go" -> Good Omens, "re" -> Resident Evil -- where the
+    characters should win. A reader who writes the fandom's own NAME has not
+    guessed at anything. Measured before this:
+
+        "naruto fic where sasuke and sakura time travel"
+          -> fandom:"Fire Emblem: If | Fire Emblem: Fates"   (8,016 works)
+
+    while `Naruto`, matched from the literal word "naruto", is on 456,030. The
+    evidence behind it was junk in both halves: the resolved `Sasuke Uchiha` is
+    a 237-work spelling and no `Sakura*` character near the top of the
+    vocabulary is the Naruto one at all.
+    """
+
+    def test_a_named_fandom_is_protected(self):
+        import inspect
+        src = inspect.getsource(S.extract)
+        assert "_named_outright" in src, \
+            "the overrule must not fire when the reader named the fandom"
+        i_named = src.index("_named_outright = bool(_fmatched)")
+        i_use = src.index("and not _named_outright")
+        assert i_named < i_use
+
+    def test_an_abbreviation_is_still_overrulable(self):
+        """The guard must be EQUALITY, not a prefix: "go" is a prefix of "Good
+        Omens" and must stay overrulable, or the hijack this rule exists to
+        stop comes back."""
+        import inspect
+        src = inspect.getsource(S.extract)
+        block = src[src.index("_fname = _base(fandom_term.value)"):
+                    src.index("and not _named_outright")]
+        assert "==" in block, "the name test must be equality"
+        assert "startswith" not in block, \
+            "a prefix test would protect 'go' -> Good Omens and reopen the hijack"
+
+    def test_the_pipe_split_is_aos_own_convention(self):
+        """`僕のヒーローアカデミア | Boku no Hero Academia | My Hero Academia` --
+        a reader typing any one of those has named it outright."""
+        import inspect
+        src = inspect.getsource(S.extract)
+        assert '_fname.split("|")' in src
