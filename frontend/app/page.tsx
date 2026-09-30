@@ -3452,7 +3452,17 @@ function SearchPageInner() {
                     {(() => {
                       const sug = shown.suggestions ?? []
                       const spelling = sug.filter(s => (s.reason ?? "spelling") === "spelling")
-                      const wider = sug.filter(s => (s.reason ?? "spelling") !== "spelling")
+                      // A third heading, because neither of the other two is
+                      // true here. "Did you mean" says they made a spelling
+                      // mistake and they did not; "every term is a
+                      // requirement" says they asked for too many things, and
+                      // they asked for one thing in a sentence. What happened
+                      // is that the sentence was read.
+                      const describe = sug.filter(s => s.reason === "describe")
+                      const wider = sug.filter(s => {
+                        const r = s.reason ?? "spelling"
+                        return r !== "spelling" && r !== "describe"
+                      })
                       const label = (s: Suggestion) =>
                         s.reason === "relax"   ? `without “${s.drops}”`
                       : s.reason === "broaden" ? `“${s.drops}” → “${s.value}”`
@@ -3471,6 +3481,30 @@ function SearchPageInner() {
                                       <span className="dym__value">{sg.value}</span>
                                       <span className="dym__kind">{DYM_KIND_LABEL[sg.kind] ?? sg.kind}</span>
                                       <span className="dym__count">{fmtCount(sg.count)}</span>
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          {describe.length > 0 && (
+                            <div className="dym">
+                              <p className="dym__lead">
+                                That reads like a description rather than a
+                                title, and every word in it has to match. Here
+                                is what it seems to be asking for:
+                              </p>
+                              <ul className="dym__list">
+                                {describe.map(sg => (
+                                  <li key={"describe" + sg.value}>
+                                    <button className="dym__pick"
+                                      onClick={() => { setQuery(sg.query); doSearch(true, undefined, sg.query) }}>
+                                      <span className="dym__value">{sg.value}</span>
+                                      <span className="dym__count">
+                                        {sg.works != null
+                                          ? `${fmtCount(sg.works)}${sg.works >= 2000 ? "+" : ""} works`
+                                          : fmtCount(sg.count)}
+                                      </span>
                                     </button>
                                   </li>
                                 ))}
