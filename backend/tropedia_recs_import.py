@@ -175,6 +175,28 @@ BATCH_PAGES = 25
 
 
 def run(dry_run: bool = False, limit: int | None = None) -> dict:
+    """Serialised against every other bulk rewrite of `stories`.
+
+    These write `stories` in bulk like the gate and crossover repairs do, and
+    were the two left outside the lock. Measured: tropedia failed every hour
+    with
+
+        canceling statement due to statement timeout
+        CONTEXT: while locking tuple (1550040,5) in relation "stories"
+
+    -- blocked on a row lock held by the popularity rebuild, waiting out the
+    60s statement timeout and dying, which is exactly what the shared lock
+    exists to prevent.
+    """
+    import maintenance_lock
+
+    if dry_run:
+        return _run_locked(dry_run=True, limit=limit)
+    with maintenance_lock.heavy_pass("tropedia_recs"):
+        return _run_locked(limit=limit)
+
+
+def _run_locked(dry_run: bool = False, limit: int | None = None) -> dict:
     """Read every rec page and tag what it names, committing as it goes.
 
     Committing in BATCHES rather than once at the end, and the difference is not

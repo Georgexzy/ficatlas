@@ -1562,28 +1562,46 @@ async def _curation_loop() -> None:
 
     interval = _num("CURATION_INTERVAL_HOURS", 168) * 3600
     await asyncio.sleep(_num("CURATION_START_DELAY_SEC", 3600))
+    chain = (("reddit recs", reddit_recs_import.run),
+             ("tropedia recs", tropedia_recs_import.run),
+             ("content gates", content_gates.run),
+             ("crossover flags", crossover.run))
+    # ONLY WHAT WAS DEFERRED COMES BACK, and the first version of this retried
+    # everything. It said "the recs imports are network-bound and idempotent,
+    # so re-running them costs pages, not correctness" — which was the wrong
+    # call, and measurable within a day: `reddit recs` ran TEN times in twenty
+    # hours against a job whose interval is a week, because the two passes
+    # behind it were deferred on every cycle and dragged the whole chain round
+    # with them. That is an hourly hit on somebody's spreadsheet and ~900
+    # Tropedia pages per attempt, against a service whose own note says the
+    # rate is "set by what is decent toward a live site".
+    #
+    # The ordering constraint survives: the recs imports rewrite `tags`, which
+    # fires the gate trigger per row, so the gates only need to follow them
+    # WITHIN a cycle — and on a retry the recs half has already run.
+    pending = list(chain)
     while True:
-        deferred = False
-        for name, fn in (("reddit recs", reddit_recs_import.run),
-                         ("tropedia recs", tropedia_recs_import.run),
-                         ("content gates", content_gates.run),
-                         ("crossover flags", crossover.run)):
+        still: list = []
+        for name, fn in pending:
             try:
                 stats = await asyncio.to_thread(fn)
                 log.info("%s: %s", name, stats)
             except MaintenanceDeferred:
                 # This loop starts 45 minutes into the popularity rebuild and
-                # both are weekly, so before the shared lock existed these two
-                # collided every week at the same offset. Retry the whole chain
-                # in an hour; the recs imports above are network-bound and
-                # idempotent, so re-running them costs pages, not correctness.
+                # both are weekly, so before the shared lock existed these
+                # collided every week at the same offset.
                 log.info("%s: deferred by another heavy pass", name)
-                deferred = True
+                still.append((name, fn))
             except Exception as e:
                 # One source failing must not stop the others, and must not
                 # stop the gate repair — which is the safety-relevant half.
                 log.warning("%s failed: %s: %s", name, type(e).__name__, e)
-        await asyncio.sleep(RETRY_SECONDS if deferred else interval)
+        if still:
+            pending = still
+            await asyncio.sleep(RETRY_SECONDS)
+        else:
+            pending = list(chain)
+            await asyncio.sleep(interval)
 
 
 async def _indexnow_loop() -> None:

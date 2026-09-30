@@ -143,6 +143,28 @@ _UPSERT = text(f"""
 
 
 def run(dry_run: bool = False, source: str | None = None) -> dict:
+    """Serialised against every other bulk rewrite of `stories`.
+
+    These write `stories` in bulk like the gate and crossover repairs do, and
+    were the two left outside the lock. Measured: tropedia failed every hour
+    with
+
+        canceling statement due to statement timeout
+        CONTEXT: while locking tuple (1550040,5) in relation "stories"
+
+    -- blocked on a row lock held by the popularity rebuild, waiting out the
+    60s statement timeout and dying, which is exactly what the shared lock
+    exists to prevent.
+    """
+    import maintenance_lock
+
+    if dry_run:
+        return _run_locked(dry_run=True, source=source)
+    with maintenance_lock.heavy_pass("reddit_recs"):
+        return _run_locked(source=source)
+
+
+def _run_locked(dry_run: bool = False, source: str | None = None) -> dict:
     raw = (open(source, encoding="utf-8").read() if source
            else urllib.request.urlopen(SHEET, timeout=60).read().decode("utf-8"))
     entries = parse(raw)
