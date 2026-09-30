@@ -5892,6 +5892,69 @@ def _is_generic_entity(value: str) -> bool:
     return value.strip().lower() in _GENERIC_ENTITIES
 
 
+# Sampled fandom rows below which the absence of a fandom means nothing. A
+# character on a handful of works can easily miss its own fandom tag.
+_CONTRADICT_MIN_ROWS = int(os.getenv("SEARCH_CONTRADICT_MIN_ROWS", "25"))
+
+
+def _fandom_contradicts(db, names: list[str], fandom: str) -> Optional[str]:
+    """Does any of these characters belong somewhere OTHER than `fandom`?
+
+    A deliberately weaker question than `_fandom_from_evidence` asks, for a
+    place where a weaker answer is the right one.
+
+    That function must not be loosened: its one-name rule exists because a
+    lone `Time (Linked Universe)`, matched from the word "time" in "during the
+    HP school time", was enough to overrule a named `Harry Potter` and send a
+    whole search to Zelda. Establishing a fandom from thin evidence is how
+    that happened.
+
+    This asks something that costs far less to get wrong. It never sets a
+    fandom. It only reports that a character the post resolved sits in a
+    different one, and the only consequence is that a ship NICKNAME — which is
+    a guess, not something the reader wrote — stops being trusted to name the
+    fandom by itself. The fallback is the rest of the post.
+
+    Why a count floor does not do this job, measured rather than assumed:
+    `Time (Linked Universe)` is on 3,888 works and `Voldemort` on 4,056, so no
+    threshold separates the junk match from a real single-word character. Nor
+    does capitalisation — this file already records that rule being tried and
+    rejected, because readers write `twd` and `tvd` in lower case all day.
+    """
+    vals = [n for n in names if n and not _is_generic_entity(n)]
+    if not vals:
+        return None
+    rows = db.execute(sql_text("""
+        SELECT f, count(*) AS n
+          FROM (SELECT unnest(fandoms) f FROM stories
+                 WHERE delisted_at IS NULL
+                   AND characters && CAST(:v AS text[])
+                 LIMIT 400) x
+         GROUP BY 1 ORDER BY 2 DESC LIMIT 12
+    """), {"v": vals}).fetchall()
+    if not rows:
+        return None
+    total = sum(r[1] for r in rows)
+    # ABSENCE, not a majority — and the first version got this wrong.
+    #
+    # A majority test cannot work here, because an AO3 fandom tag is not a
+    # franchise: authors file one work under every spelling that fits. The
+    # works carrying `Starscream (Transformers)` and `Bumblebee (Transformers)`
+    # spread over SIX Transformers tags, the largest of which is 137 of ~400
+    # sampled rows — 34%, so a 0.6 majority never fired and the bug survived
+    # the first fix. `crossover.py` exists because of this same fact.
+    #
+    # What is unambiguous is that RWBY does not appear in that sample AT ALL.
+    # If the nickname named the right pairing, the characters beside it in the
+    # post would be filed alongside it at least sometimes. Nothing, from a
+    # sample this size, is the contradiction.
+    if total < _CONTRADICT_MIN_ROWS:
+        return None                       # too thin to conclude anything
+    if any(f == fandom for f, _ in rows):
+        return None
+    return rows[0][0]
+
+
 def _fandom_from_evidence(db, names: list[str], kind: str) -> Optional[tuple[str, int]]:
     """Which fandom do these characters or pairings actually belong to?
 
@@ -6729,7 +6792,14 @@ def extract(
     # where the loose names found nothing worth ranking.
     # A nickname first: it is one token that names a whole pairing, so it is
     # the most specific thing a post can carry. Slash notation second.
-    pair_term = _ship_nickname_in_post(db, raw) or _resolve_pair(db, raw)
+    _nick_pair = _ship_nickname_in_post(db, raw)
+    pair_term = _nick_pair or _resolve_pair(db, raw)
+    # WHERE THE PAIRING CAME FROM, because the two are different KINDS of
+    # claim. `_resolve_pair` read "A/B" out of the post: the reader wrote both
+    # names and a slash. A nickname is one word this index happens to map to a
+    # pairing, which is a guess of exactly the sort `fandom_aliases` makes —
+    # and the evidence rule below already exists for those. See the note there.
+    _pair_from_nickname = _nick_pair is not None
     # No pairing in the vocabulary, but two real characters either side of the
     # slash: ask for works carrying both rather than returning nothing.
     pair_chars = [] if pair_term else _pair_characters(db, raw)
@@ -7405,9 +7475,34 @@ def extract(
         (t for t in terms if t.kind == "fandom"), None)
     if _fandom_candidate:
         fandom_term = _fandom_candidate
-        _ev = (_fandom_from_evidence(
-                   db, [t.value for t in terms if t.kind == "relationship"],
-                   "relationship")
+        # A GUESS MAY NOT BE ITS OWN EVIDENCE.
+        #
+        # This asked the relationships first and the characters only if the
+        # relationships said nothing — and a nickname-resolved pairing is IN
+        # the relationships. So the alias voted for the fandom it had just been
+        # looked up in, agreed with itself, and the `or` short-circuited before
+        # any character was consulted. Circular, and silent.
+        #
+        # Measured on a real prose query:
+        #
+        #   "A simple day out was all Bumblebee wanted, but a battered and
+        #    half alive Starscream interrupted that plan"
+        #     -> ship:"Blake Belladonna/Yang Xiao Long" fandom:"RWBY"
+        #
+        # "Bumblebee" is a RWBY ship nickname AND a Transformers character.
+        # The post also names Starscream — `Starscream (Transformers)`, 8,416
+        # works, resolved and sitting right there in the term list — and the
+        # index even holds `Bumblebee/Starscream (Transformers)`. The reader
+        # got someone else's fandom.
+        #
+        # This file already states the rule for the other alias table: "An
+        # alias is a guess; the characters are evidence." A ship nickname is
+        # the same kind of guess as `twd` or `pls`, so it gets the same
+        # treatment — it is excluded from the vote, and the characters decide.
+        _rel_values = [t.value for t in terms if t.kind == "relationship"
+                       and not (_pair_from_nickname and pair_term is not None
+                                and t.value == pair_term.value)]
+        _ev = (_fandom_from_evidence(db, _rel_values, "relationship")
                or _fandom_from_evidence(
                    db, [t.value for t in terms if t.kind == "character"],
                    "character"))
@@ -7418,6 +7513,21 @@ def extract(
                                         count=_ev[1],
                                         matched=fandom_term.matched,
                                         from_line=True)
+            # And the nickname goes with the fandom it brought. Overruling the
+            # fandom while keeping the pairing would be worse than doing
+            # nothing: the block below pins `pair_term` first and re-derives
+            # its fandom from `_fandom_of`, so RWBY would simply come back with
+            # a Transformers work list that cannot contain it.
+            if _pair_from_nickname and pair_term is not None:
+                _nick_fandom = _fandom_of(db, pair_term.value)
+                if _nick_fandom and _nick_fandom[0] != _ev[0]:
+                    log.debug("extract: nickname pairing %r dropped, its "
+                              "fandom %r lost to evidence %r",
+                              pair_term.value, _nick_fandom[0], _ev[0])
+                    terms = [t for t in terms
+                             if not (t.kind == "relationship"
+                                     and t.value == pair_term.value)]
+                    pair_term = None
         # No "drop it if it was lowercase" rule. That was tried and it is
         # wrong: readers write `twd` and `tvd` in lower case all the time, and
         # a post about one fandom often resolves no character at all, so the
@@ -7445,6 +7555,51 @@ def extract(
         # not instead of it. Note it needs a RESOLVED pairing — the rejected
         # "characters outrank tags" rule let `God`, from "for the love of God",
         # beat every tag in the post.
+        # A NICKNAME BRINGS ITS OWN FANDOM, SO IT HAS TO FACE THE EVIDENCE HERE
+        # TOO — and this is the path that actually caught the Bumblebee post.
+        #
+        # The reconciliation further up only runs when the post NAMED a fandom.
+        # A post that names none has no candidate to overrule, so the nickname
+        # arrives here unopposed and `_fandom_of` below turns it into the
+        # fandom of the whole query. That is how
+        #
+        #   "...all Bumblebee wanted, but a battered and half alive Starscream"
+        #
+        # became RWBY: nothing in the post said RWBY, the nickname did, and
+        # `Starscream (Transformers)` (8,416 works) was sitting unused in the
+        # term list the entire time.
+        if _pair_from_nickname:
+            _chars = [t.value for t in terms if t.kind == "character"]
+            _nick_fandom = _fandom_of(db, pair_term.value)
+            _other = (_fandom_contradicts(db, _chars, _nick_fandom[0])
+                      if _nick_fandom else None)
+            if _other:
+                log.debug("extract: nickname %r (%r) dropped — characters %r "
+                          "say %r", pair_term.matched, _nick_fandom[0],
+                          _chars, _other)
+                terms = [t for t in terms
+                         if not (t.kind == "relationship"
+                                 and t.value == pair_term.value)]
+                pair_term = None
+                # AND THE CHARACTERS TAKE ITS PLACE.
+                #
+                # Dropping the nickname without this was a second bug wearing
+                # the first one's clothes: "Bumblebee and Starscream fight then
+                # make up" stopped saying RWBY and started saying
+                # `tag:"Fights"`, with two canonical Transformers characters
+                # sitting unused in the term list. A bare name is ranked on the
+                # BARE name's count by design — `Starscream` alone is on 791
+                # works against `Fights` on 17,614 — so neither could ever win
+                # a slot on frequency.
+                #
+                # They are exactly what `_pair_characters` was written to pin,
+                # and handing them to that branch is also what makes the fandom
+                # come out right: TWO names clear the one-name guard in
+                # `_fandom_from_evidence`, so the fandom is inferred from the
+                # works rather than from anything the nickname claimed.
+                pair_chars = [t for t in terms if t.kind == "character"][:2]
+
+    if pair_term:
         head = [pair_term]
         fand = _fandom_of(db, pair_term.value)
         if fand:
