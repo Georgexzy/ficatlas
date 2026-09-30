@@ -24,8 +24,27 @@ export default function HealthBanner() {
   useEffect(() => {
     let alive = true
     let timer: ReturnType<typeof setTimeout>
+    let last = 0
 
     const check = async () => {
+      // CANCEL THE PENDING POLL BEFORE STARTING ONE.
+      //
+      // `check` re-arms itself in its own `finally`, and `wake` below calls it
+      // directly on focus/online. Without this line that direct call did not
+      // replace the scheduled poll, it ADDED to it: the pending timeout still
+      // fired and started a second self-re-arming chain, and the two never
+      // merged. One chain per focus event, for the life of the tab.
+      //
+      // Measured at the origin before the fix: 7,294 requests to
+      // /api/stats/totals in a single hour — two a second, from a handful of
+      // readers with tabs open — against the two a minute one chain costs.
+      // None of it is absorbed at the edge, because this deliberately asks for
+      // `no-store` (a health check served from a 300s cache cannot see an
+      // outage), so every one reached the box over a domestic connection and
+      // queued beside real searches. On a phone it is also somebody's battery
+      // and data.
+      clearTimeout(timer)
+      last = Date.now()
       try {
         // Cheap and cached server-side. A health check that costs real work is
         // one that makes the outage worse.
@@ -54,7 +73,16 @@ export default function HealthBanner() {
     // Check immediately when the connection returns or the tab is looked at
     // again, so the banner clears the moment it is wrong rather than up to
     // thirty seconds later.
-    const wake = () => { fails.current = 0; check() }
+    // Alt-tabbing is not news. Coming back after a while is, so this still
+    // checks on focus — it just will not turn a flurry of window switches into
+    // a flurry of requests. The banner clearing promptly is the point; doing it
+    // more than once every few seconds buys nothing.
+    const WAKE_MIN_GAP_MS = 5_000
+    const wake = () => {
+      if (Date.now() - last < WAKE_MIN_GAP_MS) return
+      fails.current = 0
+      check()
+    }
     window.addEventListener("online", wake)
     window.addEventListener("focus", wake)
     const offline = () => setState({
