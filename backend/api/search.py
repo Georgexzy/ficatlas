@@ -7513,7 +7513,32 @@ def extract(
                or _fandom_from_evidence(
                    db, [t.value for t in terms if t.kind == "character"],
                    "character"))
-        if _ev and _ev[0] != fandom_term.value:
+        # ONLY A GUESS MAY BE OVERRULED, and a name is not a guess.
+        #
+        # Everything this overrule was built for is an ABBREVIATION standing in
+        # for a fandom: "OP Harry" -> One Piece, "go" -> Good Omens, "re" ->
+        # Resident Evil. Those are guesses and the characters should beat them.
+        # A reader who writes the fandom's own name has not guessed at
+        # anything, and overruling that is the same mistake pointed the other
+        # way. Measured:
+        #
+        #   "naruto fic where sasuke and sakura time travel"
+        #     -> fandom:"Fire Emblem: If | Fire Emblem: Fates"   (8,016 works)
+        #
+        # while `Naruto` -- matched from the literal word "naruto" -- is on
+        # 456,030. The evidence behind that was junk in both halves: the
+        # resolved `Sasuke Uchiha` is a 237-work spelling, and no `Sakura*`
+        # character near the top of the vocabulary is the Naruto one at all.
+        #
+        # The pipe split is AO3's own convention for a multi-language title
+        # (`僕のヒーローアカデミア | Boku no Hero Academia | My Hero Academia`):
+        # a reader typing any one of those has named it outright too.
+        _fname = _base(fandom_term.value).strip().lower()
+        _fmatched = (fandom_term.matched or "").strip().lower()
+        _named_outright = bool(_fmatched) and (
+            _fmatched == _fname
+            or _fmatched in {p.strip() for p in _fname.split("|")})
+        if _ev and _ev[0] != fandom_term.value and not _named_outright:
             log.debug("extract: alias %r -> %r overruled by evidence %r",
                       fandom_term.matched, fandom_term.value, _ev[0])
             fandom_term = ExtractedTerm(kind="fandom", value=_ev[0],
