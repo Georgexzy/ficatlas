@@ -30,11 +30,13 @@ Two things must be in the key or the cache is a bug:
     matter to an author rather than merely being stale.
 
 Staleness is bounded by TTL and is the acceptable half of the trade: the index
-gains rows continuously but no individual search becomes wrong within a couple
-of minutes. Anything with an editorial effect — a takedown, a delisting — is not
-served from here at all, because those change what an operator sees and
-operators are keyed separately, and because two minutes is shorter than any
-human notices.
+gains rows continuously — about ten a minute — but no individual search becomes
+WRONG by missing a few of them, only slightly less complete, and a result set
+is capped at 5,001 candidates anyway. Anything with an editorial effect — a
+takedown, a delisting — is not served from here at all, because those change
+what an operator sees and operators are keyed separately. That exclusion is
+what makes the TTL a performance number rather than a safety one; see the note
+on TTL_SECONDS for why it is fifteen minutes and not two.
 
 Two tiers, and why
 ------------------
@@ -61,6 +63,7 @@ endpoint down with it is worse than no cache.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import urllib.parse
 import time
@@ -69,11 +72,37 @@ from typing import Any, Optional
 
 log = logging.getLogger(__name__)
 
-# Two minutes. Long enough that a burst of people searching the same popular
-# fandom collapses onto one query; short enough that a reader refining a search
-# never sees a result set that predates their last edit in any way they could
-# notice.
-TTL_SECONDS = 120
+# Fifteen minutes, raised from two, and the old reason for two did not survive
+# being looked at.
+#
+# It read: "short enough that a reader refining a search never sees a result
+# set that predates their last edit." But REFINING A SEARCH CHANGES THE KEY —
+# every filter is in it, by the correctness rule above — so a refined search
+# lands on a fresh entry at any TTL whatsoever. Two minutes was protecting
+# against something the key already made impossible.
+#
+# What the TTL actually governs is the IDENTICAL search run again, and the
+# commonest way that happens is one reader: search, open a story, read it, come
+# back. Measured cold on this box, page one of a real query costs 1.5-8s
+# (median 3.1s). At two minutes, anyone who spent longer than that on the story
+# paid the whole cost again to get back to a list they had already been shown —
+# which is most readers, because two minutes is shorter than a chapter.
+#
+# The cost of the longer window is bounded and small: the crawler adds ~15,000
+# works a day, about ten a minute, against a result set capped at 5,001
+# candidates. A work indexed during the window is late to a search it would
+# rarely have led anyway, and the next uncached run picks it up.
+#
+# Nothing with an editorial effect is served from here at all — takedowns and
+# delistings are keyed separately for operators and excluded — so the one class
+# of staleness that could wrong an author is out of scope of this number
+# entirely. That is what makes it safe to raise; without it, two minutes would
+# still be arguable.
+#
+# Fifteen minutes rather than an hour because it matches what the edge already
+# does with documents (`s-maxage=900` in next.config.ts), and a reader coming
+# back an hour later is a new visit rather than the same one continuing.
+TTL_SECONDS = int(os.getenv("SEARCH_CACHE_TTL_SEC", "900"))
 
 # Entries, not bytes. A search response is ~20-40KB of JSON, so this is roughly
 # 20-40MB per worker at capacity, against a 1.4GB container limit.
