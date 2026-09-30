@@ -28,7 +28,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Every pass that bulk-rewrites `stories`.
 JOBS = ["popularity_rank.py", "content_gates.py", "crossover.py",
-        "series_wordcount.py"]
+        "series_wordcount.py",
+        # Added after tropedia failed EVERY HOUR with
+        #   canceling statement due to statement timeout
+        #   CONTEXT: while locking tuple (1550040,5) in relation "stories"
+        # -- blocked on a row lock held by the popularity rebuild. The recs
+        # importers bulk-write `stories` like the repairs do and were the two
+        # left outside the lock.
+        "tropedia_recs_import.py", "reddit_recs_import.py"]
 
 # The per-job keys, which are NOT the shared one and must stay distinct from it.
 PER_JOB_KEYS = [8_531_197_402_664_219, 0x0C205501, 0x6721C0DE, 0x5E21E5CD]
@@ -90,3 +97,21 @@ def test_it_is_released_even_when_the_pass_raises(db):
 
     with maintenance_lock.heavy_pass("after"):
         pass
+
+
+def test_a_deferred_cycle_retries_only_what_was_deferred():
+    """Not the whole chain, which is what the first version did.
+
+    Measured within a day of shipping it: `reddit recs` ran TEN times in
+    twenty hours against a job whose interval is a week, because the two
+    passes behind it deferred on every cycle and dragged the network importers
+    round with them -- an hourly hit on somebody's spreadsheet and ~900
+    Tropedia pages per attempt.
+    """
+    import inspect
+    import worker
+    src = inspect.getsource(worker._curation_loop)
+    assert "pending = still" in src, \
+        "a retry must carry only the deferred jobs forward"
+    assert "pending = list(chain)" in src, \
+        "a clean pass must reset to the full chain before the long sleep"

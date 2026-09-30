@@ -1344,6 +1344,43 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     passing `ex.query` through, so the count shown and the search behind it
     cannot disagree.
 
+- **"What a fandom is recommending LATELY" has never produced a single
+  mention, and three separate faults were keeping it that way.** Measured
+  2026-09-30: `rec_threads` holds **8 threads, 0 mentions, 0 works**.
+  - **Reddit refuses us and the backoff cannot recover.** Every pass ends
+    "backed off for another 20965s". The penalty escalated
+    15 → 30 → 60 → 120 → 240 → 360 minutes from 2026-09-29 17:54 and has sat
+    at its 6h ceiling since, because each probe is refused and re-penalises.
+    **The module is unauthenticated BY DESIGN** — a User-Agent against public
+    JSON, and nothing in this repo reads `REDDIT_CLIENT_ID` at all, so an
+    unset credential is not the fault. Reddit simply no longer serves
+    unauthenticated traffic from this address. `reddit_fetch.py` already names
+    the remedy in its own comment: *register an app*. Waiting will not fix it,
+    which is why the panel row says so rather than reporting "stale".
+  - **Tropedia failed EVERY HOUR**, and the message says exactly why:
+    `canceling statement due to statement timeout / CONTEXT: while locking
+    tuple (1550040,5) in relation "stories"` — blocked on a row lock held by
+    the popularity rebuild, waiting out the 60s timeout and dying. The recs
+    importers bulk-write `stories` like the gate and crossover repairs do, and
+    were the two passes left OUTSIDE the shared lock. Being under it is the
+    whole difference between deferring cleanly and timing out.
+  - **A deferral must retry only what was deferred.** The first version of
+    `_curation_loop`'s retry took the whole chain round again, on the
+    reasoning that "the recs imports are network-bound and idempotent, so
+    re-running them costs pages, not correctness". Measurably wrong within a
+    day: `reddit recs` ran **ten times in twenty hours** against a job whose
+    interval is a week, because the two passes behind it deferred on every
+    cycle and dragged it with them — an hourly hit on somebody's spreadsheet
+    and ~900 Tropedia pages per attempt, from a service whose own note says
+    the rate is "set by what is decent toward a live site".
+  - The ordering constraint survives the change: the recs imports rewrite
+    `tags`, which fires the gate trigger per row, so the gates only need to
+    follow them WITHIN a cycle — and on a retry the recs half has already run.
+  - **The only trace of any of this was a WARNING in a 75,000-line log.** Same
+    gap as the FF.net harvester, same fix: an evidence row reading
+    `max(read_at)`, which moves when a thread was actually READ. A loop
+    cheerfully backing off for ever reads as stale, which is what it is.
+
 - **A 117-work fandom evicted an 8,416-work character, and the filter that did
   it was the LAST of three bugs in one sentence.** The real prose query
 

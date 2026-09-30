@@ -288,6 +288,28 @@ _JOB_EVIDENCE = [
      "are what keep FF.net moving meanwhile.", 24,
      "SELECT to_timestamp(NULLIF(value,'')::bigint) FROM app_settings "
      " WHERE key = 'ffnet_listing_ok_at'"),
+    # What a fandom is recommending LATELY, which is the one recommendation
+    # question no archive can answer — and which has produced nothing at all.
+    #
+    # Measured 2026-09-30: 8 threads discovered, **0 mentions, 0 works**. Every
+    # pass ends "backed off for another 20965s"; the Reddit penalty has been
+    # pinned at its 6h ceiling since 2026-09-29 17:54 and escalated
+    # 15 -> 30 -> 60 -> 120 -> 240 -> 360 minutes without one success. The
+    # module is unauthenticated by design (a User-Agent against public JSON,
+    # no OAuth anywhere in this repo), and Reddit now refuses that from this
+    # address — a condition the backoff cannot recover from, because every
+    # probe is refused and re-penalises.
+    #
+    # The only trace of any of that was a WARNING in a 75,000-line worker log.
+    # This is the row that says so. `read_at` is evidence and not a heartbeat:
+    # it moves when a thread was actually READ, so a loop cheerfully backing
+    # off forever reads as stale, which is what it is.
+    ("rec_threads", "Recommendation threads",
+     "Recent recommendation threads, which is how the index knows what a "
+     "fandom is pressing on people NOW rather than all-time. Stale here means "
+     "Reddit is refusing us; unauthenticated access is no longer enough and "
+     "the fix is to register an app, not to wait.", 72,
+     "SELECT max(read_at) FROM rec_threads"),
     ("crawler", "Crawler fetching",
      "Thirteen loops fetch works: AO3 stubs and recent works, the archive walks, "
      "the fandom listing harvest, title repair and both Wayback passes. They all "
