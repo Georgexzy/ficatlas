@@ -99,3 +99,54 @@ def test_dropping_the_nickname_promotes_the_characters():
     i_drop = src.index("pair_term = None")
     i_chars = src.index("pair_chars = [t for t in terms if t.kind == \"character\"]")
     assert i_chars > i_drop, "the characters must take the dropped nickname's place"
+
+
+class TestAWeakFandomMayNotEvictStrongCharacters:
+    """The same rule, one layer down, and the last piece of the Bumblebee bug.
+
+    Once a post's fandom is known, a character from elsewhere is usually a
+    misfire — so `_wrong_fandom` drops it. But the FANDOM is sometimes the
+    misfire. Measured on the real prose query:
+
+        "A simple day out was all Bumblebee wanted, but a battered and half
+         alive Starscream interrupted that plan"
+
+    `Wanted (2008)`, a fandom on 117 works matched from the ordinary word
+    "wanted", evicted `Starscream (Transformers)` (8,416) and
+    `Bumblebee (Transformers)` (6,781) — both of which the span loop had
+    ranked FIRST and SECOND. The reader got a 117-work film.
+    """
+
+    def test_the_check_runs_before_the_filter_it_guards(self):
+        """ORDER IS THE WHOLE FIX, and getting it wrong is silent.
+
+        The first version of this sat after `_wrong_fandom` had already
+        stripped the characters, so it read an empty character list, never
+        fired, and looked exactly like a rule that did not work.
+        """
+        import inspect
+        src = inspect.getsource(S.extract)
+        i_words = src.index("_f_words = {w for w in re.findall")
+        i_guard = src.index("_FANDOM_OUTWEIGHED")
+        i_filter = src.index("if not _wrong_fandom(t.value, t.kind, _f_words)")
+        assert i_words < i_guard < i_filter, (
+            "the outweigh check must sit between _f_words and the "
+            "_wrong_fandom filter, or it reads characters that are already gone")
+
+    def test_it_needs_the_characters_to_be_better_attested(self):
+        """Not the contradiction alone — the contradiction holds both ways.
+
+        A named `Harry Potter` (686,826) must keep beating a lone
+        `Time (Linked Universe)` (3,888) matched from the word "time", or the
+        Zelda bug comes straight back. What separates that from the Bumblebee
+        case is which side the numbers are on: 176x one way, 72x the other.
+        """
+        import inspect
+        src = inspect.getsource(S.extract)
+        assert "_best_char >= _fand_count * _FANDOM_OUTWEIGHED" in src, \
+            "dropping the fandom must be gated on the characters outweighing it"
+
+    def test_the_margin_is_wide(self):
+        """Both observed cases are an order of magnitude clear of the
+        threshold, so nothing near it has ever actually been seen."""
+        assert 1 < S._FANDOM_OUTWEIGHED <= 5

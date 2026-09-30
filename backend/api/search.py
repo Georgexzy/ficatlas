@@ -5896,6 +5896,13 @@ def _is_generic_entity(value: str) -> bool:
 # character on a handful of works can easily miss its own fandom tag.
 _CONTRADICT_MIN_ROWS = int(os.getenv("SEARCH_CONTRADICT_MIN_ROWS", "25"))
 
+# How much better attested the characters must be before they are allowed to
+# unseat the post's fandom. Two is deliberately generous on both sides: the
+# two real cases sit at 72x and 176x in opposite directions, so nothing near
+# the boundary has ever been observed, and a wide margin is what keeps this
+# from firing on an ordinary post.
+_FANDOM_OUTWEIGHED = float(os.getenv("SEARCH_FANDOM_OUTWEIGHED", "2"))
+
 
 def _fandom_contradicts(db, names: list[str], fandom: str) -> Optional[str]:
     """Does any of these characters belong somewhere OTHER than `fandom`?
@@ -7712,6 +7719,53 @@ def extract(
     # came in afterwards and went straight to the head of the list.
     _f_words = {w for w in re.findall(r"[a-z0-9]+", (_post_fandom or "").lower())
                 if len(w) > 2}
+    # A 117-WORK FANDOM MAY NOT EVICT AN 8,416-WORK CHARACTER.
+    #
+    # This filter is right in general: once a post's fandom is known, a
+    # character from somewhere else is usually a misfire. But it trusted the
+    # fandom absolutely, and the fandom is sometimes the misfire. Measured on
+    # the real prose query this whole thread began with:
+    #
+    #   "A simple day out was all Bumblebee wanted, but a battered and half
+    #    alive Starscream interrupted that plan"
+    #
+    # `Wanted (2008)` — a fandom on 117 works, matched from the ordinary word
+    # "wanted" — evicted `Starscream (Transformers)` (8,416) and
+    # `Bumblebee (Transformers)` (6,781), both of which the span loop had
+    # ranked FIRST and SECOND. The reader got a 117-work film.
+    #
+    # So the fandom faces the same question the ship nickname now does. It is
+    # NOT applied blindly, and the case that forbids that is already in this
+    # file: a named `Harry Potter` must keep beating a lone
+    # `Time (Linked Universe)` matched from the word "time", or the Zelda bug
+    # comes straight back.
+    #
+    # What separates them is not the contradiction, which holds both ways —
+    # it is WHICH SIDE IS BETTER ATTESTED, and the margin is not close:
+    #
+    #   Wanted (2008)  117     vs  Starscream (Transformers)  8,416   (72x)
+    #   Harry Potter   686,826 vs  Time (Linked Universe)     3,888   (176x)
+    #
+    # So the fandom is dropped only when the characters that contradict it are
+    # comfortably bigger than it is. Everywhere else the filter behaves exactly
+    # as before.
+    if _f_words:
+        _chars_now = [t for t in terms if t.kind == "character"]
+        _fand_count = next((t.count for t in terms
+                            if t.kind == "fandom" and t.value == _post_fandom),
+                           None)
+        if _chars_now and _fand_count is not None:
+            _best_char = max(t.count for t in _chars_now)
+            if (_best_char >= _fand_count * _FANDOM_OUTWEIGHED
+                    and _fandom_contradicts(
+                        db, [t.value for t in _chars_now], _post_fandom)):
+                log.debug("extract: fandom %r (%s works) dropped — characters "
+                          "%r are better attested and sit elsewhere",
+                          _post_fandom, _fand_count,
+                          [t.value for t in _chars_now])
+                terms = [t for t in terms
+                         if not (t.kind == "fandom" and t.value == _post_fandom)]
+                _post_fandom, _f_words = None, set()
     terms = [t for t in terms
              if not _wrong_fandom(t.value, t.kind, _f_words)
              and not _is_framing(t.value)]
