@@ -99,6 +99,10 @@ export interface Suggestion {
    *   relax    — their own query minus the term that is costing the results
    *   broaden  — a narrow tag swapped for the way the archives usually spell it
    *   split    — a rarely-filed pairing swapped for the two characters in it
+   *   describe — they typed a SENTENCE, so it is read as a description of a
+   *              story and turned into a search. Not a correction and not a
+   *              relaxation: nothing they typed was wrong, it was prose, and
+   *              every word of prose is a requirement the index cannot meet.
    *
    * The last three exist because a measurement said the first was answering
    * the wrong question: ablating every component of every query built from a
@@ -106,7 +110,7 @@ export interface Suggestion {
    * works while dropping the fandom recovers 1. A typo announces itself;
    * over-constraint looks exactly like a thin index.
    */
-  reason?: "spelling" | "relax" | "broaden" | "split"
+  reason?: "spelling" | "relax" | "broaden" | "split" | "describe"
   /** Works the suggested query would find — probe-measured and capped, so a
    *  floor. `count` is how many carry the term ANYWHERE, which on an
    *  over-constrained search is a different question. */

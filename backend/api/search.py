@@ -1461,6 +1461,91 @@ def _edit_distance_1(a: str, b: str) -> bool:
     return True
 
 
+# A sentence, not a title. Six words because real titles reach five
+# ("Harry Potter and the Philosopher's Stone" is six, and is caught by the
+# title rescue that runs before this one anyway).
+_DESCRIBE_MIN_WORDS = int(os.getenv("SEARCH_DESCRIBE_MIN_WORDS", "6"))
+# The extractor's own floor for keeping a term. Below it there is nothing to
+# offer that the reader could not have found by typing less.
+_DESCRIBE_MIN_WORKS = int(os.getenv("SEARCH_DESCRIBE_MIN_WORKS", "3"))
+
+
+def _describe_suggestion(db, typed: str) -> list[Suggestion]:
+    """They described the story instead of naming it. Search for the description.
+
+    The commonest unhelped empty search, measured by replaying every
+    zero-result query real readers ran over fourteen days: of 64 that are still
+    empty, 31 got no suggestion of any kind, and roughly a third of those are
+    prose — someone quoting a line they remember, or describing the plot:
+
+        A simple day out was all Bumblebee wanted, but a battered and half
+          alive Starscream interrupted that plan
+        Naruto: Naruto and fem Naruto time travel to Minatos gennin days
+        ao3 story where the guy falls on the plunger and then his dad ...
+
+    Every word of that is AND-ed against the index, so it matches nothing, and
+    the page said nothing back. These are the most invested readers on the
+    site — they typed a whole sentence — and they got the emptiest answer.
+
+    `/api/search/extract` was built for exactly this shape and was reachable
+    only from the admin outreach panel. On the Naruto line above it returns
+    `fandom:"Naruto" tag:"Time Travel"`, which is the search they wanted.
+
+    OFFERED, NEVER APPLIED, because extraction from prose is genuinely
+    ambiguous and this file already has the measurement to prove it: the
+    Transformers line resolves to RWBY, since "Bumblebee" is also a RWBY ship
+    nickname. A person can see that instantly and a ranker cannot. Same
+    conclusion `extract` itself reached about its chips.
+
+    The offered query is built from the terms that were PROBED, rather than
+    passing `ex.query` through, so the count shown and the search behind it
+    cannot disagree — this file's own rule about a probe that does not run the
+    predicate the search will run.
+    """
+    # A COLON IS NOT AN OPERATOR. The first version of this rejected anything
+    # containing one, and threw away the very query that prompted the feature:
+    #
+    #     Naruto: Naruto and fem Naruto time travel to Minatos gennin days
+    #
+    # where the colon is how a reader writes a fandom before a description.
+    # This file already records the same mistake one layer down — `/^-?\w+:$/`
+    # matched `3:` and turned "chapter 3: the return" into "chapter the
+    # return". An operator is a colon after a word the PARSER recognises, so
+    # ask the parser rather than the punctuation.
+    from query_parser import FIELD_ALIASES
+    if any(m.group(1).lower() in FIELD_ALIASES
+           for m in re.finditer(r"(?:^|\s)-?(\w+):", typed)):
+        return []            # already using the syntax; _relax handles those
+    words = re.findall(r"[A-Za-z0-9']+", typed)
+    if len(words) < _DESCRIBE_MIN_WORDS:
+        return []
+    try:
+        ex = extract(text=typed, db=db)
+    except Exception:
+        log.debug("describe extraction failed", exc_info=True)
+        return []
+    # `with_query is None` marks the terms the extractor kept, i.e. the ones
+    # its own probe found could hold together.
+    kept = [t for t in (ex.terms or []) if t.with_query is None]
+    if not kept:
+        return []
+    probe_terms = [_Term(t.kind, t.value, t.spellings or [t.value]) for t in kept]
+    try:
+        n = _probe_count(db, probe_terms, ex.word_count_min, None, None,
+                         cap=_SUGGEST_CAP, word_count_max=ex.word_count_max)
+    except Exception:
+        log.debug("describe probe failed", exc_info=True)
+        return []
+    if n < _DESCRIBE_MIN_WORKS:
+        return []
+    built = _as_query(probe_terms, None, ex.word_count_min, ex.word_count_max,
+                      None, None)
+    if not built:
+        return []
+    return [Suggestion(kind="describe", value=built, count=n, works=n,
+                       reason="describe", drops=None, query=built)]
+
+
 def _names_one_work(db, typed: str) -> list[Suggestion]:
     """The reader named a specific work. Find it, or say nothing.
 
@@ -4497,9 +4582,15 @@ def search(          # NOT async — see below
         # and costs ~360ms even tuned, so it runs only when the cheap pass
         # found nothing. A misspelt TITLE is not in `facets` anyway, so
         # nothing is hidden by the order.
+        # `_describe_suggestion` is last for the same "cheapest first" reason:
+        # it runs the whole extractor (~320ms warm, 2.7s cold) and is the least
+        # certain of the four, so it only ever speaks when the three rescues
+        # above have nothing. A reader who merely misspelt a title is not
+        # offered a reading of their sentence instead.
         _suggestions = (_typed_rescues(db, q)
                         or _did_you_mean(db, q)
-                        or _misspelt_title(db, q))
+                        or _misspelt_title(db, q)
+                        or _describe_suggestion(db, q))
     elif (_typed and 0 < total <= SUGGEST_MAX_RESULTS
             and len(_typed.split()) <= SUGGEST_MAX_WORDS):
         # A LOWER similarity floor than the zero-result path, and it is the

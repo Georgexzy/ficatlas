@@ -1261,6 +1261,48 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   the underage toggle to reveal. Confirmed at the row level too: zero
   underage-gated works pass the predicate an `explicit=true` search applies.
 
+- **The commonest unhelped empty search is a SENTENCE, and the machine that
+  reads sentences was only wired to the admin panel.** Measured by replaying
+  every zero-result query real readers ran over fourteen days: 72 distinct
+  queries, 64 still empty, and **31 of those got no suggestion of any kind**.
+  About a third of the 31 are prose — someone quoting a line they remember, or
+  describing the plot:
+
+      A simple day out was all Bumblebee wanted, but a battered and half
+        alive Starscream interrupted that plan
+      Naruto: Naruto and fem Naruto time travel to Minatos gennin days
+      ao3 story where the guy falls on the plunger and then his dad ...
+
+  Every word is AND-ed against the index, so it matches nothing and the page
+  said nothing back. These are the most invested readers on the site — they
+  typed a whole sentence — and they got the emptiest answer. `/api/search/
+  extract` was built for exactly this shape and was reachable only from
+  `OutreachPanel`. On the Naruto line it gives `fandom:"Naruto" tag:"Time
+  Travel"` — **1,190 works**.
+  - **Offered, never applied**, because extraction from prose is genuinely
+    ambiguous and there is a measurement to prove it: the Transformers line
+    resolves to RWBY, since "Bumblebee" is also a RWBY ship nickname. A person
+    sees that instantly and a ranker cannot. Same conclusion `extract` reached
+    about its own chips.
+  - **A third heading, not one of the two that existed.** "Did you mean" says
+    they misspelled something and they did not; "every term is a requirement"
+    says they asked for too many things and they asked for one thing in a
+    sentence. The heading has to state the actual rule, which is the same
+    argument that split the first two apart.
+  - **A COLON IS NOT AN OPERATOR, and the first version threw away the query
+    that prompted the feature.** It rejected anything containing one —
+    including `Naruto: Naruto and fem Naruto...`, where the colon is how a
+    reader writes a fandom before a description. This file already recorded
+    the identical mistake one layer down (`/^-?\w+:$/` matched `3:` and turned
+    "chapter 3: the return" into "chapter the return"). Ask `FIELD_ALIASES`,
+    not the punctuation.
+  - Last of the four rescues, because it runs the whole extractor (~320ms
+    warm, 2.7s cold) and is the least certain: a reader who merely misspelt a
+    title is not offered a reading of their sentence instead.
+  - The offered query is rebuilt from the terms that were PROBED rather than
+    passing `ex.query` through, so the count shown and the search behind it
+    cannot disagree.
+
 - **A derivative work QUOTES the original's title, so prefix matching hands
   the reader the podfic.** "<Title> by <Author>" is how fanfiction is named,
   and measured on the live index:
