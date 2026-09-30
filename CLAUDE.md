@@ -1261,6 +1261,30 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   the underage toggle to reveal. Confirmed at the row level too: zero
   underage-gated works pass the predicate an `explicit=true` search applies.
 
+- **A handler that calls a self-re-arming poll does not restart it, it CLONES
+  it.** `HealthBanner` polls `/api/stats/totals` every 30s and re-arms in its
+  own `finally`; its focus/online handler called `check()` directly without
+  clearing the pending timeout, so the scheduled poll still fired and started a
+  SECOND chain. The two never merged, and a tab accumulated one chain per focus
+  event for as long as it stayed open. Measured at the origin: **7,294 requests
+  in a single hour**, two a second, against the two a minute one chain costs.
+  - **None of it is absorbed at the edge, and that is correct.** The poll asks
+    for `no-store` on purpose — a health check served from the 300s cache
+    cannot see an outage — so every duplicate reached the box over a domestic
+    connection and queued beside real searches. On a phone it is also somebody
+    else's battery and data.
+  - It was invisible because it is self-limiting per page load and unbounded
+    only over a LONG session, so no single visit looks wrong. It showed up as
+    `/api/stats/totals` being 71% of all origin requests over 48h while
+    `cf-cache-status` said HIT for an ordinary reader — the edge rule was
+    working the whole time and was never the problem.
+  - The fix is `clearTimeout(timer)` at the top of `check`, plus a 5s floor on
+    the wake handler. Alt-tabbing is not news; coming back after a while is.
+  - **The general rule: anything that re-arms itself must cancel before it
+    re-arms, or every other caller of it is a fork.** `lib/healthPolling.test.ts`
+    asserts the clear precedes the re-arm, because reproducing this needs a
+    long-lived tab and repeated focus events.
+
 - **Every heavy pass said "one at a time" and each of them meant "one of ME at
   a time".** `popularity_rank`, `content_gates`, `crossover` and
   `series_wordcount` each took their own advisory key, so each excluded a
