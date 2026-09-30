@@ -72,6 +72,13 @@ COUNT_CACHE_TTL = int(os.getenv("SEARCH_COUNT_CACHE_TTL", "900"))
 # zero rows and a large scan is the very thing to avoid.
 HIDDEN_EXPLICIT_CEILING = int(os.getenv("HIDDEN_EXPLICIT_CEILING", "999"))
 
+# Up to how many results still counts as "they may be missing one specific
+# work". Above this a reader is browsing, not hunting, and a notice about
+# content settings is noise. 200 covers the shape that reaches the traffic log
+# -- a title search returning tens or low hundreds -- while leaving the
+# five-thousand-result browses alone.
+_HIDDEN_NOTICE_MAX_RESULTS = int(os.getenv("SEARCH_HIDDEN_NOTICE_MAX", "200"))
+
 # A title ending on one of these was cut off, not written that way.
 #
 # The English half is the set ao3_title_repair.py already trusts to identify a
@@ -483,11 +490,42 @@ def _query_is_category(db, term: str) -> int:
     try:
         # One indexed lookup for all of them (ix_facets_value_lower), rather
         # than a query per sub-phrase.
-        return int(db.execute(sql_text(
+        n = int(db.execute(sql_text(
             "SELECT COALESCE(max(count), 0) FROM facets WHERE lower(value) = ANY(:vs)"
         ), {"vs": uniq}).scalar() or 0)
     except Exception:
         return 0
+    # A MULTI-WORD PHRASE ON SIXTEEN WORKS IS NOT A CATEGORY.
+    #
+    # This returned any match at all, however small, and the docstring above
+    # already disagreed with it: it says a 13-work tag means "a title" and the
+    # code returned 13, which every caller reads as true. Being called a
+    # category drops `w_exact` from 4.0 to 0.15 — a 26x cut to the exact-title
+    # bonus — so a title that happens to collide with a tiny tag stops being
+    # rankable as a title.
+    #
+    # From the traffic log, a reader who ran it four times and opened nothing:
+    # `a breach in hell` matched a 16-work facet, and `SCP - A Breach in Hell`
+    # — 53,101 words, in the index, not gated — never reached page one, while
+    # `A Breach in His Heart` (438 kudos) led. We held the fic and could not
+    # show it to them.
+    #
+    # THE FLOOR IS FOR MULTI-WORD MATCHES ONLY, and a flat floor was measured
+    # and rejected. Real one-word ship nicknames sit in exactly the same range
+    # as the false positives — `bellamione` 10, `linny` 4, `pansmione` 14
+    # against titles at 12, 13, 16, 26 — so a floor that caught the titles
+    # would have silently broken those. A coined portmanteau is a category at
+    # any size; a phrase is only a category if the archives really use it:
+    #
+    #     a breach in hell            16      coffee shop au     2,768
+    #     all the young dudes         13      enemies to lovers 63,789
+    #     a court of thorns and roses 26      fluff          1,130,841
+    #
+    # Nothing has been observed between 26 and 2,768, which is the margin this
+    # relies on.
+    if len(words) > 1 and n < _CATEGORY_MIN_WORKS:
+        return 0
+    return n
 
 
 _SHIP_SPLIT = re.compile(r"\s*/\s*")
@@ -3979,9 +4017,38 @@ def search(          # NOT async — see below
         # words beat every better overall match, and popularity never got a vote
         # — which is how a 0-kudos fic called "Harry Potter" ended up above all
         # 686,000 actual Harry Potter stories.
-        exact_bonus = case((title_l == q_norm, w_exact),
-                           (title_l.like(q_norm + "%"), w_exact * 0.4),
-                           else_=0.0)
+        # A TITLE CAN BE PREFIXED, AND ONLY THE PREFIX CASE WAS HANDLED.
+        #
+        # `exact_bonus` rewarded a title that EQUALS the query or STARTS with
+        # it. Archives routinely put something in front: a fandom ("SCP - A
+        # Breach in Hell"), a marker ("[Podfic] ..."), a series name before a
+        # colon. Those titles end with what the reader typed and scored zero.
+        #
+        # From the traffic log, a reader who searched it four times and opened
+        # nothing: `a breach in hell` returns 96 works, and
+        # `SCP - A Breach in Hell` — the work they were plainly after — was not
+        # on page one, because it has 0 kudos and `A Breach in His Heart` has
+        # 438. We hold the fic and could not show it to them.
+        #
+        # Weighted BELOW the prefix arm. Containment is weaker evidence than a
+        # title that begins with the query, and much weaker than equality, so
+        # an exact match still wins by a wide margin: `all the young dudes`
+        # keeps returning the 322,055-kudos work rather than a podfic of it.
+        #
+        # Long queries only. A one-word query is a trope, not a title, and
+        # `%fluff%` would lift every title containing it — which is the
+        # `exact_bonus` failure this file already records, one arm along.
+        # Wildcards in the reader's own text are escaped, or a query
+        # containing `%` silently matches everything.
+        _contain_ok = (not is_category
+                       and len(q_norm) >= _TITLE_CONTAIN_MIN_CHARS
+                       and len(q_norm.split()) >= _TITLE_CONTAIN_MIN_WORDS)
+        _arms = [(title_l == q_norm, w_exact),
+                 (title_l.like(q_norm + "%"), w_exact * 0.4)]
+        if _contain_ok:
+            _esc = q_norm.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+            _arms.append((title_l.like(f"%{_esc}%", escape="\\"), w_exact * 0.3))
+        exact_bonus = case(*_arms, else_=0.0)
 
         # "<title> by <author>" must find the WORK, not the podfic of it.
         #
@@ -4399,7 +4466,29 @@ def search(          # NOT async — see below
     # misspelled title — it cannot overcount, which is the direction that would
     # promise results that are not there.
     hidden_explicit = 0
-    if _explicit_pred is not None and page == 1 and total <= per_page:
+    # A FULL PAGE OF RESULTS CAN STILL BE MISSING THE ONE WORK THEY WANT.
+    #
+    # This ran only when the whole result set fitted on one page
+    # (`total <= per_page`), which is right for the case it was written
+    # for — a search returning two works — and silent for the case that
+    # actually reaches the traffic log.
+    #
+    # Measured on `a breach in hell`, a title a reader searched four times and
+    # opened nothing from: 109 results with the adult tier on, 145 with it off.
+    # THIRTY-SIX works hidden, one of them `SCP - A Breach in Hell`, which is
+    # the work they were plainly after and which ranks SECOND once the tier is
+    # off. `hidden_explicit` reported 0, so the notice never rendered and
+    # nothing on the page suggested a setting was involved.
+    #
+    # The arithmetic this file already requires — results + hidden = results
+    # with the tier off — simply was not being computed at all above a page.
+    #
+    # Bounded rather than unbounded: a reader browsing `fluff` at five
+    # thousand results is not missing a specific work, and a notice on every
+    # search is the kind that stops being read. The count itself is one
+    # capped query on page one only.
+    if (_explicit_pred is not None and page == 1
+            and total <= max(per_page, _HIDDEN_NOTICE_MAX_RESULTS)):
         try:
             # WHAT THE ADULT TIER HIDES, which is not the same as what the
             # RATING hides — and reporting the second while applying the first
@@ -4889,6 +4978,20 @@ class ExtractResponse(BaseModel):
 # A term nobody would be narrowing by. `Fluff` is on 1.13M works and is still
 # worth offering — a reader asking for fluff means it — but anything under this
 # is a coincidence of wording rather than a subject.
+# How many works a MULTI-WORD phrase must carry before it counts as a category
+# a reader would browse by. 200 sits in the empty band between the largest
+# observed false positive (26) and the smallest real category phrase (2,768),
+# and matches the floors this file already uses elsewhere (_DYM_MIN_COUNT,
+# _PAIR_MIN_WORKS). One-word nicknames are exempt -- see _query_is_category.
+_CATEGORY_MIN_WORKS = int(os.getenv("SEARCH_CATEGORY_MIN_WORKS", "200"))
+
+# A contained title match needs the query to look like a TITLE, not a trope.
+# Three words or twelve characters: "a breach in hell" qualifies, "fluff" and
+# "drarry" do not, and lifting every title containing a one-word trope is the
+# exact failure the prefix arm was already narrowed to avoid.
+_TITLE_CONTAIN_MIN_CHARS = int(os.getenv("SEARCH_TITLE_CONTAIN_MIN_CHARS", "12"))
+_TITLE_CONTAIN_MIN_WORDS = int(os.getenv("SEARCH_TITLE_CONTAIN_MIN_WORDS", "3"))
+
 EXTRACT_MIN_WORKS = 50
 # How many words of a post to look at. Four n-grams per word, so this bounds the
 # lookup; nobody's actual request is in the two-hundredth word.
