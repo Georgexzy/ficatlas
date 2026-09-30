@@ -139,3 +139,71 @@ def test_a_suggestion_counts_high_enough_to_be_worth_reading():
     question."""
     from api.search import _PROBE_CAP, _SUGGEST_CAP
     assert _SUGGEST_CAP > _PROBE_CAP * 10
+
+
+def _crossover_story(db, fandoms, *, is_crossover):
+    """`is_crossover` is set explicitly rather than left to the trigger.
+
+    The trigger is installed by `crossover.run`, not by init_db.py, so it may
+    or may not exist on a fresh test database — and what is under test here is
+    what the FILTER does with the column, not what maintains it.
+    """
+    n = uuid.uuid4().hex
+    db.execute(text("""
+        INSERT INTO stories (site, site_id, url, title, author, fandoms,
+                             is_crossover)
+        VALUES ('ao3', :sid, :url, :t, 'An Author', CAST(:f AS text[]), :x)
+    """), {"sid": n[:16], "url": f"https://example.test/{n}", "t": n[:8],
+           "f": list(fandoms), "x": is_crossover})
+
+
+class TestCrossoverContradiction:
+    """Two fandoms and "no crossovers" is not a narrow search, it is an empty one.
+
+    `is_crossover` MEANS a work carrying more than one franchise, so the halves
+    of `fandom:A fandom:B xover:exclude` delete each other by construction. The
+    reader ticks two fandoms and a "no crossovers" box, and gets a page that
+    looks exactly like an index which does not hold the crossover they want.
+
+    From the traffic log, one reader on 2026-09-29:
+
+        fandom:Batman fandom:Danny Phantom site:ao3 xover:exclude      0 works
+        fandom:Batman fandom:Danny Phantom site:ao3               5,000 works
+    """
+
+    def test_it_offers_to_drop_the_filter_that_emptied_the_search(self, db, client):
+        a, b = f"Fandom A {uuid.uuid4().hex[:6]}", f"Fandom B {uuid.uuid4().hex[:6]}"
+        for _ in range(25):
+            _crossover_story(db, [a, b], is_crossover=True)
+        db.commit()
+        got = _sug(client, f'fandom:"{a}" fandom:"{b}" xover:exclude', "relax")
+        assert got, "an unsatisfiable query got no explanation"
+        top = got[0]
+        assert top["kind"] == "crossover", got
+        assert top["works"] >= 20, got
+        # It must keep BOTH fandoms — they are what the reader came for — and
+        # drop only the flag that made them contradict each other.
+        assert "xover:" not in top["query"], top
+        assert a in top["query"] and b in top["query"], top
+
+    def test_it_survives_the_single_term_early_return(self, db, client):
+        """Like the length filter and unlike a term: dropping it leaves
+        everything the reader searched for intact, so a one-term query still
+        gets the offer."""
+        a = f"Solo Fandom {uuid.uuid4().hex[:6]}"
+        for _ in range(25):
+            _crossover_story(db, [a, "Something Else"], is_crossover=True)
+        db.commit()
+        got = _sug(client, f'fandom:"{a}" xover:exclude', "relax")
+        assert [s for s in got if s["kind"] == "crossover"], got
+
+    def test_it_says_nothing_when_the_filter_is_not_the_problem(self, db, client):
+        """The ablation puts this filter at a median 8 works recovered, so on
+        an ordinary query it is noise. A feature that talks for the sake of it
+        gets ignored, and then it is not there on the day it matters."""
+        a = f"Quiet Fandom {uuid.uuid4().hex[:6]}"
+        for _ in range(25):
+            _crossover_story(db, [a], is_crossover=False)
+        db.commit()
+        got = _sug(client, f'fandom:"{a}" xover:exclude', "relax")
+        assert not [s for s in got if s["kind"] == "crossover"], got
