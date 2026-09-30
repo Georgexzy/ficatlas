@@ -1261,6 +1261,57 @@ def _length_phrase(wc_min, wc_max) -> str:
     return f"under {_k(wc_max)} words"
 
 
+def _crossover_phrase(crossovers) -> str:
+    """How to say the crossover filter back to the reader."""
+    return "crossovers excluded" if crossovers == "exclude" else "crossovers only"
+
+
+def _crossover_suggestion(db, terms: list, status, wc_min, wc_max, crossovers,
+                          site, base: int) -> list[Suggestion]:
+    """Offer to drop the crossover filter, which can make a query UNSATISFIABLE.
+
+    The other relaxations are about a query being too narrow. This one is
+    different in kind, because naming two fandoms and excluding crossovers is
+    not a tight search — it is a contradiction, and it cannot return anything
+    at all. `is_crossover` MEANS a work carrying more than one franchise, so
+    the two halves of `fandom:A fandom:B xover:exclude` delete each other by
+    construction.
+
+    Found in the traffic log, twice in one reader's session on 2026-09-29:
+
+        fandom:Batman - All Media Types fandom:Danny Phantom site:ao3 xover:exclude   0 works
+        fandom:Batman - All Media Types fandom:Danny Phantom site:ao3              5,000 works
+
+    They had a filter panel in front of them, ticked two fandoms and "no
+    crossovers", and got an empty page that looks exactly like an index which
+    does not hold Batman/Danny Phantom — a crossover this index holds thousands
+    of. The next thing they did was try the same shape again with different
+    sites.
+
+    `_relax_suggestions` could not offer this because it drops TERMS and a
+    crossover flag is not a term. Exactly the gap `_length_suggestion` was
+    written to close, one filter along — and unlike the length filter, the
+    ablation says this one usually recovers little (a median 8 works), which is
+    precisely why it has to be probed rather than assumed: it is cheap noise on
+    a normal query and the entire answer on a self-contradicting one.
+    """
+    if crossovers not in ("exclude", "only"):
+        return []
+    try:
+        n = _probe_count(db, terms, wc_min, status, None,
+                         cap=_SUGGEST_CAP, word_count_max=wc_max)
+    except Exception:
+        log.debug("crossover relax probe failed", exc_info=True)
+        return []
+    if n <= max(base, 0) + _RELAX_MIN_GAIN:
+        return []
+    phrase = _crossover_phrase(crossovers)
+    return [Suggestion(
+        kind="crossover", value=phrase, count=n, works=n,
+        reason="relax", drops=phrase,
+        query=_as_query(terms, status, wc_min, wc_max, None, site))]
+
+
 def _relax_suggestions(db, terms: list, status, wc_min, wc_max, crossovers,
                        site, base: int) -> list[Suggestion]:
     """Which ONE of the reader's own filters is costing them the results.
@@ -1277,6 +1328,12 @@ def _relax_suggestions(db, terms: list, status, wc_min, wc_max, crossovers,
     """
     out: list[Suggestion] = _length_suggestion(db, terms, status, wc_min,
                                                wc_max, crossovers, site, base)
+    # Like the length filter, this is not a term and so survives the
+    # single-term early return below: dropping it leaves everything the reader
+    # actually searched for intact. It matters most on a query with exactly the
+    # two fandoms that made it unsatisfiable.
+    out += _crossover_suggestion(db, terms, status, wc_min, wc_max,
+                                 crossovers, site, base)
     if len(terms) < 2:
         return out[:_RELAX_LIMIT]
     for t in terms:

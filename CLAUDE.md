@@ -1261,6 +1261,32 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   the underage toggle to reveal. Confirmed at the row level too: zero
   underage-gated works pass the predicate an `explicit=true` search applies.
 
+- **Two fandoms and "no crossovers" is not a narrow search, it is an EMPTY
+  one, and the reader could not tell.** `is_crossover` means a work carrying
+  more than one franchise, so the halves of `fandom:A fandom:B xover:exclude`
+  delete each other by construction. Found in the traffic log, one reader on
+  2026-09-29 who then tried the same shape again with different sites:
+
+      fandom:Batman fandom:Danny Phantom site:ao3 xover:exclude      0 works
+      fandom:Batman fandom:Danny Phantom site:ao3               5,000 works
+
+  They had a filter panel in front of them, ticked two fandoms and "no
+  crossovers", and got a page indistinguishable from an index that does not
+  hold a crossover this index holds thousands of.
+  - **`_relax_suggestions` could not say so, because it drops TERMS and a
+    crossover flag is not a term** — the same gap `_length_suggestion` was
+    written to close, one filter along. `_crossover_suggestion` probes without
+    it and offers the drop, keeping BOTH fandoms, which is what the reader came
+    for.
+  - **It has to be probed, never assumed.** The ablation puts this filter at a
+    median 8 works recovered, so on an ordinary query it is noise — measured
+    after: silent on `fandom:Harry Potter xover:exclude` (5,000), silent on a
+    genuinely narrow `fandom:Danny Phantom xover:exclude tag:Time Travel`
+    (111), and first in the list on the contradiction. Cheap noise on a normal
+    query and the entire answer on a self-contradicting one.
+  - Like the length filter it survives the single-term early return, because
+    dropping it leaves everything the reader searched for intact.
+
 - **A handler that calls a self-re-arming poll does not restart it, it CLONES
   it.** `HealthBanner` polls `/api/stats/totals` every 30s and re-arms in its
   own `finally`; its focus/online handler called `check()` directly without
