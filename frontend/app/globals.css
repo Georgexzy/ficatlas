@@ -709,6 +709,11 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   border: 1px solid var(--border2); background: transparent;
   color: var(--text-dim); font-size: 11px; font-family: var(--font-mono);
   transition: all 0.12s; cursor: pointer;
+  /* Some of these are anchors rather than buttons -- the signed-out "+ follow"
+     is a link to /login, because a control that can only 401 should say what it
+     needs instead. Without this it arrives underlined and a different colour
+     from the button beside it. */
+  text-decoration: none;
 }
 .card-btn:hover { border-color: var(--accent); color: var(--accent); }
 .card-btn--primary { background: var(--accent-bg); border-color: var(--accent-dim); color: var(--accent); }

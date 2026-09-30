@@ -781,10 +781,39 @@ function StoryCard({ story }: { story: StoryCard }) {
             load meant the intent had usually passed by the time you could act
             on it.
 
-            Only for a signed-in reader: following is stored server-side, so the
-            control would otherwise be a button whose only outcome is a 401.
-            Unfinished works only, since there is nothing to be told about a work
-            that is complete. */}
+            Unfinished works only, since there is nothing to be told about a
+            work that is complete.
+
+            SHOWN SIGNED OUT TOO, and that is a change. This used to render
+            only for a signed-in reader, reasoning that the control "would
+            otherwise be a button whose only outcome is a 401" — which is the
+            same argument the STORY PAGE made and then reversed, for the same
+            reason, in the comment beginning "FOLLOW IS SHOWN TO EVERYONE".
+            That reversal never reached this card, and this card is where the
+            readers are: over fourteen days 327 visitors, of whom 62 opened a
+            story at all, so gating it on the story page put the one feature
+            built to bring people back behind the step most people never take.
+
+            Measured at the same time: follows table, ZERO rows, ever. Nobody
+            can want a feature they have never seen.
+
+            A link and not a dead button — the honest shape the offline control
+            already uses. `next` is attached at click time rather than during
+            render because this component server-renders, and reading
+            `window.location` in the body is a hydration mismatch; the bare
+            href stays valid without JS. */}
+        {!user && story.status === "in_progress" && (
+          <a className="card-btn" href="/login"
+             onClick={(e) => {
+               e.preventDefault(); e.stopPropagation()
+               const next = window.location.pathname + window.location.search
+               window.location.href = `/login?next=${encodeURIComponent(next)}`
+             }}
+             title="Sign in to be told when this unfinished work updates — across AO3, FanFiction.net and FictionAlley"
+             aria-label="Sign in to follow this work for updates">
+            + follow
+          </a>
+        )}
         {user && story.status === "in_progress" && (
           <button className={`card-btn ${following ? "card-btn--on" : ""}`}
                   onClick={toggleFollow} disabled={followBusy}
