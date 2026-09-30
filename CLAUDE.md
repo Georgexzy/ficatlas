@@ -1344,6 +1344,38 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
     passing `ex.query` through, so the count shown and the search behind it
     cannot disagree.
 
+- **A 117-work fandom evicted an 8,416-work character, and the filter that did
+  it was the LAST of three bugs in one sentence.** The real prose query
+
+      "A simple day out was all Bumblebee wanted, but a battered and half
+       alive Starscream interrupted that plan"
+
+  needed all three fixed before it gave a reader anything: the ship nickname
+  overruling the evidence, the dropped nickname leaving the characters unused,
+  and this. End to end, **0 works → 1,918**.
+  - `_wrong_fandom` drops a character that does not belong to the post's
+    fandom, which is right in general — but the FANDOM is sometimes the
+    misfire. `Wanted (2008)`, on 117 works, matched from the ordinary word
+    "wanted", evicted `Starscream (Transformers)` (8,416) and
+    `Bumblebee (Transformers)` (6,781), both of which the span loop had ranked
+    FIRST and SECOND. Nothing logged, and the query looked plausible.
+  - **It cannot be applied blindly, and this file already says why:** a named
+    `Harry Potter` must keep beating a lone `Time (Linked Universe)` matched
+    from the word "time". The contradiction holds in BOTH directions; what
+    separates them is which side is better attested, and it is not close —
+    `Wanted` 117 vs `Starscream` 8,416 is 72x one way, `Harry Potter` 686,826
+    vs `Time` 3,888 is 176x the other. Hence `_FANDOM_OUTWEIGHED`.
+  - **ORDER IS THE FIX, and getting it wrong is silent.** The first version sat
+    AFTER `_wrong_fandom` had already stripped the characters, so it read an
+    empty character list, never fired, and was indistinguishable from a rule
+    that simply did not work. `tests/test_nickname_vs_evidence.py` asserts the
+    check sits between `_f_words` and the filter it guards.
+  - Found by bisecting the sentence: the same words minus "all Bumblebee
+    wanted" resolved fine. When a long input fails and a short one works, cut
+    the input down rather than reading the code — three wrong hypotheses
+    (a swallowed exception, a squash-key collision, the term cap) died in
+    minutes against one bisect.
+
 - **A derivative work QUOTES the original's title, so prefix matching hands
   the reader the podfic.** "<Title> by <Author>" is how fanfiction is named,
   and measured on the live index:
