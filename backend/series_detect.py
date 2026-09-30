@@ -583,6 +583,58 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
             # of the same works is a duplicate under a name we invented —
             # "Danger series" sitting beside "Dangerverse", describing the
             # same books. Dropped rather than left for a reader to reconcile.
+            # FIRST take the OVERLAP away, then drop what is left empty.
+            #
+            # The delete below is all-or-nothing: it removes an inferred series
+            # only when EVERY one of its works is already in the better one. So
+            # a single extra work keeps the whole duplicate alive, and every
+            # work they share stays in both — which is what a reader sees as a
+            # story filed under a side series it does not belong to.
+            #
+            # Observed on `The Evans Boy` by lonibal, which had FOUR series
+            # between them — an AO3 `explicit` one, a `stated` one, a `sequel`
+            # one, and an `inferred` "Evans Boy Deathly Hallows stuff series".
+            # `Victims of Peace` and `Salad Days` sat in the archive's own
+            # series AND in the inferred one, because the inferred one also
+            # held a work the explicit one did not, so the subset test never
+            # fired.
+            #
+            # The rule is the one this file already states, applied per WORK
+            # rather than per series: the archive's own grouping is
+            # authoritative, and inference only fills gaps. A work an explicit
+            # or stated series already claims is not evidence for an invented
+            # one, whatever else that invented series contains.
+            trimmed = db.execute(sql_text("""
+                DELETE FROM series_works iw
+                USING series inf, series better, series_works bw
+                WHERE iw.series_id = inf.id
+                  AND inf.source = 'inferred'
+                  AND better.source IN ('stated','explicit')
+                  AND better.id <> inf.id
+                  AND lower(coalesce(better.author,'')) = lower(coalesce(inf.author,''))
+                  AND bw.series_id = better.id
+                  AND bw.story_id = iw.story_id
+            """)).rowcount
+            db.commit()
+            if trimmed:
+                log.info(f"  removed {trimmed:,} memberships an inferred series "
+                         f"shared with a stated or explicit one")
+                # A trimmed series is a series whose counts now lie, and both
+                # are read by the UI — `work_count` on the page and
+                # `member_count` in the length add-on's guard. Recomputed only
+                # for inferred series, which are the only ones this touched.
+                db.execute(sql_text("""
+                    UPDATE series s
+                       SET work_count = c.n, member_count = c.n
+                      FROM (SELECT sw.series_id, count(*) AS n
+                              FROM series_works sw GROUP BY 1) c
+                     WHERE c.series_id = s.id
+                       AND s.source = 'inferred'
+                       AND (s.work_count IS DISTINCT FROM c.n
+                            OR s.member_count IS DISTINCT FROM c.n)
+                """))
+                db.commit()
+
             gone = db.execute(sql_text("""
                 DELETE FROM series inf
                 WHERE inf.source = 'inferred'

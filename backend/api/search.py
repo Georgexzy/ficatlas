@@ -4075,6 +4075,32 @@ def search(          # NOT async — see below
         # naming the title AND the author is the most specific thing a reader
         # can do, and the one case where they have told us exactly which of the
         # five works called "Manacled" they mean.
+        # TYPING AN AUTHOR'S NAME SHOULD FIND THAT AUTHOR'S WORKS.
+        #
+        # `author` sits in band D of `fic_doc`, the same weight as summary
+        # text — so a work that merely MENTIONS somebody outranks everything
+        # they wrote. Reported from the site as author search "not working",
+        # and it is not case sensitivity (`author:` resolves fine in any case);
+        # it is weighting. Measured before this:
+        #
+        #   SenLinYu  -> "The Ouroboros Protocol" by Nightfable
+        #   lonibal   -> "Cover for The Evans Boy by" by Rae
+        #
+        # Equality on `lower(author)`, which `ix_stories_author_lower` serves
+        # — the same index and the same rule the `author:` operator already
+        # uses, applied to the plain text box, because a reader who types a pen
+        # name into the search bar has named an author exactly as surely as one
+        # who types the operator.
+        #
+        # A bonus, not a tier, like every other arm here: a work actually
+        # TITLED after the query still wins, which is what keeps
+        # `all the young dudes` returning the work and not its author's
+        # back catalogue.
+        author_bonus = literal_column("0.0")
+        if not is_category and q_norm:
+            author_bonus = case((func.lower(S.author) == q_norm, w_exact * 0.75),
+                                else_=0.0)
+
         named_work_bonus = literal_column("0.0")
         _nw = re.search(r"^(.{2,160}?)\s+by\s+([^\s].{0,60})$", q.strip(), re.I)
         if _nw and not is_category:
@@ -4228,6 +4254,7 @@ def search(          # NOT async — see below
             else_=0.0)
 
         relevance = (w_title * title_sim + exact_bonus + named_work_bonus
+                     + author_bonus
                      + w_text * text_rank + w_pop * pop
                      + ship_bonus + trope_bonus + rec_bonus
                      + describe_term
