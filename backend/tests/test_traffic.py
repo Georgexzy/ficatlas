@@ -1274,3 +1274,115 @@ def test_the_funnel_comparison_excludes_the_other_route(db):
     assert "read_without_searching" not in out["previous"]
     assert set(out["previous"]) == {"from", "to", "searched",
                                     "opened_a_story", "read_it", "partial"}
+
+
+# ── the previous window, which is a baseline and not just a number ────────────
+
+def _seed_at(db, rows):
+    """`_seed`, but at an explicit instant, so a window can be filled by hand."""
+    from sqlalchemy import text as t
+    db.execute(t("DELETE FROM visit_events"))
+    for visitor, kind, at in rows:
+        db.execute(t("""
+            INSERT INTO visit_events (at, visitor, kind, path, bot)
+            VALUES (:at, :v, :k, '/p', false)
+        """), {"at": at, "v": visitor.ljust(16)[:16], "k": kind})
+    db.commit()
+
+
+def test_the_previous_window_is_a_series_not_only_a_total(db):
+    """A total answers "is it growing" and cannot answer "is it steady" — 396
+    views is 200 every day for a month, or 400 on one day and silence for the
+    rest, and those are the same number. The chart draws the previous window
+    underneath this one, which needs the days."""
+    from datetime import date, datetime, time, timedelta
+    from api.traffic import summary
+
+    today = date.today()
+    # The PREVIOUS window, not the current one: for days=7 the current window
+    # is today-6..today, so the one before it is today-13..today-7. Seeding
+    # today-6..today is the current window and this test would pass for the
+    # wrong reason -- which is exactly what it did the first time.
+    prev_first = today - timedelta(days=13)
+    rows = [(f"p{i}", "page",
+             datetime.combine(prev_first + timedelta(days=i), time(12, 0)))
+            for i in range(7)]
+    _seed_at(db, rows)
+
+    out = summary(days=7, include_bots=False, db=db, _owner=None)
+    prev = out["previous"]
+
+    assert len(prev["days"]) == 7
+    # Every day present INCLUDING the empty ones, for the same reason the
+    # current window zero-fills: a chart grouped by the days that happen to
+    # have rows draws no gaps and reads as continuous.
+    assert [d["day"] for d in prev["days"]] == [
+        (prev_first + timedelta(days=i)).isoformat() for i in range(7)]
+    assert [d["views"] for d in prev["days"]] == [1] * 7
+
+
+def test_a_previous_window_total_is_the_sum_of_its_own_series(db):
+    """The number a tile prints and the line the chart draws must be the same
+    measurement. They were two separate queries, and they disagreed."""
+    from datetime import date, datetime, time, timedelta
+    from api.traffic import summary
+
+    today = date.today()
+    prev_first = today - timedelta(days=13)   # the window BEFORE, see above
+    rows = [(f"q{i}", "page",
+             datetime.combine(prev_first + timedelta(days=i), time(9, 0)))
+            for i in range(7)]
+    # The search needs a page render on the same visitor-day, or `_NOT_A_BROWSER`
+    # removes it as a script — which is the filter doing its job, and would make
+    # this test assert that a search with no reader behind it survives. The
+    # third test is the one that pins that behaviour.
+    rows += [("s1", "search",
+              datetime.combine(prev_first + timedelta(days=2), time(9, 30))),
+             ("s1", "page",
+              datetime.combine(prev_first + timedelta(days=2), time(9, 35)))]
+    _seed_at(db, rows)
+
+    prev = summary(days=7, include_bots=False, db=db, _owner=None)["previous"]
+
+    # 7 one-per-day pageviews, plus the one page the searching reader rendered.
+    assert sum(d["views"] for d in prev["days"]) == prev["views"] == 8
+    assert sum(d["searches"] for d in prev["days"]) == prev["searches"] == 1
+
+
+def test_the_previous_window_excludes_scripts_the_current_one_excludes(db):
+    """The bug this was found by: the current window drops sessions that only
+    ever called the API, and the previous window did not. So every delta on the
+    page — and the line the chart draws underneath it — was measured against a
+    baseline counted on different rules. On the real 7-day window that was 967
+    searches against 114, a factor of eight."""
+    from datetime import date, datetime, time, timedelta
+    from api.traffic import summary
+
+    today = date.today()
+    prev_day = today - timedelta(days=10)   # inside the previous window
+    at = datetime.combine(prev_day, time(10, 0))
+    _seed_at(db, [
+        # A reader: searched and rendered a page.
+        ("real1", "search", at),
+        ("real1", "page", at + timedelta(minutes=1)),
+        # A script: searched, and never rendered anything. `_NOT_A_BROWSER`.
+        ("botish", "search", at),
+        ("botish", "search", at + timedelta(minutes=1)),
+        ("botish", "search", at + timedelta(minutes=2)),
+    ])
+
+    prev = summary(days=7, include_bots=False, db=db, _owner=None)["previous"]
+
+    assert prev["searches"] == 1, (
+        "the previous window counted three searches; the current window would "
+        "count one, so the two are not comparable")
+
+
+def test_a_quiet_window_still_returns_every_day(db):
+    """Zeros are the finding on a site this quiet. A previous window with no
+    events must still be seven entries long, or the chart silently shortens."""
+    from api.traffic import summary
+
+    prev = summary(days=7, include_bots=False, db=db, _owner=None)["previous"]
+    assert len(prev["days"]) == 7
+    assert all(d["views"] == 0 and d["searches"] == 0 for d in prev["days"])

@@ -4181,54 +4181,301 @@ body.is-resizing * { cursor: col-resize !important; }
 }
 .traffic-range__sub { color: var(--text-faint); font-size: 11px; }
 
+/* `flex-wrap: wrap` is the fix, and it is needed because the legend gained a
+   third key. Two keys fitted a 292px column; three do not, and an inline-flex
+   row that cannot wrap is exactly as wide as its content — measured at 320px
+   it pushed the Overview section to `scrollWidth` 318 inside a 292 column and
+   the shell to 332 against a 320 viewport. A legend that wraps onto a second
+   line is still a legend.
+
+   `float: right` stays for the wide case because the heading is a flex row
+   with `justify-content: space-between` (see `.tsec__h`), which makes the
+   float redundant; it is harmless and removing it would reflow every heading
+   this page has. */
 .traffic-legend {
   float: right; font-size: 10.5px; font-weight: 400;
-  color: var(--text-faint); display: inline-flex; align-items: center; gap: 5px;
+  color: var(--text-faint); display: inline-flex; align-items: center;
+  gap: 5px; flex-wrap: wrap; max-width: 100%;
 }
 .traffic-legend__key {
   width: 9px; height: 9px; border-radius: 2px; display: inline-block;
 }
-.traffic-legend__key--views { background: color-mix(in srgb, var(--accent) 60%, transparent); }
-.traffic-legend__key--searches { background: color-mix(in srgb, var(--accent) 95%, black 25%); }
+.traffic-legend__key--views { background: var(--chart-1); }
+.traffic-legend__key--searches { background: var(--chart-2); }
+/* A dashed rule rather than a swatch: the previous-window series IS dashed in
+   the chart, and a solid square beside a dashed line would describe a
+   difference the reader can see but not connect. */
+.traffic-legend__key--prev {
+  width: 14px; height: 0; border-radius: 0;
+  border-top: 2px dashed var(--text-faint);
+}
 
-.traffic-days {
-  display: flex; align-items: flex-end; gap: 3px;
-  height: 120px; margin: 0 0 20px; padding: 0 0 18px;
-  overflow-x: auto; border-bottom: 1px solid var(--border);
+/* ── chart palette ────────────────────────────────────────────────────────
+   Five hues, fixed, and NOT derived from --accent by mixing. The old
+   pageviews/searches pair was two mixes of one gold, which at 60% and 95%
+   differ mostly in lightness: indistinguishable to a reader with any form of
+   colour blindness, and hard to tell apart at sparkline size even for
+   everyone else. A palette needs hues, not shades.
+
+   The pairs are chosen to stay separable in the common forms of CVD, and the
+   first two (the two daily series) also differ in the LINE STYLE of the
+   previous-window overlay (dashed) so the comparison is not colour-only. */
+:root {
+  --chart-1: #6aa9e9;   /* pageviews — blue */
+  --chart-2: #e08a6a;   /* searches — warm orange */
+  --chart-3: #7fc99a;   /* a third measure — green */
+  --chart-4: #b490e0;   /* referrers — violet */
+  --chart-5: #d9c26a;   /* cache status — gold */
+  --chart-warn: #e2705f;
 }
-.traffic-day {
-  flex: 1 0 14px; min-width: 14px; height: 100%;
-  display: flex; flex-direction: column; justify-content: flex-end;
-  align-items: center; position: relative;
+:root[data-theme="light"] {
+  /* Lightened and darkened for contrast against a white plot area: the dark
+     values are close to invisible on #fff at 1.75px. */
+  --chart-1: #2f6fb5;
+  --chart-2: #c05a2e;
+  --chart-3: #2f8a55;
+  --chart-4: #7145ad;
+  --chart-5: #8a6d12;
+  --chart-warn: #b03a26;
 }
-/* Views and searches sit side by side in the same column, sharing one scale so
-   they can be compared with each other. A day with NOTHING draws no bar at all
-   rather than a minimum-height stub — an empty day has to look empty, which is
-   the entire reason the series is zero-filled. */
-.traffic-day__bars {
-  width: 100%; height: 100%; display: flex; align-items: flex-end;
-  justify-content: center; gap: 1px;
+
+/* ── the sticky header ────────────────────────────────────────────────────
+   Title, range control, window and section nav, in one block that stays put.
+   The range control is what every number on the page depends on, so a reader
+   who has scrolled into a table needs it and needs the window spelled out —
+   neither was available without going back to the top. */
+.traffic-head {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--bg);
+  /* A solid background and a bottom rule rather than a blur: the tables behind
+     it are dense, and a translucent bar over them makes both unreadable. */
+  padding-bottom: 6px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border);
 }
-.traffic-day__bar {
-  flex: 1 1 0; border-radius: 3px 3px 0 0;
-  background: color-mix(in srgb, var(--accent) 60%, transparent);
-  /* A day with views but a tiny share of the peak still has to be visible, or
-     the chart reads as "nothing happened" on every day but the best one. */
-  min-height: 2px;
+.traffic-head__row {
+  display: flex; flex-wrap: wrap; gap: 10px 16px;
+  align-items: center; justify-content: space-between;
 }
-.traffic-day__bar--searches {
-  background: color-mix(in srgb, var(--accent) 95%, black 25%);
+.traffic-head__title { margin: 8px 0 0; }
+.traffic-head .traffic-range { margin: 4px 0 6px; }
+.traffic-head__ranges { margin: 0; }
+
+/* A sticky bar that is most of the screen is not a header, it is a lid.
+
+   Measured on a 375px phone: 205px tall, and 257px at 320px — leaving 210px
+   of content on an iPhone SE and 63px at the narrow end, which is not a page
+   anybody can read a table in. The title and the window line are the two
+   things that must stay, because a reader deep in a table needs to know which
+   window they are looking at; the range buttons and the nav do not, and both
+   are reachable by scrolling up a little.
+
+   `position: static` rather than `display: none` for the same reason every
+   other rule in this file keeps hidden controls in the DOM: this is a narrow
+   screen, not a different site, and the buttons are how the window is
+   changed. Hiding them entirely removed the only control for the one setting
+   every number on the page depends on. */
+@media (max-width: 700px) {
+  .traffic-head__title { font-size: 1.05rem; margin: 4px 0 0; }
+  .traffic-head__ranges,
+  .secnav { position: static; }
+  .traffic-head .traffic-range { font-size: 11.5px; margin: 2px 0 4px; }
+  .tsec { scroll-margin-top: 96px; }
 }
-.traffic-day__label {
-  position: absolute; bottom: -16px; font-size: 9px; color: var(--text-faint);
-  white-space: nowrap; font-variant-numeric: tabular-nums;
+
+
+/* ── section navigation ───────────────────────────────────────────────────
+   A scroll container, so it is obviously scrollable on a phone rather than
+   silently cutting the last three sections off.
+
+   `contain: inline-size` is what stops a scrolling row from making the DOCUMENT
+   scroll sideways. A child of an `overflow-x: auto` box does not normally
+   contribute to an ancestor's scroll width, but the row is a flex container
+   whose items refuse to shrink, so the box sized itself to its content and
+   became 675px wide inside a 320px viewport. Measured on a 320px phone before
+   this: `body.scrollWidth` 332 against a 320 viewport — the whole page scrolled
+   sideways 12px because of a navigation bar, on a page whose `overflow-x: clip`
+   on body was doing its job by hiding a real fault rather than by fixing one. */
+.secnav { margin: 0 0 4px; contain: inline-size; }
+.secnav__list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; gap: 2px; overflow-x: auto;
+  scrollbar-width: thin;
 }
-/* Which labels get drawn is decided in TrafficPanel (roughly eight across the
-   range, always including the most recent day). It used to be this rule:
-   `:nth-child(n+15) .traffic-day__label { display: none }` — which did not thin
-   the labels, it truncated them, so a 30-day chart was labelled for a fortnight
-   and then simply stopped. Every bar still carries the full date in its
-   tooltip. */
+.secnav__link {
+  display: block; padding: 5px 10px; border-radius: 6px 6px 0 0;
+  font-size: 12px; color: var(--text-dim); text-decoration: none;
+  white-space: nowrap; border-bottom: 2px solid transparent;
+  /* `flex: none` so an item cannot be squashed to fit. A squashed nav label is
+     an unreadable one, and the container scrolls for exactly this case. */
+  flex: none;
+}
+.secnav__link:hover { color: var(--text); background: var(--surface2); }
+.secnav__link--on {
+  color: var(--accent); border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── sections ─────────────────────────────────────────────────────────────
+   `scroll-margin-top` is what lets the nav's scrollIntoView land the heading
+   below the sticky bar rather than underneath it. Without it every jump lands
+   with the heading hidden, and the reader cannot tell which section they
+   arrived at. The value is the sticky bar's own height, which is why the
+   section is a sibling of it and not nested inside. */
+.tsec {
+  margin: 0 0 34px;
+  scroll-margin-top: 150px;
+}
+.tsec__h {
+  font-size: 13px; text-transform: uppercase; letter-spacing: 0.09em;
+  color: var(--text-faint); font-weight: 600; margin: 0 0 10px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+}
+.tsec__note {
+  font-size: 12.5px; color: var(--text-dim); margin: -4px 0 12px;
+  max-width: 78ch; line-height: 1.5;
+}
+.admin-linkjump { color: var(--accent); text-decoration: underline; }
+
+/* ── the trend chart ──────────────────────────────────────────────────────
+   A fixed aspect via the viewBox on the SVG, so it scales with the column
+   instead of being a fixed pixel height that either overflows on a phone or
+   wastes space on a desktop. */
+.chart {
+  margin: 0 0 10px; padding: 12px 10px 6px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+}
+.chart__svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+.chart__grid { stroke: var(--border); stroke-width: 1; }
+.chart__ylabel, .chart__xlabel {
+  fill: var(--text-faint); font-size: 10px; font-variant-numeric: tabular-nums;
+}
+.chart__line { fill: none; stroke-width: 2; stroke-linejoin: round; }
+/* Dashed, and thinner than the current window. It is context: a reader who
+   has to work out which of two solid lines is real has been asked to do the
+   chart's job. */
+.chart__prev { fill: none; stroke-width: 1.4; stroke-dasharray: 4 3; opacity: 0.55; }
+.chart__cursor { stroke: var(--text-faint); stroke-width: 1; stroke-dasharray: 2 2; }
+
+/* The numbers, as text. Everything the chart encodes as height is also written
+   down here, which is what makes it readable by a screen reader, legible in a
+   screenshot, and answerable without a pointer. */
+.chart__readout {
+  display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline;
+  font-size: 12px; color: var(--text-dim);
+  padding: 6px 4px 2px; border-top: 1px solid var(--border); margin-top: 4px;
+}
+.chart__readout strong { color: var(--text); }
+.chart__readout i {
+  width: 8px; height: 8px; border-radius: 2px; display: inline-block;
+  margin-right: 5px;
+}
+.chart__readout-dim { color: var(--text-faint); }
+
+.spark { display: block; margin-top: 8px; overflow: visible; }
+
+/* ── share bars ───────────────────────────────────────────────────────────
+   A bar BEHIND the number rather than a column beside it. A reader scanning
+   for "how much" reads the digit; one scanning for "shape" reads the bar; and
+   neither has to reconcile the two, which is what a separate Share column
+   asked them to do. */
+.sharebar {
+  position: absolute; inset: 0 auto 0 0; width: 100%;
+  display: block; border-radius: 3px; overflow: hidden; pointer-events: none;
+}
+.sharebar__fill {
+  display: block; height: 100%; border-radius: 3px;
+  background: color-mix(in srgb, var(--chart-1) 22%, transparent);
+}
+.sharebar--warn .sharebar__fill {
+  background: color-mix(in srgb, var(--chart-warn) 22%, transparent);
+}
+.sharebar--ref .sharebar__fill {
+  background: color-mix(in srgb, var(--chart-4) 22%, transparent);
+}
+.sharebar__fill { transition: width .18s ease; }
+
+.num--barred { position: relative; }
+.num--barred .num__v { position: relative; font-weight: 600; }
+
+/* ── the funnel ───────────────────────────────────────────────────────────
+   Widths are proportional to the LARGEST step, and the step-to-step rate is
+   printed under each bar. Both, because the two answer different questions:
+   the width says "how many are left" and the rate says "how many of the ones
+   who got this far carried on" — which is the number that tells you whether
+   people are being lost between searching and opening a work, as against
+   arriving and never searching at all. Two tiles in a row said "these are
+   related" by being adjacent and left the reader to work out the drop-off. */
+.funnel { list-style: none; margin: 0 0 20px; padding: 0; }
+.funnel__step { margin-bottom: 14px; }
+.funnel__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  margin-bottom: 3px;
+}
+.funnel__label { font-size: 12.5px; color: var(--text-dim); }
+.funnel__value {
+  font-size: 17px; font-weight: 600; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.funnel__bar { position: static; height: 22px; border-radius: 4px; }
+.funnel__bar .sharebar__fill {
+  background: color-mix(in srgb, var(--chart-1) 34%, transparent);
+}
+.funnel__foot {
+  display: flex; flex-wrap: wrap; gap: 3px 12px;
+  font-size: 11.5px; color: var(--text-faint); margin-top: 3px;
+}
+.funnel__rate { color: var(--text-dim); }
+.funnel__delta--up { color: var(--chart-3); }
+.funnel__delta--down { color: var(--chart-warn); }
+.funnel__note { font-style: italic; }
+
+/* ── ranked bars ──────────────────────────────────────────────────────────
+   For a list where the ORDER is the information, rather than a series over
+   time. Bars rather than a pie, because the comparison people make is "how
+   much bigger is the first than the second" — a subtraction from lengths, not
+   a judgement about angles. */
+.ranked { list-style: none; margin: 0 0 18px; padding: 0; }
+.ranked__row {
+  display: grid;
+  /* `minmax(0, ...)` on the label track, not `minmax(90px, ...)`. A grid
+     track's minimum is its CONTENT's minimum unless it is zero, and the label
+     is a long path or a country name — so a `90px` floor plus a non-shrinking
+     track made every row at least 109-166px wider than its column. Measured
+     on a 320px phone: the shell reported `scrollWidth` 332 against a 320
+     viewport, from a ranked bar list. `min-width: 0` is the same fix this file
+     already applies to the header row for the same reason. */
+  grid-template-columns: minmax(0, 1.4fr) minmax(60px, 2.2fr) auto auto;
+  gap: 4px 10px; align-items: center; padding: 3px 0; font-size: 12px;
+}
+.ranked__label {
+  color: var(--text); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ranked__track {
+  height: 13px; background: var(--surface2); border-radius: 3px; overflow: hidden;
+}
+.ranked__fill { display: block; height: 100%; border-radius: 3px; }
+.ranked__value {
+  color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums;
+  min-width: 52px; text-align: right;
+}
+.ranked__share {
+  color: var(--text-faint); font-variant-numeric: tabular-nums;
+  min-width: 46px; text-align: right;
+}
+
+/* Two ranked lists side by side. The point of the pair is that the two
+   measures have DIFFERENT SHAPES — one broad and shallow, the other narrow
+   and deep — and a reader sees that in two bars next to each other in a way
+   they do not see it in two table columns. */
+.duo {
+  display: grid; gap: 16px 24px; margin: 0 0 16px;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 700px) { .duo { grid-template-columns: 1fr 1fr; } }
+.duo__col { min-width: 0; }
 
 .traffic-table {
   width: 100%; border-collapse: collapse; margin: 0 0 22px;
@@ -6492,6 +6739,45 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    different size; the raw number is what stops "100%" built out of a single
    session from reading as a triumph. Both, with the rate leading. */
 .entry-table__n { color: var(--text-faint); font-size: 11px; font-weight: 400; }
+
+/* Seven nowrap columns is 400px of table inside a 375px phone, which made the
+   whole page scroll sideways and pushed every other section's width to the
+   widest thing on it — the fault `overflow-x: clip` on body is there to hide
+   and which this file already records hiding a real layout bug.
+
+   The columns that go are the two a phone reader does not act on: "referred"
+   (a count with no denominator to compare it to) and "pages" (an average
+   already visible in the "left at once" column beside it). The rates stay,
+   because they are the reason this table exists. Hidden with `display: none`
+   on the cell AND the header so the two stay aligned — hiding only the `td`
+   would leave an empty header column, which is worse than not hiding it. */
+@media (max-width: 700px) {
+  .entry-table th:nth-child(3), .entry-table td:nth-child(3),
+  .entry-table th:nth-child(7), .entry-table td:nth-child(7) { display: none; }
+
+  /* The same for the referrers table, and for the same reason — five
+     `white-space: nowrap` cells is ~297px of table plus padding, which fits a
+     375px phone and not a 320px one. Measured there at 320px: the section
+     reported `scrollWidth` 297 inside a 292 column, and the shell 332 against a
+     320 viewport, so the whole page scrolled sideways because of a "First seen"
+     date nobody reads on a phone.
+
+     Scoped to `.traffic-table--refs` rather than to `.traffic-table`, because
+     the fourth column means something different in each of these tables — it
+     is "First seen" in the referrers and pages tables but "Found" in the
+     searches one, and a rule written against the bare class would have taken
+     out the most-asked-for column of the most-read table on the page.
+
+     "First seen" is what goes. "Last seen" is the column that answers "is this
+     still happening", which is why `ago()` sits beside it. And the host column
+     is allowed to wrap rather than be hidden: a referrer list is unreadable
+     without the site names, and they are words rather than numbers, so wrapping
+     costs height instead of a column. */
+  .traffic-table--refs th:nth-child(4),
+  .traffic-table--refs td:nth-child(4) { display: none; }
+  .traffic-table__q, .ranked__label { white-space: normal; overflow-wrap: anywhere; }
+}
+
 .entry-hubs { margin: 0 0 22px; }
 
 /* Share a search. The one object this site can produce that is worth sending:
@@ -6731,4 +7017,114 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   position: absolute; width: 1px; height: 1px;
   padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* ── index control centre ────────────────────────────────────────────────────
+   Three things this page needed and did not have: a way to FIND one of twenty
+   collapsible filter sections, a sort control beside the list it reorders, and
+   somewhere to go on the landing page that is not twelve fandoms. */
+
+/* ── filter finder ─────────────────────────────────────────────────────────
+   Sits where the sort used to be, at the top of the filter panel, because the
+   question it answers ("where is the word-count filter") is the question a
+   twenty-section panel raises first. */
+.filter-finder { margin: 0 0 12px; }
+.filter-finder__input { width: 100%; }
+/* The status line is not decoration: a filter box that matches nothing and
+   says nothing looks like a broken search, and the reader cannot tell whether
+   they guessed the label wrong or there is no such filter. */
+.filter-finder__status {
+  margin: 5px 0 0; font-size: 11px; color: var(--text-faint); line-height: 1.4;
+}
+
+/* A match is made obvious by BOTH an outline and a lift, because the panel is
+   16 collapsed sections of near-identical grey and a subtle tint is not
+   findable at speed. Non-matches stay in place and dimmed rather than being
+   removed: a list that changes shape as you type makes you lose your place,
+   and a typo would look like an empty panel. */
+.filter-section--found {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+.filter-section--missed { opacity: 0.3; }
+
+/* ── sort, in the results bar ────────────────────────────────────────────────
+   First in the bar, before the count. The count is only interpretable once the
+   order is known, and the order is what the reader is about to change. */
+.results-bar__sort { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.results-bar__sort-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-faint); font-weight: 500; white-space: nowrap;
+}
+.results-bar__sort .select { font-size: 12px; padding: 3px 6px; }
+.results-bar__sort .sidebar__hint { flex-basis: 100%; margin: 2px 0 0; }
+/* On a phone the bar is a flex-wrap row and the sort's label+select would take
+   a whole line of its own above the count, pushing the number the reader came
+   for below the fold. The label goes; the select's own first option says
+   "Relevance", so the control is still self-describing. */
+@media (max-width: 560px) {
+  .results-bar__sort-label > :first-child { display: none; }
+}
+
+/* ── the landing page's browse surface ──────────────────────────────────────
+   Tabs rather than three stacked lists: 42 rows of scroll for a reader who
+   wants one of them, on a page where the browse block is below the fold. */
+.browse { margin: 26px 0 22px; }
+.browse__tabs {
+  display: flex; gap: 2px; margin: 0 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.browse__tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border: 0; background: none; cursor: pointer;
+  font-size: 13px; color: var(--text-dim);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.browse__tab:hover { color: var(--text); }
+.browse__tab--on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.browse__tab-n { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+.browse__list { list-style: none; margin: 0; padding: 0; }
+.browse__row {
+  display: grid; width: 100%;
+  /* `minmax(0, 1fr)` on the name, not `1fr`: a grid track's minimum is its
+     content's minimum unless it is zero, and a pairing name like
+     "Castiel/Dean Winchester" plus a count plus a bar is wider than a phone.
+     The name wraps instead, which is the same fix the ranked-bars list made
+     and for the same reason. */
+  grid-template-columns: minmax(0, 1fr) minmax(40px, 90px) 58px;
+  gap: 10px; align-items: center;
+  padding: 5px 4px; border: 0; background: none; cursor: pointer;
+  border-radius: 5px; text-align: left; color: var(--text);
+}
+.browse__row:hover { background: var(--surface2); }
+.browse__name {
+  font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.browse__track {
+  height: 8px; background: var(--surface2); border-radius: 3px; overflow: hidden;
+}
+.browse__fill {
+  display: block; height: 100%; border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.browse__count {
+  font-size: 12px; color: var(--text-dim); text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.browse__more {
+  margin: 10px 0 0; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 14px;
+  align-items: baseline;
+}
+.browse__more a { color: var(--accent); }
+.browse__more-hint { color: var(--text-faint); font-size: 11.5px; }
+
+@media (max-width: 560px) {
+  /* The bar goes under the name on a phone rather than beside it: at 320px a
+     three-column grid leaves the name about 120px, which truncates every
+     pairing to "Castiel/Dean W…". */
+  .browse__row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; }
+  .browse__track { grid-column: 1 / -1; }
 }
