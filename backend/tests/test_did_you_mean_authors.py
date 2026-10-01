@@ -19,7 +19,7 @@ was formatted.
 import pytest
 from sqlalchemy import text
 
-from api.search import _did_you_mean_authors
+from api.search import _did_you_mean_authors, _spelling_rescues
 
 
 @pytest.fixture()
@@ -109,3 +109,72 @@ def test_a_missing_table_is_a_feature_off_not_a_failed_request(db):
     assert _did_you_mean_authors(db, "Ionibal") == []
     # And the session is still usable afterwards, which is the actual point.
     assert db.execute(text("SELECT 1")).scalar() == 1
+
+    # Put it back. The `db` fixture TRUNCATES between tests but does not roll
+    # back, so a dropped table stays dropped for the rest of the session — and
+    # conftest's `_apply_schema` only runs once per session, so every test
+    # ordered after this one fails for a reason that has nothing to do with
+    # itself. This was found by the three tests below it erroring on
+    # "relation author_facets does not exist".
+    db.execute(text("CREATE TABLE IF NOT EXISTS author_facets ("
+                    "value TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0)"))
+    db.commit()
+
+
+def test_an_author_operator_is_not_rescued_as_the_word_author(db, authors):
+    """The fault this ordering exists to fix, which predates the author table.
+
+    The facet rescue matches the query as a STRING, so `author: Ionibal` matched
+    the operator word: measured on the live index, it returned the tag
+    `mlm author` and the character `The Author`, and `or` stopped there. The
+    reader who mistyped their own pen name was handed two other things called
+    "author", one of which looks like an answer.
+
+    Both halves are asserted, because either alone would pass: that the right
+    name is offered, AND that the operator word is not what was rescued.
+    """
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag',       'mlm author', 900),
+          ('character', 'The Author', 6314)
+    """))
+    db.commit()
+
+    out = _spelling_rescues(db, "author: Ionibal")
+    assert out, "the operator form found nothing"
+    assert out[0].value == "lonibal", f"rescued the operator word, not the name: {out[0].value}"
+    assert all(s.value not in ("mlm author", "The Author") for s in out)
+
+
+def test_a_bare_word_still_tries_facets_first(db, authors):
+    """The order is only reversed for an EXPLICIT operator.
+
+    A bare `Ionibal` is far more often a mistyped tag than a mistyped author, and
+    the facet rescue is the older, better-exercised path — reversing it for bare
+    words too would quietly demote every existing spelling rescue.
+    """
+    # A tag at similarity 1.0 for the same string, so BOTH rescues have a real
+    # candidate and the assertion is about ORDER rather than about which one
+    # happened to clear its floor. (The first attempt used `loniball`, which
+    # scores under the 0.35 floor — so the facet rescue correctly returned
+    # nothing and the test measured the wrong thing.)
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('tag', 'ionibal', 5000)
+    """))
+    db.commit()
+    out = _spelling_rescues(db, "Ionibal")
+    assert out and out[0].value == "ionibal", \
+        f"a bare word should reach the facet rescue first, got {out and out[0].value}"
+
+
+def test_the_near_miss_floor_is_passed_through(authors):
+    """A refactor here once handed the near-miss path the 0.35 default instead of
+    SUGGEST_NEAR_SIM (0.30), which would have stopped `romoine` -> `romione`
+    (similarity 0.333) being rescued at all. The floor is the whole mechanism."""
+    import api.search as S
+    assert S.SUGGEST_NEAR_SIM < 0.35, "the near-miss floor stopped being lower"
+    out = _spelling_rescues(authors, "Ionibal", min_sim=S.SUGGEST_NEAR_SIM)
+    assert out and out[0].value == "lonibal"
