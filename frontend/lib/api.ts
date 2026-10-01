@@ -333,11 +333,29 @@ export interface IndexTotals {
   updated_last_month?: number
   updated_last_quarter?: number
   updated_last_year?: number
-  /** Works WE re-read from the source in the last week. A claim about our
-   *  freshness, not the work's — a different question from the three above. */
+  /** Works re-read from the source in the last week. A claim about how fresh the
+   *  index is, not the work's — a different question from the three above. */
   checked_last_week?: number
   /** Live per-site share of works listing a ship / a character. */
   coverage?: Record<string, FieldCoverage>
+  /** Rows per archive.
+   *
+   *  ABSENT until the first sites refresh lands, and every render that shows a
+   *  breakdown has to handle that — see `_with_sites` in the backend, which
+   *  returns the totals without it rather than starting a scan of the biggest
+   *  table on the box to fill it in.
+   *
+   *  `stories` above is the SUM of this map, derived server-side from this
+   *  scan rather than counted separately beside it, so the two cannot disagree.
+   *  Do not recompute a total from anything else and render it next to this. */
+  sites?: Record<string, number>
+  /** When each archive was last added to, for the freshness line. */
+  sites_updated_at?: Record<string, string>
+  /** The raw `count(*)` from the totals scan, before `stories` was replaced by
+   *  the sum of `sites`. The gap between it and `stories` is the age difference
+   *  between two scans. Informational — no page should display a total that
+   *  contradicts the breakdown printed under it. */
+  stories_scanned?: number
 }
 
 const TOTALS_TTL_MS = 5 * 60 * 1000   // matches the server-side cache window
@@ -421,6 +439,49 @@ export function getTopHubs(limit = 12): Promise<TopHub[]> {
       return c.value ?? []
     })
     .catch(() => c.value ?? [])
+    .finally(() => { c.inflight = null })
+
+  return c.inflight
+}
+
+// The landing page's browse surface: the biggest fandoms, pairings and tags in
+// one request.
+//
+// One call rather than three because the landing page renders all three at once
+// and a reader landing there waits for the slowest of them — which was measured
+// at 25ms for all three together against the hub tables, since it reads two
+// already-sorted index walks and one `facets` lookup.
+//
+// The cache is the same `globalThis` pattern as `getTopHubs` and for the same
+// reason: this is fetched on every landing-page view, and a request per
+// navigation is a request per navigation forever. It is NOT an empty-list cache
+// — an empty list is a real answer on a fresh install, and caching one would
+// leave the front door permanently bare after the first importer run.
+export interface LandingEntry { name: string; work_count: number }
+export interface LandingBrowse {
+  fandom?: LandingEntry[]
+  ship?: LandingEntry[]
+  tag?: LandingEntry[]
+}
+
+function landingCache() {
+  const w = globalThis as any
+  if (!w.__ficatlasLanding) w.__ficatlasLanding = { value: null, at: 0, inflight: null }
+  return w.__ficatlasLanding
+}
+
+export function getLandingBrowse(): Promise<LandingBrowse> {
+  const c = landingCache()
+  if (c.value && Date.now() - c.at < 900000) return Promise.resolve(c.value)
+  if (c.inflight) return c.inflight
+
+  c.inflight = fetchWithTimeout("/api/hubs/landing", {}, USER_TIMEOUT_MS)
+    .then(r => (r.ok ? r.json() : {}))
+    .then((d: LandingBrowse) => {
+      if (d && typeof d === "object" && Object.keys(d).length) { c.value = d; c.at = Date.now() }
+      return c.value ?? {}
+    })
+    .catch(() => c.value ?? {})
     .finally(() => { c.inflight = null })
 
   return c.inflight

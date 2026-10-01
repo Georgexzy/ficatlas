@@ -460,6 +460,68 @@ def list_hubs(
     return _list("fandom", response, limit, offset, db)
 
 
+# ── the landing page's browse surface ────────────────────────────────────────
+#
+# One request for the front door's "somewhere to go", rather than four.
+#
+# The landing page asked a first-time visitor with no search in mind to pick from
+# twelve fandoms, and a fic-finder site's readers overwhelmingly arrive looking
+# for a CHARACTER or a PAIRING, not a universe. Asking them to name a fandom
+# first is the one step this index exists to avoid. The three groups are also
+# the three things `search` can filter on that are not expressible as a guess
+# about the plot.
+#
+# Read from the two hub tables rather than from `facets`, for the reason this
+# file already exists: both tables are written by `hub_build.build_groups` and
+# are exactly sorted by `work_count`, so this is two bounded index walks over a
+# few thousand rows and no scan of `stories` at all. `facets` would have needed a
+# `GROUP BY kind, value` over 1.98M rows, which is the query the watchdog note
+# in this repo is about.
+#
+# `limit` is capped at 20 because the widest column is a two-column grid on a
+# phone; asking for more is a phone number, not a browse list.
+# 300 works, and not a count of rows: a tag list is only worth having if
+# every entry leads somewhere dense, and the tail of this vocabulary is very
+# long — the two-thousandth commonest tag is on a few hundred works, which
+# is a link to almost nothing and reads as a broken promise. See the
+# measurement in `_did_you_mean` in api/search.py, which uses the same
+# 200 floor for the same reason: a facet nobody has used much is not a
+# suggestion anybody wanted.
+LANDING_TAG_FLOOR = 300
+LANDING_LIMITS = {"fandom": 12, "ship": 12, "tag": 18}
+
+
+@router.get("/landing", response_model=dict)
+def landing_browse(
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """The front door's entry points. Owner-and-reader alike — this is not an
+    admin surface, it is the public landing page's data, and every number here is
+    already public through the hub pages it links to."""
+    out: dict[str, list[dict]] = {}
+    for kind, cap in LANDING_LIMITS.items():
+        if kind == "tag":
+            rows = db.execute(text("""
+                SELECT value, count FROM facets
+                 WHERE kind = 'tag' AND count >= :floor
+                 ORDER BY count DESC, value ASC
+                 LIMIT :lim
+            """), {"floor": LANDING_TAG_FLOOR, "lim": cap}).fetchall()
+            out[kind] = [{"name": r[0], "work_count": r[1]} for r in rows]
+            continue
+        table = "fandom_hubs" if kind == "fandom" else "ship_hubs"
+        rows = db.execute(text(f"""
+            SELECT name, work_count FROM {table}
+             ORDER BY work_count DESC, slug ASC
+             LIMIT :lim
+        """), {"lim": cap}).fetchall()
+        out[kind] = [{"name": r[0], "work_count": r[1]} for r in rows]
+
+    response.headers["Cache-Control"] = "public, max-age=600, s-maxage=3600"
+    return out
+
+
 @router.get("/{slug}", response_model=HubDetail)
 def get_hub(slug: str, response: Response, db: Session = Depends(get_db)):
     return _detail("fandom", slug, response, db)
