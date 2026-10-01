@@ -2891,11 +2891,20 @@ function SearchPageInner() {
               min={wordMin ?? parsedLive.wordCountMin ?? undefined}
               max={wordMax ?? parsedLive.wordCountMax ?? undefined}
               onChange={(lo, hi) => { setWordMin(lo); setWordMax(hi) }} />
+            {/* Labelled rather than placeholder-only. A placeholder is not an
+                accessible name: it disappears the moment the box has a value,
+                so on typing into either of these the field was announced as an
+                unnamed spin button and the reader had no way to tell which end
+                of the range they were editing. The visible placeholder stays —
+                "Min"/"Max" is the clearest thing to put on the face of these —
+                and the label is what the name comes from. */}
             <div className="input-pair">
-              <input type="number" placeholder="Min" value={wordMin ?? parsedLive.wordCountMin ?? ""}
+              <input type="number" placeholder="Min" aria-label="Minimum word count"
+                value={wordMin ?? parsedLive.wordCountMin ?? ""}
                 className="input-sm" onChange={e => setWordMin(e.target.value ? Number(e.target.value) : undefined)} />
-              <span className="input-pair__sep">–</span>
-              <input type="number" placeholder="Max" value={wordMax ?? parsedLive.wordCountMax ?? ""}
+              <span className="input-pair__sep" aria-hidden="true">–</span>
+              <input type="number" placeholder="Max" aria-label="Maximum word count"
+                value={wordMax ?? parsedLive.wordCountMax ?? ""}
                 className="input-sm" onChange={e => setWordMax(e.target.value ? Number(e.target.value) : undefined)} />
             </div>
           </FilterSection>
@@ -3087,7 +3096,18 @@ function SearchPageInner() {
             {importMsg && <div className="alert alert--success" style={{marginBottom:8}}>{importMsg}</div>}
             <div className="search-bar">
               <div className="search-input-wrap">
-                <input type="text" className="search-input"
+                {/* The site's most important input had no accessible name. Its
+                    placeholder is `exampleQuery`, which is a rotating example
+                    ("harry potter dumplings") and not a label — so a screen
+                    reader announced an unlabelled text field, and on some
+                    rotations the announced placeholder looked like the value.
+                    The name is fixed and describes the control; the example
+                    stays as the placeholder, where it is a hint rather than a
+                    name. */}
+                <label htmlFor="search-q" className="visually-hidden">
+                  Search stories
+                </label>
+                <input id="search-q" type="search" className="search-input"
                   placeholder={exampleQuery}
                   value={query}
                   onChange={e => { barEditedRef.current = true; setQuery(e.target.value) }}

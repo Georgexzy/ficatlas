@@ -74,6 +74,19 @@ describe("single-token operators do not swallow the query", () => {
     expect(pq.cleanText).toBe("harry potter")
   })
 
+  it("accepts every reader-facing spelling of a status", () => {
+    // The vocabulary the search bar documents and parses. A status filter that
+    // silently matches nothing is indistinguishable from a thin index, which is
+    // how "ongoing" spent weeks returning every work instead of the unfinished
+    // ones.
+    expect(parseQuery("status:ongoing").status).toBe("in_progress")
+    expect(parseQuery("status:wip").status).toBe("in_progress")
+    expect(parseQuery("status:incomplete").status).toBe("in_progress")
+    expect(parseQuery("status:in_progress").status).toBe("in_progress")
+    expect(parseQuery("status:complete").status).toBe("complete")
+    expect(parseQuery("status:completed").status).toBe("complete")
+  })
+
   it("status: leaves the trailing text alone", () => {
     const pq = parseQuery("status:complete harry potter")
     expect(pq.status).toBe("complete")
