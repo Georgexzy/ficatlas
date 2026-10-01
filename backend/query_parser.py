@@ -135,9 +135,20 @@ WORDCOUNT_RE = re.compile(
 )
 
 # Status shorthands (standalone words)
+# Mirrored in frontend/lib/queryParser.ts, and the two must agree: this is the
+# bar rendering chips and the API re-parsing the same string, and the frontend's
+# copy had an `in_progress` identity entry this one did not. Harmless today —
+# both fall through to the raw value — and harmless is exactly why it survives
+# until somebody adds the next synonym to one side. frontend/lib/queryParser.test.ts
+# and tests/test_query_parser.py assert the same cases for the same reason.
+#
+# The storage spellings are `complete` / `in_progress` / `abandoned` / `unknown`
+# (StatusEnum). The reader-facing synonyms are the other half of this table: a
+# status filter that silently matches nothing looks exactly like a thin index.
 STATUS_WORDS = {
     "complete": "complete", "completed": "complete",
     "wip": "in_progress", "incomplete": "in_progress", "ongoing": "in_progress",
+    "in_progress": "in_progress",
 }
 
 # Rating shorthands (standalone words)

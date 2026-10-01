@@ -16,6 +16,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from query_parser import parse_query
 
 
+def test_status_spellings_all_reach_the_storage_enum():
+    """Every spelling the search bar documents must reach a StatusEnum member.
+
+    A status filter that silently matches nothing is indistinguishable from a
+    thin index — which is how `ongoing` spent weeks returning every work instead
+    of the unfinished ones. The frontend copy of this table is asserted to cover
+    the same ground in frontend/lib/queryParser.test.ts.
+    """
+    from query_parser import STATUS_WORDS
+    from models.story import StatusEnum
+
+    storage = set(StatusEnum.__members__)
+    for reader_spelling in ("complete", "completed", "wip", "incomplete",
+                            "ongoing", "in_progress"):
+        assert reader_spelling in STATUS_WORDS, f"{reader_spelling} is unrecognised"
+        assert STATUS_WORDS[reader_spelling] in storage, (
+            f"{reader_spelling} maps to {STATUS_WORDS[reader_spelling]!r}, "
+            f"which is not a StatusEnum member"
+        )
+
+
 def test_free_text_only():
     pq = parse_query("Harry Potter and the Methods of Rationality")
     assert pq.clean_text == "Harry Potter and the Methods of Rationality"
