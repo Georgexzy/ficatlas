@@ -763,6 +763,11 @@ def suggest_canonical(
     return out[:limit]
 
 
+# How many works an author must have to be rescuable by name. See the INSERT
+# below for why this is not the same floor `facets` uses for tags.
+_AUTHOR_FACET_MIN_WORKS = int(os.getenv("AUTHOR_FACET_MIN_WORKS", "20"))
+
+
 @router.post("/refresh-facets")
 def refresh_facets(
     min_count: int = Query(1, ge=1, description="Drop values rarer than this"),
@@ -804,6 +809,35 @@ def refresh_facets(
             built[kind] = db.execute(
                 text("SELECT count(*) FROM facets_rebuild WHERE kind = :k"), {"k": kind}
             ).scalar()
+
+        # Authors, in their own table. A `GROUP BY author` over the whole table
+        # is the same cost as one of the scans above and it is the only way to
+        # get this vocabulary, so it belongs in this batch rather than in a
+        # script somebody has to remember to run.
+        #
+        # The floor is 20, and it is not `min_count`'s default of 1 and not
+        # _DYM_MIN_COUNT's 200: 3,399,217 of the index's authors have exactly one
+        # work, and those are never going to be typed. At 20 works there are
+        # 182,050 of them, at 200 only 4,218 — and the reported case (`lonibal`,
+        # 28 works) sits between the two, so the 200 floor used for TAGS would
+        # have dropped the very name this was built to rescue. A pen name with a
+        # dozen works is a real reader, and no author file is going to be a typo
+        # of another.
+        #
+        # 20 and not 10 because the table is the thing that costs: the trigram
+        # index is built over it, and the search path's own floor
+        # (_DYM_AUTHOR_MIN_COUNT, 10) sits BELOW this one deliberately, so a
+        # member of this table is never filtered out at suggestion time. One
+        # floor, stated once, enforced in one place.
+        db.execute(text("DELETE FROM author_facets"))
+        db.execute(text(
+            "INSERT INTO author_facets (value, count) "
+            "SELECT author, count(*) AS c FROM stories "
+            "WHERE author IS NOT NULL AND btrim(author) <> '' "
+            "GROUP BY author HAVING count(*) >= :author_min"
+        ), {"author_min": _AUTHOR_FACET_MIN_WORKS})
+        built["author_facets"] = db.execute(
+            text("SELECT count(*) FROM author_facets")).scalar()
 
         # Carry over kinds that are NOT derived from stories. The rebuild below
         # swaps a freshly-built table in and drops the old one, so anything this

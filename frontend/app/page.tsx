@@ -1148,6 +1148,10 @@ const DYM_KIND_LABEL: Record<string, string> = {
   character: "character",
   relationship: "pairing",
   tag: "tag",
+  // An author is not a facet, which is why it has its own vocabulary table
+  // rather than being a fifth `facets` kind — so it needs its own label, or the
+  // chip would render the raw word "author" for a pen name.
+  author: "author",
 }
 
 // The browse-able list of the biggest hubs in the index, which gives the
@@ -3122,7 +3126,7 @@ function SearchPageInner() {
                     phone — which is where the mark was least visible, because
                     the header is not sticky below 700px and scrolls away the
                     moment you move. */}
-                {loading ? <CompassMark className="compass--spin" needle /> : "Search"}
+                {loading ? <CompassMark className="compass--spin" /> : "Search"}
               </button>
             </div>
             <TokenStrip tokens={parsedTokens} onRemove={raw => {
@@ -3153,36 +3157,32 @@ function SearchPageInner() {
             </div>
           )}
 
-          {/* Skeletons are for a search with nothing behind it. A page change
-              has the previous page behind it and keeps it — see `stale`. */}
+          {/* The loader. Rendered only when a search has nothing behind it — a
+              page change has the previous page behind it and keeps it, see `stale`. */}
           {loading && !shown && (
-            <div className="story-list" aria-busy="true" aria-label="Loading results">
-              {/* The compass, needle turning over a rose that stays put.
+            <div className="search-loading" role="status" aria-live="polite">
+              {/* A compass, big, and the only thing on the page while it turns.
 
-                  Six grey cards say "something is happening" and nothing else.
-                  This is the one moment a reader is looking at an empty column
-                  with time to notice, so it is the one moment worth the site's
-                  own mark rather than a generic ring.
+                  This used to be the compass at 30px sitting on top of six grey
+                  result cards. The cards were the problem, not the absence of
+                  them: a column of empty boxes asserts a SHAPE — a title, a
+                  summary, a byline — and then fills it with nothing, so for the
+                  seconds a cold search takes on a 20M-row index the reader is
+                  looking at six lies about what is coming. It also made the
+                  arrival a hard cut, because six cards of a fixed height and
+                  whatever comes back are different heights and the reader has to
+                  re-find their place.
 
-                  `needle` is what makes it a compass: <CompassMark/> alone is
-                  the logo, and spinning the whole of it would be a floral
-                  spinner. With the needle it is an instrument, and the overshoot
-                  in the keyframe is a needle settling on north.
-
-                  Reused rather than a new asset — inline SVG, no request, and it
-                  takes its colours from the theme so there is nothing to load
-                  and nothing to get wrong in dark mode. */}
-              <div className="search-spinner" aria-hidden="true">
-                <CompassMark needle />
+                  One mark at 96px says the honest thing — nothing is known yet —
+                  and it is the site's own shape rather than a generic ring, which
+                  is the whole argument for inlining the logo here instead of
+                  reaching for a spinner component. Colours come from the theme,
+                  so there is nothing to load and nothing to get wrong in dark
+                  mode. */}
+              <div className="search-loading__rose" aria-hidden="true">
+                <CompassMark />
               </div>
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="card-skeleton">
-                  <div className="skel-line skel-line--title" />
-                  <div className="skel-line" />
-                  <div className="skel-line skel-line--short" />
-                  <div className="skel-line skel-line--meta" />
-                </div>
-              ))}
+              <p className="search-loading__text">Searching</p>
             </div>
           )}
 

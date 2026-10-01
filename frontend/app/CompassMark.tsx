@@ -23,19 +23,23 @@
  * aria-hidden: it sits inside the link that already says "FicAtlas home", so
  * announcing it again would make every page start by saying the name twice.
  *
- * `needle` is opt-in and off by default. The rose alone is the logo, and two of
- * its three call sites are that: the wordmark, and the button that spins while
- * a search runs. The search results loader is the one place that wants the whole
- * instrument, because a compass is a FIXED rose with something turning over it
- * — rotating all eight points instead just gives a slow, floral spinner, which
- * is the generic thing this mark is supposed to stop looking like. So the needle
- * is a separate group, drawn last so it sits over the rose, and it is the only
- * part that moves.
+ * THE NEEDLE is part of the mark, not an optional extra, and it is the first
+ * thing here that took a measurement to get right. A compass is a FIXED rose
+ * with something turning over it; rotating the whole <svg> instead gives a
+ * slow, floral spinner, which is the generic thing this mark exists to stop
+ * looking like. So the needle is a separate group, drawn last, and it is the
+ * only part that moves.
+ *
+ * The first attempt at the needle was 2.3 wide on this 32-unit grid — and the
+ * rose's own vertical cardinal point is 2.32 wide and reaches further. The
+ * needle was therefore a strict SUBSET of a shape already in the mark, on the
+ * same axis and in the same two colours: it animated, and nothing about it was
+ * distinguishable from the point it was hiding inside. Pixel-diffing the icon
+ * with and without it measured 1.3% of the tile, against 7% for the geometry
+ * below. Same proportion as NEEDLE_LEN/NEEDLE_HALF in tools/make-icons.py,
+ * which is what keeps the tab icon and this the same picture.
  */
-export default function CompassMark({
-  className = "",
-  needle = false,
-}: { className?: string; needle?: boolean }) {
+export default function CompassMark({ className = "" }: { className?: string }) {
   return (
     <svg className={`compass ${className}`} viewBox="0 0 32 32"
          width="1em" height="1em" aria-hidden="true" focusable="false">
@@ -61,18 +65,17 @@ export default function CompassMark({
         <polygon points="16,31 18.32,16 16,16" />
         <polygon points="1,16 16,18.32 16,16" />
       </g>
-      {/* The needle: one long kite through the centre, split into a lit half and
-          a shaded one so the direction of travel stays readable while it turns.
-          Same 32-unit grid and same centre as the rose, so `transform-origin:
-          50%` on the group (with transform-box: view-box) is the pivot with no
-          arithmetic. Deliberately NOT emitted from make-icons.py: that builds
-          the logo, and this is an instrument. */}
-      {needle && (
-        <g className="compass__needle">
-          <polygon className="compass__needle-n" points="16,2.4 18.3,16 13.7,16" />
-          <polygon className="compass__needle-s" points="16,29.6 13.7,16 18.3,16" />
-        </g>
-      )}
+      {/* The needle: a full-diameter kite over the rose, WIDER than the cardinal
+          it crosses (4.2 against 2.32) so it is a separate object rather than a
+          highlight of one. Lit at the north end and shaded at the south, because
+          a needle's job is to say which way is north — the rose's left/right
+          facet split says nothing about that. Same 32-unit grid and centre as
+          the rose, so `transform-origin: 50%` with `transform-box: view-box` is
+          the pivot with no arithmetic. */}
+      <g className="compass__needle">
+        <polygon className="compass__needle-n" points="16,1 20.2,16 11.8,16" />
+        <polygon className="compass__needle-s" points="16,31 11.8,16 20.2,16" />
+      </g>
     </svg>
   )
 }
