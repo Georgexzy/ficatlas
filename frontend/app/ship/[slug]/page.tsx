@@ -57,7 +57,6 @@ interface SiteSection { site: string; works: Work[]
   /** How many works this archive actually holds — NOT works.length,
    *  which is the per-archive cap. See hub_build.py. */
   total?: number }
-interface Quality { tag: string; works: number }
 interface RelatedHub {
   kind: "fandom" | "ship"
   slug: string
@@ -75,7 +74,6 @@ interface Hub {
   sections?: SiteSection[]
   related?: RelatedHub[]
   /** What works here tend to be — the refinement chips. */
-  qualities?: Quality[]
 }
 
 const SITE_LABELS: Record<string, string> = {
@@ -258,75 +256,24 @@ export default async function ShipHub(
         Archive of Our Own, FanFiction.net and FictionAlley.
       </p>
 
-      {/* THE TOOL, ON THE PAGE — not a link to it.
+      {/* Removed: the in-page search box and the "Popular here" qualities.
 
-          This page type is the site's front door: 77 of the 80 sessions Google
-          sends in a month land on a hub rather than the home page. Nine per
-          cent of them ever run a search. The page offered a LINK to the search
-          box ("Search all N with filters →"), which is a navigation step
-          between somebody who has just arrived and the only thing here they
-          cannot get from the archive itself.
+          Both were the hub page's attempt to be a search entry point, and
+          neither fitted. A hub is what a reader (or a crawler) arrives at to
+          find out what is here — the counts, the sections, the pairings, the
+          recommendations — and a text box sitting under the title asked them to
+          leave before they had seen any of it.
 
-          A plain GET form, deliberately. It needs no JavaScript, a crawler
-          sees a real form, and it submits to exactly the URL the search page
-          already reads — the one carrying relationships — so the reader lands on
-          results scoped to this pairing rather than in an empty box.
+          The form also cost every one of 11,196 hub pages a full-text input and
+          a submit button in the server HTML, on pages whose job is to be
+          crawled and read. "Popular here" was eight tag links chosen at build
+          time, which is the same job as the archive sections immediately below
+          it and a weaker version of it.
 
-          The placeholder is a sentence on purpose. Typed words that match
-          nothing are now re-read against the vocabulary (see `Interpreted` in
-          backend/api/search.py), so "a long one where they get together at the
-          end" is a search this site can answer and most cannot. */}
-      <form className="hub-find" action="/" method="get" role="search">
-        <input type="hidden" name="relationships" value={hub.name} />
-        <label className="hub-find__label" htmlFor="hub-find-q">
-          Search inside these {hub.work_count.toLocaleString()} works
-        </label>
-        <div className="hub-find__row">
-          <input id="hub-find-q" name="q" type="search" className="hub-find__input"
-            placeholder="slow burn, complete, no major character death" autoComplete="off" />
-          <button type="submit" className="hub-find__go">Search</button>
-        </div>
-        <p className="hub-find__hint">
-          Plain words work — describe the fic you want and we will read it as a search.
-        </p>
-      </form>
+          The facets ("Or narrow by") stayed: they are links into a search
+          rather than a search box, they are true of every hub, and removing
+          them would take away the only way to narrow without the bar. */}
 
-      {/* WHAT WORKS HERE ARE ACTUALLY LIKE.
-          These were a fixed list — complete, 100k+, under 10k, recently
-          updated — which is the same four suggestions on all 11,196 hubs and
-          says nothing about any of them. They are this hub's OWN most common
-          qualities now, sampled and filtered at build time, so Slow Burn
-          appears on the pairings that have it and does not on the ones that
-          do not. See hub_build.hub_qualities for what is excluded and why:
-          the hub's own names and nicknames, the writing process, the artefact,
-          and any word people write more often than they tag. */}
-      {!!hub.qualities?.length && (
-        <div className="hub-find__quick">
-          <span className="hub-find__quick-label">Popular here</span>
-          <ul>
-            {hub.qualities.slice(0, 8).map(q => (
-              <li key={q.tag}>
-                <Link rel="nofollow"
-                  href={`${searchHref(hub.name)}&tags=${encodeURIComponent(q.tag)}`}>
-                  {q.tag}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Length and completion, which are true of every hub and so belong in
-          the fixed row rather than up there with the ones that are not. */}
-      <div className="hub-find__quick hub-find__quick--plain">
-        <span className="hub-find__quick-label">Or narrow by</span>
-        <ul>
-          <li><Link rel="nofollow" href={`${searchHref(hub.name)}&status=complete`}>Complete</Link></li>
-          <li><Link rel="nofollow" href={`${searchHref(hub.name)}&word_count_min=100000`}>100k+ words</Link></li>
-          <li><Link rel="nofollow" href={`${searchHref(hub.name)}&word_count_max=10000`}>Under 10k</Link></li>
-          <li><Link rel="nofollow" href={`${searchHref(hub.name)}&sort=updated_desc`}>Recently updated</Link></li>
-        </ul>
-      </div>
 
       {/* One section per archive rather than one merged list — see the fandom
           hub for why a single cross-archive ranking could only ever return AO3. */}

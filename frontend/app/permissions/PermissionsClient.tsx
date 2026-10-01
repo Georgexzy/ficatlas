@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useCallback, useEffect, useState } from "react"
 import BackLink from "../BackLink"
 import SiteHeader from "../SiteHeader"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 // One page for an author, rather than two.
 //
@@ -60,7 +61,9 @@ export default function PermissionsClient() {
     if (!a.trim()) return
     setBusy(true); setError(null); setMsg(null)
     try {
-      const r = await fetch(`/api/permissions/works?site=${s}&author=${encodeURIComponent(a.trim())}`)
+      const r = await fetchWithTimeout(
+        `/api/permissions/works?site=${s}&author=${encodeURIComponent(a.trim())}`,
+        {}, USER_TIMEOUT_MS)
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || "Could not look that up.")
       setData(d)
@@ -94,7 +97,8 @@ export default function PermissionsClient() {
     try {
       const fd = new FormData()
       fd.append("site", data.site); fd.append("author", data.author)
-      const r = await fetch("/api/permissions/revoke", { method: "POST", body: fd })
+      const r = await fetchWithTimeout("/api/permissions/revoke",
+        { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || "Could not withdraw that.")
       setMsg(d.revoked
@@ -116,7 +120,8 @@ export default function PermissionsClient() {
     try {
       const fd = new FormData()
       fd.append("site", data.site); fd.append("author", data.author); fd.append("policy", policy)
-      const r = await fetch("/api/permissions/restrict", { method: "POST", body: fd })
+      const r = await fetchWithTimeout("/api/permissions/restrict",
+        { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || "Could not save that.")
       setMsg("Saved. This also applies to anything you publish from now on.")
@@ -130,7 +135,8 @@ export default function PermissionsClient() {
     try {
       const fd = new FormData()
       fd.append("site", data.site); fd.append("author", data.author)
-      const r = await fetch("/api/permissions/challenge", { method: "POST", body: fd })
+      const r = await fetchWithTimeout("/api/permissions/challenge",
+        { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || "Could not start verification.")
       setToken(d.token); setProfileUrl(d.profile_url); setStep("prove")
@@ -143,7 +149,8 @@ export default function PermissionsClient() {
     try {
       const fd = new FormData()
       fd.append("token", token); fd.append("policy", policy); fd.append("email", email)
-      const r = await fetch("/api/permissions/verify", { method: "POST", body: fd })
+      const r = await fetchWithTimeout("/api/permissions/verify",
+        { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || "Could not verify.")
       setStep("done"); lookup(d.site, d.author)
@@ -157,7 +164,8 @@ export default function PermissionsClient() {
     setBusy(true); setError(null)
     try {
       const fd = new FormData(); fd.append("delist", String(delist))
-      const r = await fetch(`/api/permissions/works/${w.id}/withdraw`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`/api/permissions/works/${w.id}/withdraw`,
+        { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || "Could not take that down.")
       setMsg(`"${w.title}" is down.`)

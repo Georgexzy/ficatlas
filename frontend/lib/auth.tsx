@@ -1,7 +1,7 @@
 "use client"
 import { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from "react"
 import { SYNCED_PREF_KEYS } from "./storageKeys"
-import { fetchWithTimeout } from "./net"
+import { fetchWithTimeout, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "./net"
 
 export interface User {
   username: string
@@ -244,12 +244,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     inFlightRef.current = true
     setSyncing(true)
     try {
-      const r = await fetch("/api/userdata/merge", {
+      const r = await fetchWithTimeout("/api/userdata/merge", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: bodyHash,
-      })
+      }, USER_TIMEOUT_MS)
       if (r.ok) {
         const merged = await r.json()
         // Adopt merged values locally (without re-triggering the setItem hook)
@@ -361,7 +361,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // The server decides what the cookie looks like; this only says which was
     // asked for. Unticked means a session cookie, gone when the browser closes.
     fd.append("remember", String(remember))
-    const r = await fetch("/api/auth/login", { method: "POST", body: fd, credentials: "include" })
+    const r = await fetchWithTimeout("/api/auth/login", { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
     if (!r.ok) {
       const e = await r.json().catch(() => ({}))
       throw new Error(e.detail || "Login failed")
@@ -385,7 +385,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // API, and sending an empty one would be the same thing said twice.
     if (email && email.trim()) fd.append("email", email.trim())
     fd.append("remember", String(remember))
-    const r = await fetch("/api/auth/signup", { method: "POST", body: fd, credentials: "include" })
+    const r = await fetchWithTimeout("/api/auth/signup", { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
     if (!r.ok) {
       const e = await r.json().catch(() => ({}))
       throw new Error(e.detail || "Signup failed")
@@ -398,7 +398,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     // Flush any pending edits before signing out so nothing is lost.
     if (dirtyRef.current.size > 0) { try { await doMerge(undefined, true) } catch {} }
-    try { await fetch("/api/auth/logout", { method: "POST", credentials: "include" }) } catch {}
+    try { await fetchWithTimeout("/api/auth/logout", { method: "POST", credentials: "include" }, USER_TIMEOUT_MS) } catch {}
     setUser(null); cacheUser(null); loggedInRef.current = false
   }, [doMerge])
 
@@ -407,7 +407,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const changePassword = useCallback(async (current: string, next: string) => {
     const fd = new FormData()
     fd.append("current_password", current); fd.append("new_password", next)
-    const r = await fetch("/api/auth/change-password", { method: "POST", body: fd, credentials: "include" })
+    const r = await fetchWithTimeout("/api/auth/change-password", { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
     if (!r.ok) {
       const e = await r.json().catch(() => ({}))
       throw new Error(e.detail || "Couldn't change password")
@@ -443,7 +443,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       targets.push("settings" as SyncKey)
     }
     await Promise.all(targets.map(k =>
-      fetch(`/api/userdata/${k}`, { method: "DELETE", credentials: "include" })
+      fetchWithTimeout(`/api/userdata/${k}`, { method: "DELETE", credentials: "include" },
+                       BACKGROUND_TIMEOUT_MS)
         .catch(() => {})))
     // Whatever is local now IS the truth, so record it as synced. Without this
     // the next merge compares against the pre-clear hash, decides nothing has
@@ -456,7 +457,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const fd = new FormData()
     fd.append("password", password)
     fd.append("confirm", confirm)
-    const r = await fetch("/api/auth/delete-account", { method: "POST", body: fd, credentials: "include" })
+    const r = await fetchWithTimeout("/api/auth/delete-account", { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
     if (!r.ok) {
       const e = await r.json().catch(() => ({}))
       throw new Error(e.detail || "Couldn't delete account")

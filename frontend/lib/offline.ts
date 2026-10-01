@@ -8,6 +8,13 @@
 // story metadata plus an array of {number, title, content} chapters, so a saved
 // story is fully self-contained and readable with no network.
 
+import {
+  fetchWithTimeout,
+  BACKGROUND_TIMEOUT_MS,
+  USER_TIMEOUT_MS,
+  DOWNLOAD_TIMEOUT_MS,
+} from "./net"
+
 export interface OfflineChapter {
   number: number
   title?: string
@@ -452,7 +459,8 @@ export async function downloadStoryForOffline(
   // granted and easier to explain if it is not.
   await requestPersistentStorage()
 
-  const metaRes = await fetch(`/api/stories/${storyId}`)
+  const metaRes = await fetchWithTimeout(`/api/stories/${storyId}`,
+    {}, USER_TIMEOUT_MS)
   if (!metaRes.ok) throw new Error(`Couldn't load story (HTTP ${metaRes.status})`)
   const meta = await metaRes.json()
 
@@ -519,7 +527,13 @@ export async function downloadStoryForOffline(
     let lostConnection = false
     for (let attempt = 0; attempt < 6; attempt++) {
       try {
-        r = await fetch(`/api/stories/${storyId}/chapters/${n}`)
+        // DOWNLOAD_TIMEOUT_MS, not USER_TIMEOUT_MS. This loop honours 429 and
+        // 5xx with backoff on purpose — waiting when the server asks is correct
+        // — and a long chapter over a slow connection is a success rather than a
+        // stall. Cutting it off would throw away minutes of downloading and, with
+        // it, the partial save the catch below goes to some trouble to keep.
+        r = await fetchWithTimeout(`/api/stories/${storyId}/chapters/${n}`,
+          {}, DOWNLOAD_TIMEOUT_MS)
       } catch {
         // The connection went away mid-download. Everything fetched so far is
         // still good and still worth keeping — see the partial save below.
@@ -648,7 +662,7 @@ export async function downloadStoryForOffline(
         const first = chapters[0]?.number ?? 1
         for (const u of [`/story/${storyId}`, `/story/${storyId}/chapter/${first}`]) {
           try {
-            const res = await fetch(u)
+            const res = await fetchWithTimeout(u, {}, BACKGROUND_TIMEOUT_MS)
             if (res.ok) await cache.put(u, res.clone())
           } catch {}
         }

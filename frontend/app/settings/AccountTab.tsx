@@ -5,6 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth"
 import { fetchJson } from "@/lib/errors"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 interface Session {
   current: boolean
@@ -72,7 +73,8 @@ function ManageAccounts({ selfId }: { selfId: string }) {
   const setRole = async (id: string, role: string) => {
     setMsg(""); setErr("")
     const fd = new FormData(); fd.append("role", role)
-    const r = await fetch(`/api/auth/users/${id}/role`, { method: "POST", body: fd, credentials: "include" })
+    const r = await fetchWithTimeout(`/api/auth/users/${id}/role`,
+        { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
     if (!r.ok) {
       const d = await r.json().catch(() => ({}))
       setErr(d.detail || "Could not change that account's role.")
@@ -144,7 +146,8 @@ export default function AccountTab() {
       // impossible to satisfy — see confirm_identity in backend/api/auth.py.
       fd.append("password", emailPw); fd.append("email", email)
       fd.append("confirm", emailPw)
-      const r = await fetch("/api/auth/email", { method: "POST", body: fd, credentials: "include" })
+      const r = await fetchWithTimeout("/api/auth/email",
+        { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || "Could not save that.")
       setEmailMsg(d.email ? `Saved — resets will go to ${d.email}.` : "Address removed.")
@@ -186,7 +189,8 @@ export default function AccountTab() {
     setBusy(true)
     try {
       const fd = new FormData(); fd.append("keep_current", "true")
-      await fetch("/api/auth/logout-all", { method: "POST", body: fd, credentials: "include" })
+      await fetchWithTimeout("/api/auth/logout-all",
+        { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
       loadSessions()
     } catch {}
     finally { setBusy(false) }
@@ -288,7 +292,8 @@ export default function AccountTab() {
           <div className="account-danger-actions">
             <button className="card-btn" onClick={async () => {
               const fd = new FormData(); fd.append("role", "reader")
-              await fetch("/api/auth/view-as", { method: "POST", body: fd, credentials: "include" })
+              await fetchWithTimeout("/api/auth/view-as",
+                { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
               window.location.href = "/"
             }}>Preview as reader</button>
           </div>
@@ -337,8 +342,8 @@ export default function AccountTab() {
                 setBusy(true); setPwErr(""); setPwMsg("")
                 try {
                   const body = new URLSearchParams({ new_password: newPw })
-                  const r = await fetch("/api/auth/set-password",
-                    { method: "POST", credentials: "include", body })
+                  const r = await fetchWithTimeout("/api/auth/set-password",
+                    { method: "POST", credentials: "include", body }, USER_TIMEOUT_MS)
                   const d = await r.json().catch(() => ({}))
                   if (!r.ok) throw new Error(d.detail || "Could not set password")
                   setPwMsg(d.message || "Password set.")
@@ -393,8 +398,8 @@ export default function AccountTab() {
               onClick={async () => {
                 setBusy(true)
                 try {
-                  await fetch("/api/auth/google/unlink",
-                              { method: "POST", credentials: "include" })
+                  await fetchWithTimeout("/api/auth/google/unlink",
+                              { method: "POST", credentials: "include" }, USER_TIMEOUT_MS)
                   location.reload()
                 } finally { setBusy(false) }
               }}>

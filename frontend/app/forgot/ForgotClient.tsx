@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useEffect, useState } from "react"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 // Two steps on one component, because the second half is useless without the
 // first and bouncing between routes loses the code people have just been given.
@@ -65,7 +66,8 @@ export default function ForgotClient(
   async function request(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setBusy(true); setError(null)
     try {
-      const r = await fetch("/api/auth/forgot", { method: "POST", body: new FormData(e.currentTarget) })
+      const r = await fetchWithTimeout("/api/auth/forgot",
+        { method: "POST", body: new FormData(e.currentTarget) }, USER_TIMEOUT_MS)
       const d = await r.json()
       setNote(d.message); setStep("enter")
     } catch { setError("Could not reach the server. Please try again.") }
@@ -75,7 +77,8 @@ export default function ForgotClient(
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); setBusy(true); setError(null)
     try {
-      const r = await fetch("/api/auth/reset", { method: "POST", body: new FormData(e.currentTarget) })
+      const r = await fetchWithTimeout("/api/auth/reset",
+        { method: "POST", body: new FormData(e.currentTarget) }, USER_TIMEOUT_MS)
       const d = await r.json()
       if (!r.ok) throw new Error(d.detail || "That did not work.")
       // Now the code is spent, take it out of the address bar so it is not left

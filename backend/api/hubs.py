@@ -96,14 +96,6 @@ class SiteSection(BaseModel):
     total: int = 0
 
 
-class Quality(BaseModel):
-    """One thing works in this hub tend to be, offered as a one-click
-    refinement. `works` is the count within a sample, so it ranks rather than
-    measures — see hub_build.hub_qualities."""
-    tag: str
-    works: int
-
-
 class RelatedHub(BaseModel):
     """Another hub worth a link from this one. `kind` is "fandom" or "ship"."""
     kind: str
@@ -134,11 +126,6 @@ class HubDetail(BaseModel):
     # The window the counts describe, so the page can say "in the last 30 days"
     # rather than leaving a number to be read as all-time.
     recommended_days: int = 0
-    # What works here tend to BE. The page's refinement chips: real tags from
-    # this hub's own works rather than a generic list, so "Slow Burn" appears
-    # on the pairings that have it and not on the ones that do not. Empty on a
-    # hub built before the column existed.
-    qualities: list[Quality] = []
 
 
 # Both hub tables have the same shape, so listing and detail differ only in the
@@ -338,7 +325,7 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     response.headers["Cache-Control"] = CACHE
     hub = db.execute(text(
         f"SELECT slug, name, work_count, top_ids, top_by_site, site_counts, "
-        f"       qualities, variants "
+        f"       variants "
         f"  FROM {table} WHERE slug = :s"
     ), {"s": slug}).fetchone()
     if not hub:
@@ -448,22 +435,18 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
 
     related = _related(db, kind, hub[0], hub[1], _fandoms, _rels)
 
-    qualities = [Quality(tag=q["tag"], works=int(q.get("works") or 0))
-                 for q in (hub[6] or []) if q.get("tag")]
-
     # What the fandom has been recommending lately. Never allowed to fail the
     # page: this is a new table fed by a rate-limited harvest, so an empty or
     # broken result must cost the block and nothing else.
     try:
-        recommended = _recommended(db, list(hub[7] or []))
+        recommended = _recommended(db, list(hub[6] or []))
     except Exception:
         log.warning("hub %s: recommended block unavailable", hub[0], exc_info=True)
         recommended = []
 
     return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2],
                      nicknames=nicknames, works=works, sections=sections,
-                     related=related, qualities=qualities,
-                     recommended=recommended,
+                     related=related, recommended=recommended,
                      recommended_days=RECS_DAYS if recommended else 0)
 
 

@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 // What the site is being used for. Owner-only on the server (see
 // backend/api/traffic.py) — this component only decides what to draw.
@@ -437,7 +438,8 @@ export default function TrafficPanel() {
   const load = useCallback(async (d: number) => {
     setError(null)
     const get = async (path: string) => {
-      const r = await fetch(`/api/traffic/${path}?days=${d}`, { credentials: "include" })
+      const r = await fetchWithTimeout(`/api/traffic/${path}?days=${d}`,
+        { credentials: "include" }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(`Could not load traffic (${r.status}).`)
       return r.json()
     }
@@ -771,74 +773,130 @@ export default function TrafficPanel() {
         </>
       )}
 
-      {/* The only question worth asking of a search engine. */}
-      {summary?.funnel && (
-        <>
-          <h2 className="admin-site__name">Did it work?</h2>
-          <p className="admin-note">
-            Counted in people, not clicks: somebody who searched nine times and
-            opened one work is one of each. Bots are excluded, and so are the
-            sessions that searched without ever loading a page — there were{" "}
-            {summary.funnel.not_a_browser.toLocaleString()} of those in this
-            window, and they are scripts rather than readers. Leaving them in
-            halves the number below and flatters nobody.
-          </p>
-          <div className="admin-tiles">
-            <div className="admin-tile">
-              <span className="admin-tile__value">{summary.funnel.searched.toLocaleString()}</span>
-              <span className="admin-tile__label">Searched</span>
-            </div>
-            <div className="admin-tile">
-              <span className="admin-tile__value">{summary.funnel.opened_a_story.toLocaleString()}</span>
-              <span className="admin-tile__label">Opened a story</span>
-              {summary.funnel.searched > 0 && (
-                <span className="admin-tile__sub">
-                  {Math.round(100 * summary.funnel.opened_a_story / summary.funnel.searched)}% of searchers
-                </span>
-              )}
-            </div>
-            <div className="admin-tile">
-              <span className="admin-tile__value">{summary.funnel.read_it.toLocaleString()}</span>
-              <span className="admin-tile__label">Went and read it</span>
-              {summary.funnel.opened_a_story > 0 && (
-                <span className="admin-tile__sub">
-                  {Math.round(100 * summary.funnel.read_it / summary.funnel.opened_a_story)}% of those
-                </span>
-              )}
-              {/* Only when it actually applies to the window on screen.
-                  Printing the caveat unconditionally teaches the reader to
-                  discount a figure that is, for most windows, complete. */}
-              {summary.funnel.read_it_partial && (
-                <span className="admin-tile__sub">
-                  only counted since {summary.funnel.read_it_since}
-                </span>
-              )}
-            </div>
-          </div>
+      {/* THE ONLY QUESTION WORTH ASKING OF A SEARCH ENGINE: did anybody use
+          the thing this index was built to offer?
 
-          {/* The other way in, and on this site the one that is growing.
-              These three tiles are now genuinely nested — each step is a subset
-              of the one before it — which they were not: "went and read it"
-              used to count everybody with an outbound click, including readers
-              who never touched the search box. Those people are real and they
-              are the SEO route: every page Google sends a reader to is a hub,
-              so arriving there, opening a work and leaving for the archive is
-              a complete success that the funnel above cannot see. */}
-          {summary.funnel.read_without_searching > 0 && (
+          This was three tiles and two paragraphs of explanation, and it asked
+          the reader to assemble the answer themselves — the number that
+          mattered was split across a tile and a note, and the note arrived
+          after it. It also described one of its two halves wrongly. The SQL is
+          `outs > 0 AND NOT (searches > 0 AND stories > 0)`: it means "did not
+          arrive at a story by way of a search on this site", which is NOT the
+          same as "never searched". It also counts people who searched, found
+          nothing they wanted here, and went to the archive instead — a real
+          outcome, and one the old wording made invisible.
+
+          So: the answer goes first and alone, because it is the whole question.
+          Then the two routes that add up to it, because they are genuinely
+          different — one is this site's product and one is its SEO surface —
+          and each is still a subset of the one before it. The exclusions move
+          to the end, where a caveat belongs: they change the number, so they
+          belong next to it, but they are not the answer, and leading with
+          `not_a_browser` answered a question nobody asked. */}
+      {summary?.funnel && (() => {
+        const f = summary.funnel
+        // Disjoint by construction, so the sum is the whole answer and not a
+        // double count. See the SQL in backend/api/traffic.py `_funnel`.
+        const reached = f.read_it + f.read_without_searching
+        const pct = (a: number, b: number) => (b > 0 ? Math.round(100 * a / b) : null)
+        return (
+          <>
+            <h2 className="admin-site__name">Did it work?</h2>
+
+            <div className="admin-tiles">
+              <div className="admin-tile admin-tile--lead">
+                <span className="admin-tile__value">{reached.toLocaleString()}</span>
+                <span className="admin-tile__label">people read something</span>
+                <span className="admin-tile__sub">
+                  counted in people, not clicks — and by either route below
+                </span>
+              </div>
+            </div>
+
+            {/* Route one. Each tile is a subset of the one before it, so the
+                percentages are step-to-step and never restated as a share of
+                the whole. That nesting is the property a three-tile funnel is
+                supposed to have and did not until "went and read it" stopped
+                counting everybody with an outbound click. */}
+            <h3 className="admin-route__name">Reached it through the search box</h3>
+            <div className="admin-tiles">
+              <div className="admin-tile">
+                <span className="admin-tile__value">{f.searched.toLocaleString()}</span>
+                <span className="admin-tile__label">searched</span>
+              </div>
+              <div className="admin-tile">
+                <span className="admin-tile__value">{f.opened_a_story.toLocaleString()}</span>
+                <span className="admin-tile__label">opened a work</span>
+                {pct(f.opened_a_story, f.searched) !== null && (
+                  <span className="admin-tile__sub">
+                    {pct(f.opened_a_story, f.searched)}% of those who searched
+                  </span>
+                )}
+              </div>
+              <div className="admin-tile">
+                <span className="admin-tile__value">{f.read_it.toLocaleString()}</span>
+                <span className="admin-tile__label">went and read it</span>
+                {pct(f.read_it, f.opened_a_story) !== null && (
+                  <span className="admin-tile__sub">
+                    {pct(f.read_it, f.opened_a_story)}% of those
+                  </span>
+                )}
+                {/* Only when it actually applies to the window on screen.
+                    Printing the caveat unconditionally teaches the reader to
+                    discount a figure that is, for most windows, complete. */}
+                {f.read_it_partial && (
+                  <span className="admin-tile__sub">
+                    only counted since {f.read_it_since}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Route two, and on this site the one that is growing. Not noise to
+                be dropped: every page Google sends a reader to is a hub, so
+                arriving on one, opening a work and going to read it never
+                touches the search box. Counted apart rather than folded in, so
+                every step of the funnel above stays a subset of the one before
+                it. */}
+            {f.read_without_searching > 0 && (
+              <>
+                <h3 className="admin-route__name">Reached it without one</h3>
+                <div className="admin-tiles">
+                  <div className="admin-tile">
+                    <span className="admin-tile__value">
+                      {f.read_without_searching.toLocaleString()}
+                    </span>
+                    <span className="admin-tile__label">went to the archive anyway</span>
+                    <span className="admin-tile__sub">
+                      no search here led them to a work
+                    </span>
+                  </div>
+                </div>
+                <p className="admin-note">
+                  Mostly people who landed on a fandom or pairing hub from a
+                  search engine and found what they wanted without typing
+                  anything — which is what the hub pages are for. It also
+                  counts people who searched for something this index did not
+                  have and left to look elsewhere, so it is not a pure
+                  SEO number.
+                </p>
+              </>
+            )}
+
+            {/* The exclusions, last. They are not idle: `not_a_browser` is
+                scripts that searched without ever loading a page, and leaving
+                them in halves the apparent conversion, so the numbers above are
+                only true because they are out. */}
             <p className="admin-note">
-              A further{" "}
-              <strong>{summary.funnel.read_without_searching.toLocaleString()}</strong>{" "}
-              {summary.funnel.read_without_searching === 1 ? "person" : "people"}{" "}
-              went off to the archive without ever running a search — they
-              arrived on a fandom or pairing hub, most likely from a search
-              engine, and found what they wanted there. That is the same result
-              by a different route, and it is counted apart from the funnel
-              rather than inside it so each step above stays a subset of the one
-              before.
+              {f.not_a_browser > 0
+                ? `${f.not_a_browser.toLocaleString()} more searched without ever loading a page — a script, not a reader — and are excluded from all of the above. `
+                : "Bots, and any search that never loaded a page, are excluded. "}
+              Each step above is a subset of the one before it, so the tiles are
+              a progression rather than three separate totals.
             </p>
-          )}
-        </>
-      )}
+          </>
+        )
+      })()}
 
       {/* Which front door is working.
           The site has two and they serve different people: the search box is

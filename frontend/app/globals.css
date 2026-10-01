@@ -338,15 +338,11 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 }
 .search-btn:hover { opacity: 0.85; }
 .search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-/* The old generic ring, kept because .scrape-spinner and others still use the
-   `spin` keyframes below. The SEARCH button uses the compass instead — see
-   .compass--spin. */
-.search-btn__spinner {
-  width: 14px; height: 14px; border: 2px solid var(--bg);
-  border-top-color: transparent; border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
+/* `.search-btn__spinner` — the generic ring this button used to show — is gone.
+   It had no remaining renderer, and every loading indicator on the site is now
+   the compass: the button's own needle (`.compass--spin`) above, the results
+   loader's (`.search-spinner`) below, and the scrape one after this. The
+   `spin` keyframe went with it, so nothing is left spinning a ring. */
 
 /* The compass turning while a search runs.
    Slower than a loading ring on purpose — 1.6s, so it reads as a needle
@@ -362,17 +358,32 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
      rose in it, which read as a speck rather than as the thing telling you the
      search is running. */
   font-size: 1.6em;
-  animation: spin 1.6s cubic-bezier(0.5, 0, 0.5, 1) infinite;
-  transform-origin: 50% 50%;
 }
 .compass.compass--spin .compass__gold,
 .compass.compass--spin .compass__cream { fill: currentColor; }
 .compass.compass--spin .compass__gold { opacity: 0.55; }
 
+/* The needle, not the rose. This used to put `animation: spin 1.6s` on the whole
+   <svg>, which turns an eight-pointed rose into a slow flower — the same flaw
+   the results loader had. The instrument is a fixed rose and a turning needle,
+   and only one of the two is supposed to move.
+
+   The needle takes the button's own text colour like the rose does, because on
+   the accent-filled button an accent-coloured needle would vanish into its own
+   background. The two halves differ in opacity instead of in hue, so the
+   direction of travel still reads at 14px. */
+.compass.compass--spin .compass__needle {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: compass-seek 1.6s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+.compass.compass--spin .compass__needle-n { fill: currentColor; }
+.compass.compass--spin .compass__needle-s { fill: currentColor; opacity: 0.4; }
+
 @media (prefers-reduced-motion: reduce) {
   /* Still shown, not still spinning: it is the only thing telling the reader
      the search is running, so it must not disappear — it just stops turning. */
-  .compass.compass--spin { animation: none; }
+  .compass.compass--spin .compass__needle { animation: none; }
 }
 
 /* ── Token strip ───────────────────────────────────────────────────────────── */
@@ -2444,18 +2455,35 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   .reader-fab { bottom: 16px; right: 16px; width: 44px; height: 44px; }
 }
 
-/* ── Inline scrape spinner ───────────────────────────────────────────────── */
+/* ── Inline scrape spinner: the compass, at 12px ──────────────────────────
+   This was a bordered ring spinning on `scrape-spin`, and it was the last
+   loading indicator on the site that was not the compass — so a reader
+   scraping filtered AO3 pages was watching a different idea of "working" from
+   the one they saw on every other wait. It is slower than the search loader's
+   needle (2.4s) because this is the longest single wait the site has: AO3
+   regenerates each filtered page in ~5–10s and the run is three of them, so
+   this one is up to 30 seconds of waiting and a fast needle would read as
+   impatient. */
 .scrape-spinner {
   display: inline-block;
-  width: 12px; height: 12px;
-  border: 2px solid var(--accent);
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: scrape-spin 0.8s linear infinite;
+  width: 13px; height: 13px;
   vertical-align: -2px;
   margin-right: 8px;
+  color: var(--accent);
 }
-@keyframes scrape-spin { to { transform: rotate(360deg); } }
+.scrape-spinner .compass {
+  width: 13px; height: 13px;
+}
+.scrape-spinner .compass__needle {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: compass-seek 2.4s ease-in-out infinite;
+}
+.scrape-spinner .compass__needle-n { fill: var(--accent); }
+.scrape-spinner .compass__needle-s { fill: var(--accent); opacity: 0.4; }
+@media (prefers-reduced-motion: reduce) {
+  .scrape-spinner .compass__needle { animation: none; }
+}
 
 /* ── Search UX polish batch ──────────────────────────────────────────────── */
 .card__meta-muted { color: var(--text-faint); opacity: 0.6; }
@@ -2467,7 +2495,51 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   padding: 16px 0 8px; z-index: 10;
 }
 
+/* The search loader's compass.
+
+   A compass is a rose that does NOT move and a needle that does. Rotating the
+   whole mark — which is what this did at first — turns an eight-pointed rose
+   into a slow, floral spinner, which is precisely the generic thing this logo
+   exists to stop looking like. So only `.compass__needle` is animated, and the
+   rose underneath it stays put.
+
+   Not a constant spin either: a needle hunting north overshoots and settles,
+   which is what gives it away as an instrument rather than a loading icon. 2.4s
+   because a cold search on a 20M-row index is seconds, not milliseconds —
+   anything faster looks frantic beside a wait this long. The wrap from 180 back
+   to 0 is invisible because the needle is a 180°-symmetric kite.
+
+   `transform-box: view-box` is what makes `transform-origin: 50% 50%` mean the
+   CENTRE of the 32-unit viewBox rather than the group's own bounding box, which
+   for this kite is a thin sliver and would pivot from the wrong place. */
+.search-spinner {
+  display: flex; justify-content: center;
+  margin: 4px 0 18px; opacity: 0.75;
+}
+.search-spinner svg { width: 30px; height: 30px; }
+.search-spinner .compass__needle {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: compass-seek 2.4s ease-in-out infinite;
+}
+/* The needle is opaque where the rose is a wash of thin kites, and its two
+   halves differ in value so the direction of travel reads while it turns. */
+.search-spinner .compass__needle-n { fill: var(--accent); }
+.search-spinner .compass__needle-s { fill: var(--text-dim); }
+@keyframes compass-seek {
+  0%   { transform: rotate(0deg); }
+  55%  { transform: rotate(200deg); }
+  70%  { transform: rotate(178deg); }
+  85%  { transform: rotate(184deg); }
+  100% { transform: rotate(180deg); }
+}
+/* Motion is decoration here; the skeletons already say the page is working. */
+@media (prefers-reduced-motion: reduce) {
+  .search-spinner .compass__needle { animation: none; }
+}
+
 /* Loading skeleton shimmer for result cards */
+
 .card-skeleton {
   border: 1px solid var(--border); border-radius: 10px;
   padding: 18px 20px; margin-bottom: 14px; background: var(--surface);
@@ -3952,6 +4024,15 @@ body.is-resizing * { cursor: col-resize !important; }
   display: flex; flex-direction: column; gap: 3px;
 }
 .admin-tile--link { text-decoration: none; border-color: var(--accent); }
+/* The one tile that is the answer rather than a step towards it. Given the
+   whole first row on its own: a three-tile row reads as three equally weighted
+   figures and asks the reader to pick which one the section was asking for. */
+.admin-tile--lead {
+  grid-column: 1 / -1;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.admin-tile--lead .admin-tile__value { font-size: 34px; }
 .admin-tile__value {
   font-family: var(--font-serif); font-size: 24px; font-weight: 600; color: var(--text);
 }
@@ -3964,6 +4045,17 @@ body.is-resizing * { cursor: col-resize !important; }
 .admin-tile__sub {
   font-size: 10.5px; color: var(--text-faint);
   font-variant-numeric: tabular-nums;
+}
+
+/* A route heading inside a section: smaller and quieter than the section's own
+   `admin-site__name`, because it labels a group of tiles rather than starting
+   a new section. It carries the route's question, which is what made the split
+   legible — "reached it through the search box" is a claim, where two rows of
+   tiles under one heading was just arithmetic. */
+.admin-route__name {
+  font-size: 11px; font-weight: 600; color: var(--text-dim);
+  letter-spacing: .06em; text-transform: uppercase;
+  margin: 14px 0 8px;
 }
 
 .admin-site { margin: 16px 0 4px; }
@@ -6355,68 +6447,6 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   text-decoration: underline; text-underline-offset: 2px;
 }
 .read-as__undo:hover { text-decoration-thickness: 2px; }
-
-/* ── The search box ON the hub page ───────────────────────────────────────
-   Hub pages are the front door: 77 of the 80 sessions Google sends in a month
-   land on one, and 9% of those visitors ever run a search. The page used to
-   offer a LINK to the search box, which puts a navigation step between arrival
-   and the one thing here an archive cannot do for them. This is the box. */
-.hub-find {
-  margin: 0 0 10px; padding: 14px; border-radius: 10px;
-  background: var(--surface2); border: 1px solid var(--border);
-}
-.hub-find__label {
-  display: block; margin: 0 0 7px; font-size: 13px; font-weight: 600;
-  color: var(--text);
-}
-.hub-find__row { display: flex; gap: 8px; flex-wrap: wrap; }
-.hub-find__input {
-  flex: 1 1 260px; min-width: 0; padding: 9px 12px; font: inherit;
-  font-size: 14px; color: var(--text); background: var(--surface);
-  border: 1px solid var(--border); border-radius: 7px;
-}
-.hub-find__input:focus-visible {
-  outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
-}
-.hub-find__go {
-  padding: 9px 18px; font: inherit; font-size: 14px; font-weight: 600;
-  color: var(--accent-contrast, #fff); background: var(--accent);
-  border: 1px solid transparent; border-radius: 7px; cursor: pointer;
-}
-.hub-find__go:hover { filter: brightness(1.06); }
-.hub-find__hint { margin: 7px 0 0; font-size: 11.5px; color: var(--text-faint); }
-
-/* Two rows of chips, and they are not the same KIND of thing — which is why
-   each is labelled. The first is what works in THIS hub are actually like,
-   sampled from its own works; the second is length and completion, which are
-   true of every hub. Running them together as one undifferentiated row was
-   the half-baked version: it read as eight arbitrary suggestions. */
-.hub-find__quick {
-  display: flex; flex-wrap: wrap; align-items: baseline;
-  gap: 4px 10px; margin: 0 0 8px;
-}
-.hub-find__quick--plain { margin-bottom: 24px; }
-.hub-find__quick-label {
-  font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
-  color: var(--text-faint); flex: none;
-}
-.hub-find__quick ul {
-  list-style: none; margin: 0; padding: 0;
-  display: flex; flex-wrap: wrap; gap: 6px;
-}
-.hub-find__quick a {
-  display: inline-block; padding: 4px 11px; border-radius: 999px;
-  border: 1px solid var(--border); background: var(--surface);
-  font-size: 12.5px; color: var(--text-dim); text-decoration: none;
-}
-.hub-find__quick a:hover {
-  border-color: var(--accent); color: var(--text);
-}
-/* The hub's own qualities lead, so they are the ones that look clickable. */
-.hub-find__quick:not(.hub-find__quick--plain) a {
-  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
-  color: var(--text);
-}
 
 /* The count behind a rate. The percentage is what compares across rows of very
    different size; the raw number is what stops "100%" built out of a single

@@ -23,6 +23,8 @@ export interface JobState {
   [k: string]: unknown
 }
 
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "./net"
+
 export interface PollOptions {
   /** Called whenever `progress` changes, for live status text. */
   onProgress?: (state: JobState) => void
@@ -60,7 +62,11 @@ export async function pollJob(
 
     let res: Response
     try {
-      res = await fetch(`/api/library/jobs/${jobId}`, { signal })
+      // USER_TIMEOUT_MS rather than a bare fetch: the loop already has a whole
+      // deadline, but a single hung poll inside it waits forever, and this was
+      // the last unguarded call on the page.
+      res = await fetchWithTimeout(`/api/library/jobs/${jobId}`,
+        { signal }, USER_TIMEOUT_MS)
     } catch (e: any) {
       if (signal?.aborted || e?.name === "AbortError") {
         throw new JobPollError("cancelled", "aborted")

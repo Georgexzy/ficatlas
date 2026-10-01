@@ -5,6 +5,7 @@ import Link from "next/link"
 import BackLink from "../../BackLink"
 import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory, getOfflineStory } from "@/lib/offline"
 import { localFirst } from "@/lib/localFirst"
+import { fetchWithTimeout, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/net"
 import { useAuth } from "@/lib/auth"
 import { describeError, type Failure } from "@/lib/errors"
 import OfflineLink from "@/app/OfflineLink"
@@ -77,7 +78,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
   const [following, setFollowing] = useState<boolean | null>(null)
   useEffect(() => {
     if (!id) return
-    fetch(`${API_BASE}/api/follows/${id}`)
+    fetchWithTimeout(`${API_BASE}/api/follows/${id}`, {}, USER_TIMEOUT_MS)
       .then(r => r.ok ? r.json() : null)
       // null means "cannot follow" — signed out, or the check failed. The
       // button is not rendered at all in that case.
@@ -90,8 +91,8 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
     const next = !following
     setFollowing(next)                       // optimistic; corrected on failure
     try {
-      const r = await fetch(`${API_BASE}/api/follows/${id}`,
-                            { method: next ? "POST" : "DELETE" })
+      const r = await fetchWithTimeout(`${API_BASE}/api/follows/${id}`,
+                            { method: next ? "POST" : "DELETE" }, USER_TIMEOUT_MS)
       if (!r.ok) setFollowing(!next)
     } catch {
       setFollowing(!next)
@@ -149,7 +150,8 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
     localFirst<StoryDetail>({
       local: readSaved,
       remote: async (signal) => {
-        const r = await fetch(`${API_BASE}/api/stories/${id}`, { signal })
+        const r = await fetchWithTimeout(`${API_BASE}/api/stories/${id}`,
+          { signal }, USER_TIMEOUT_MS)
         if (!r.ok) throw describeError(null, r.status)
         return r.json()
       },
@@ -214,7 +216,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
     setImporting(true)
     try {
       const fd = new FormData(); fd.append("url", story.url)
-      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const data = await r.json()
       if (data.id) {
         window.location.href = `/story/${data.id}/chapter/1`
@@ -281,7 +283,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
   const [series, setSeries] = useState<any[]>([])
   useEffect(() => {
     if (!story?.id) return
-    fetch(`/api/stories/${story.id}/series`)
+    fetchWithTimeout(`/api/stories/${story.id}/series`, {}, BACKGROUND_TIMEOUT_MS)
       .then(r => r.ok ? r.json() : null)
       .then(d => setSeries(d?.series ?? []))
       .catch(() => {})

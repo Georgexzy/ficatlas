@@ -4,6 +4,7 @@ import Link from "next/link"
 import BackLink from "../BackLink"
 import { useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 // The person filling this in is an author who has found their work somewhere
 // they did not put it. They may be upset, they are not necessarily technical,
@@ -37,7 +38,9 @@ export default function TakedownClient() {
     if (penName.trim().length < 2) return
     setChecking(true)
     try {
-      const r = await fetch(`/api/takedown/check?author=${encodeURIComponent(penName.trim())}`)
+      const r = await fetchWithTimeout(
+        `/api/takedown/check?author=${encodeURIComponent(penName.trim())}`,
+        {}, USER_TIMEOUT_MS)
       const d = await r.json()
       setHosted(d.hosted || []); setChecked(true)
     } catch { setHosted([]); setChecked(true) }
@@ -48,7 +51,8 @@ export default function TakedownClient() {
     e.preventDefault()
     setBusy(true); setError(null)
     try {
-      const r = await fetch("/api/takedown", { method: "POST", body: new FormData(e.currentTarget) })
+      const r = await fetchWithTimeout("/api/takedown",
+        { method: "POST", body: new FormData(e.currentTarget) }, USER_TIMEOUT_MS)
       const data = await r.json()
       if (!r.ok) throw new Error(data.detail || "Something went wrong. Please try again.")
       setSent(data)

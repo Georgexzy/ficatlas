@@ -5,6 +5,7 @@ import GoogleIcon from "../GoogleIcon"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { useAuth } from "@/lib/auth"
+import { fetchWithTimeout } from "@/lib/net"
 import WhyAccount from "../WhyAccount"
 
 function LoginPageInner() {
@@ -38,7 +39,7 @@ function LoginPageInner() {
   }, [user, loading, router, next])
 
   useEffect(() => {
-    fetch("/api/auth/signup-policy")
+    fetchWithTimeout("/api/auth/signup-policy")
       .then(r => (r.ok ? r.json() : null))
       .then(setPolicy)
       // A failed policy fetch must not remove the signup tab: falling back to
@@ -57,7 +58,7 @@ function LoginPageInner() {
   }, [signupClosed, mode])
 
   useEffect(() => {
-    fetch("/api/auth/google/status", { credentials: "include" })
+    fetchWithTimeout("/api/auth/google/status", { credentials: "include" })
       .then(r => r.ok ? r.json() : { configured: false })
       .then(d => setSso(!!d.configured))
       .catch(() => setSso(false))

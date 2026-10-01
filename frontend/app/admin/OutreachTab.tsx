@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react"
 import QueuePanel, { type Post } from "./QueuePanel"
 import OutreachPanel from "./OutreachPanel"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 /**
  * One screen for one job: find a post, answer it, move on.
@@ -33,11 +34,11 @@ export default function OutreachTab() {
 
   const onAnswered = useCallback(async (id: string) => {
     try {
-      await fetch(`/api/queue/${encodeURIComponent(id)}/state`, {
+      await fetchWithTimeout(`/api/queue/${encodeURIComponent(id)}/state`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ state: "answered" }),
-      })
+      }, USER_TIMEOUT_MS)
     } catch { /* the pane still advances; the list reloads on its own */ }
     advance(id)
   }, [advance])

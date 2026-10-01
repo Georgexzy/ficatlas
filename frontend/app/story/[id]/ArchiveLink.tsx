@@ -1,6 +1,7 @@
 "use client"
 
 import { ReactNode } from "react"
+import { fetchBackground } from "@/lib/net"
 
 // The link out to the archive, and the one measurement that says whether this
 // site did its job.
@@ -26,6 +27,11 @@ import { ReactNode } from "react"
 // href rewriting through a redirector — the anchor stays an ordinary anchor, so
 // middle-click, ctrl-click and "copy link address" all still do what they
 // should, and a beacon that fails costs a number rather than a reader.
+//
+// Hence fetchBackground rather than fetch. A raw fetch cannot fail on a
+// connection that is dead but still associated — it hangs, holding one of the
+// browser's six slots per host, and six of those stop the *next* chapter
+// loading. This file was one of them.
 export default function ArchiveLink(
   { href, className, children }:
   { href: string; className?: string; children: ReactNode },
@@ -36,8 +42,7 @@ export default function ArchiveLink(
       fd.append("path", window.location.pathname)
       fd.append("ref", href)
       fd.append("kind", "out")
-      fetch("/api/traffic/hit", { method: "POST", body: fd, keepalive: true })
-        .catch(() => {})
+      fetchBackground("/api/traffic/hit", { method: "POST", body: fd, keepalive: true })
     } catch { /* analytics may never break a link */ }
   }
   return (

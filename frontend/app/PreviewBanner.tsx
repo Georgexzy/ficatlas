@@ -2,6 +2,7 @@
 
 import { useAuth } from "@/lib/auth"
 import { useState } from "react"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 // Shown on every page while a role preview is active.
 //
@@ -20,7 +21,8 @@ export default function PreviewBanner() {
     try {
       const fd = new FormData()
       fd.append("role", "")
-      await fetch("/api/auth/view-as", { method: "POST", body: fd, credentials: "include" })
+      await fetchWithTimeout("/api/auth/view-as",
+        { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
       // Full reload rather than a state refresh: the role decides what half the
       // app renders, and a stale tree that thinks it is still a reader is the
       // same confusion this banner exists to prevent.
