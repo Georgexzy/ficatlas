@@ -669,6 +669,31 @@ CREATE INDEX IF NOT EXISTS ix_facets_kind_norm ON facets (kind, norm, count DESC
 CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm ON facets USING gin (value gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC);
 
+-- Author names, in their OWN table, for the same reason they are not a fifth
+-- `facets` kind: a name is not a category.
+--
+-- `facets` is searched by SUBSTRING on the hot path (`_facet_variants` resolves
+-- an operator's value against it), and there are 3,399,217 distinct authors in
+-- this index against 1,574,508 tags. Adding them would more than double the
+-- table that every facet lookup touches, to serve a lookup that only ever runs
+-- on an EMPTY result set — 1.1% of searches.
+--
+-- The bug this fixes is real and was reported: `Ionibal` returns nothing while
+-- `lonibal` returns 28 works, and the story card's own author link works
+-- because it carries the stored spelling exactly. Every other facet gets a
+-- "did you mean" rescue from a typo; authors got nothing, because the vocabulary
+-- to rescue them from did not exist. Trigram handles this case comfortably —
+-- similarity('Ionibal','lonibal') is 0.4545, ABOVE both known-good rescues
+-- ('hsrry'->'harry' and 'romoine'->'romione', both 0.3333).
+CREATE TABLE IF NOT EXISTS author_facets (
+    value  TEXT PRIMARY KEY,
+    count  INTEGER NOT NULL DEFAULT 0
+);
+-- The trigram index is the whole point: the rescue never does an equality
+-- lookup, because if the reader had it exactly they would not need rescuing.
+CREATE INDEX IF NOT EXISTS ix_author_facets_trgm ON author_facets USING gin (value gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS ix_author_facets_count ON author_facets (count DESC);
+
 -- Which section of a multi-part archive a work came from.
 --
 -- FictionAlley was not one archive but five, and readers navigated by them:

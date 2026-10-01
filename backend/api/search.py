@@ -1907,6 +1907,87 @@ def _misspelt_title(db, q: str) -> list[Suggestion]:
     return out
 
 
+# How alike a name must be before it is worth offering, against `author_facets`.
+# Lower than the facet rescue's 0.35, because the trigram operator has already
+# narrowed the candidates to names that share a three-letter run and the count
+# tiebreak below is what picks between them.
+#
+# There is deliberately NO count floor here, and that is not an oversight. The
+# table is BUILT with a floor (20 works, `AUTHOR_FACET_MIN_WORKS` in api/stats.py),
+# so every row already satisfies it — and stating it again cost a 182,050-row
+# Bitmap Index Scan on `count >= 10` that returned every row, ANDed against the
+# trigram scan for nothing. One floor, enforced where the rows are made.
+_DYM_AUTHOR_MIN_SIM = float(os.getenv("SEARCH_DYM_AUTHOR_MIN_SIM", "0.30"))
+
+# `author:` and its two documented spellings, so the value can be rescued
+# without the operator prefix defeating the trigram match.
+_AUTHOR_OPERATOR_RE = re.compile(r"^\s*author\s*:\s*(?P<value>.+)$", re.IGNORECASE)
+
+
+def _did_you_mean_authors(db, q: str) -> list[Suggestion]:
+    """The author the reader probably meant, for a search that found nothing.
+
+    Authors are the one searchable thing with no rescue, and it shows up as a
+    reported dead end: `Ionibal` returns 0 works, `lonibal` returns 28, and the
+    author link on the story card works fine — because it carries the stored
+    spelling exactly. The reader who typed the name got a different answer from
+    the reader who clicked it, and nothing on the page said so.
+
+    Two shapes of query reach here, and they need different handling:
+
+      `Ionibal`         the whole string is trigram-matched, same as a facet
+      `author: Ionibal` the OPERATOR has to come off first, or the string being
+                        matched is `author: Ionibal` and no author name is
+                        similar to that
+
+    Author names also collide more than tags do — a pen name is often a common
+    word — but they are ranked by similarity ALONE, with the work count only
+    breaking ties, and that is a deliberate break with the facet rescue beside
+    it. `similarity * ln(count)` is right for a tag: a tag is a category, so a
+    far more-used near-match is generally the better correction. An author is an
+    IDENTITY, and the same arithmetic got the reported case exactly backwards —
+    for `Ionibal` it ranked `ionia` (57 works, similarity 0.400) above `lonibal`
+    (33 works, similarity 0.455), because ln(57) > ln(33). It offered a
+    different person above the one the reader meant, which is the same class of
+    error as suggesting a stranger's name.
+
+    A missing `author_facets` table is a feature that is merely off, not a
+    request that fails: the table is built by the same admin refresh as `facets`
+    and genuinely does not exist on a fresh install. The lookup is wrapped in a
+    savepoint because without one the failed SELECT aborts the caller's whole
+    transaction and every later query in the session raises "current transaction
+    is aborted" — including the surrounding search's own teardown.
+    """
+    m = _AUTHOR_OPERATOR_RE.match(q or "")
+    if m:
+        value = m.group("value").strip()
+    else:
+        value = (q or "").strip()
+    # Same guard as the facet rescue: a one- or two-character string is not a
+    # misspelling, it is a reader typing something short.
+    if len(value) < 4:
+        return []
+    try:
+        with db.begin_nested():
+            rows = db.execute(sql_text("""
+                SELECT value, count, similarity(value, :q) AS sim
+                  FROM author_facets
+                 WHERE value % :q
+                   AND similarity(value, :q) >= :minsim
+                 ORDER BY similarity(value, :q) DESC, count DESC
+                 LIMIT :lim
+            """), {"q": value,
+                   "minsim": _DYM_AUTHOR_MIN_SIM, "lim": _DYM_LIMIT}).fetchall()
+    except Exception:
+        # A suggestion is a nicety on a page that already says "no results".
+        log.debug("author did-you-mean lookup failed", exc_info=True)
+        return []
+
+    return [Suggestion(kind="author", value=v, count=int(c or 0),
+                       query=f'author:"{v}"', reason="spelling")
+            for v, c, _sim in rows]
+
+
 def _did_you_mean(db, q: str, min_sim: float | None = None) -> list[Suggestion]:
     """What the reader might have meant, for a search that found nothing.
 
@@ -4705,6 +4786,16 @@ def search(          # NOT async — see below
         # offered a reading of their sentence instead.
         _suggestions = (_typed_rescues(db, q)
                         or _did_you_mean(db, q)
+                        # Authors have their own vocabulary and their own floors,
+                        # and the two rescues must not hide one another: the facet
+                        # one returns [] for a string no tag resembles, which is
+                        # exactly the case an author name needs (the reported one
+                        # was `Ionibal`, and not one of 1.57M tag values is
+                        # similar to it). So this is ADDED rather than chained —
+                        # the author is offered alongside a facet correction
+                        # rather than instead of it, and when there is no facet
+                        # correction it is the only thing on offer.
+                        or _did_you_mean_authors(db, q)
                         or _misspelt_title(db, q)
                         or _describe_suggestion(db, q))
     elif (_typed and 0 < total <= SUGGEST_MAX_RESULTS
@@ -4721,7 +4812,12 @@ def search(          # NOT async — see below
         # counts what a full-text search matched, so the comparison was
         # between different things and rejected good suggestions for arithmetic
         # reasons. Removed rather than retuned.
-        _suggestions = _did_you_mean(db, q, min_sim=SUGGEST_NEAR_SIM)
+        # The author rescue is offered here too, for the same reason the facet
+        # one is: a near miss is worse than a miss, because it looks like an
+        # answer. `author: Ionibal` returning a handful of unrelated works is
+        # exactly the `romoine` case, and the reader has no way to tell.
+        _suggestions = (_did_you_mean(db, q, min_sim=SUGGEST_NEAR_SIM)
+                        or _did_you_mean_authors(db, q))
 
     # ── And the failure that came first: they typed a sentence ─────────────
     #

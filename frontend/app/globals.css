@@ -341,7 +341,7 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
 /* `.search-btn__spinner` — the generic ring this button used to show — is gone.
    It had no remaining renderer, and every loading indicator on the site is now
    the compass: the button's own needle (`.compass--spin`) above, the results
-   loader's (`.search-spinner`) below, and the scrape one after this. The
+   loader's (`.search-loading__rose`) below, and the scrape one after this. The
    `spin` keyframe went with it, so nothing is left spinning a ring. */
 
 /* The compass turning while a search runs.
@@ -378,7 +378,7 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   animation: compass-seek 1.6s cubic-bezier(0.5, 0, 0.5, 1) infinite;
 }
 .compass.compass--spin .compass__needle-n { fill: currentColor; }
-.compass.compass--spin .compass__needle-s { fill: currentColor; opacity: 0.4; }
+.compass.compass--spin .compass__needle-s { fill: currentColor; opacity: 0.45; }
 
 @media (prefers-reduced-motion: reduce) {
   /* Still shown, not still spinning: it is the only thing telling the reader
@@ -2479,8 +2479,6 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   transform-origin: 50% 50%;
   animation: compass-seek 2.4s ease-in-out infinite;
 }
-.scrape-spinner .compass__needle-n { fill: var(--accent); }
-.scrape-spinner .compass__needle-s { fill: var(--accent); opacity: 0.4; }
 @media (prefers-reduced-motion: reduce) {
   .scrape-spinner .compass__needle { animation: none; }
 }
@@ -2512,20 +2510,11 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
    `transform-box: view-box` is what makes `transform-origin: 50% 50%` mean the
    CENTRE of the 32-unit viewBox rather than the group's own bounding box, which
    for this kite is a thin sliver and would pivot from the wrong place. */
-.search-spinner {
-  display: flex; justify-content: center;
-  margin: 4px 0 18px; opacity: 0.75;
-}
-.search-spinner svg { width: 30px; height: 30px; }
-.search-spinner .compass__needle {
+.search-loading__rose .compass__needle {
   transform-box: view-box;
   transform-origin: 50% 50%;
   animation: compass-seek 2.4s ease-in-out infinite;
 }
-/* The needle is opaque where the rose is a wash of thin kites, and its two
-   halves differ in value so the direction of travel reads while it turns. */
-.search-spinner .compass__needle-n { fill: var(--accent); }
-.search-spinner .compass__needle-s { fill: var(--text-dim); }
 @keyframes compass-seek {
   0%   { transform: rotate(0deg); }
   55%  { transform: rotate(200deg); }
@@ -2533,25 +2522,41 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   85%  { transform: rotate(184deg); }
   100% { transform: rotate(180deg); }
 }
-/* Motion is decoration here; the skeletons already say the page is working. */
 @media (prefers-reduced-motion: reduce) {
-  .search-spinner .compass__needle { animation: none; }
+  .search-loading__rose .compass__needle { animation: none; }
 }
 
-/* Loading skeleton shimmer for result cards */
+/* The full loader: a big compass and a line of text, alone on the page.
 
-.card-skeleton {
-  border: 1px solid var(--border); border-radius: 10px;
-  padding: 18px 20px; margin-bottom: 14px; background: var(--surface);
+   96px, not 30px. The mark is the ONLY thing on screen while a search runs, and
+   at 30px it was a small spinner floating above six empty cards; with the cards
+   gone it has to carry the state on its own, and a 30px mark in a 700px column
+   is a speck rather than a state. It is also the one piece of the brand that is
+   ever shown this large, which is worth something.
+
+   `min-height` reserves roughly three result rows. Not to fake a layout — to
+   bound the jump when they land. The results themselves are taller than this and
+   grow downward, so reserving too much would leave a gap; too little and the
+   footer rides up under the reader mid-search. 260px is about right and is a
+   floor, not a fixed height, so a short result set does not leave a void. */
+.search-loading {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: flex-start;
+  min-height: 260px; padding: 64px 16px 40px;
 }
-.skel-line {
-  height: 12px; border-radius: 4px; margin-bottom: 10px;
-  background: linear-gradient(90deg, var(--surface2) 25%, var(--surface3) 50%, var(--surface2) 75%);
-  background-size: 200% 100%; animation: skel 1.2s ease-in-out infinite;
+.search-loading__rose { opacity: 0.8; }
+.search-loading__rose svg { width: 96px; height: 96px; }
+.search-loading__rose .compass__needle {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: compass-seek 2.4s ease-in-out infinite;
 }
-.skel-line--title { height: 18px; width: 55%; margin-bottom: 14px; }
-.skel-line--short { width: 30%; }
-.skel-line--meta  { width: 45%; height: 10px; }
+.search-loading__text {
+  margin: 22px 0 0; font-size: 0.82rem;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+
 @keyframes skel { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
 
 .active-filter-chip button {
@@ -3078,6 +3083,15 @@ body:has(.reader-shell[data-theme="default"]) {
   transform: translateY(0.04em) rotate(360deg);
 }
 .compass__gold { fill: var(--accent); }
+/* The needle at REST — in the wordmark, and anywhere the mark is not turning.
+   Lit at the north end, shaded at the south, for the same reason the icon's
+   needle is: a needle says which way is north, and that is the one piece of
+   information the rose alone cannot carry. `color-mix` rather than a literal so
+   it follows the theme into light mode instead of being a fixed bronze. */
+.compass__needle-n { fill: var(--accent); }
+.compass__needle-s {
+  fill: color-mix(in srgb, var(--accent) 45%, var(--bg));
+}
 /* The cream half follows the TEXT colour, so in the light theme it darkens with
    the wordmark rather than staying near-white on parchment. */
 .compass__cream { fill: var(--text); }

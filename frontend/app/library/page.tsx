@@ -1558,7 +1558,7 @@ export default function LibraryPage() {
             </div>
             {a3Busy && (
               <div className="alert" style={{marginTop:10, background:"var(--surface2)", borderColor:"var(--border)"}}>
-                <span className="scrape-spinner" aria-hidden="true"><CompassMark needle /></span> Working on it — {a3Elapsed}s elapsed.
+                <span className="scrape-spinner" aria-hidden="true"><CompassMark /></span> Working on it — {a3Elapsed}s elapsed.
                 AO3&apos;s filtered pages take ~5–10s each to generate, so {a3Pages || "3"} pages
                 usually takes {(parseInt(a3Pages || "3") * 7)}–{(parseInt(a3Pages || "3") * 10)}s. Watch the browser console (F12) for verbose logs.
               </div>

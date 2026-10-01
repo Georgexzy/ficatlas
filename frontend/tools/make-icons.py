@@ -90,6 +90,14 @@ SIZES = {
 # strokes are where the character is, and rasterising them straight at 48px
 # breaks them up. Supersampling keeps the hairlines as grey rather than as gaps.
 SS = 8
+# The needle's proportions, shared with app/CompassMark's 32-unit viewBox:
+# tip at 2.4/16 of the way in from the edge => 0.85 of the cardinal length;
+# half-width 2.3/16 => 0.144. Change one and the other stops being the same mark.
+NEEDLE_LEN = 1.0
+NEEDLE_HALF = 0.28
+# Gold at 45% toward --bg, for the needle's shaded half. Pre-blended because
+# these icons are written RGB, not RGBA.
+NEEDLE_SHADE = (99, 85, 58)
 
 
 def fetch_fonts(dirpath: Path) -> dict[str, Path]:
@@ -159,6 +167,35 @@ def _rose(d, cx, cy, R, gold, cream, minor=True):
         _kite(d, cx, cy, ux, uy, R, R * 0.155, gold, cream)
 
 
+def _needle(d, cx, cy, R, gold, cream):
+    """The needle over the rose, from the SAME construction as app/CompassMark.
+
+    A compass rose with nothing turning over it is a star. The needle is what
+    makes it an instrument, and it is the part the search loader animates while
+    a search runs — so it has to be in the icons too, or the tab, the home
+    screen and the header stop being the same mark. That drift is the entire
+    reason this file exists.
+
+    One long kite through the centre, split into a lit half and a shaded one so
+    the direction of travel reads. `NEEDLE_LEN` and `NEEDLE_HALF` below are the
+    same proportion as the 32-unit viewBox in CompassMark: 2.4/16 = 0.85 of the
+    cardinal length, and the half-width 2.3/16 ≈ 0.144. Drawn last so it sits
+    over the rose.
+    """
+    L = R * NEEDLE_LEN
+    hw = R * NEEDLE_HALF
+    # A lit half and a SHADED half, north against south — not the rose's
+    # left/right split. A needle's job is to say which end is north, and a
+    # left/right facet says nothing about that; a light end against a dim one
+    # says it at any size. The shaded half is gold pre-blended toward the
+    # ground, because Pillow has no opacity here and the icon must stay RGB
+    # (Google's consent screen rejects an alpha channel).
+    d.polygon([(cx, cy - L), (cx + hw, cy), (cx, cy)], fill=gold)
+    d.polygon([(cx, cy - L), (cx - hw, cy), (cx, cy)], fill=gold)
+    d.polygon([(cx, cy + L), (cx - hw, cy), (cx, cy)], fill=NEEDLE_SHADE)
+    d.polygon([(cx, cy + L), (cx + hw, cy), (cx, cy)], fill=NEEDLE_SHADE)
+
+
 def draw_icon(px: int, fonts: dict[str, Path]) -> Image.Image:
     """The app icon: a compass rose on the site's dark ground.
 
@@ -189,6 +226,11 @@ def draw_icon(px: int, fonts: dict[str, Path]) -> Image.Image:
     # reason to hold the mark back, and at 16px it wants every pixel it can get.
     R = S * (0.40 if px <= 32 else 0.355)
     _rose(d, S / 2, S / 2, R, GOLD, CREAM, minor=px > 32)
+    # At 16px the needle is 4px of a 32px tile: it reads as a hairline and adds
+    # nothing but mud, so the smallest sizes keep the bare rose — which is what
+    # a compass looks like from far enough away to need an icon at all.
+    if px >= 32:
+        _needle(d, S / 2, S / 2, R, GOLD, CREAM)
 
     return img.resize((px, px), Image.LANCZOS)
 
