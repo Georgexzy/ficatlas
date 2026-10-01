@@ -23,3 +23,8 @@ backups/
 
 # Production secrets (see .env.example)
 .env
+
+# tsc incremental build info, and the node_modules symlink used to typecheck a
+# worktree against the frontend image (see the tsc invocation in git log)
+frontend/tsconfig.tsbuildinfo
+frontend/node_modules

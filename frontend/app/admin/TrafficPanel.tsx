@@ -218,6 +218,8 @@ interface Summary {
     searched: number; opened_a_story: number; read_it: number
     read_without_searching: number
     not_a_browser: number; read_it_since: string; read_it_partial: boolean
+    previous?: { from: string; to: string; searched: number
+                 opened_a_story: number; read_it: number; partial: boolean }
   }
 }
 // `label` is the story, series or hub name the path resolves to, and is absent
@@ -390,13 +392,19 @@ interface Cloudflare {
 // A change worth showing, or nothing. Percentages on tiny numbers are theatre:
 // 3 -> 5 is not a 67% surge, and a traffic page that says it is will be
 // disbelieved on the one occasion it matters.
-function trend(now: number, before: number): string | undefined {
+//
+// `vs` is what the number is being compared AGAINST, in words. It used to be
+// omitted and the tile read "up 42% on 1,234", which does not say whether 1,234
+// is last week, the week before, or the same days last year — and on a panel
+// whose whole job is comparing windows, an unlabelled comparison period is the
+// one thing that makes the comparison unusable rather than merely terse.
+function trend(now: number, before: number, vs: string): string | undefined {
   if (!before && !now) return undefined
   if (!before) return `first ${now === 1 ? "one" : now.toLocaleString()} in this window`
-  if (now + before < 20) return `was ${before.toLocaleString()}`
+  if (now + before < 20) return `was ${before.toLocaleString()} ${vs}`
   const pct = Math.round(((now - before) / before) * 100)
-  if (pct === 0) return `level with the previous ${"period"}`
-  return `${pct > 0 ? "up" : "down"} ${Math.abs(pct)}% on ${before.toLocaleString()}`
+  if (pct === 0) return `level with ${vs}`
+  return `${pct > 0 ? "up" : "down"} ${Math.abs(pct)}% — ${before.toLocaleString()} ${vs}`
 }
 
 const pct = (n: number, total: number) =>
@@ -482,6 +490,11 @@ export default function TrafficPanel() {
   const nothing = summary.totals.views === 0 && summary.totals.searches === 0
   const t = summary.totals
   const prev = summary.previous ?? { views: 0, searches: 0, visitor_days: 0, from: "", to: "" }
+  // What the delta on every tile below is measured against, in words. Named
+  // rather than left to the reader: "up 42% — 1,234" does not say which window
+  // 1,234 came from, and a 30-day view compared against a week would read as a
+  // collapse rather than as the window it is.
+  const vs = `the ${days} days before`
 
   // Every day is drawn, so at 90 days there are 90 labels and they collide.
   // Label roughly eight of them, always including the last, so the axis stays
@@ -717,8 +730,8 @@ export default function TrafficPanel() {
       )}
 
       <div className="admin-tiles">
-        <Tile label="Pageviews" value={t.views} sub={trend(t.views, prev.views)} />
-        <Tile label="Searches" value={t.searches} sub={trend(t.searches, prev.searches)} />
+        <Tile label="Pageviews" value={t.views} sub={trend(t.views, prev.views, vs)} />
+        <Tile label="Searches" value={t.searches} sub={trend(t.searches, prev.searches, vs)} />
         <Tile label="Visitors, busiest day" value={t.busiest_day_visitors}
               sub={t.busiest_day ? longDate(t.busiest_day) : undefined} />
         {/* Crawlers are excluded from every other number on this page, but
@@ -799,6 +812,25 @@ export default function TrafficPanel() {
         // double count. See the SQL in backend/api/traffic.py `_funnel`.
         const reached = f.read_it + f.read_without_searching
         const pct = (a: number, b: number) => (b > 0 ? Math.round(100 * a / b) : null)
+        // The week-on-week line for each step of the funnel, which is the
+        // comparison this page could not previously make about the only numbers
+        // that say whether the site did its job. Two guards, both because the
+        // alternative is a confident wrong number:
+        //
+        // `partial` suppresses the `read_it` delta outright. That field began
+        // collecting on 2026-09-07, so a previous window reaching back before it
+        // compares a real count against zero and prints a rise that is an
+        // artefact of a field that did not exist. The same caveat the tile below
+        // already prints, applied to the comparison rather than only to the
+        // number.
+        //
+        // And a step is never compared to a step that was not part of the same
+        // route: `read_without_searching` is deliberately not in `previous`, so
+        // there is nothing here that could fold the two routes together and
+        // break the subset ordering the whole block exists to preserve.
+        const pf = f.previous
+        const delta = (now: number, before: number | undefined) =>
+          pf && !pf.partial ? trend(now, before ?? 0, `the ${days} days before`) : undefined
         return (
           <>
             <h2 className="admin-site__name">Did it work?</h2>
@@ -823,6 +855,9 @@ export default function TrafficPanel() {
               <div className="admin-tile">
                 <span className="admin-tile__value">{f.searched.toLocaleString()}</span>
                 <span className="admin-tile__label">searched</span>
+                {delta(f.searched, pf?.searched) && (
+                  <span className="admin-tile__sub">{delta(f.searched, pf?.searched)}</span>
+                )}
               </div>
               <div className="admin-tile">
                 <span className="admin-tile__value">{f.opened_a_story.toLocaleString()}</span>
@@ -830,6 +865,11 @@ export default function TrafficPanel() {
                 {pct(f.opened_a_story, f.searched) !== null && (
                   <span className="admin-tile__sub">
                     {pct(f.opened_a_story, f.searched)}% of those who searched
+                  </span>
+                )}
+                {delta(f.opened_a_story, pf?.opened_a_story) && (
+                  <span className="admin-tile__sub">
+                    {delta(f.opened_a_story, pf?.opened_a_story)}
                   </span>
                 )}
               </div>
