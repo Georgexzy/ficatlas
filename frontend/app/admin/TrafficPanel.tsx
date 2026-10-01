@@ -1,7 +1,10 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
+import {
+  TrendChart, Funnel, Sparkline, RankedBars, ShareBar, type DayPoint, type FunnelStep,
+} from "@/lib/charts"
 
 // What the site is being used for. Owner-only on the server (see
 // backend/api/traffic.py) — this component only decides what to draw.
@@ -120,6 +123,82 @@ function Th({ id, label, table, align }:
   )
 }
 
+// ── section navigation ──────────────────────────────────────────────────────
+//
+// The page is a control centre, and a control centre with eleven sections and
+// no way to move between them is a very long scroll. This is a scroll-spy: the
+// nav names every section, and the one you are reading is marked, so the panel
+// answers "where am I" without the reader having to keep the whole thing in
+// their head.
+//
+// IntersectionObserver rather than a scroll handler, because the handler
+// version fires on every frame of every scroll and this page has tables in it.
+// A nav that lags is worse than no nav, and the observer threshold is what
+// makes the highlight land as the section reaches the top rather than when its
+// midpoint crosses the middle of the viewport — the version that made the
+// highlight follow the previous section for most of the way down.
+
+interface SectionDef { id: string; label: string; note?: string }
+
+function SectionNav({ sections, active, onJump }: {
+  sections: SectionDef[]; active: string; onJump: (id: string) => void
+}) {
+  return (
+    <nav className="secnav" aria-label="Sections of this page">
+      <ul className="secnav__list">
+        {sections.map(s => (
+          <li key={s.id}>
+            <a href={`#${s.id}`}
+              className={"secnav__link" + (active === s.id ? " secnav__link--on" : "")}
+              aria-current={active === s.id ? "true" : undefined}
+              onClick={e => { e.preventDefault(); onJump(s.id) }}>
+              {s.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  )
+}
+
+/** One section, registered with the nav and marked when it is on screen. */
+function Section({ id, title, sub, note, children, onActive }: {
+  id: string; title: string; sub?: React.ReactNode; note?: string
+  children: React.ReactNode
+  onActive: (id: string) => void
+}) {
+  const ref = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof IntersectionObserver === "undefined") return
+    const io = new IntersectionObserver(
+      entries => {
+        for (const e of entries) {
+          if (e.isIntersecting) onActive(id)
+        }
+      },
+      // A band across the top of the viewport. A full-viewport threshold marks a
+      // section active only while it fills the screen, so a long table is
+      // "active" for barely any of its length and the highlight flickers off
+      // it as you read.
+      { rootMargin: "-80px 0px -60% 0px", threshold: 0 },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [id, onActive])
+  return (
+    <section ref={ref} id={id} className="tsec" aria-labelledby={`${id}-h`}>
+      <h2 className="tsec__h" id={`${id}-h`}>
+        {title}
+        {sub}
+      </h2>
+      {note && <p className="tsec__note">{note}</p>}
+      {children}
+    </section>
+  )
+}
+
+
 /** The row above a table: filter, how many rows are showing, and a way to take
  *  the numbers somewhere else.
  *
@@ -211,7 +290,8 @@ interface Summary {
     active_days: number; bot_views: number; bot_searches: number
     script_searches: number; script_visitors: number
   }
-  previous?: { from: string; to: string; views: number; searches: number; visitor_days: number }
+  previous?: { from: string; to: string; views: number; searches: number
+               visitor_days: number; days?: DayPoint[] }
   retention_days: number
   enabled: boolean
   funnel?: {
@@ -480,49 +560,87 @@ export default function TrafficPanel() {
   const tPages = useTable<PageRow>(pages, "views", ["path", "label"])
   const tRefs  = useTable<RefRow>(refs, "hits", ["host"])
 
+  // Which section is on screen, for the sticky nav. `useState` rather than a
+  // ref so the nav re-renders; the callback is stable so it does not become a
+  // dependency of every Section's observer.
+  const [active, setActive] = useState("overview")
+  const onActive = useCallback((id: string) => setActive(id), [])
+
+  const jump = useCallback((id: string) => {
+    setActive(id)
+    // `scroll-margin-top` on the section does the offset, so this is a plain
+    // scrollIntoView rather than a hand-computed position that would have to
+    // know the height of the sticky header.
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }, [])
+
   if (error) return <p className="settings-save-error" role="alert">{error}</p>
   if (!summary) return <p className="loading">Reading traffic…</p>
 
-  // One scale for both series, so the two bars in a day can be compared with
-  // each other. Scaling them separately would make 3 searches as tall as 40
-  // views and quietly turn the chart into two unrelated pictures.
+  // One scale for both series, so the two can be compared with each other.
+  // Scaling them separately would make 3 searches as tall as 40 pageviews and
+  // quietly turn the chart into two unrelated pictures.
   const peak = Math.max(1, ...summary.days.map(d => Math.max(d.views, d.searches)))
   const nothing = summary.totals.views === 0 && summary.totals.searches === 0
   const t = summary.totals
-  const prev = summary.previous ?? { views: 0, searches: 0, visitor_days: 0, from: "", to: "" }
+  const prev = summary.previous ?? {
+    views: 0, searches: 0, visitor_days: 0, from: "", to: "", days: undefined,
+  }
   // What the delta on every tile below is measured against, in words. Named
   // rather than left to the reader: "up 42% — 1,234" does not say which window
   // 1,234 came from, and a 30-day view compared against a week would read as a
   // collapse rather than as the window it is.
   const vs = `the ${days} days before`
 
-  // Every day is drawn, so at 90 days there are 90 labels and they collide.
-  // Label roughly eight of them, always including the last, so the axis stays
-  // readable at any range without the label set jumping about as data arrives.
-  const step = Math.max(1, Math.ceil(summary.days.length / 8))
-  const labelled = (i: number) =>
-    i === summary.days.length - 1 || (summary.days.length - 1 - i) % step === 0
+  const viewsSeries = summary.days.map(d => d.views)
+  const searchSeries = summary.days.map(d => d.searches)
+
+  // What is on this page, in the order it is read. The nav is built from the
+  // same list the sections are, so a section cannot be added without appearing
+  // in the nav — which is the failure a hand-maintained nav always has.
+  const SECTIONS: SectionDef[] = [
+    { id: "overview",   label: "Overview" },
+    { id: "funnel",     label: "Did it work?" },
+    { id: "sources",    label: "Where visits start" },
+    { id: "returning",  label: "Returning" },
+    { id: "searches",   label: "Searches" },
+    { id: "empty",      label: "Found nothing" },
+    { id: "pages",      label: "Pages" },
+    { id: "referrers",  label: "Referrers" },
+    { id: "edge",       label: "At the edge" },
+  ]
 
   return (
     <>
-      <h1 className="settings-title">Traffic</h1>
+      {/* The sticky bar: the title, the range control, and the section nav.
 
-      <div className="admin-tabs">
-        {RANGES.map(d => (
-          <button key={d} className={`library-tab ${days === d ? "library-tab--on" : ""}`}
-            onClick={() => setDays(d)}>Last {d} days</button>
-        ))}
+          All three are here rather than scrolled away because the range control
+          is what every number on the page depends on, and a reader who has
+          scrolled 6,000px into a table has no way to tell which window they
+          are looking at or to change it without going back to the top. */}
+      <div className="traffic-head">
+        <div className="traffic-head__row">
+          <h1 className="settings-title traffic-head__title">Traffic</h1>
+          <div className="admin-tabs traffic-head__ranges">
+            {RANGES.map(d => (
+              <button key={d} className={`library-tab ${days === d ? "library-tab--on" : ""}`}
+                onClick={() => setDays(d)}>Last {d} days</button>
+            ))}
+          </div>
+        </div>
+
+        {/* The window, spelled out. "Last 30 days" is a control rather than a
+            record of what is on screen, and the two stop agreeing the moment
+            anybody screenshots this or compares it with something else. */}
+        <p className="traffic-range">
+          {longDate(summary.range.from)} — {longDate(summary.range.to)}
+          <span className="traffic-range__sub">
+            {t.active_days} of {summary.range.days} days saw any traffic
+          </span>
+        </p>
+
+        <SectionNav sections={SECTIONS} active={active} onJump={jump} />
       </div>
-
-      {/* The window, spelled out. "Last 30 days" is a control rather than a
-          record of what is on screen, and the two stop agreeing the moment
-          anybody screenshots this or compares it with something else. */}
-      <p className="traffic-range">
-        {longDate(summary.range.from)} — {longDate(summary.range.to)}
-        <span className="traffic-range__sub">
-          {t.active_days} of {summary.range.days} days saw any traffic
-        </span>
-      </p>
 
       {/* THE FLAG. Everything else on this page describes an audience; this
           says a defence failed.
@@ -624,18 +742,9 @@ export default function TrafficPanel() {
         </details>
       )}
 
-      {/* WHERE A VISIT STARTS, AND WHAT IT DOES NEXT.
-
-          Every other table here counts events; this counts journeys, and it is
-          the only one that says whether the site is working. Hub pages are the
-          front door — most of what search engines send lands on one — and the
-          share of those visitors who go on to run a search is the number this
-          panel exists to move. They used to appear only in `Pages`, as
-          thousands of rows of one or two views each, which reads as a long
-          tail rather than as the main entrance. */}
       {entry && entry.entries.length > 0 && (
-        <>
-          <h2 className="admin-site__name">Where visits start</h2>
+        <Section id="entry" title="Where visits start" onActive={onActive}
+          note="Hub pages are the front door — most of what search engines send lands on one — and the share of those visitors who go on to run a search is the number this panel exists to move.">
           <table className="traffic-table entry-table">
               <thead>
                 <tr>
@@ -652,7 +761,14 @@ export default function TrafficPanel() {
                 {entry.entries.map(e => (
                   <tr key={e.entry}>
                     <td>{e.entry}</td>
-                    <td className="num">{e.sessions.toLocaleString()}</td>
+                    {/* The bar sits behind the sessions figure, scaled to the
+                        busiest row — so the volume of each door is a shape
+                        rather than four digits to compare in your head, while
+                        the digits themselves are still right there. */}
+                    <td className="num num--barred">
+                      <ShareBar value={e.sessions} max={Math.max(...entry.entries.map(x => x.sessions))} />
+                      <span className="num__v">{e.sessions.toLocaleString()}</span>
+                    </td>
                     <td className="num">{e.referred.toLocaleString()}</td>
                     {/* The percentage leads and the count follows it, because
                         the rate is the comparable thing across rows of very
@@ -699,7 +815,7 @@ export default function TrafficPanel() {
                 </table>
             </details>
           )}
-        </>
+        </Section>
       )}
 
       {/* DID ANYBODY COME BACK — the stage that decides whether any of the
@@ -709,8 +825,7 @@ export default function TrafficPanel() {
           sends one of three words. Nothing here identifies a returning reader,
           it only counts them. */}
       {entry && Object.keys(entry.returning ?? {}).length > 0 && (
-        <>
-          <h2 className="admin-site__name">Did they come back</h2>
+        <Section id="returning" title="Did they come back" onActive={onActive}>
           <div className="admin-tiles">
             {["first", "week", "return", "unknown"]
               .filter(k => entry.returning[k])
@@ -726,14 +841,32 @@ export default function TrafficPanel() {
             blocks site data, or sends Do Not Track, never reports as
             returning — so this understates rather than flatters.
           </p>
-        </>
+        </Section>
       )}
 
+      {/* ═══ OVERVIEW ═══
+          The four numbers, the shape behind them, and the shape behind the
+          window before. In that order, because the numbers are the answer and
+          the shapes are what make the answer mean anything: 905 pageviews is
+          neither good nor bad until you can see whether it was steady or one
+          good day, and that is the first thing the chart below settles. */}
+      <Section id="overview" title="Overview" onActive={onActive}
+        sub={<span className="tsec__spark">
+          <span className="traffic-legend">
+            <span className="traffic-legend__key traffic-legend__key--views" /> pageviews
+            <span className="traffic-legend__key traffic-legend__key--searches" /> searches
+            <span className="traffic-legend__key traffic-legend__key--prev" /> the {days} days before
+          </span>
+        </span>}>
+
       <div className="admin-tiles">
-        <Tile label="Pageviews" value={t.views} sub={trend(t.views, prev.views, vs)} />
-        <Tile label="Searches" value={t.searches} sub={trend(t.searches, prev.searches, vs)} />
+        <Tile label="Pageviews" value={t.views}
+              sub={trend(t.views, prev.views, vs)} spark={viewsSeries} />
+        <Tile label="Searches" value={t.searches}
+              sub={trend(t.searches, prev.searches, vs)} spark={searchSeries} />
         <Tile label="Visitors, busiest day" value={t.busiest_day_visitors}
-              sub={t.busiest_day ? longDate(t.busiest_day) : undefined} />
+              sub={t.busiest_day ? longDate(t.busiest_day) : undefined}
+              spark={summary.days.map(d => d.visitors)} />
         {/* Crawlers are excluded from every other number on this page, but
             "nobody came" and "nobody but crawlers came" are different facts,
             and while the site is waiting to be indexed the second one is the
@@ -752,39 +885,29 @@ export default function TrafficPanel() {
         </p>
       ) : (
         <>
-          <h2 className="admin-site__name">
-            By day
-            <span className="traffic-legend">
-              <span className="traffic-legend__key traffic-legend__key--views" /> pageviews
-              <span className="traffic-legend__key traffic-legend__key--searches" /> searches
-            </span>
-          </h2>
-          {/* Every day in the range is drawn, including the empty ones. Grouping
-              by the days that happen to have rows drew a chart with no gaps in
-              it — 77 searches over 4 days became 4 adjacent bars, which reads as
-              a busy week rather than four scattered days in a quiet month. */}
-          <div className="traffic-days">
-            {summary.days.map((d, i) => (
-              <div key={d.day} className="traffic-day" title={
-                `${longDate(d.day)}\n${d.views} views · ${d.visitors} visitors · ${d.searches} searches`}>
-                <div className="traffic-day__bars">
-                  {d.views > 0 && (
-                    <div className="traffic-day__bar"
-                         style={{ height: `${(d.views / peak) * 100}%` }} />
-                  )}
-                  {d.searches > 0 && (
-                    <div className="traffic-day__bar traffic-day__bar--searches"
-                         style={{ height: `${(d.searches / peak) * 100}%` }} />
-                  )}
-                </div>
-                {labelled(i) && (
-                  <span className="traffic-day__label">{shortDate(d.day)}</span>
-                )}
-              </div>
-            ))}
-          </div>
+          {/* The chart. Every day in the range is drawn, including the empty
+              ones, because on a site this quiet the gaps ARE the story —
+              grouping by the days that happen to have rows drew a chart with no
+              gaps in it, so 77 searches spread over 4 days read as four
+              consecutive busy days.
+
+              The dashed lines behind are the same-length window immediately
+              before this one, aligned by POSITION rather than by date. That is
+              the comparison a total cannot make: 905 views against last
+              month's 905 says nothing about whether this month was steady, and
+              two lines on one scale say it at a glance. */}
+          <TrendChart days={summary.days} previous={prev.days ? { days: prev.days } : null} />
+          <p className="admin-note">
+            Every day is drawn, including the ones with nothing on them — a quiet
+            stretch is information, and a chart that skipped it would draw four
+            busy days in a row out of four scattered ones. Hover or tap a day
+            for its exact numbers. The dashed lines behind are the same number
+            of days immediately before this window, so the two shapes can be
+            compared directly.
+          </p>
         </>
       )}
+      </Section>
 
       {/* THE ONLY QUESTION WORTH ASKING OF A SEARCH ENGINE: did anybody use
           the thing this index was built to offer?
@@ -829,12 +952,30 @@ export default function TrafficPanel() {
         // there is nothing here that could fold the two routes together and
         // break the subset ordering the whole block exists to preserve.
         const pf = f.previous
-        const delta = (now: number, before: number | undefined) =>
-          pf && !pf.partial ? trend(now, before ?? 0, `the ${days} days before`) : undefined
+        const canDelta = !!pf && !pf.partial
+        // The funnel, as a funnel. Three tiles in a row said "these are
+        // related" by being adjacent and left the reader to work out the
+        // drop-off themselves; the bars say it, and the step-to-step rate is
+        // printed on each because that rate is the thing worth watching — it
+        // is what tells you whether people are being lost BETWEEN searching
+        // and opening a work, which is a different problem from them arriving
+        // and never searching at all.
+        const steps: FunnelStep[] = [
+          { label: "searched", value: f.searched, before: canDelta ? pf!.searched : undefined },
+          { label: "opened a work", value: f.opened_a_story, before: canDelta ? pf!.opened_a_story : undefined },
+          {
+            label: "went and read it", value: f.read_it,
+            before: canDelta ? pf!.read_it : undefined,
+            // Only when it applies to the window on screen. Printing the caveat
+            // unconditionally teaches the reader to discount a figure that is,
+            // for most windows, complete.
+            note: f.read_it_partial ? `only counted since ${longDate(f.read_it_since)}` : undefined,
+          },
+        ]
         return (
           <>
-            <h2 className="admin-site__name">Did it work?</h2>
-
+            <Section id="funnel" title="Did it work?" onActive={onActive}
+              note="The only question worth asking of a search engine: did anybody use the thing this index was built to offer? Counted in people, not clicks, so one reader who searched nine times and opened one work is one of each.">
             <div className="admin-tiles">
               <div className="admin-tile admin-tile--lead">
                 <span className="admin-tile__value">{reached.toLocaleString()}</span>
@@ -845,52 +986,13 @@ export default function TrafficPanel() {
               </div>
             </div>
 
-            {/* Route one. Each tile is a subset of the one before it, so the
-                percentages are step-to-step and never restated as a share of
-                the whole. That nesting is the property a three-tile funnel is
+            {/* Route one. Each step is a subset of the one before it, so the
+                rates are step-to-step and never restated as a share of the
+                whole. That nesting is the property a three-tile funnel is
                 supposed to have and did not until "went and read it" stopped
                 counting everybody with an outbound click. */}
             <h3 className="admin-route__name">Reached it through the search box</h3>
-            <div className="admin-tiles">
-              <div className="admin-tile">
-                <span className="admin-tile__value">{f.searched.toLocaleString()}</span>
-                <span className="admin-tile__label">searched</span>
-                {delta(f.searched, pf?.searched) && (
-                  <span className="admin-tile__sub">{delta(f.searched, pf?.searched)}</span>
-                )}
-              </div>
-              <div className="admin-tile">
-                <span className="admin-tile__value">{f.opened_a_story.toLocaleString()}</span>
-                <span className="admin-tile__label">opened a work</span>
-                {pct(f.opened_a_story, f.searched) !== null && (
-                  <span className="admin-tile__sub">
-                    {pct(f.opened_a_story, f.searched)}% of those who searched
-                  </span>
-                )}
-                {delta(f.opened_a_story, pf?.opened_a_story) && (
-                  <span className="admin-tile__sub">
-                    {delta(f.opened_a_story, pf?.opened_a_story)}
-                  </span>
-                )}
-              </div>
-              <div className="admin-tile">
-                <span className="admin-tile__value">{f.read_it.toLocaleString()}</span>
-                <span className="admin-tile__label">went and read it</span>
-                {pct(f.read_it, f.opened_a_story) !== null && (
-                  <span className="admin-tile__sub">
-                    {pct(f.read_it, f.opened_a_story)}% of those
-                  </span>
-                )}
-                {/* Only when it actually applies to the window on screen.
-                    Printing the caveat unconditionally teaches the reader to
-                    discount a figure that is, for most windows, complete. */}
-                {f.read_it_partial && (
-                  <span className="admin-tile__sub">
-                    only counted since {f.read_it_since}
-                  </span>
-                )}
-              </div>
-            </div>
+            <Funnel steps={steps} total={f.searched} />
 
             {/* Route two, and on this site the one that is growing. Not noise to
                 be dropped: every page Google sends a reader to is a hub, so
@@ -901,17 +1003,9 @@ export default function TrafficPanel() {
             {f.read_without_searching > 0 && (
               <>
                 <h3 className="admin-route__name">Reached it without one</h3>
-                <div className="admin-tiles">
-                  <div className="admin-tile">
-                    <span className="admin-tile__value">
-                      {f.read_without_searching.toLocaleString()}
-                    </span>
-                    <span className="admin-tile__label">went to the archive anyway</span>
-                    <span className="admin-tile__sub">
-                      no search here led them to a work
-                    </span>
-                  </div>
-                </div>
+                <Funnel total={f.searched} steps={[
+                  { label: "went to the archive anyway", value: f.read_without_searching },
+                ]} />
                 <p className="admin-note">
                   Mostly people who landed on a fandom or pairing hub from a
                   search engine and found what they wanted without typing
@@ -931,9 +1025,11 @@ export default function TrafficPanel() {
               {f.not_a_browser > 0
                 ? `${f.not_a_browser.toLocaleString()} more searched without ever loading a page — a script, not a reader — and are excluded from all of the above. `
                 : "Bots, and any search that never loaded a page, are excluded. "}
-              Each step above is a subset of the one before it, so the tiles are
-              a progression rather than three separate totals.
+              Each step above is a subset of the one before it, so the bars are
+              a progression rather than three separate totals. The arrows
+              compare against {vs}.
             </p>
+            </Section>
           </>
         )
       })()}
@@ -951,15 +1047,30 @@ export default function TrafficPanel() {
           story" from the reverse, and most people who open a story here have
           done both. */}
       {routes && routes.sources.length > 0 && (
-        <>
-          <h2 className="admin-site__name">How readers reach a story</h2>
-          <p className="admin-note">
-            The page each story view directly followed. Counted per view, with a
-            thirty-minute cutoff — a story opened an hour after a hub view is a
-            new visit, not a click, and crediting the hub for it would flatter
-            the wrong door.
-          </p>
-          <table className="traffic-table">
+        <Section id="sources" title="How readers reach a story" onActive={onActive}
+          note="The page each story view directly followed. Counted per view, with a thirty-minute cutoff — a story opened an hour after a hub view is a new visit, not a click, and crediting the hub for it would flatter the wrong door.">
+          {/* Bars for BOTH measures, because the comparison between them is the
+              finding and a table column does not make it: the hubs reach more
+              distinct readers than search does off far fewer views, which is
+              what a discovery surface for strangers should look like. Drawn
+              side by side, the two shapes differ in a way the numbers do not
+              make obvious — one is broad and shallow, the other narrow and
+              deep. */}
+          <div className="duo">
+            <div className="duo__col">
+              <h3 className="admin-subhead">Story opens</h3>
+              <RankedBars color="var(--chart-1)" rows={routes.sources.map(r => ({
+                label: ROUTE_LABEL[r.source] ?? r.source, value: r.opens,
+              }))} />
+            </div>
+            <div className="duo__col">
+              <h3 className="admin-subhead">Distinct people</h3>
+              <RankedBars color="var(--chart-3)" rows={routes.sources.map(r => ({
+                label: ROUTE_LABEL[r.source] ?? r.source, value: r.people,
+              }))} />
+            </div>
+          </div>
+          <table className="traffic-table traffic-table--compact">
               <thead>
               <tr>
                 <th>Came from</th>
@@ -972,6 +1083,7 @@ export default function TrafficPanel() {
                 {routes.sources.map(r => {
                   const total = routes.sources.reduce((a, b) => a + b.opens, 0)
                   return (
+
                     <tr key={r.source}>
                       <td>{ROUTE_LABEL[r.source] ?? r.source}</td>
                       <td className="num">{r.opens.toLocaleString()}</td>
@@ -993,41 +1105,31 @@ export default function TrafficPanel() {
             Hub pages were viewed{" "}
             <strong>{routes.hub_views.toLocaleString()}</strong> times and
             searches ran <strong>{routes.searches.toLocaleString()}</strong>{" "}
-            times in this window. Compare the two rows above on{" "}
+            times in this window. Compare the two columns above on{" "}
             <em>people</em> rather than opens: a reader who searches opens
             several stories in one sitting, while a hub tends to bring one new
             person to one story — which is what a page that greets strangers
             from a search engine is supposed to do.
           </p>
-        </>
+        </Section>
       )}
 
-      <h2 className="admin-site__name">Searches people ran</h2>
-      {/* "Searches" means BOTH kinds now, and the distinction matters when
-          reading the numbers below.
-          Until 2026-09-07 this counted only searches carrying typed text,
-          because the middleware recorded a row `if q`. Every fandom hub, every
-          ship hub and every fandom, character or tag clicked on a result card
-          made a search with no text in it, and none of them were here —
-          measured on 24h of origin logs, 22 of 38 searches. So the report was
-          blindest to the way people actually use the site, and any figure taken
-          from before that date is a count of TYPED searches only, not of
-          searches. A filter-only row is shown in the search bar's own syntax
-          (`fandom:Naruto complete`), which is what the reader had in front of
-          them and pastes back in to run it again. */}
       {searches?.top?.length ? (
-        <>
+        <Section id="searches" title="Searches people ran" onActive={onActive}
+          note={`"Searches" means BOTH kinds. Until 2026-09-07 this counted only searches carrying typed text, so any figure from before that date is TYPED searches only.`}>
           {/* Totals over the whole window, not over the rows below — the list is
               capped, so adding up what is displayed answers a question about the
               top 30 queries while looking like an answer about the site. */}
           <p className="admin-note">
             {searches.totals.runs.toLocaleString()} searches over{" "}
             {searches.totals.distinct.toLocaleString()} distinct queries.{" "}
-            {searches.totals.empty_runs > 0 && <>
-              {searches.totals.empty_runs.toLocaleString()} of them
-              ({Math.round((searches.totals.empty_runs / searches.totals.runs) * 100)}%)
-              found nothing.
-            </>}
+            {searches.totals.empty_runs > 0 && (
+              <a href="#empty" className="admin-linkjump">
+                {searches.totals.empty_runs.toLocaleString()} of them
+                ({Math.round((searches.totals.empty_runs / searches.totals.runs) * 100)}%)
+                found nothing
+              </a>
+            )}
           </p>
           {/* The doubt the user-agent check cannot answer. Pageviews come from
               the browser beacon, so a visitor that searched and never rendered
@@ -1053,34 +1155,43 @@ export default function TrafficPanel() {
               <Th id="results" label="Found" table={tTop} align="r" />
               <Th id="last_seen" label="Last run" table={tTop} />
             </tr></thead>
-            <tbody>
-              {tTop.view.map(s => (
-                <tr key={s.query}>
-                  <td className="traffic-table__q">{s.query}</td>
-                  <td>{s.runs}</td>
-                  <td>{s.visitors}</td>
-                  {/* null means no exit recorded a count, which is not the same
-                      as a search that found nothing — see _note_total. */}
-                  <td>{s.results == null ? "—" : s.results.toLocaleString()}</td>
-                  <td title={`first run ${longStamp(s.first_seen)}\nlast run ${longStamp(s.last_seen)}`}>
-                    <span className="traffic-table__abs">{stamp(s.last_seen)}</span>
-                    <span className="traffic-table__ago">{ago(s.last_seen)}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      ) : <p className="admin-note">No searches recorded in this window.</p>}
+          <tbody>
+            {tTop.view.map(s => (
+              <tr key={s.query}>
+                <td className="traffic-table__q">{s.query}</td>
+                {/* The bar is behind the count rather than in a column of its
+                    own. A reader scanning for "how much" reads the digit, and
+                    one scanning for "shape" reads the bar, and neither has to
+                    reconcile the two — which is what a separate Share column
+                    asked them to do. Scaled to the busiest query, because these
+                    rows are ranked and the question is how they compare with
+                    each other. */}
+                <td className="num--barred">
+                  <ShareBar value={s.runs} max={tTop.view[0]?.runs ?? 1} />
+                  <span className="num__v">{s.runs}</span>
+                </td>
+                <td>{s.visitors}</td>
+                {/* null means no exit recorded a count, which is not the same
+                    as a search that found nothing — see _note_total. */}
+                <td>{s.results == null ? "—" : s.results.toLocaleString()}</td>
+                <td title={`first run ${longStamp(s.first_seen)}\nlast run ${longStamp(s.last_seen)}`}>
+                  <span className="traffic-table__abs">{stamp(s.last_seen)}</span>
+                  <span className="traffic-table__ago">{ago(s.last_seen)}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </Section>
+      ) : (
+        <Section id="searches" title="Searches people ran" onActive={onActive}>
+          <p className="admin-note">No searches recorded in this window.</p>
+        </Section>
+      )}
 
       {!!searches?.empty?.length && (
-        <>
-          <h2 className="admin-site__name">Searches that found nothing</h2>
-          <p className="admin-note">
-            The most direct answer there is to "what should be crawled next":
-            each of these is a reader who left with nothing, and it names the gap
-            exactly. The date says whether it is still being asked.
-          </p>
+        <Section id="empty" title="Searches that found nothing" onActive={onActive}
+          note="The most direct answer there is to “what should be crawled next”: each of these is a reader who left with nothing, and it names the gap exactly. The date says whether it is still being asked.">
           <TableTools table={tEmpty} rows={tEmpty.view}
             columns={[{ id: "query", label: "Query" }, { id: "runs", label: "Runs" },
                       { id: "last_seen", label: "Last run" }]} />
@@ -1093,8 +1204,18 @@ export default function TrafficPanel() {
             <tbody>
               {tEmpty.view.map(s => (
                 <tr key={s.query}>
-                  <td className="traffic-table__q">{s.query}</td>
-                  <td>{s.runs}</td>
+                  <td className="traffic-table__q">
+                    {/* A query that found nothing is a search the reader can
+                        re-run in one click from here, which is the point of
+                        listing them at all. */}
+                    <a href={`/?q=${encodeURIComponent(s.query)}`}
+                      target="_blank" rel="noopener noreferrer">{s.query}</a>
+                  </td>
+                  <td className="num--barred">
+                    <ShareBar value={s.runs} max={tEmpty.view[0]?.runs ?? 1}
+                      className="sharebar--warn" />
+                    <span className="num__v">{s.runs}</span>
+                  </td>
                   <td title={`last run ${longStamp(s.last_seen)}`}>
                     <span className="traffic-table__abs">{stamp(s.last_seen)}</span>
                     <span className="traffic-table__ago">{ago(s.last_seen)}</span>
@@ -1103,12 +1224,12 @@ export default function TrafficPanel() {
               ))}
             </tbody>
           </table>
-        </>
+        </Section>
       )}
 
-      <h2 className="admin-site__name">Most-viewed pages</h2>
       {pages?.length ? (
-        <><TableTools table={tPages} rows={tPages.view}
+        <Section id="pages" title="Most-viewed pages" onActive={onActive}>
+        <TableTools table={tPages} rows={tPages.view}
             columns={[{ id: "label", label: "Page" }, { id: "path", label: "Path" },
                       { id: "views", label: "Views" }, { id: "visitors", label: "People" },
                       { id: "first_seen", label: "First seen" }, { id: "last_seen", label: "Last seen" }]} />
@@ -1133,7 +1254,11 @@ export default function TrafficPanel() {
                   </a>
                   {p.label && <span className="traffic-table__path">{p.path}</span>}
                 </td>
-                <td>{p.views}</td><td>{p.visitors}</td>
+                <td className="num--barred">
+                  <ShareBar value={p.views} max={tPages.view[0]?.views ?? 1} />
+                  <span className="num__v">{p.views}</span>
+                </td>
+                <td>{p.visitors}</td>
                 <td>{shortDate(p.first_seen)}</td>
                 <td><span className="traffic-table__abs">{shortDate(p.last_seen)}</span>
                   <span className="traffic-table__ago">{ago(p.last_seen)}</span>
@@ -1141,16 +1266,28 @@ export default function TrafficPanel() {
               </tr>
             ))}
           </tbody>
-        </table></>
-      ) : <p className="admin-note">No pageviews recorded in this window.</p>}
+        </table>
+        </Section>
+      ) : (
+        <Section id="pages" title="Most-viewed pages" onActive={onActive}>
+          <p className="admin-note">No pageviews recorded in this window.</p>
+        </Section>
+      )}
 
-      <h2 className="admin-site__name">Where readers came from</h2>
       {refs?.length ? (
-        <><TableTools table={tRefs} rows={tRefs.view}
+        <Section id="referrers" title="Where readers came from" onActive={onActive}>
+        <TableTools table={tRefs} rows={tRefs.view}
             columns={[{ id: "host", label: "Site" }, { id: "hits", label: "Arrivals" },
                       { id: "visitors", label: "People" }, { id: "first_seen", label: "First seen" },
                       { id: "last_seen", label: "Last seen" }]} />
-        <table className="traffic-table">
+        {/* The bars above the table rather than only in it. Referrers are read
+            as a list — "where does our audience come from" is a ranking
+            question, and the table's dates and first-seen columns are detail
+            most visits to this section do not need. The table stays underneath
+            for the full detail; the chart is what answers the question. */}
+        <RankedBars rows={refs.map(r => ({ label: r.host, value: r.hits }))}
+          color="var(--chart-4)" />
+        <table className="traffic-table traffic-table--refs">
           <thead><tr>
             <Th id="host" label="Site" table={tRefs} />
             <Th id="hits" label="Arrivals" table={tRefs} align="r" />
@@ -1162,7 +1299,12 @@ export default function TrafficPanel() {
             {tRefs.view.map(r => (
               <tr key={r.host}>
                 <td className="traffic-table__q">{r.host}</td>
-                <td>{r.hits}</td><td>{r.visitors}</td>
+                <td className="num--barred">
+                  <ShareBar value={r.hits} max={tRefs.view[0]?.hits ?? 1}
+                    className="sharebar--ref" />
+                  <span className="num__v">{r.hits}</span>
+                </td>
+                <td>{r.visitors}</td>
                 <td>{shortDate(r.first_seen)}</td>
                 <td><span className="traffic-table__abs">{shortDate(r.last_seen)}</span>
                   <span className="traffic-table__ago">{ago(r.last_seen)}</span>
@@ -1170,13 +1312,16 @@ export default function TrafficPanel() {
               </tr>
             ))}
           </tbody>
-        </table></>
+        </table>
+        </Section>
       ) : (
-        <p className="admin-note">
-          No external referrers yet. Only the host is ever stored, never the page
-          somebody arrived from, and arrivals from inside the site are not
-          counted at all.
-        </p>
+        <Section id="referrers" title="Where readers came from" onActive={onActive}>
+          <p className="admin-note">
+            No external referrers yet. Only the host is ever stored, never the page
+            somebody arrived from, and arrivals from inside the site are not
+            counted at all.
+          </p>
+        </Section>
       )}
 
       {/* The half of the traffic this page otherwise cannot see.
@@ -1187,7 +1332,8 @@ export default function TrafficPanel() {
           anything crawling us?" is the question the rest of this page
           structurally cannot answer. Cloudflare already counts every request at
           the edge because it is the thing serving them. */}
-      <h2 className="admin-site__name">At the edge, from Cloudflare</h2>
+      <Section id="edge" title="At the edge, from Cloudflare" onActive={onActive}
+        note="Everything else on this page comes from a beacon the BROWSER sends, so it counts only pages a human's browser rendered — and crawlers do not run JavaScript.">
       {!cf ? (
         <p className="loading">Asking Cloudflare…</p>
       ) : !cf.configured ? (
@@ -1236,21 +1382,18 @@ export default function TrafficPanel() {
           {cf.cache_breakdown?.length ? (
             <>
               <h3 className="admin-subhead">How the edge answered</h3>
-              <table className="traffic-table">
-                <thead><tr><th>Cloudflare said</th><th>Requests</th><th>Share</th></tr></thead>
-                <tbody>
-                  {cf.cache_breakdown.map(c => (
-                    <tr key={c.status}>
-                      <td className="traffic-table__q">
-                        {CACHE_WORDS[c.status] ?? c.status}
-                        <span className="traffic-table__path">{c.status}</span>
-                      </td>
-                      <td>{c.requests.toLocaleString()}</td>
-                      <td>{pct(c.requests, cf.totals!.requests)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {/* Bars rather than a table of shares. The order is the
+                  information here and the comparison people make is "how much
+                  bigger is the first than the second" — which is a subtraction
+                  from lengths and a judgement about angles. The raw cacheStatus
+                  string stays under each label because it is what you paste
+                  into a Cloudflare query. */}
+              <RankedBars total={cf.totals!.requests} color="var(--chart-5)"
+                rows={cf.cache_breakdown.map(c => ({
+                  label: CACHE_WORDS[c.status] ?? c.status,
+                  hint: c.status,
+                  value: c.requests,
+                }))} />
             </>
           ) : null}
 
@@ -1260,40 +1403,21 @@ export default function TrafficPanel() {
                   not appear here however heavily they are crawled, because each
                   one is a distinct path and this groups by exact path. */}
               <h3 className="admin-subhead">Most-requested single paths</h3>
-              <table className="traffic-table">
-                <thead><tr><th>Path</th><th>Requests</th><th>Share</th></tr></thead>
-                <tbody>
-                  {cf.paths.map(p => (
-                    <tr key={p.path}>
-                      <td className="traffic-table__q">{p.path}</td>
-                      <td>{p.requests.toLocaleString()}</td>
-                      <td>{pct(p.requests, cf.totals!.requests)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <RankedBars total={cf.totals!.requests} color="var(--chart-1)"
+                rows={cf.paths.map(p => ({ label: p.path, value: p.requests }))} />
             </>
           ) : null}
 
           {cf.countries?.length ? (
             <>
               <h3 className="admin-subhead">Where the requests came from</h3>
-              <table className="traffic-table">
-                <thead><tr><th>Country</th><th>Requests</th><th>Share</th></tr></thead>
-                <tbody>
-                  {cf.countries.map(c => (
-                    <tr key={c.country}>
-                      <td className="traffic-table__q">{c.country}</td>
-                      <td>{c.requests.toLocaleString()}</td>
-                      <td>{pct(c.requests, cf.totals!.requests)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <RankedBars total={cf.totals!.requests} color="var(--chart-3)"
+                rows={cf.countries.map(c => ({ label: c.country, value: c.requests }))} />
             </>
           ) : null}
         </>
       ) : null}
+      </Section>
 
       <p className="admin-note">
         No address, user agent or account is stored with any of this. A visitor
@@ -1308,15 +1432,42 @@ export default function TrafficPanel() {
   )
 }
 
-function Tile({ label, value, sub, display }:
-              { label: string; value: number; sub?: string; display?: string }) {
+function Tile({ label, value, sub, display, spark, tone }:
+  { label: string; value: number; sub?: string; display?: string
+    /** The same measure, per day, at sparkline size. A tile that can only be
+     *  read as a number forces the reader to go and find the chart to learn
+     *  whether it is steady or was one spike — which is the question a number
+     *  cannot answer on its own. */
+    spark?: number[]
+    tone?: "good" | "bad" | "warn" }) {
   return (
-    <div className="admin-tile">
+    <div className={"admin-tile" + (tone ? ` admin-tile--${tone}` : "")}>
       {/* `display` for values whose readable form is not a plain count --
           8,129,390,899 is not a number anybody reads, "7.6 GB" is. */}
       <span className="admin-tile__value">{display ?? value.toLocaleString()}</span>
       <span className="admin-tile__label">{label}</span>
       {sub && <span className="admin-tile__sub">{sub}</span>}
+      {spark && spark.length > 1 && (
+        <Sparkline values={spark} color="var(--chart-1)" />
+      )}
     </div>
+  )
+}
+
+/** A number with its week-on-week change, and nothing else claimed.
+ *
+ *  The "up" and "down" words are the part that matters: an arrow alone is
+ *  ambiguous on a screen where a rising line can be bad news (an error rate) or
+ *  good (pageviews), and this panel has both.
+ */
+function Delta({ now, before, vs }: { now: number; before: number; vs: string }) {
+  const t = trend(now, before, vs)
+  if (!t) return null
+  const good = t.startsWith("up")
+  const bad = t.startsWith("down")
+  return (
+    <span className={"delta" + (good ? " delta--up" : bad ? " delta--down" : "")}>
+      {t}
+    </span>
   )
 }

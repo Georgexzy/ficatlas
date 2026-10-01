@@ -244,17 +244,48 @@ def summary(days: int = Query(30, ge=1, le=365),
     # a single window cannot answer it -- 396 views is neither good nor bad
     # until you know last month was 200. Compared over equal spans so the
     # answer is not an artefact of one being longer.
+    #
+    # `_NOT_A_BROWSER` and `_SWARM` are applied HERE for the same reason they
+    # are applied to the current window above, and their absence was a real
+    # bug rather than a simplification: the tile said "up 42% -- 114" against a
+    # previous window whose searches included every script that called the API
+    # and never rendered a page, while the current window had those same
+    # sessions removed. Measured on the 7-day window, the previous series
+    # filtered this way and the previous TOTAL unfiltered disagreed by 967
+    # against 114 searches -- a factor of eight, in whichever direction the
+    # automation happened to fall. Every comparison on this page was measured
+    # against a differently-defined baseline.
+    #
+    # `%%` -> `%` for the reason in the long comment below: `_SWARM` is built by
+    # an f-string, which escapes nothing, so the literal inside it is doubled
+    # and the doubling has to come back off for a non-f-string query.
     span = (last - first).days + 1
     prev_last = first - timedelta(days=1)
     prev_first = prev_last - timedelta(days=span - 1)
-    prev = db.execute(text(f"""
-        SELECT count(e.id) FILTER (WHERE e.kind='page')   AS views,
+    swarm = _SWARM.replace("%%", "%")
+    prev_rows = db.execute(text(f"""
+        SELECT d::date                                   AS day,
+               count(e.id) FILTER (WHERE e.kind='page')   AS views,
                count(e.id) FILTER (WHERE e.kind='search') AS searches,
                count(DISTINCT e.visitor)                  AS visitors
-        FROM visit_events_public e
-        WHERE e.at >= CAST(:pf AS date) AND e.at < CAST(:pl AS date) + interval '1 day'
-        {bots}
-    """), {"pf": prev_first, "pl": prev_last}).first()
+        FROM generate_series(CAST(:pf AS date), CAST(:pl AS date),
+                             interval '1 day') d
+        -- generate_series and a LEFT JOIN for the same reason the main query
+        -- uses them: grouped by the dates that happen to have rows, a quiet
+        -- window draws a chart with no gaps in it and reads as continuous.
+        LEFT JOIN visit_events e
+               ON e.at >= d AND e.at < d + interval '1 day' {bots}
+              AND NOT ({_NOT_A_BROWSER})
+              AND NOT ({swarm})
+        GROUP BY 1 ORDER BY 1
+    """), {"pf": prev_first, "pl": prev_last,
+           "first": prev_first, "last": prev_last}).fetchall()
+    # Totals are the SUM of the series rather than a second query, so the number
+    # a tile prints and the line the chart draws cannot be two different
+    # measurements of the same window. `visitors` is NOT summed -- see below.
+    prev = (sum(r[1] for r in prev_rows), sum(r[2] for r in prev_rows),
+            max((r[3] for r in prev_rows), default=0))
+
 
     # Unique visitors do not add up across days — the hash is per-day by
     # design, so the same person is a different visitor tomorrow. Summing the
@@ -303,6 +334,15 @@ def summary(days: int = Query(30, ge=1, le=365),
             # count(DISTINCT) instead of sum(). Nothing renders it today, which
             # is exactly why it was free to be wrong.
             "visitor_days": (prev[2] if prev else 0) or 0,
+            # The same window day by day, so the chart can draw it rather than
+            # infer it. Keyed under its own name because `previous` is a
+            # flat summary and this is a series — mixing them would mean a
+            # consumer summing a list of days into a total the tiles already
+            # have.
+            "days": [{
+                "day": r[0].isoformat(), "views": r[1],
+                "searches": r[2], "visitors": r[3],
+            } for r in prev_rows],
         },
         # Did the site do its job?
         #
