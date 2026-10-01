@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session, aliased
 import os
 import threading
 import time
-from sqlalchemy import and_, not_, or_, func, literal_column, cast, case, Text, text as sql_text
+from sqlalchemy import (and_, not_, or_, func, literal_column, cast, case,
+                        false, Text, text as sql_text)
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from typing import Dict, Optional, List
 from pydantic import BaseModel
@@ -170,7 +171,8 @@ def _cost_ttl(elapsed_ms: float) -> int:
     """
     return max(SEARCH_CACHE_SECONDS,
                min(SEARCH_CACHE_MAX_SECONDS, int(elapsed_ms * SEARCH_CACHE_COST_FACTOR)))
-from query_parser import STATUS_WORDS, parse_query, parsed_to_search_params
+from query_parser import (STATUS_WORDS, parse_query, parsed_to_search_params,
+                          serialise_filters)
 from query_intent import (resolve_intent, read_request, resolve_trope_tags,
                           _extract_negations, _fandom_aliases)
 import collections
@@ -851,6 +853,107 @@ def _facet_exact(db, col_name: str, term: str) -> bool:
     if not kind:
         return False
     return _facet_exact_cached(kind, term.strip().lower())
+
+
+# ── Can this term match ANYTHING, according to the vocabulary? ────────────────
+#
+# A facet filter that names a term the index has never seen used to fall back
+# to a substring scan of the stories table: `fic_arr(tags) ILIKE '%fluffx%'`.
+# With no trigram index on `tags` (dropped as 4.4GB of zero scans) that is a
+# sequential scan of 20.9M rows, and it is reached by every mistyped tag —
+# which is to say by the one query a reader makes when they have already been
+# told the tag they wanted is spelled differently.
+#
+# Measured on production: `?tags=Fluffx` -> 503 after 24.2s. `?q=tag:Fluffx`
+# did not come back inside 30s.
+#
+# The scan is not merely slow. It is a NO-OP, and provably so.
+#
+# `facets` is built from these very array columns, so `fic_arr(col) ILIKE '%t%'`
+# matches some row only if some VALUE in that array contains `t` — and the
+# facets table holds every value there is. If no facet value contains the term,
+# no array element can either, and the scan is guaranteed to return nothing.
+#
+# The vocabulary is also ALREADY the primary path: `_facet_variants` above
+# searches it by ILIKE before this fallback is ever reached. So the fallback only
+# exists for terms it has already failed to find, and its only remaining power is
+# to be slow.
+#
+# The one thing it can still do is find a tag written since the last facets
+# rebuild, which self-heals on the next rebuild (daily). That is the trade, and
+# it is the right way round: a mistyped tag returning nothing is a correct answer
+# the reader can act on through the spelling rescue, and a 503 is neither.
+#
+# ESCAPES: the word "unknown" is load-bearing and is not the same as "absent",
+# and the FIRST version of this got that wrong in the most damaging direction
+# available — it treated "asked and found nothing" as proof, which is correct on
+# a populated vocabulary and catastrophic on an empty one.
+#
+# Ten search tests failed against a fresh test database, whose `facets` table is
+# legitimately empty: every term read as absent, so every tag filter matched
+# nothing. The same is true of a real fresh install before its first rebuild, and
+# the old code degraded to slow-but-correct there while this version would have
+# been fast and wrong. Being wrong in this direction is worse than the 503 it
+# fixes: one costs a reader an empty page that looks like the answer, the other
+# costs a retry.
+#
+# So absence is a THREE-valued question and only the middle value licenses the
+# scan to be skipped:
+#
+#   True   some value of this kind contains the term -> definitely matches
+#   False  the vocabulary holds values of this kind and none contains the term
+#          -> provably matches nothing -> skip the 20.9M-row scan
+#   None   we cannot tell: no such kind, the query failed, or the vocabulary
+#          holds NO values of this kind at all -> unknown, not absent, so run
+#          the scan, which is the only way to find out
+#
+# The empty-vocabulary case is asked in the same round trip because it is the
+# cheap one to ask: `WHERE kind = :kind LIMIT 1` is served by
+# ix_facets_kind_count and stops at the first entry, whatever the kind holds.
+_CONTAINS_SQL = sql_text("""
+    SELECT
+      EXISTS (SELECT 1 FROM facets
+               WHERE kind = :kind AND value ILIKE :pat) AS hit,
+      EXISTS (SELECT 1 FROM facets WHERE kind = :kind LIMIT 1) AS has_any
+""")
+
+# Kill switch. The reasoning above is a staleness assumption about the facets
+# table, and this makes that assumption testable in production without a deploy.
+FACET_PROVES_ABSENCE = os.getenv("SEARCH_FACET_PROVES_ABSENCE", "1") != "0"
+
+
+@lru_cache(maxsize=4096)
+def _facet_contains_cached(kind: str, term: str) -> bool | None:
+    """Does any value of this kind contain this term? None means "cannot tell"."""
+    from db.session import db_session
+    try:
+        with db_session() as db:
+            row = db.execute(_CONTAINS_SQL,
+                             {"kind": kind, "pat": f"%{term}%"}).first()
+        if row is None:
+            return None
+        hit, has_any = row[0], row[1]
+        if hit:
+            return True
+        return False if has_any else None
+    except Exception:
+        return None       # could not ask
+
+
+def _vocabulary_absent(db, col_name: str, term: str) -> bool:
+    """True when the vocabulary PROVES no value of this column contains `term`.
+
+    False means "cannot tell", and the caller must then do the slow certain thing.
+    The asymmetry is the whole point: being wrong here in one direction costs a
+    24-second 503, and in the other costs a reader an empty page for a tag that
+    was spelled wrong — which is the answer they should have been given anyway.
+    """
+    if not FACET_PROVES_ABSENCE:
+        return False
+    kind = _FACET_KIND.get(col_name)
+    if not kind:
+        return False                       # no vocabulary for this column
+    return _facet_contains_cached(kind, term.strip().lower()) is False
 
 
 def _author_is_known(db, name: str) -> bool:
@@ -3425,6 +3528,16 @@ def search(          # NOT async — see below
                 # way, and the cast keeps the parameter typed as text[] so the
                 # GIN index is still eligible.
                 return col.op("&&")(cast(variants, PG_ARRAY(Text)))
+            # The vocabulary has been asked and found nothing. See
+            # `_vocabulary_absent`: the substring scan this used to fall back to
+            # cannot match a value the vocabulary does not hold, so it was a
+            # sequential scan of 20.9M rows guaranteed to return nothing.
+            # `false` is a constant the planner folds away, so this costs
+            # nothing and keeps `permissive_empty` behaving correctly below —
+            # `or_(false, empty)` is `empty`, which is the right answer for
+            # include_unknown: rows that carry no tag data still come through.
+            if _vocabulary_absent(db, col.key, v):
+                return false()
             return _arr_text(col).ilike(f"%{v}%")
 
         if permissive_empty:
@@ -3484,10 +3597,25 @@ def search(          # NOT async — see below
             if variants:
                 match = col.op("&&")(cast(variants, PG_ARRAY(Text)))
             else:
-                # Last resort, and genuinely slow now that the trigram indexes on
-                # these columns are gone. Only reached for a term the vocabulary
-                # has never seen, which by definition matches nothing much.
-                match = _arr_text(col).ilike(f"%{v.lower()}%")
+                # Same reasoning as `arr_inc`'s fallback above, and for the same
+                # measured reason. This branch has a history: it is what made
+                # `relationships=Theodore Nott/Luna Lovegood` — 7 works, and the
+                # link every ship hub emits — take 83.5s and 500 through the
+                # proxy, back when the trigram index behind it had been dropped.
+                # The vocabulary lookup above is what fixed that case; this is
+                # the residue, for a term the vocabulary cannot account for.
+                #
+                # "Last resort, and genuinely slow" was the old comment. It is
+                # not slow AND not a last resort — where the vocabulary is
+                # complete it is a provable no-op, because no array element can
+                # contain a value the facets table does not hold. Where it is
+                # not complete (no vocabulary kind for the column, or the query
+                # failed) it still runs, because there the scan is the only way
+                # to find out.
+                if _vocabulary_absent(db, col.key, v):
+                    match = false()
+                else:
+                    match = _arr_text(col).ilike(f"%{v.lower()}%")
             clauses.append(or_(match, empty) if permissive_empty else match)
         return combine(*clauses)
 
@@ -4974,6 +5102,39 @@ def search(          # NOT async — see below
     # needed" — a mistyped `author:` or `fandom:` is a reader who has named the
     # field they want and got it wrong.
     _typed = raw_query
+    if not _typed and request is not None:
+        # A search made from the FILTER PANEL has no `q` at all, so `raw_query` is
+        # empty and the rescues below were skipped entirely — which is why a
+        # mistyped tag arriving as `?tags=Fluffx` got an empty page with nothing
+        # on it while the identical mistyping written in the search bar
+        # (`?q=tag:Fluffx`) got "Fluff · Fluffy". Same reader, same question,
+        # different entry point: the sidebar, every facet link on a result card,
+        # and every hub's "Search all" arrive this way.
+        #
+        # `serialise_filters` renders the filters in the search bar's own syntax,
+        # which is what the rescues can read, and it is already the exact
+        # round-trip partner of `parse_query` — asserted by tests in
+        # tests/test_query_parser.py.
+        #
+        # It also means the filter parameters are not a second vocabulary. The
+        # recoveries in `api/hubs.py` and the tags clickable on a result card
+        # are both written in this syntax precisely so they can be pasted back in.
+        #
+        # Two consequences worth stating. The rescues only ever SUGGEST, so a
+        # filter set is never silently rewritten — the reader is told what was
+        # assumed and decides. And the serialised form contains operators, so
+        # `_HAS_OPERATOR` keeps the expensive sentence extractor below off this
+        # path: `interpreted` is for prose, and a chip list is not prose.
+        try:
+            _typed = (serialise_filters(request.query_params) or "").strip()
+        except Exception:
+            _typed = ""
+        # Long chip lists must not drive a trigram pass over the vocabulary.
+        # A reader who has ticked eight filters has not made a typo, and the
+        # same SUGGEST_MAX_WORDS gate the near-miss path already uses is the
+        # right measure.
+        if len(_typed.split()) > SUGGEST_MAX_WORDS:
+            _typed = ""
     if _typed and total == 0 and not merged:
         # The typed rescues run FIRST and, when one lands, instead of the
         # trigram pass rather than alongside it. A mistyped operator or a
