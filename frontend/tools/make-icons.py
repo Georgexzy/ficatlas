@@ -90,11 +90,33 @@ SIZES = {
 # strokes are where the character is, and rasterising them straight at 48px
 # breaks them up. Supersampling keeps the hairlines as grey rather than as gaps.
 SS = 8
-# The needle's proportions, shared with app/CompassMark's 32-unit viewBox:
-# tip at 2.4/16 of the way in from the edge => 0.85 of the cardinal length;
-# half-width 2.3/16 => 0.144. Change one and the other stops being the same mark.
-NEEDLE_LEN = 1.0
-NEEDLE_HALF = 0.28
+# The needle's proportions, shared with app/CompassMark's 32-unit viewBox.
+# On a 32-unit grid with the rose tips at radius 15, these are a tip at
+# 16 -/+ 12.3 and a half-width of 3.0. Change one and the other stops being the
+# same mark.
+#
+# WHY IT IS NARROWER THAN IT LOOKS LIKE IT SHOULD BE, and shorter than the rose.
+# The first shipped needle was 0.28 of the radius — 8.4 units across on a 32-unit
+# grid, a quarter of the mark's width — and the complaint was that the logo had
+# gone "fat and squat". The cause is occlusion rather than the needle's own
+# bulk: the rose's horizontal cardinal points are 2.32 wide where they meet the
+# centre, so a needle 4.2 either side buried them completely and the eight-point
+# rose stopped reading as a rose, leaving a chunky lozenge with two small side
+# points. Narrower restores the rose.
+#
+# LENGTH is doing the work that width used to do. At 0.82 of the radius the
+# needle stops 2.7 units short of the rose's own tips at both ends, so there is
+# a visible gap all the way round it — which is what makes it a separate object
+# turning over a fixed rose, at a width that is only 20% wider than the cardinal
+# it crosses. An earlier iteration solved the same problem with width alone, at
+# 0.28, and paid for it by hiding the mark underneath.
+#
+# What it does NOT rely on: the shading. The needle is differentiated from the
+# rose by its lit north half and its 45%-opacity south half, not by its
+# silhouette — a gold needle on a gold rose is invisible at any width, which is
+# why the south half is shaded in both this and the CSS.
+NEEDLE_LEN = 0.82
+NEEDLE_HALF = 0.20
 # Gold at 45% toward --bg, for the needle's shaded half. Pre-blended because
 # these icons are written RGB, not RGBA.
 NEEDLE_SHADE = (99, 85, 58)

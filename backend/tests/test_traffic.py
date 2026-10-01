@@ -1195,3 +1195,82 @@ def test_marking_our_own_traffic_needs_all_three_signals(db):
     assert marked(ours) == 12, "the outreach panel's own searches must be flagged"
     assert marked(scraper) == 0, "a plain-text scraper stays visible in the reports"
     assert marked(reader) == 0, "somebody who also reads pages is an audience"
+
+
+def test_the_funnel_carries_the_window_before_it(db):
+    """"Up x% from last week" is a comparison, and the page could not make one
+    about the only numbers that say whether the site did its job. The activity
+    tiles had a `previous` pair; the funnel had nothing, so 41 people reading
+    something this week was a number with nothing to be read against.
+
+    Two properties are asserted, and the second is the one that would have been
+    got wrong: the comparison window is the SAME WIDTH as the one on screen, not
+    "the seven days to yesterday". A 30-day view compared against a week prints
+    a confident -75% and means nothing."""
+    from datetime import date, timedelta
+    from sqlalchemy import text as t
+    from api.traffic import _with_previous_funnel
+    _seed(db, [("now1", "search", "/api/search", False),
+               ("now1", "page", "/story/a", False)])
+    # A visitor 45 days back. The two windows' previous periods are days 7-13
+    # and days 30-59 respectively, so this visitor is inside the second and
+    # outside the first — which is exactly the distinction being tested, and why
+    # a 7-day view must not be compared against a 30-day one.
+    db.execute(t("""UPDATE visit_events SET at = now() - interval '45 days'
+                    WHERE visitor LIKE 'now1%'"""))
+    db.commit()
+
+    today = date.today()
+
+    week = _with_previous_funnel(db, today - timedelta(days=6), today)
+    assert week["previous"]["to"] == (today - timedelta(days=7)).isoformat()
+    assert week["previous"]["from"] == (today - timedelta(days=13)).isoformat()
+    # The week before this one had nobody in it, and the seeded visitor is 45
+    # days back, outside days 7-13 — so the comparison is zero rather than a
+    # fabricated rise off a visitor who is plainly in the current window.
+    assert week["previous"]["searched"] == 0
+
+    month = _with_previous_funnel(db, today - timedelta(days=29), today)
+    # Same width: a 30-day view compares against 30 days, which reaches back far
+    # enough to find them.
+    assert month["previous"]["from"] == (today - timedelta(days=59)).isoformat()
+    assert month["previous"]["searched"] == 1
+
+
+def test_a_previous_window_that_predates_read_it_is_marked_partial(db):
+    """`read_it` began collecting on 2026-09-07. A previous window reaching back
+    before it compares a real count against zero and prints a rise that is an
+    artefact of a field that did not exist yet — so the UI is told to stay quiet
+    rather than left to work that out."""
+    from datetime import date, timedelta
+    from api.traffic import _with_previous_funnel
+    from api.traffic import _OUT_SINCE
+
+    _seed(db, [("p1", "search", "/api/search", False)])
+    out = _with_previous_funnel(db, date.today() - timedelta(days=6), date.today())
+
+    # The previous week of THIS window is recent, so it is not partial...
+    assert out["previous"]["partial"] is (out["previous"]["to"] < _OUT_SINCE)
+    # ...and the flag is what the frontend gates the read_it delta on, so its
+    # absence would be a silent wrong number rather than a wrong-looking one.
+    assert "partial" in out["previous"]
+
+
+def test_the_funnel_comparison_excludes_the_other_route(db):
+    """`read_without_searching` is the route that never touches the search box.
+    It is reported apart precisely so it cannot contaminate the funnel's subset
+    ordering, and a week-on-week delta on it would invite exactly the folding-in
+    that separation exists to prevent — so `previous` carries the three steps of
+    one route and nothing else."""
+    from datetime import date, timedelta
+    from api.traffic import _with_previous_funnel
+
+    _seed(db, [("h1", "page", "/ship/x", False),
+               ("h1", "page", "/story/c", False),
+               ("h1", "out", "/story/c", False)])
+    out = _with_previous_funnel(db, date.today() - timedelta(days=6), date.today())
+
+    assert out["read_without_searching"] == 1
+    assert "read_without_searching" not in out["previous"]
+    assert set(out["previous"]) == {"from", "to", "searched",
+                                    "opened_a_story", "read_it", "partial"}

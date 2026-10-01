@@ -3183,6 +3183,49 @@ function SearchPageInner() {
                 <CompassMark />
               </div>
               <p className="search-loading__text">Searching</p>
+              {/* The result skeletons, back. Restored on request, having read the
+                  objection to them and disagreed with it.
+
+                  The argument for removing them was that a column of empty boxes
+                  asserts a SHAPE — a title, a summary, a byline — and then fills
+                  it with nothing, so for the seconds a cold search takes the
+                  reader is looking at six lies about what is coming. That is a
+                  real argument and it is not the whole of it, because it only
+                  weighs against the alternative that was actually on screen,
+                  which was a single mark in an otherwise empty column: the
+                  skeletons do not merely avoid promising a shape, they also
+                  occupy the space the results will occupy, so the column does
+                  not reflow when the answer lands. Perceived latency is a
+                  function of how much the page moves as much as of how long it
+                  takes, and a page that goes from six boxes to six differently
+                  sized cards moves.
+
+                  Two things they must not do, both of which the first version
+                  got wrong and which is why they were easy to argue away:
+
+                  They must not be announced. `aria-hidden` on the whole column —
+                  a screen reader is told "Searching", which is the fact; six
+                  anonymous grey rectangles are not information and reading them
+                  out is worse than silence.
+
+                  And they must not be the ONLY loader. The first version rendered
+                  the spinner in the results list as well as the header, so the
+                  reader got a compass, the word "Searching", and then a second
+                  loader further down the same column. One loader, and this
+                  block is the only place one is rendered — the header's compass
+                  animates (`.compass--spin`) but that is the same mark turning,
+                  not a second one. */}
+              <div className="search-loading__cards" aria-hidden="true">
+                {Array.from({ length: 6 }, (_, i) => (
+                  <div className="skeleton-card" key={i}>
+                    <div className="skeleton-card__line skeleton-card__line--title" />
+                    <div className="skeleton-card__line" />
+                    <div className="skeleton-card__line" />
+                    <div className="skeleton-card__line skeleton-card__line--short" />
+                    <div className="skeleton-card__meta" />
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

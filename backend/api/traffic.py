@@ -320,7 +320,7 @@ def summary(days: int = Query(30, ge=1, le=365),
         # component — so a window reaching back further will show a conversion
         # that looks catastrophic and is really just a field that did not exist
         # yet. `since` says so rather than leaving it to be discovered.
-        "funnel": _funnel(db, first, last),
+        "funnel": _with_previous_funnel(db, first, last),
         "retention_days": tracking.RETENTION_DAYS,
         "enabled": tracking.ENABLED,
     }
@@ -491,6 +491,44 @@ def _funnel(db: Session, first, last) -> dict:
         # perfectly good.
         "read_it_partial": first.isoformat() < _OUT_SINCE,
     }
+
+
+def _with_previous_funnel(db: Session, first, last) -> dict:
+    """The funnel for this window, plus the same three counts for the one before.
+
+    "Up x% from last week" is a comparison, and the page could not previously
+    make one about the only numbers that answer whether the site did its job. The
+    activity tiles above it carry a `previous` pair; the funnel did not, so a
+    reader could see 41 people read something this week and had no way to learn
+    whether that is good.
+
+    The previous window is the SAME LENGTH immediately before this one, not
+    "the seven days to yesterday" — a 30-day view compared against a week would
+    print a confident -75% and mean nothing. The page's range control is what
+    decides what a reader thinks a period is, so the comparison has to be the
+    same width or it is answering a different question than the one on screen.
+
+    Only the three steps of the search route are carried. `read_without_searching`
+    is deliberately left out of the comparison: it is the OTHER route, reported
+    separately so it cannot contaminate the funnel's subset ordering, and a delta
+    on it would invite exactly the folding-in that separation exists to prevent.
+    """
+    span = (last - first).days + 1
+    prev = _funnel(db, first - timedelta(days=span), first - timedelta(days=1))
+    out = dict(_funnel(db, first, last))
+    out["previous"] = {
+        "from": (first - timedelta(days=span)).isoformat(),
+        "to": (first - timedelta(days=1)).isoformat(),
+        "searched": prev["searched"],
+        "opened_a_story": prev["opened_a_story"],
+        "read_it": prev["read_it"],
+        # The same caveat, carried. A previous window reaching back before
+        # `read_it` existed would compare a real number against zero and print a
+        # rise that is an artefact of a field that was not there yet — so the UI
+        # is told to stay quiet rather than left to work that out.
+        "partial": prev["read_it_partial"],
+    }
+    return out
 
 
 # ── making the paths readable ───────────────────────────────────────────────
