@@ -207,3 +207,119 @@ def test_a_failed_lookup_rolls_back_the_request_session():
     assert m._pair_lookup(db2, "jin", "jimin") == ""
     assert db2.rolled_back
     _reset_alias_cache()
+
+
+# ── a ship written as initials, which the filters resolved and free text did not ──
+
+@pytest.fixture
+def initial(monkeypatch):
+    """`_spelled_out_pair` on a query shaped like an initials pairing.
+
+    `character_variants` and `_pair_lookup` are stubbed because both are the
+    subject of their own tests; what is under test here is WHICH queries reach
+    the alias table at all. The first version of this passed every case below
+    and fixed nothing, because the shape never got past the two guards in
+    front of the lookup — the split needs whitespace around the slash and
+    `_PAIR_RE` needs three characters a side.
+    """
+    from api import search as m
+    from character_aliases import character_variants
+    asked = []
+
+    # The REAL alias table, not a stub of it. An earlier version of this fixture
+    # listed only `rl`/`sb`/`hr`/`d`, so `r` fell through to the identity
+    # fallback and `hr/r` asked for `hermione granger` + `r` — which is the
+    # substring bug the test is meant to catch, reproduced by the stub rather
+    # than prevented. A stub of the vocabulary cannot test a rule about the
+    # vocabulary.
+    variants = character_variants
+    pairings = {
+        ("remus", "sirius"): "Sirius Black/Remus Lupin",
+        ("remus lupin", "sirius black"): "Sirius Black/Remus Lupin",
+        ("remus", "sirius black"): "Sirius Black/Remus Lupin",
+        ("remus lupin", "sirius"): "Sirius Black/Remus Lupin",
+        ("rl", "sb"): "RL/SB",
+        ("remus", "hermione"): "Hermione Granger/Remus Lupin",
+        ("hermione", "draco"): "Draco Malfoy/Hermione Granger",
+        ("hermione granger", "ron weasley"): "Hermione Granger/Ron Weasley",
+        ("ron weasley", "hermione granger"): "Hermione Granger/Ron Weasley",
+        ("draco malfoy", "harry potter"): "Draco Malfoy/Harry Potter",
+        ("harry potter", "draco malfoy"): "Draco Malfoy/Harry Potter",
+    }
+
+
+
+    def fake_lookup(db, a, b):
+        asked.append((a, b))
+        return pairings.get((a, b), "")
+
+    monkeypatch.setattr(m, "_pair_lookup", fake_lookup)
+    m._pair_cache.clear()
+    return lambda q: (m._spelled_out_pair(None, q), asked)
+
+
+@pytest.mark.parametrize("q", ["rl/sb", "RL/SB", "Rl/Sb", "rl / sb", "rl x sb"])
+def test_a_ship_written_as_initials_resolves(initial, q):
+    """The measured case: `q=rl/sb` returned 925 free-text matches where the
+    pairing itself is on 44,730 works, and nothing about the page said so."""
+    result, _ = initial(q)
+    assert result is not None, f"{q!r} did not resolve to a pairing"
+    assert result[0] == "Sirius Black/Remus Lupin"
+
+
+def test_an_initials_pairing_keeps_the_other_words(initial):
+    """The pairing is OR-ed beside the text match, so a qualifier the reader
+    typed still has to apply to the branch that was added."""
+    result, _ = initial("rl/sb fluff")
+    assert result == ("Sirius Black/Remus Lupin", "fluff")
+
+
+def test_a_one_letter_half_is_not_an_initials_pairing(initial):
+    """`A/B` is an operator and a URL path. Refused before the database."""
+    _, asked = initial("d/hr and a/b")
+    assert ("d", "a") not in asked
+
+
+def test_a_half_the_alias_table_has_never_heard_of_is_left_alone(initial):
+    """One known half means the other is a real name the reader typed out, so
+    this is not an initials pairing and must not be resolved as one."""
+    result, _ = initial("zz/sb")
+    assert result is None
+
+
+def test_the_same_letters_twice_is_not_a_pairing(initial):
+    _, asked = initial("rl/rl")
+    assert asked == []
+
+
+def test_an_initials_query_with_too_many_words_still_resolves(initial):
+    """The word-count guard returns through the initials path, so a long
+    fic-finder post naming `RL/SB` is not the one shape that cannot resolve."""
+    result, _ = initial("looking for a wolfstar fic rl/sb in the marauders era")
+    assert result is not None
+    assert result[0] == "Sirius Black/Remus Lupin"
+
+
+def test_a_spelled_out_pairing_is_unchanged(initial):
+    """The regression direction. `draco and hermione` must still go down the
+    existing path and reach the lookup with the two bare names."""
+    result, asked = initial("Bts jin and jimin")
+    assert asked == [("jin", "jimin")]
+    assert result is None or result[0]
+
+
+def test_only_the_expanded_names_are_looked_up(initial):
+    """The substring bug, which the first version had and the tests above did not
+    catch because every stubbed pairing happened to be the right one.
+
+    `_pair_lookup` matches halves as SUBSTRINGS, so asking it for `hr` and `r`
+    returns `Alex Claremont-Diaz/Henry Fox-...` — `r` matching inside `Henry` —
+    and `hermione` + `r` returns `Hermione Granger/Draco Malfoy`, `r` inside
+    `Draco`. Both are real pairings and both are better attested than the
+    answer, so "try every spelling, keep the best" picked them. The rule is that
+    only the longest spelling of each half is ever asked about.
+    """
+    _, asked = initial("hr/r")
+    assert ("hr", "r") not in asked
+    assert ("hermione", "r") not in asked
+    assert ("hermione granger", "ron weasley") in asked
