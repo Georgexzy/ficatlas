@@ -782,6 +782,36 @@ def _facet_exact(db, col_name: str, term: str) -> bool:
     return _facet_exact_cached(kind, term.strip().lower())
 
 
+def _author_is_known(db, name: str) -> bool:
+    """Is this exactly an author the index holds?
+
+    The author question asked by `_resolve_or_split`, and it has to be an EXACT
+    lookup for the same reason the fandom one is: the job is to find where a
+    value the reader wrote ends and the free text begins, and a fuzzy match
+    invents boundaries that are not there. `author: Ionibal fluff` matched the
+    author `Ionibal` at a trigram similarity of 0.71 without this, which is the
+    right answer by luck rather than by construction.
+
+    A missing `author_facets` table is a feature that is off, not an error — it
+    is built by the same admin refresh as `facets` and genuinely does not exist
+    on a fresh install. The savepoint is load-bearing for the reason it is in
+    `_did_you_mean_authors`: without one, the failed SELECT aborts the caller's
+    transaction and every later query in the search raises "current transaction
+    is aborted".
+    """
+    name = (name or "").strip()
+    if not name:
+        return False
+    try:
+        with db.begin_nested():
+            return bool(db.execute(
+                sql_text("SELECT 1 FROM author_facets WHERE value = :v LIMIT 1"),
+                {"v": name}).first())
+    except Exception:
+        log.debug("author split lookup failed", exc_info=True)
+        return False
+
+
 def _resolve_or_split(db, col_name: str, csv_val):
     """Trim words off a facet value until the vocabulary recognises it, and hand
     whatever was trimmed back to the free-text query.
@@ -826,6 +856,27 @@ def _resolve_or_split(db, col_name: str, csv_val):
     unknown fandom should keep behaving as it did, not silently become a text
     search.
     """
+    # AUTHORS ARE A SEPARATE VOCABULARY and were missing from this entirely,
+    # because the guard below only admits columns that live in `facets` and
+    # authors live in `author_facets`. So `author: Ionibal fluff` parsed as one
+    # author named "Ionibal fluff", found nothing, and the spelling rescue then
+    # offered Fluff TAGS — a different question than the one asked. The same
+    # failure `fandom:Harry Potter time travel` had, one column over, and it
+    # survived because nobody checked a second column.
+    #
+    # The floor is 20 works (`author_facets`' own floor), so a name has to be a
+    # real pen name before it is allowed to end the author's half of the query.
+    # A pen name is also the case that most needs it: `author: Jon Bellion
+    # fluff` is a natural thing to type and `Jon Bellion` is exactly the kind of
+    # multi-word value that swallows the rest.
+    if csv_val and col_name == "author" and " " in csv_val.strip():
+        words = csv_val.strip().split()
+        for cut in range(len(words) - 1, 0, -1):
+            head = " ".join(words[:cut])
+            if _author_is_known(db, head):
+                spill = words[cut:]
+                return head, spill
+
     if not csv_val or col_name not in _FACET_KIND:
         return csv_val, []
 

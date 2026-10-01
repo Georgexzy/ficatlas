@@ -399,7 +399,18 @@ def stop_scheduler():
 
 
 def get_schedule_status() -> dict:
-    """Return current schedule info for the /api/crawl/schedule endpoint."""
+    """Return current schedule info for the schedule status endpoint.
+
+    The docstring used to name `/api/crawl/schedule`, which was served by
+    `backend/api/crawl.py` — a router that was never mounted, so the reference
+    pointed at a URL that had never existed. That module drove the crawlers
+    from the API process, which is the architecture this repo deliberately moved
+    away from: `main.py` records that running crawls on the event loop meant
+    feed polls and crawls competed with request handling. The harvester is its
+    own container now and the admin panel reads its state. Deleted rather than
+    mounted, because a complete admin panel that is not reachable is worse than
+    no panel — it reads as a feature.
+    """
     result = {}
     for site in ["ao3", "ffnet"]:
         job_id = f"crawl_{site}"
