@@ -22,8 +22,20 @@
  *
  * aria-hidden: it sits inside the link that already says "FicAtlas home", so
  * announcing it again would make every page start by saying the name twice.
+ *
+ * `needle` is opt-in and off by default. The rose alone is the logo, and two of
+ * its three call sites are that: the wordmark, and the button that spins while
+ * a search runs. The search results loader is the one place that wants the whole
+ * instrument, because a compass is a FIXED rose with something turning over it
+ * — rotating all eight points instead just gives a slow, floral spinner, which
+ * is the generic thing this mark is supposed to stop looking like. So the needle
+ * is a separate group, drawn last so it sits over the rose, and it is the only
+ * part that moves.
  */
-export default function CompassMark({ className = "" }: { className?: string }) {
+export default function CompassMark({
+  className = "",
+  needle = false,
+}: { className?: string; needle?: boolean }) {
   return (
     <svg className={`compass ${className}`} viewBox="0 0 32 32"
          width="1em" height="1em" aria-hidden="true" focusable="false">
@@ -49,6 +61,18 @@ export default function CompassMark({ className = "" }: { className?: string }) 
         <polygon points="16,31 18.32,16 16,16" />
         <polygon points="1,16 16,18.32 16,16" />
       </g>
+      {/* The needle: one long kite through the centre, split into a lit half and
+          a shaded one so the direction of travel stays readable while it turns.
+          Same 32-unit grid and same centre as the rose, so `transform-origin:
+          50%` on the group (with transform-box: view-box) is the pivot with no
+          arithmetic. Deliberately NOT emitted from make-icons.py: that builds
+          the logo, and this is an instrument. */}
+      {needle && (
+        <g className="compass__needle">
+          <polygon className="compass__needle-n" points="16,2.4 18.3,16 13.7,16" />
+          <polygon className="compass__needle-s" points="16,29.6 13.7,16 18.3,16" />
+        </g>
+      )}
     </svg>
   )
 }

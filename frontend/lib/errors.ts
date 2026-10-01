@@ -9,6 +9,12 @@
 // So failures are classified, and the classification decides both the wording
 // and whether a retry is even offered. Telling someone to "try again" when their
 // wifi is off is as useless as saying nothing.
+//
+// This module classifies failures; it does not decide how patient a caller is.
+// The timeout comes from `lib/net.ts` for that reason — a request that cannot
+// give up holds a socket until the platform frees it, which is the failure this
+// whole file exists to stop having to describe.
+import { USER_TIMEOUT_MS } from "./net"
 
 export type FailureKind =
   | "offline"      // this device has no connection
@@ -102,7 +108,7 @@ export function describeError(e: unknown, status?: number): Failure {
 export async function fetchOrFail(
   input: string, init?: RequestInit & { timeoutMs?: number },
 ): Promise<Response> {
-  const { timeoutMs = 45_000, signal: external, ...rest } = init ?? {}
+  const { timeoutMs = USER_TIMEOUT_MS, signal: external, ...rest } = init ?? {}
   const ctl = new AbortController()
   // A request with no timeout does not fail, it hangs — and a spinner that
   // never resolves is the worst of the failure modes, because nothing tells the

@@ -5,6 +5,7 @@ import BackLink from "../BackLink"
 import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 // The other half of the takedown flow.
 //
@@ -55,7 +56,8 @@ export default function TakedownQueue() {
   const load = useCallback(async () => {
     setLoading(true); setError(null)
     try {
-      const r = await fetch(`/api/takedown?state=${state}&limit=200`, { credentials: "include" })
+      const r = await fetchWithTimeout(`/api/takedown?state=${state}&limit=200`,
+        { credentials: "include" }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(r.status === 401 || r.status === 403
         ? "You are not signed in as someone who can review these."
         : `Could not load the queue (${r.status}).`)
@@ -77,8 +79,8 @@ export default function TakedownQueue() {
       fd.append("uphold", String(uphold))
       fd.append("delist", String(delist))
       if (notes[id]) fd.append("note", notes[id])
-      const r = await fetch(`/api/takedown/${id}/resolve`,
-        { method: "POST", body: fd, credentials: "include" })
+      const r = await fetchWithTimeout(`/api/takedown/${id}/resolve`,
+        { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(`That did not save (${r.status}).`)
       await load()
     } catch (e: any) {

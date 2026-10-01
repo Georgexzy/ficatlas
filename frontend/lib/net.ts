@@ -38,6 +38,24 @@
  *  of it, so it gets little room and its failure is never reported. */
 export const BACKGROUND_TIMEOUT_MS = 5_000
 
+/** Traffic a reader IS waiting on: a search, a story, a list they asked for.
+ *
+ *  `lib/errors.ts`'s `fetchOrFail` defaults to this same number, and it imports
+ *  it from here rather than repeating it — because a request that must give up
+ *  needs a timeout chosen from what the caller is doing, and two lists of those
+ *  choices would drift, and the one that drifts LAXER is the bug.
+ */
+export const USER_TIMEOUT_MS = 45_000
+
+/** A deliberate bulk download, where the caller retries and honours Retry-After.
+ *
+ *  `lib/offline.ts` waits rather than abandoning when the server asks it to slow
+ *  down, which is the correct answer to a rate limit and the reason this cannot
+ *  share USER_TIMEOUT_MS: a long chapter over a slow connection is a success,
+ *  not a stall, and cutting it off would throw away minutes of downloading.
+ */
+export const DOWNLOAD_TIMEOUT_MS = 120_000
+
 /**
  * fetch() that actually gives up — and actually aborts.
  *

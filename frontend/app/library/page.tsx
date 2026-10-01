@@ -5,6 +5,8 @@ import Link from "next/link"
 import BackLink from "../BackLink"
 import OfflineLink from "../OfflineLink"
 import { fetchJson, isAbort, describeError, type Failure } from "@/lib/errors"
+import { fetchWithTimeout, fetchBackground, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/net"
+import CompassMark from "../CompassMark"
 import {
   listOfflineStories, deleteOfflineStory, isStoryOffline, downloadStoryForOffline,
   persistenceState, storageEstimate, fmtBytes,
@@ -54,7 +56,7 @@ function CanonicalFandomInput({
     const mySeq = ++seq.current
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`${API_BASE_C}/api/stats/suggest-canonical?kind=${kind}&q=${encodeURIComponent(q)}&limit=8`)
+        const r = await fetchWithTimeout(`${API_BASE_C}/api/stats/suggest-canonical?kind=${kind}&q=${encodeURIComponent(q)}&limit=8`, {}, USER_TIMEOUT_MS)
         if (r.ok && mySeq === seq.current) {
           setSugs(await r.json()); setOpen(true); setActive(-1)
         }
@@ -267,7 +269,8 @@ export default function LibraryPage() {
   }, [])
   useEffect(() => {
     let live = true
-    fetch("/api/follows/count", { credentials: "include" })
+    fetchWithTimeout("/api/follows/count", { credentials: "include" },
+                      BACKGROUND_TIMEOUT_MS)
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (live && d) setFollowUnread(d.unread || 0) })
       .catch(() => {})
@@ -401,8 +404,8 @@ export default function LibraryPage() {
   }, [user, mineReload])
 
   const removeMine = async (id: string) => {
-    const r = await fetch(`${API_BASE}/api/library/mine/${id}`,
-      { method: "DELETE", credentials: "include" })
+    const r = await fetchWithTimeout(`${API_BASE}/api/library/mine/${id}`,
+      { method: "DELETE", credentials: "include" }, USER_TIMEOUT_MS)
     if (r.ok) { setMine(m => m.filter(x => x.id !== id)); setMineTotal(t => Math.max(0, t - 1)) }
   }
 
@@ -458,7 +461,7 @@ export default function LibraryPage() {
     try {
       const fd = new FormData()
       fd.append("dry_run", String(dryRun))
-      const r = await fetch(`${API_BASE}/api/library/cleanup-preface-chapters`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/cleanup-preface-chapters`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       let data: any = null
       try { data = await r.json() } catch { /* server returned non-JSON (e.g. 500 page) */ }
       if (!r.ok || !data) { setPrefaceMsg(`Failed (server error ${r.status}). Check backend logs.`); return }
@@ -536,7 +539,7 @@ export default function LibraryPage() {
   const [trackedSaved, setTrackedSaved] = useState(false)
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/settings`).then(r => r.json())
+    fetchWithTimeout(`${API_BASE}/api/settings`, {}, USER_TIMEOUT_MS).then(r => r.json())
       .then(s => setTrackedFandom(s.tracked_fandom ?? ""))
       .catch(() => {})
   }, [])
@@ -547,11 +550,11 @@ export default function LibraryPage() {
       const fd = new FormData()
       fd.append("key", "tracked_fandom")
       fd.append("value", trackedFandom.trim())
-      await fetch(`${API_BASE}/api/settings`, { method: "POST", body: fd })
+      await fetchWithTimeout(`${API_BASE}/api/settings`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       setTrackedSaved(true)
       // Immediately pull for the newly-set fandom
       const pf = new FormData(); pf.append("fandom", trackedFandom.trim())
-      fetch(`${API_BASE}/api/library/poll-feed`, { method: "POST", body: pf }).catch(() => {})
+      fetchBackground(`${API_BASE}/api/library/poll-feed`, { method: "POST", body: pf })
       setTimeout(() => setTrackedSaved(false), 2500)
     } finally {
       setSavingTracked(false)
@@ -576,7 +579,7 @@ export default function LibraryPage() {
   const deleteHosted = async (id: string, title: string) => {
     if (!confirm(`Remove "${title}" from your library? This deletes the stored text.`)) return
     try {
-      const r = await fetch(`${API_BASE}/api/library/hosted/${id}`, { method: "DELETE" })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/hosted/${id}`, { method: "DELETE" }, USER_TIMEOUT_MS)
       if (r.ok) {
         setHosted(h => h.filter(s => s.id !== id))
         try {
@@ -618,7 +621,7 @@ export default function LibraryPage() {
     try {
       const fd = new FormData()
       fd.append("url", importUrl.trim())
-      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(await importErrorText(r))
       const data = await r.json().catch(() => null)
       if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
@@ -648,7 +651,7 @@ export default function LibraryPage() {
       const url = urls[i]
       try {
         const fd = new FormData(); fd.append("url", url)
-        const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+        const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
         if (!r.ok) {
           throw new Error(await importErrorText(r))
         }
@@ -676,7 +679,7 @@ export default function LibraryPage() {
     if (files.length === 1) {
       try {
         const fd = new FormData(); fd.append("file", files[0])
-        const r = await fetch(`${API_BASE}/api/library/upload-epub`, { method: "POST", body: fd })
+        const r = await fetchWithTimeout(`${API_BASE}/api/library/upload-epub`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
         if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`)
         const data = await r.json()
         setImportMsg(`Uploaded "${data.title}" (${data.chapters} chapters).`)
@@ -695,7 +698,7 @@ export default function LibraryPage() {
         const batch = files.slice(i, i + CHUNK)
         const fd = new FormData()
         batch.forEach(f => fd.append("files", f))
-        const r = await fetch(`${API_BASE}/api/library/upload-epubs`, { method: "POST", body: fd })
+        const r = await fetchWithTimeout(`${API_BASE}/api/library/upload-epubs`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
         if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`)
         const data = await r.json()
         totalSucceeded += data.succeeded
@@ -718,7 +721,7 @@ export default function LibraryPage() {
       fd.append("fandom", feedFandom.trim())
       if (feedMinWords.trim()) fd.append("min_words", feedMinWords.trim())
       if (feedCompleteOnly) fd.append("complete_only", "true")
-      const r = await fetch(`${API_BASE}/api/library/poll-feed`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/poll-feed`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const data = await r.json()
       if (data.ok) {
         const filtered = data.after_filter ?? data.found
@@ -743,7 +746,7 @@ export default function LibraryPage() {
       const fd = new FormData()
       if (ffnQuery.trim()) fd.append("query", ffnQuery.trim())
       fd.append("limit", "30")
-      const r = await fetch(`${API_BASE}/api/library/discover-ffnet`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/discover-ffnet`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const data = await r.json()
       if (data.ok) {
         setFfnUrls(data.urls || [])
@@ -761,7 +764,7 @@ export default function LibraryPage() {
   const importDiscoveredUrl = async (url: string) => {
     const fd = new FormData(); fd.append("url", url)
     try {
-      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(await importErrorText(r))
       const data = await r.json().catch(() => null)
       if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
@@ -809,7 +812,7 @@ export default function LibraryPage() {
       if (a3CompleteOnly) fd.append("complete_only", "true")
       fd.append("sort", a3Sort)
       fd.append("max_pages", a3Pages || "3")
-      const startR = await fetch(`${API_BASE}/api/library/discover-ao3`, { method: "POST", body: fd })
+      const startR = await fetchWithTimeout(`${API_BASE}/api/library/discover-ao3`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const startData = await startR.json().catch(() => ({}))
 
       // 429 → AO3 is in cooldown. The backend has already refused; give the user
@@ -870,7 +873,7 @@ export default function LibraryPage() {
       if (hpCompleteOnly) fd.append("complete_only", "true")
       fd.append("sort", hpSort)
       fd.append("max_pages", hpPages || "3")
-      const startR = await fetch(`${API_BASE}/api/library/discover-hpffa`, { method: "POST", body: fd })
+      const startR = await fetchWithTimeout(`${API_BASE}/api/library/discover-hpffa`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const startData = await startR.json().catch(() => ({}))
       if (!startR.ok || !startData.job_id) {
         setHpMsg(`❌ Failed to start: HTTP ${startR.status} — ${startData.detail || "no job_id returned"}`)
@@ -906,7 +909,7 @@ export default function LibraryPage() {
     try {
       const fd = new FormData()
       for (const [k, v] of Object.entries(body)) fd.append(k, v)
-      const startR = await fetch(`${API_BASE}/api/library/${endpoint}`, { method: "POST", body: fd })
+      const startR = await fetchWithTimeout(`${API_BASE}/api/library/${endpoint}`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const startData = await startR.json().catch(() => ({}))
       if (!startR.ok || !startData.job_id) {
         setArchMsg(`❌ Failed to start ${label}: HTTP ${startR.status} — ${startData.detail || "no job_id"}`)
@@ -946,7 +949,7 @@ export default function LibraryPage() {
       fd.append("corpus", dlpCorpus)
       fd.append("limit", "200")
       fd.append("auto_import", String(dlpAutoImport))
-      const r = await fetch(`${API_BASE}/api/library/discover-dlp`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/discover-dlp`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const data = await r.json()
       if (data.ok) {
         setDlpEntries(data.entries || [])
@@ -970,7 +973,7 @@ export default function LibraryPage() {
     if (!url) { setImportError("This entry has no FFN/AO3 URL to import"); return }
     const fd = new FormData(); fd.append("url", url)
     try {
-      const r = await fetch(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(await importErrorText(r))
       const data = await r.json().catch(() => null)
       if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
@@ -1230,9 +1233,9 @@ export default function LibraryPage() {
                 onClick={async () => {
                   setLoadingMore(true)
                   try {
-                    const r = await fetch(
+                    const r = await fetchWithTimeout(
                       `${API_BASE}/api/library/mine?limit=100&offset=${mine.length}`,
-                      { credentials: "include" })
+                      { credentials: "include" }, USER_TIMEOUT_MS)
                     const d = await r.json()
                     setMine(m => [...m, ...(d.items ?? [])])
                     if (d.total) setMineTotal(d.total)
@@ -1381,8 +1384,8 @@ export default function LibraryPage() {
                       onClick={async () => {
                         setLoadingMore(true)
                         try {
-                          const r = await fetch(
-                            `${API_BASE}/api/library/hosted?limit=100&offset=${hosted.length}`)
+                          const r = await fetchWithTimeout(
+                            `${API_BASE}/api/library/hosted?limit=100&offset=${hosted.length}`, {}, USER_TIMEOUT_MS)
                           const d = await r.json()
                           setHosted(h => [...h, ...(d.items ?? [])])
                           if (d.total) setHostedTotal(d.total)
@@ -1555,7 +1558,7 @@ export default function LibraryPage() {
             </div>
             {a3Busy && (
               <div className="alert" style={{marginTop:10, background:"var(--surface2)", borderColor:"var(--border)"}}>
-                <span className="scrape-spinner" /> Working on it — {a3Elapsed}s elapsed.
+                <span className="scrape-spinner" aria-hidden="true"><CompassMark needle /></span> Working on it — {a3Elapsed}s elapsed.
                 AO3&apos;s filtered pages take ~5–10s each to generate, so {a3Pages || "3"} pages
                 usually takes {(parseInt(a3Pages || "3") * 7)}–{(parseInt(a3Pages || "3") * 10)}s. Watch the browser console (F12) for verbose logs.
               </div>

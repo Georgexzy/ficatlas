@@ -6,6 +6,7 @@ import Link from "next/link"
 import OfflineLink from "./OfflineLink"
 import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard, Suggestion } from "@/lib/types"
+import { fetchWithTimeout, fetchBackground, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/net"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
          DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getTopHubs, type TopHub, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
@@ -316,7 +317,7 @@ function TagInput({ value, onChange, placeholder, highlighted = [], kind }: {
     if (q.length < 1) { setSuggestions([]); return }
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`/api/stats/suggest?kind=${kind}&q=${encodeURIComponent(q)}&limit=8`)
+        const r = await fetchWithTimeout(`/api/stats/suggest?kind=${kind}&q=${encodeURIComponent(q)}&limit=8`, {}, USER_TIMEOUT_MS)
         if (r.ok) {
           const data = await r.json()
           setSuggestions(data); setShowSug(true); setActiveIdx(-1)
@@ -452,7 +453,8 @@ function StoryCard({ story }: { story: StoryCard }) {
   useEffect(() => {
     if (!user || story.status !== "in_progress") return
     let live = true
-    fetch(`/api/follows/${story.id}`, { credentials: "include" })
+    fetchWithTimeout(`/api/follows/${story.id}`, { credentials: "include" },
+                     BACKGROUND_TIMEOUT_MS)
       .then(r => (r.ok ? r.json() : null))
       .then(d => { if (live && d) setFollowing(!!d.following) })
       .catch(() => {})
@@ -466,8 +468,8 @@ function StoryCard({ story }: { story: StoryCard }) {
     const next = !following
     setFollowing(next)                       // optimistic; the row is a toggle
     try {
-      const r = await fetch(`/api/follows/${story.id}`,
-        { method: next ? "POST" : "DELETE", credentials: "include" })
+      const r = await fetchWithTimeout(`/api/follows/${story.id}`,
+        { method: next ? "POST" : "DELETE", credentials: "include" }, USER_TIMEOUT_MS)
       if (!r.ok) setFollowing(!next)         // put it back if the server refused
     } catch {
       setFollowing(!next)
@@ -517,7 +519,7 @@ function StoryCard({ story }: { story: StoryCard }) {
     setImporting(true)
     try {
       const fd = new FormData(); fd.append("url", story.url)
-      const r = await fetch(`/api/library/import-url`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const data = await r.json()
       if (data.id) {
         setImportedId(data.id)
@@ -1263,7 +1265,8 @@ function useExampleQuery(): string {
   const [fandom, setFandom] = useState<string | null>(null)
   useEffect(() => {
     let live = true
-    fetch("/api/stats/suggest?kind=fandom&q=&limit=8")
+    fetchWithTimeout("/api/stats/suggest?kind=fandom&q=&limit=8", {},
+                      BACKGROUND_TIMEOUT_MS)
       .then(r => r.json())
       .then((rows: { value: string }[]) => {
         if (!live || !Array.isArray(rows) || !rows.length) return
@@ -1561,8 +1564,8 @@ function SearchPageInner() {
       // the shared index. Sending private=false for everyone meant the button
       // 403'd for every reader while the label promised them a library.
       fd.append("private", String(!user?.can_manage))
-      const r = await fetch(`${API_BASE}/api/library/import-url`,
-                            { method: "POST", body: fd, credentials: "include" })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`,
+                            { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(await r.text())
       const data = await r.json()
       setImportMsg(user?.can_manage
@@ -1587,7 +1590,7 @@ function SearchPageInner() {
       if (pq.cleanText) fd.append("q", pq.cleanText)
       if (pq.fandoms.length) fd.append("fandom", pq.fandoms[0])
       fd.append("pages", "5")
-      const r = await fetch(`${API_BASE}/api/library/refresh-ao3`, { method: "POST", body: fd })
+      const r = await fetchWithTimeout(`${API_BASE}/api/library/refresh-ao3`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const data = await r.json()
       setRefreshMsg(`Found ${data.fetched} live results — ${data.newly_indexed} new added to index.`)
       doSearch(false)
@@ -1612,7 +1615,7 @@ function SearchPageInner() {
   useEffect(() => {
     if (!user?.can_manage) return
     const API_BASE = ""  // relative — handled by Next.js rewrite to backend
-    fetch(`${API_BASE}/api/library/autopoll`, { method: "POST" }).catch(() => {})
+    fetchBackground(`${API_BASE}/api/library/autopoll`, { method: "POST" })
   }, [user?.can_manage])
 
   // Run the search when the URL already describes one.
@@ -1801,7 +1804,7 @@ function SearchPageInner() {
       if (Number.isFinite(n) && n > 0 && n <= 100) setPerPage(n)
     }
     apply(mine)
-    fetch(`${API_BASE}/api/settings`).then(r => r.json())
+    fetchWithTimeout(`${API_BASE}/api/settings`, {}, USER_TIMEOUT_MS).then(r => r.json())
       .then(s => apply({ ...s, ...mine }))
       .catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2526,7 +2529,7 @@ function SearchPageInner() {
       const params = new URLSearchParams({ count: "8" })
       params.set("explicit", explicit ? "true" : "false")
       if (incFandoms.length > 0) params.set("fandom", incFandoms[0])
-      const r = await fetch(`${API_BASE}/api/search/random?${params.toString()}`)
+      const r = await fetchWithTimeout(`${API_BASE}/api/search/random?${params.toString()}`, {}, USER_TIMEOUT_MS)
       if (!r.ok) throw describeError(null, r.status)
       const cards = await r.json()
       setResults({
@@ -3119,7 +3122,7 @@ function SearchPageInner() {
                     phone — which is where the mark was least visible, because
                     the header is not sticky below 700px and scrolls away the
                     moment you move. */}
-                {loading ? <CompassMark className="compass--spin" /> : "Search"}
+                {loading ? <CompassMark className="compass--spin" needle /> : "Search"}
               </button>
             </div>
             <TokenStrip tokens={parsedTokens} onRemove={raw => {
@@ -3154,6 +3157,24 @@ function SearchPageInner() {
               has the previous page behind it and keeps it — see `stale`. */}
           {loading && !shown && (
             <div className="story-list" aria-busy="true" aria-label="Loading results">
+              {/* The compass, needle turning over a rose that stays put.
+
+                  Six grey cards say "something is happening" and nothing else.
+                  This is the one moment a reader is looking at an empty column
+                  with time to notice, so it is the one moment worth the site's
+                  own mark rather than a generic ring.
+
+                  `needle` is what makes it a compass: <CompassMark/> alone is
+                  the logo, and spinning the whole of it would be a floral
+                  spinner. With the needle it is an instrument, and the overshoot
+                  in the keyframe is a needle settling on north.
+
+                  Reused rather than a new asset — inline SVG, no request, and it
+                  takes its colours from the theme so there is nothing to load
+                  and nothing to get wrong in dark mode. */}
+              <div className="search-spinner" aria-hidden="true">
+                <CompassMark needle />
+              </div>
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="card-skeleton">
                   <div className="skel-line skel-line--title" />

@@ -5,6 +5,7 @@ import { describeError, type Failure } from "@/lib/errors"
 import { useAuth } from "@/lib/auth"
 import { navigateTo } from "@/lib/navigation"
 import { localFirst } from "@/lib/localFirst"
+import { fetchWithTimeout, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/net"
 // A STATIC import, and that is load-bearing.
 //
 // This was `await import("@/lib/offline")` inside the offline read — and a
@@ -154,7 +155,7 @@ export default function ChapterPage() {
 
     // Fall back to server settings if localStorage is empty (different browser etc.)
     if (!savedFont || !savedWidth) {
-      fetch(`${API_BASE}/api/settings`).then(r => r.json()).then(s => {
+      fetchWithTimeout(`${API_BASE}/api/settings`, {}, BACKGROUND_TIMEOUT_MS).then(r => r.json()).then(s => {
         if (!savedFont && (s.reader_font === "sans" || s.reader_font === "serif")) {
           setFontFamily(s.reader_font)
         }
@@ -267,9 +268,11 @@ export default function ChapterPage() {
         // usual next-chapter tap renders without a round trip or a spinner.
         const warm = CHAPTER_CACHE.get(cacheKey(storyId, num))
         const [story, chapter] = await Promise.all([
-          fetch(`${API_BASE}/api/stories/${storyId}`, { signal })
+          fetchWithTimeout(`${API_BASE}/api/stories/${storyId}`,
+            { signal }, USER_TIMEOUT_MS)
             .then(r => { if (!r.ok) throw describeError(null, r.status); return r.json() }),
-          warm ?? fetch(`${API_BASE}/api/stories/${storyId}/chapters/${num}`, { signal })
+          warm ?? fetchWithTimeout(`${API_BASE}/api/stories/${storyId}/chapters/${num}`,
+            { signal }, USER_TIMEOUT_MS)
             .then(r => { if (!r.ok) throw describeError(null, r.status); return r.json() }),
         ])
         return { story, chapter }
@@ -565,7 +568,11 @@ export default function ChapterPage() {
         ? (window as any).requestIdleCallback(cb, { timeout: 2000 })
         : window.setTimeout(cb, 400)
     const handle = idle(() => {
-      fetch(`${API_BASE}/api/stories/${storyId}/chapters/${nextNum}`, { signal: ctl.signal })
+      // A prefetch nobody is waiting on, so it gets the background leash — and it
+      // must give up rather than sit on a slot, because this fires on idle after
+      // every chapter read and the reader's next tap needs that connection.
+      fetchWithTimeout(`${API_BASE}/api/stories/${storyId}/chapters/${nextNum}`,
+        { signal: ctl.signal }, BACKGROUND_TIMEOUT_MS)
         .then(r => r.ok ? r.json() : null)
         .then(c => { if (c) cachePut(key, c) })
         .catch(() => {})   // a failed prefetch must be silent — see CHAPTER_CACHE

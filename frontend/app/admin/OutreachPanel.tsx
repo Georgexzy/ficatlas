@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react"
 import { SITE_LABELS, formatNumber } from "@/lib/api"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 /**
  * Turning a fic-finder post into a search, and a search into a reply.
@@ -227,10 +228,10 @@ export default function OutreachPanel(
       // there. This panel used to read `query` alone and drop every other
       // field the endpoint returned, so a post asking for "good ongoing fics,
       // at least 150k words" was searched with none of the three.
-      const r = await fetch(
+      const r = await fetchWithTimeout(
         `/api/search?q=${encodeURIComponent(term)}&per_page=8` +
         (sort ? `&sort=${encodeURIComponent(sort)}` : ""),
-        { credentials: "include" })
+        { credentials: "include" }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(`Search failed (${r.status})`)
       setRes(await r.json())
     } catch (e: any) {
@@ -297,8 +298,9 @@ export default function OutreachPanel(
   const read = useCallback(async (textIn: string) => {
     setErr(null)
     try {
-      const r = await fetch("/api/search/extract?text=" +
-        encodeURIComponent(textIn.slice(0, 4000)), { credentials: "include" })
+      const r = await fetchWithTimeout("/api/search/extract?text=" +
+        encodeURIComponent(textIn.slice(0, 4000)),
+        { credentials: "include" }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(`Could not read the post (${r.status})`)
       const e: Extracted = await r.json()
       setExt(e)
@@ -460,9 +462,9 @@ export default function OutreachPanel(
         <div className="outreach__row outreach__negs">
           <button className="btn" onClick={async () => {
             try {
-              const r = await fetch("/api/search/taste?titles=" +
+              const r = await fetchWithTimeout("/api/search/taste?titles=" +
                 encodeURIComponent(readTitles(raw).join("|")),
-                { credentials: "include" })
+                { credentials: "include" }, USER_TIMEOUT_MS)
               if (!r.ok) throw new Error(`Could not read their list (${r.status})`)
               const t: Taste = await r.json()
               setTaste(t)

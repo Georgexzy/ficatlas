@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 /**
  * The fic-finder posts waiting for an answer — the left half of Outreach.
@@ -62,7 +63,8 @@ export default function QueuePanel(
     setError(null)
     try {
       const qs = new URLSearchParams({ state, order, subreddit: sub, search })
-      const r = await fetch(`/api/queue?${qs}`, { credentials: "include" })
+      const r = await fetchWithTimeout(`/api/queue?${qs}`,
+        { credentials: "include" }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(`Could not load the queue (${r.status}).`)
       const data: Post[] = await r.json()
       setPosts(data)
@@ -73,7 +75,11 @@ export default function QueuePanel(
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
-    fetch("/api/queue/counts", { credentials: "include" })
+    // Nobody is waiting on the filter options — they fill in a dropdown behind
+    // the list — so this gets the short leash and the failure stays silent. It
+    // fires on every list change, which makes it per-navigation traffic of
+    // exactly the kind `lib/net.ts` was written about.
+    fetchWithTimeout("/api/queue/counts", { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) { setSubs(d.subreddits ?? []); setStates(d.states ?? {}) } })
       .catch(() => {})
@@ -81,11 +87,11 @@ export default function QueuePanel(
 
   const mark = async (id: string, to: string) => {
     try {
-      await fetch(`/api/queue/${encodeURIComponent(id)}/state`, {
+      await fetchWithTimeout(`/api/queue/${encodeURIComponent(id)}/state`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ state: to }),
-      })
+      }, USER_TIMEOUT_MS)
       setPosts(p => {
         const next = (p ?? []).filter(x => x.id !== id)
         onList?.(next)
@@ -102,8 +108,8 @@ export default function QueuePanel(
   const fetchNow = async () => {
     setFetching("Fetching…")
     try {
-      const r = await fetch("/api/queue/refresh",
-        { method: "POST", credentials: "include" })
+      const r = await fetchWithTimeout("/api/queue/refresh",
+        { method: "POST", credentials: "include" }, USER_TIMEOUT_MS)
       const d = await r.json()
       // The fetch runs behind the response — a run walks the feeds with a
       // twenty-second gap, so holding the button would mean a two-minute

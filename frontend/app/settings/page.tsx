@@ -8,6 +8,7 @@ import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 import { writePref, mergePrefs, type Prefs } from "@/lib/prefs"
 import { fetchJson } from "@/lib/errors"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 import { EMPTY_MUTES, loadMutes, muteCount, saveMutes, type MuteList } from "@/lib/mutelist"
 import { DATA_GROUPS, clearGroup, downloadExport, groupSize } from "@/lib/localdata"
 import { fmtBytes, storageEstimate, type StorageEstimate } from "@/lib/offline"
@@ -297,7 +298,12 @@ export default function SettingsPage() {
   const resetBreaker = async (site: "ao3" | "ffnet") => {
     try {
       const fd = new FormData(); fd.append("site", site)
-      await fetch(`${API_BASE}/api/library/crawl-reset-breaker`, { method: "POST", body: fd })
+      // Awaited, deliberately. loadCrawlStatus() below re-reads the breaker, so
+      // firing this and reading in the same tick would read the state from
+      // before the reset landed — which is the exact bug the "reload and see
+      // the flag clear" advice would then send the admin to check.
+      await fetchWithTimeout(`${API_BASE}/api/library/crawl-reset-breaker`,
+        { method: "POST", body: fd }, USER_TIMEOUT_MS)
       loadCrawlStatus()
     } catch {}
   }
@@ -313,7 +319,8 @@ export default function SettingsPage() {
         const fd = new FormData()
         fd.append("key", key); fd.append("value", String(admin[key] ?? ""))
         try {
-          const r = await fetch(`${API_BASE}/api/settings`, { method: "POST", body: fd })
+          const r = await fetchWithTimeout(`${API_BASE}/api/settings`,
+            { method: "POST", body: fd }, USER_TIMEOUT_MS)
           return r.ok
         } catch { return false }
       }))

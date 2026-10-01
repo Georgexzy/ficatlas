@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react"
 import Link from "next/link"
 import { useAuth } from "@/lib/auth"
 import { formatWordCount, chapterDisplay, displayTitle, SITE_LABELS } from "@/lib/api"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 // The other half of following a work. Rendered as the first tab of /library.
 //
@@ -51,7 +52,8 @@ export default function FollowingTab() {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch("/api/follows", { credentials: "include" })
+      const r = await fetchWithTimeout("/api/follows",
+        { credentials: "include" }, USER_TIMEOUT_MS)
       if (r.status === 401) { setWorks([]); return }
       if (!r.ok) throw new Error("Could not load your follows")
       setWorks(await r.json())
@@ -68,7 +70,8 @@ export default function FollowingTab() {
   const markSeen = async (id: string) => {
     setBusy(id)
     try {
-      await fetch(`/api/follows/${id}/seen`, { method: "POST", credentials: "include" })
+      await fetchWithTimeout(`/api/follows/${id}/seen`,
+        { method: "POST", credentials: "include" }, USER_TIMEOUT_MS)
       setWorks(w => (w ?? []).map(x =>
         x.id === id ? { ...x, new_chapters: 0, is_new: false } : x))
     } finally {
@@ -79,7 +82,8 @@ export default function FollowingTab() {
   const unfollow = async (id: string) => {
     setBusy(id)
     try {
-      await fetch(`/api/follows/${id}`, { method: "DELETE", credentials: "include" })
+      await fetchWithTimeout(`/api/follows/${id}`,
+        { method: "DELETE", credentials: "include" }, USER_TIMEOUT_MS)
       setWorks(w => (w ?? []).filter(x => x.id !== id))
     } finally {
       setBusy(null)

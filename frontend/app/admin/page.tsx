@@ -5,6 +5,7 @@ import TakedownQueue from "./TakedownQueue"
 import TrafficPanel from "./TrafficPanel"
 import OutreachTab from "./OutreachTab"
 import { adminTabFor, type AdminTab } from "@/lib/adminTabs"
+import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 import BackLink from "../BackLink"
 import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
@@ -262,16 +263,16 @@ export default function AdminPage() {
       // from tables with tens of entries, and folding it into the cached
       // overview would tie a cheap, always-current answer to a 180-second cache
       // built for queries that scan millions of rows.
-      fetch("/api/auth/reset-requests", { credentials: "include" })
+      fetchWithTimeout("/api/auth/reset-requests", { credentials: "include" })
         .then(r => (r.ok ? r.json() : []))
         .then(setResets)
         .catch(() => setResets([]))
-      fetch("/api/admin/users", { credentials: "include" })
+      fetchWithTimeout("/api/admin/users", { credentials: "include" })
         .then(r => (r.ok ? r.json() : null))
         .then(d => setPeople(d?.users ?? null))
         .catch(() => {})
-      const r = await fetch(`/api/admin/overview${fresh ? "?refresh=true" : ""}`,
-                            { credentials: "include" })
+      const r = await fetchWithTimeout(`/api/admin/overview${fresh ? "?refresh=true" : ""}`,
+                            { credentials: "include" }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(`Could not load (${r.status}).`)
       setData(await r.json())
     } catch (e: any) { setError(e.message) }
@@ -283,7 +284,8 @@ export default function AdminPage() {
     setBusy(job); setNote(null)
     try {
       const fd = new FormData(); fd.append("limit", "300")
-      const r = await fetch(`/api/admin/run/${job}`, { method: "POST", body: fd, credentials: "include" })
+      const r = await fetchWithTimeout(`/api/admin/run/${job}`,
+        { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
       const d = await r.json().catch(() => null)
       setNote(r.ok
         ? "Started. It runs in the background — reload in a few minutes to see the coverage move."
@@ -499,8 +501,8 @@ export default function AdminPage() {
                 try {
                   const fd = new FormData()
                   fd.append("username", issuing.trim())
-                  const r = await fetch("/api/auth/admin/issue-reset",
-                    { method: "POST", credentials: "include", body: fd })
+                  const r = await fetchWithTimeout("/api/auth/admin/issue-reset",
+                    { method: "POST", credentials: "include", body: fd }, USER_TIMEOUT_MS)
                   const d = await r.json()
                   if (!r.ok) throw new Error(d?.detail ?? `Failed (${r.status})`)
                   setIssued({ username: d.username, code: d.code })
