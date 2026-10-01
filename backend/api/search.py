@@ -1924,6 +1924,35 @@ _DYM_AUTHOR_MIN_SIM = float(os.getenv("SEARCH_DYM_AUTHOR_MIN_SIM", "0.30"))
 _AUTHOR_OPERATOR_RE = re.compile(r"^\s*author\s*:\s*(?P<value>.+)$", re.IGNORECASE)
 
 
+def _spelling_rescues(db, q: str, min_sim: float | None = None) -> list[Suggestion]:
+    """The spelling rescues for a query, in the order that respects what the
+    reader ASKED for rather than what the text happens to resemble.
+
+    An explicit `author:` operator puts the author rescue FIRST, and that is the
+    whole point of this function. The facet rescue matches the query as a
+    STRING, so `author: Ionibal` was matching the OPERATOR WORD: measured, it
+    returned the tag `mlm author` and the character `The Author` and stopped
+    there, because `or` takes the first non-empty list. The reader who typed
+    their own pen name mistyped was handed two other things called "author" —
+    which is worse than no suggestion, because one of them looks like an answer.
+
+    That is the general shape of the fault: a trigram match does not know which
+    word in the query is the subject. When the reader has said with an operator
+    which KIND of thing they want, that is stronger evidence than string
+    resemblance and is preferred over it. For a bare word the two run in the
+    original order, facets first — `Ionibal` alone is far more often a mistyped
+    tag than a mistyped author, and the facet rescue is the older, better
+    exercised path.
+    """
+    if _AUTHOR_OPERATOR_RE.match(q or ""):
+        return (_did_you_mean_authors(db, q)
+                or _typed_rescues(db, q)
+                or _did_you_mean(db, q, min_sim=min_sim))
+    return (_typed_rescues(db, q)
+            or _did_you_mean(db, q, min_sim=min_sim)
+            or _did_you_mean_authors(db, q))
+
+
 def _did_you_mean_authors(db, q: str) -> list[Suggestion]:
     """The author the reader probably meant, for a search that found nothing.
 
@@ -4784,18 +4813,11 @@ def search(          # NOT async — see below
         # certain of the four, so it only ever speaks when the three rescues
         # above have nothing. A reader who merely misspelt a title is not
         # offered a reading of their sentence instead.
-        _suggestions = (_typed_rescues(db, q)
-                        or _did_you_mean(db, q)
-                        # Authors have their own vocabulary and their own floors,
-                        # and the two rescues must not hide one another: the facet
-                        # one returns [] for a string no tag resembles, which is
-                        # exactly the case an author name needs (the reported one
-                        # was `Ionibal`, and not one of 1.57M tag values is
-                        # similar to it). So this is ADDED rather than chained —
-                        # the author is offered alongside a facet correction
-                        # rather than instead of it, and when there is no facet
-                        # correction it is the only thing on offer.
-                        or _did_you_mean_authors(db, q)
+        # `_spelling_rescues` owns the ORDER of the three spelling rescues and
+        # the reason for it; `_misspelt_title` and `_describe_suggestion` stay
+        # here because they are a different kind of answer (a title, a reading of
+        # a sentence) and are the last two things a reader should be offered.
+        _suggestions = (_spelling_rescues(db, q)
                         or _misspelt_title(db, q)
                         or _describe_suggestion(db, q))
     elif (_typed and 0 < total <= SUGGEST_MAX_RESULTS
@@ -4816,8 +4838,9 @@ def search(          # NOT async — see below
         # one is: a near miss is worse than a miss, because it looks like an
         # answer. `author: Ionibal` returning a handful of unrelated works is
         # exactly the `romoine` case, and the reader has no way to tell.
-        _suggestions = (_did_you_mean(db, q, min_sim=SUGGEST_NEAR_SIM)
-                        or _did_you_mean_authors(db, q))
+        # SUGGEST_NEAR_SIM goes in, not the 0.35 default: the lower floor is the
+        # difference between catching `romoine` -> `romione` (0.333) and not.
+        _suggestions = _spelling_rescues(db, q, min_sim=SUGGEST_NEAR_SIM)
 
     # ── And the failure that came first: they typed a sentence ─────────────
     #
