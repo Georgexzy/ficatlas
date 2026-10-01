@@ -358,7 +358,8 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
                   Grouped by FicAtlas from the titles and publication order —{" "}
                   {sr.author ? <>all by <strong>{sr.author}</strong>. </> : null}
                   {sr.site === "ao3" ? "AO3 " : "This archive "}
-                  did not publish a series list, so this is our reading of it.
+                  did not publish a series list, so this grouping was read off
+                  the titles and publication order by FicAtlas.
                 </p>
               )}
               {/* Every other entry is a link to that story, and it has to LOOK
@@ -765,13 +766,13 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
             typeof window !== "undefined"
               ? window.location.href
               : `/story/${story.id}`)}`}>
-            {story.is_hosted
-              ? "Ask us to remove it"
-              : "Ask us to remove this listing"}
+{story.is_hosted
+            ? "Request removal"
+            : "Request removal of this listing"}
           </Link>
           {story.is_hosted
             ? " — the text comes down straight away, no explanation needed."
-            : " — we hold only a summary and a link, and will take both down."}
+            : " — only a summary and a link are held, and both will be taken down."}
           {/* The other direction, offered second and phrased as the smaller ask.
               Removal comes first deliberately: it is the thing someone arriving
               here upset is looking for, and it is the one that needs nothing
@@ -781,8 +782,8 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
               {" "}Or{" "}
               <Link href={`/permissions?site=${story.site}&author=${encodeURIComponent(story.author || "")}`}>
                 {story.is_hosted
-                  ? "set your terms for storing your text here"
-                  : "say whether we may store your text here"}
+                  ? "set the terms for storing your text here"
+                  : "say whether your text may be stored here"}
               </Link>.
             </>
           )}

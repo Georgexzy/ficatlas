@@ -42,15 +42,15 @@ const MESSAGES: Record<FailureKind, { message: string; retryable: boolean }> = {
     retryable: false,
   },
   unreachable: {
-    message: "FicAtlas is not responding. It may be restarting — this usually clears in a minute.",
+    message: "FicAtlas is not responding. This usually clears within a minute.",
     retryable: true,
   },
   timeout: {
-    message: "That took too long and was given up on. The index is large and some searches are slow; a narrower search will usually come back faster.",
+    message: "That request timed out. The index is large and some searches are slow; a narrower search will usually come back faster.",
     retryable: true,
   },
   server: {
-    message: "Something went wrong at our end. This is a fault here, not with what you asked for.",
+    message: "Something went wrong at FicAtlas. This is a fault on the site, not with what was asked for.",
     retryable: true,
   },
   denied: {

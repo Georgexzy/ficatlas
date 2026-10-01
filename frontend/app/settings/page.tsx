@@ -822,8 +822,8 @@ export default function SettingsPage() {
                 </span>
                 <span className="setting-row__hint">
                   {pendingTakedowns > 0
-                    ? "Someone is waiting on a decision — the text is already down, but the reply is not sent. Also: what is thin, what the crawler is pointed at next, and whether AO3 is throttling us."
-                    : "What is thin, what the crawler is pointed at next, whether AO3 is throttling us, and any takedown requests — previously only visible by reading container logs."}
+                    ? "Someone is waiting on a decision — the text is already down, but the reply is not sent. Also: what is thin, what the crawler is pointed at next, and whether AO3 is throttling this instance."
+                    : "What is thin, what the crawler is pointed at next, whether AO3 is throttling this instance, and any takedown requests."}
                 </span>
               </div>
               <Link href={pendingTakedowns > 0 ? "/admin?tab=moderation" : "/admin"}

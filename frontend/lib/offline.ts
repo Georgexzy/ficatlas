@@ -236,10 +236,10 @@ export function offlineBlocker(): OfflineBlocker {
   if (window.isSecureContext && "serviceWorker" in navigator) return null
   return {
     reason: "insecure-context",
-    detail: `This site is being served over http://${window.location.host}. `
-      + `Browsers only allow offline caching on https (or localhost), so the app `
-      + `itself cannot be stored for offline use. Saved stories are still on this `
-      + `device, but opening the app with no connection will show nothing.`,
+    detail: "This site is being served over http. Browsers only allow offline "
+      + "caching on https (or localhost), so the app itself cannot be stored for "
+      + "offline use. Saved stories are still on this device, but opening the app "
+      + "with no connection will show nothing.",
   }
 }
 

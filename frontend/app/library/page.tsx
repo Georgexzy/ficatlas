@@ -1406,8 +1406,8 @@ export default function LibraryPage() {
           <section className="import-section">
             <h3>Import from URL</h3>
             <p className="import-help">
-              Paste an AO3 or FanFiction.net link. We&apos;ll fetch the full text via FicHub
-              and make it searchable and readable in-app.
+              Paste an AO3 or FanFiction.net link. The full text is fetched via
+              FicHub and made searchable and readable in-app.
             </p>
             <div className="import-row">
               <input type="url" className="import-input"
@@ -1596,8 +1596,8 @@ export default function LibraryPage() {
             <h3>HarryPotterFanfiction.com archive (via AO3 Open Doors)</h3>
             <p className="import-help">
               HPFFA closed to new works in 2016 and was imported wholesale to AO3 in late 2021 as
-              the <code>hpfanfiction_hpff</code> collection (~85k stories). We pull from there so
-              every result has full AO3 metadata — tags, characters, relationships, warnings — and
+              the <code>hpfanfiction_hpff</code> collection (~85k stories). Full AO3 metadata is pulled
+              from there so every result has tags, characters, relationships, warnings — and
               imports work normally via FicHub. Stories get a <code>hpffa_archive</code> tag for
               easy filtering later.
             </p>
@@ -1642,8 +1642,8 @@ export default function LibraryPage() {
               Archive) is a separate ~18k-member eFiction site that also moved to AO3
               Open Doors in 2021 (collection <code>harrypotterfanficarchive</code>);
               tagged <code>hexfiles_archive</code>. <strong>SquidgeWorld</strong> runs the
-              same Otwarchive software as AO3 (~30k mostly-HP works) so we scrape its
-              works listing directly; tagged <code>squidgeworld_archive</code>.
+              same Otwarchive software as AO3 (~30k mostly-HP works), so its works listing is
+              scraped directly; tagged <code>squidgeworld_archive</code>.
             </p>
             <div className="import-row" style={{ gap: 8, flexWrap: "wrap" }}>
               <button className="btn btn--primary"
@@ -1713,8 +1713,8 @@ export default function LibraryPage() {
             <p className="import-help">
               FF.net blocks direct server requests with a Cloudflare challenge (this is
               true for any server, regardless of IP), but the Wayback Machine&apos;s index
-              isn&apos;t blocked. We pull FF.net story URLs Wayback has archived, then import
-              each via FicHub. Filter by URL keyword (e.g. &quot;Harry-Potter&quot;) to narrow results.
+              isn&apos;t blocked. FF.net story URLs are pulled from what Wayback has archived, then
+              each is imported via FicHub. Filter by URL keyword (e.g. &quot;Harry-Potter&quot;) to narrow results.
             </p>
             <div className="import-row">
               <input type="text" className="import-input"
@@ -1841,7 +1841,7 @@ sudo docker compose exec backend python ao3_dump_importer.py \\
               <summary><strong>HuggingFace mrzjy/fanfiction_meta</strong> — 6.6M FFnet rows, metadata only ⭐ recommended</summary>
               <p>
                 The best free seed source for FFnet, which (unlike AO3) is Cloudflare-blocked
-                for direct server scraping regardless of your IP. Covers FFnet story IDs 1 to
+                for direct server scraping regardless of the IP. Covers FFnet story IDs 1 to
                 ~10.9M (roughly 2014-era). After import, click any story&apos;s &quot;Import &amp; Read&quot;
                 button in search and FicHub will fetch the full text on-demand.
               </p>

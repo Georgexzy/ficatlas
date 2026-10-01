@@ -200,7 +200,7 @@ export default function TakedownClient() {
         <label>
           <span>Your email</span>
           <input name="email" type="email" required
-            placeholder="Optional — only used if we need to ask a question" />
+            placeholder="Required — used only if a question needs asking" />
         </label>
 
         <label>
