@@ -768,15 +768,20 @@ def suggest_canonical(
 _AUTHOR_FACET_MIN_WORKS = int(os.getenv("AUTHOR_FACET_MIN_WORKS", "20"))
 
 
-@router.post("/refresh-facets")
-def refresh_facets(
-    min_count: int = Query(1, ge=1, description="Drop values rarer than this"),
-    db: Session = Depends(get_db),
-    _admin=Depends(require_admin),
-):
-    """Rebuild the facets table from current stories. Run this after big imports so
-    autocomplete reflects the latest data. It's a one-shot batch (four grouped
-    scans of the whole table), not a per-request cost.
+def rebuild_facets(db: Session, min_count: int = 1) -> dict:
+    """Rebuild the facets and author_facets tables from current stories.
+
+    The ONE implementation. The admin route below and the worker's daily
+    `_facets_loop` both call this, because the alternative is two copies of a
+    procedure that drops and recreates the vocabulary every search filter
+    resolves against — and the one that drifts is invisible until a tag stops
+    being findable.
+
+    It is a one-shot batch (a grouped scan of the whole table per kind), not a
+    per-request cost. Measured on the live index, 2026-10-01: the tags scan alone
+    is 73.4s and 2.9GB of reads, so a full rebuild is minutes. Callers on a
+    schedule must take `maintenance_lock.heavy_pass()` and must re-assert
+    `statement_timeout = 0` inside their own batching — see that module.
 
     Built into a staging table and swapped in at the end. The previous version
     deleted each kind before repopulating it, so for the several minutes the
@@ -872,3 +877,31 @@ def refresh_facets(
         db.commit()
         raise
     return {"ok": True, "facets": built}
+
+
+@router.post("/refresh-facets")
+def refresh_facets(
+    min_count: int = Query(1, ge=1, description="Drop values rarer than this"),
+    db: Session = Depends(get_db),
+    _admin=Depends(require_admin),
+):
+    """Rebuild the vocabulary by hand, for after a big import.
+
+    Nothing needed this for a long time and that is the bug this now sits
+    beside: `facets` is what tag, character and fandom filters resolve against,
+    and it was only ever rebuilt when somebody remembered this button. Measured on
+    the live index, 2026-10-01, for tag values carried by at least two works:
+
+        in `stories`          1,985,720
+        present in `facets`   1,574,444
+        MISSING                 411,276
+
+    A fifth of the real vocabulary absent, because the crawler adds works faster
+    than anything refreshed it. It cannot be read as a typo, and it cannot be
+    recovered by the search path: the fallback for a value the vocabulary does
+    not hold is a sequential scan of 20.5M rows, which is how `tags=Fluffx`
+    turned into "The index is busy right now" rather than a spelling
+    suggestion. `_facets_loop` now runs this daily; the button is for the day
+    something big is imported and nobody wants to wait for the schedule.
+    """
+    return rebuild_facets(db, min_count)

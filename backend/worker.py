@@ -1517,6 +1517,98 @@ async def _series_wordcount_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _facets_loop() -> None:
+    """The search vocabulary, rebuilt daily — because nothing rebuilt it at all.
+
+    `facets` is what tag, character and fandom filters resolve against, and what
+    autocomplete draws from. It was only ever rebuilt by an admin pressing a
+    button, so it drifted for as long as the site was up, and it drifted in the
+    direction that is hardest to notice. Measured on the live index, 2026-10-01,
+    for tag values carried by at least two works:
+
+        in `stories`          1,985,720
+        present in `facets`   1,574,444
+        MISSING                 411,276
+
+    A fifth of the real vocabulary, absent, while the index added ~10,000 works a
+    day. Nothing about that looks like a bug from inside a search: a filter on
+    one of those tags returns nothing, which is exactly what a filter on a tag
+    nobody has ever typed also returns.
+
+    The consequence worth writing down is the one that made this urgent. When a
+    tag filter cannot resolve its value, the search path falls back to
+    `fic_arr(tags) ILIKE '%value%'` — a sequential scan of 20.5M rows. Measured,
+    that scan times out at 20s for every value tried, so the search did not
+    return a slow answer, it returned "The index is busy right now", and the one
+    thing that would have helped a reader who mistyped a tag — the spelling
+    rescue added for exactly that case — never got a chance to speak, because the
+    request was still waiting on a scan.
+
+    DAILY because the drift is continuous and the cost is minutes, not hours: one
+    grouped scan of the tags array is 73.4s and 2.9GB of reads on this disk, so a
+    full rebuild is a few minutes. Hourly would be a poor use of the same disk
+    that serves searches; weekly would let the gap reach the hundreds of
+    thousands it actually reached.
+
+    It takes the shared heavy-pass lock and DEFERS rather than waits. That is not
+    politeness: `popularity_rank` and the gate repair walk the same rows for
+    hours, and two of them at once measured Postgres at 73% CPU with cold
+    searches at 5-10s against 1.5-3.5s on a quiet box.
+
+    It records evidence, not a heartbeat. The failure this loop exists to prevent
+    is a vocabulary quietly going stale again, and the only thing that catches
+    that is the age of the table — so `facets_built_at` and the per-kind row
+    counts are written on every successful pass and read by the admin panel.
+    """
+    from api.stats import rebuild_facets
+    import json
+
+    from sqlalchemy import text
+
+    from db.session import db_session, lift_statement_timeout
+    from maintenance_lock import MaintenanceDeferred, RETRY_SECONDS, heavy_pass
+
+    # The same upsert popularity_rank uses. Evidence, not a heartbeat: the
+    # failure this loop exists to prevent is the vocabulary going quietly stale
+    # again, and the only thing that catches that is the age of the table.
+    upsert = text("INSERT INTO app_settings (key, value) VALUES (:k, :v) "
+                  "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value")
+    interval = _num("FACETS_INTERVAL_HOURS", 24) * 3600
+    await asyncio.sleep(_num("FACETS_START_DELAY_SEC", 300))
+    while True:
+        try:
+            def _pass():
+                # Its own connection for the whole pass, or the lock is released
+                # at the first commit — which is exactly the bug that made three
+                # other loops' "one at a time" claim untrue.
+                with heavy_pass():
+                    with db_session() as db:
+                        # The rebuild is four grouped scans of 20.5M rows and
+                        # commits once at the end, so there is no batch boundary
+                        # for a recycled connection to slip in at. It is set here
+                        # anyway: this is a connect-time parameter, and a
+                        # statement that outlives its setting dies at 60s having
+                        # done nothing wrong.
+                        lift_statement_timeout(db)
+                        out = rebuild_facets(db, min_count=2)
+                    return out
+            built = await asyncio.to_thread(_pass)
+            log.info("facets rebuilt: %s", built.get("facets"))
+            with db_session() as db:
+                db.execute(upsert, {"k": "facets_built_at",
+                                    "v": datetime.now(timezone.utc).isoformat()})
+                db.execute(upsert, {"k": "facets_counts",
+                                    "v": json.dumps(built.get("facets", {}))})
+                db.commit()
+        except MaintenanceDeferred:
+            log.info("facets: deferred, retrying in %ss", RETRY_SECONDS)
+            await asyncio.sleep(RETRY_SECONDS)
+            continue
+        except Exception:
+            log.exception("facets rebuild failed")
+        await asyncio.sleep(interval)
+
+
 async def _curation_loop() -> None:
     """The three jobs nothing was running, on one schedule.
 
@@ -2250,6 +2342,17 @@ async def main() -> None:
     if _flag("RUN_SERIES_FILL", "true"):
         tasks.append(asyncio.create_task(_supervised("series_fill_loop", _series_fill_loop)))
         log.info("series fill enabled (fetch missing works for partial series)")
+
+    # The search vocabulary. This is the one that should have existed from the
+    # start: `facets` is what every tag, character and fandom filter resolves
+    # against, and for as long as the site was up it was only rebuilt when
+    # somebody pressed the admin button. It had drifted to 411,276 missing tag
+    # values — a fifth of the real vocabulary — and the symptom was a mistyped
+    # tag returning "The index is busy right now", because an unresolvable
+    # filter value falls back to a 20-second sequential scan.
+    if _flag("RUN_FACETS", "true"):
+        tasks.append(asyncio.create_task(_supervised("facets_loop", _facets_loop)))
+        log.info("facets rebuild enabled (daily)")
 
     # Only runs if INDEXNOW_KEY is set; indexnow.run() no-ops otherwise, so this
     # is safe to leave on for an install that has not set one up.
