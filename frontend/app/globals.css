@@ -6664,3 +6664,35 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   font-family: var(--font-mono, ui-monospace, monospace); font-size: 14px;
   user-select: all; word-break: break-all;
 }
+
+/* ── prefers-reduced-motion, applied to EVERYTHING ──────────────────────────
+
+   The six blocks above this each hand-pick a selector, and between them they
+   covered 7 of the 78 animation and transition declarations in this file. The
+   other 71 were honoured by nobody, including three that never stop:
+
+     .sync-pulse          the user menu's sync indicator, `infinite`
+     .results-progress    the search progress bar, `infinite`
+     compass-seek         the loader needle, `infinite`
+
+   A hand-picked block is also a block that any new transition silently escapes,
+   which is how 71 arrived: every one of them was added correctly and correctly
+   placed, and none of them was wrong until someone counted.
+
+   This is the blanket version, appended last so it wins on order, and it is the
+   standard reset rather than a considered exception list. It does not remove
+   motion — it removes DURATION, so a transition still changes state, it just
+   arrives immediately. A reader who has asked the OS for less motion gets a
+   functional site rather than a decorative one, which is what they asked for.
+
+   The six explicit blocks above are left in place: they are still the more
+   precise statement of intent, and on a browser that supports
+   `prefers-reduced-motion` this is simply the backstop for the other 71. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
