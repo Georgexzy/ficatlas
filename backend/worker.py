@@ -159,26 +159,57 @@ async def _dedup_loop() -> None:
     batch is much safer than one long sweep.
     """
     interval = _num("DEDUP_INTERVAL_MIN", 180) * 60
-    from db.session import db_session
+    from db.session import db_session, lift_statement_timeout
     from live_fetch.crosspost import group_existing, merge_group
+    from maintenance_lock import MaintenanceDeferred, RETRY_SECONDS, heavy_pass
 
     while True:
         try:
             def _pass() -> int:
                 merged = 0
-                with db_session() as db:
-                    for group in group_existing(db, limit=2000):
-                        try:
-                            merge_group(db, group)
-                            db.commit()
-                            merged += len(group) - 1
-                        except Exception:
-                            db.rollback()
+                # It reads all 19M rows and groups them, so it is a heavy pass
+                # and wants the one heavy slot: the popularity rebuild and the
+                # crossover and gate repairs all walk this same table, and the
+                # contention that causes is the collision CLAUDE.md records
+                # taking the Harry Potter hub down. Its own connection for the
+                # whole pass, because the merge loop below commits per group and
+                # a lock released at the first commit is not a lock.
+                with heavy_pass():
+                    with db_session() as db:
+                        # THE BUG THIS PASS HAS BEEN FAILING ON SINCE AT LEAST
+                        # 2026-09-30, every three hours, without once merging
+                        # anything: group_existing normalises title and author
+                        # with three regexes per row across the whole table and
+                        # then groups the result. That is minutes of work, and
+                        # the session default is 60s, so the scan was cancelled
+                        # every single time and the warning below was the only
+                        # trace. Every other heavy loop here lifts the timeout
+                        # for exactly this reason.
+                        lift_statement_timeout(db)
+                        for group in group_existing(db, limit=2000):
+                            try:
+                                # Re-asserted per group, not once at the top.
+                                # statement_timeout is a CONNECT-TIME parameter
+                                # in this app, so a setting made before a long
+                                # scan is gone once the pool recycles the
+                                # connection under it — which at pool_recycle
+                                # 1800s is a half-hour time bomb. The 30:00 in
+                                # the log is the tell.
+                                lift_statement_timeout(db)
+                                merge_group(db, group)
+                                db.commit()
+                                merged += len(group) - 1
+                            except Exception:
+                                db.rollback()
                 return merged
 
             n = await asyncio.to_thread(_pass)
             if n:
                 log.info(f"cross-post dedup merged {n} duplicate rows")
+        except MaintenanceDeferred:
+            log.info("dedup: deferred, retrying in %ss", RETRY_SECONDS)
+            await asyncio.sleep(RETRY_SECONDS)
+            continue
         except Exception as e:
             log.warning(f"dedup pass failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
