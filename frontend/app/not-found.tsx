@@ -11,7 +11,7 @@ export default function NotFound() {
     <div className="empty">
       <h1 className="empty__title">Nothing here</h1>
       <p className="empty__sub">
-        That page doesn&apos;t exist. The story may have been removed from the
+        That page is not here. The story may have been removed from the
         index, or the link may be mistyped.
       </p>
       <Link href="/" className="card-btn card-btn--primary">Search FicAtlas</Link>

@@ -34,7 +34,7 @@ const POLICIES = [
     detail: "A complete copy of each story is kept on FicAtlas and can be read here, in the app, without going to the archive. Your work still links back to where you posted it. This is the only option that needs you to verify." },
   { id: "metadata_only", label: "List my work, but never store the text",
     detail: "Title, summary and tags only, with a link out to the archive. No copy of the writing itself is kept." },
-  { id: "deny", label: "Don't index my work at all",
+  { id: "deny", label: "Do not index my work at all",
     detail: "Your works are removed from the index entirely and not added again." },
 ]
 

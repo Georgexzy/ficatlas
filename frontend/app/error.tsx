@@ -14,7 +14,7 @@ export default function Error({ error, reset }: { error: Error; reset: () => voi
     <div className="empty">
       <h1 className="empty__title">Something went wrong</h1>
       <p className="empty__sub">
-        This page failed to load. Trying again often works — the index is large
+        This page did not load. Retrying usually resolves it; the index is large
         and some queries time out under load.
       </p>
       <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>

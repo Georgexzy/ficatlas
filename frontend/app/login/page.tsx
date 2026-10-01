@@ -215,7 +215,7 @@ function LoginPageInner() {
 
         {mode === "login" && (
           <p className="auth-hint auth-hint--forgot">
-            <a href="/forgot">Forgotten your password?</a>
+            <a href="/forgot">Forgot your password?</a>
           </p>
         )}
 

@@ -58,7 +58,7 @@ export default function SeriesClient({ params }: { params: Promise<{ id: string 
       {/* "Not found" was the heading for every failure, including a timeout and
           a 500 — telling someone the series does not exist when in fact we could
           not ask. The classification already knows the difference. */}
-      <h1>{error.kind === "notfound" ? "Not found" : "Couldn’t load this series"}</h1>
+      <h1>{error.kind === "notfound" ? "Not found" : "Could not load this series"}</h1>
       <p>{error.message}</p>
       <p><Link href="/" className="card-btn card-btn--primary">Back to search</Link></p>
     </div>
@@ -91,7 +91,7 @@ export default function SeriesClient({ params }: { params: Promise<{ id: string 
         {data.source === "explicit"
           ? "This series is the author's own — the name and the order are theirs, taken from the archive."
           : data.source === "stated"
-          ? "Assembled from what the author wrote in their summaries — “sequel to…”, “third in the…”. The grouping is theirs; the name is our shorthand for it."
+          ? "Assembled from what the author wrote in their summaries — “sequel to…”, “third in the…”. The grouping is theirs; the name is a FicAtlas shorthand for it."
           : "Grouped by FicAtlas. This archive has no series field, so these were matched on distinctive words in their titles and ordered by publication. It may be wrong."}
       </p>
 

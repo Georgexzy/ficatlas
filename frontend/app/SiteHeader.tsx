@@ -156,7 +156,7 @@ function BrowseMenu({ current }: { current: boolean }) {
       {open && (
         <div className="user-menu__dropdown browse-menu__dropdown" role="menu">
           <p className="user-menu__hint">
-            Two ways in: by franchise, or by the pairing people actually search for.
+            Two ways in: by fandom, or by pairing.
           </p>
           {item("/fandoms", "Fandoms")}
           {item("/ships", "Pairings")}
