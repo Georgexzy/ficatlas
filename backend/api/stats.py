@@ -102,6 +102,20 @@ def _compute_sites(db: Session) -> list:
 _SITES_LOCK_KEY = 8_314_207_002
 
 
+def _site_rows_without_scanning() -> list | None:
+    """The cached per-site rows themselves, or None.
+
+    The raw rows rather than just the counts, because two callers want two
+    different things off the same scan: a count per archive, and the time each
+    archive was last added to. Reading the list twice would not cause a second
+    scan — it is a list — but the two callers had in fact been reading two
+    DIFFERENT caches, which is the defect _with_sites now fixes.
+    """
+    if _sites_cache:
+        return _sites_cache
+    return _load_persisted_sites()
+
+
 def site_counts_without_scanning() -> dict[str, int] | None:
     """Rows per site from what has already been computed, or None.
 
@@ -123,12 +137,10 @@ def site_counts_without_scanning() -> dict[str, int] | None:
     the numbers for free should say so or do without; the one thing it must not
     do is start a second scan of the biggest table on the box.
     """
-    if _sites_cache:
-        return {r["site"]: int(r["count"]) for r in _sites_cache if r.get("site")}
-    stored = _load_persisted_sites()
-    if stored:
-        return {r["site"]: int(r["count"]) for r in stored if r.get("site")}
-    return None
+    rows = _site_rows_without_scanning()
+    if not rows:
+        return None
+    return {r["site"]: int(r["count"]) for r in rows if r.get("site")}
 _sites_refreshing = False
 _sites_refresh_lock = threading.Lock()
 
@@ -254,6 +266,10 @@ _totals_cached_at: float = 0.0
 # stale-shaped entry would be the first thing every visitor got. Bump on any
 # change to the dict built in _recompute_totals.
 # v2: added updated_last_{month,quarter,year} and checked_last_week.
+# The dict is now built in one place, `_totals_from_row`, shared with the
+# `?refresh=1` path — the two copies of it had drifted, and the shape a caller
+# got depended on which one happened to answer. The keys themselves are unchanged
+# from v2, so there is nothing to invalidate here yet.
 _TOTALS_SETTING = "cached_totals_v2"
 
 
@@ -355,6 +371,41 @@ def _adopt_persisted_totals() -> bool:
     return True
 
 
+def _totals_from_row(row, coverage: dict | None = None) -> dict:
+    """One shape for the totals payload, whichever scan produced the row.
+
+    It was written out twice — here, and again in the `?refresh=1` path in
+    `total_stats` — and the two copies had drifted: the synchronous one carried
+    seven keys and the recompute one carried eleven. So the response SHAPE
+    depended on which of the two happened to serve a given request, and the
+    fields that had been added later (the `updated_last_*` floors, the
+    re-checked-this-week figure, and per-archive coverage) were simply ABSENT
+    from a cold-start or explicitly-refreshed response.
+
+    That is silent in the way a stale number is silent. Every field in the
+    frontend is rendered conditionally — `totals.updated_last_month != null &&
+    > 0` — so a missing key is not an error, it is a row that quietly is not
+    there. The index status panel loses "Updated past 30d" and "Re-checked past
+    7d" on exactly the requests that asked for the freshest figures.
+
+    Bump `_TOTALS_SETTING` alongside this: the persisted payload is served
+    INSTANTLY on the next restart, so an old-shaped row would be the first thing
+    every visitor got until the first recompute landed.
+    """
+    return {
+        "stories": row["stories"], "hosted": row["hosted"],
+        "total_words": int(row["total_words"]), "dlp": row["dlp"],
+        "hpffa": row["hpffa"],
+        "indexed_last_hour": row["indexed_last_hour"],
+        "indexed_last_day": row["indexed_last_day"],
+        "updated_last_month": row["updated_last_month"],
+        "updated_last_quarter": row["updated_last_quarter"],
+        "updated_last_year": row["updated_last_year"],
+        "checked_last_week": row["checked_last_week"],
+        "coverage": coverage if coverage is not None else {},
+    }
+
+
 def _recompute_totals(force: bool = False) -> None:
     """Refresh the cached totals off the request path. At most one at a time.
 
@@ -390,18 +441,7 @@ def _recompute_totals(force: bool = False) -> None:
                 return
             row = db.execute(_TOTALS_SQL).mappings().first()
             coverage = _compute_coverage(db)
-        _totals_cache = {
-            "stories": row["stories"], "hosted": row["hosted"],
-            "total_words": int(row["total_words"]), "dlp": row["dlp"],
-            "hpffa": row["hpffa"],
-            "indexed_last_hour": row["indexed_last_hour"],
-            "indexed_last_day": row["indexed_last_day"],
-            "updated_last_month": row["updated_last_month"],
-            "updated_last_quarter": row["updated_last_quarter"],
-            "updated_last_year": row["updated_last_year"],
-            "checked_last_week": row["checked_last_week"],
-            "coverage": coverage,
-        }
+        _totals_cache = _totals_from_row(row, coverage)
         _totals_cached_at = time.monotonic()
         _persist_totals(_totals_cache)
     except Exception:
@@ -514,13 +554,59 @@ def _with_sites(payload: dict | None) -> dict | None:
     it is. That needs one number per archive, and asking /api/stats/sites for it
     would be a second uncached request on the busiest path on the site, to learn
     three integers this process already has.
+
+    ## The total is DERIVED from the breakdown, not measured beside it
+
+    `stories` is `count(*)` from `_TOTALS_SQL`; `sites` is a `GROUP BY site`
+    from a different scan, on a different lock, cached and persisted separately
+    and recomputed at a different moment. They are the same quantity measured
+    twice, and two scans of a table the crawler is writing to do not agree —
+    measured on the live index at one instant, with both caches warm:
+
+        stories (count(*))      20,852,026
+        sum(sites)               20,851,342     -684
+        fresh /api/stats/sites   20,852,285     +259
+
+    Note the SIGNS. One breakdown was behind the total and the other was ahead of
+    it, in the same response, because they were taken at different times. So
+    this was never a stale-cache problem that a refresh would fix: the two numbers
+    could not be made to agree by refreshing either one, and the header pill
+    ("20.9M indexed") sat directly above a per-archive breakdown that added up
+    to a different figure.
+
+    A reader CAN add this up — the breakdown is displayed next to the total
+    precisely so they can see the shape of the index — so a pair that does not
+    sum is a visible error, and a site that cannot make its own numbers add up
+    has no standing to be believed about anything else. The sum of a
+    `GROUP BY site` over every row IS `count(*)`, so deriving the total from the
+    breakdown loses no accuracy whatever and makes disagreement impossible by
+    construction rather than by timing.
+
+    The scanned `count(*)` is kept, as `stories_scanned`. The difference is the
+    age difference between two scans — a few thousand rows on a table taking
+    10,000 a day — and it is a real figure about the index rather than an
+    inconsistency in the response, so it is worth being able to see. It is
+    deliberately not what any page renders: nothing should display a total that
+    contradicts the breakdown printed under it.
     """
     if not payload:
         return payload
-    counts = site_counts_without_scanning()
+    rows = _site_rows_without_scanning()
+    if not rows:
+        return payload
+    counts = {r["site"]: int(r["count"]) for r in rows if r.get("site")}
     if not counts:
         return payload
-    return {**payload, "sites": counts}
+    return {
+        **payload,
+        "sites": counts,
+        "sites_updated_at": {
+            r["site"]: r["last_indexed"] for r in rows
+            if r.get("site") and r.get("last_indexed")
+        },
+        "stories_scanned": payload.get("stories"),
+        "stories": sum(counts.values()),
+    }
 
 
 @router.get("/totals")
@@ -626,13 +712,9 @@ def total_stats(
         # Genuinely nothing to serve — a fresh install with no persisted totals.
         # Fall through and compute; there is no alternative and it happens once.
     row = db.execute(_TOTALS_SQL).mappings().first()
-    _totals_cache = {
-        "stories": row["stories"], "hosted": row["hosted"],
-        "total_words": int(row["total_words"]), "dlp": row["dlp"],
-        "hpffa": row["hpffa"],
-        "indexed_last_hour": row["indexed_last_hour"],
-        "indexed_last_day": row["indexed_last_day"],
-    }
+    # Same eleven keys as the recompute path — see _totals_from_row, and the
+    # note there on why the shape must not depend on which path answered.
+    _totals_cache = _totals_from_row(row, _compute_coverage(db))
     _totals_cached_at = now
     _persist_totals(_totals_cache)
     return _with_sites(_totals_cache)

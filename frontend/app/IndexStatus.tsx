@@ -2,25 +2,12 @@
 import { useEffect, useState } from "react"
 import { fetchWithTimeout } from "@/lib/net"
 
-const API_BASE = ""  // relative — handled by Next.js rewrite to backend
-
-interface SiteStat { site: string; count: number; last_indexed: string | null }
-interface Totals   {
-  stories: number; hosted: number; total_words: number; dlp?: number; hpffa?: number
-  /** Rows added by the background workers. As fresh as the 5-minute stats cache. */
-  indexed_last_hour?: number
-  indexed_last_day?: number
-  updated_last_month?: number
-  checked_last_week?: number
-}
-
-import { SITE_LABELS, getIndexTotals } from "@/lib/api"
+import { SITE_LABELS, getIndexTotals, type IndexTotals } from "@/lib/api"
 
 export default function IndexStatus() {
   const [open, setOpen] = useState(false)
-  const [sites, setSites] = useState<SiteStat[]>([])
   const [built, setBuilt] = useState<string | null>(null)
-  const [totals, setTotals] = useState<Totals | null>(null)
+  const [totals, setTotals] = useState<IndexTotals | null>(null)
 
   useEffect(() => {
     getIndexTotals().then(d => { if (d) setTotals(d) })
@@ -28,7 +15,6 @@ export default function IndexStatus() {
 
   useEffect(() => {
     if (!open) return
-    fetchWithTimeout(`${API_BASE}/api/stats/sites`).then(r => r.json()).then(setSites).catch(() => {})
     // cache: "no-store" so this reports the BUILD THIS PAGE IS RUNNING, not
     // whatever the service worker has cached — the whole point is to tell a
     // stale bundle apart from a real bug.
@@ -62,12 +48,28 @@ export default function IndexStatus() {
     return `${Math.round(hrs / 24)}d ago`
   }
 
-  const siteTotal = sites.reduce((a, s) => a + (s.count || 0), 0)
-  const newestIndexed = sites
-    .map(s => s.last_indexed)
-    .filter(Boolean)
+  // The per-archive breakdown now comes out of the SAME payload as the headline
+  // figure rather than from a second request to /api/stats/sites.
+  //
+  // That second request is the defect this replaces. It is a different scan of
+  // the same table, recomputed on its own lock at its own moment, and the panel
+  // rendered its total from one and its per-archive bars from the other — so
+  // "Stories: 20,852,026" sat directly above a set of bars that added up to
+  // something else. Measured on the live index: one breakdown 684 rows behind
+  // the total, a fresher one 259 rows ahead of it, in the same response.
+  //
+  // A reader can add those bars up. They are the shape of the index, and showing
+  // them is the reason to show them, so a panel that cannot make them agree
+  // with its own total is visibly broken. One payload, one scan, and `stories`
+  // is the sum of `sites` server-side — see `_with_sites` in backend/api/stats.py.
+  //
+  // Falls back to no breakdown at all when the first sites refresh has not
+  // landed, rather than fetching a second number that might not match.
+  const sites = Object.entries(totals?.sites ?? {})
+  const siteTotal = sites.reduce((a, [, n]) => a + (n || 0), 0)
+  const newestIndexed = Object.values(totals?.sites_updated_at ?? {})
     .sort()
-    .pop() as string | undefined
+    .pop()
 
   return (
     <div className="index-status">
@@ -119,7 +121,7 @@ export default function IndexStatus() {
                 {totals.checked_last_week != null && totals.checked_last_week > 0 && (
                   <div>
                     <dt>Re-checked past 7d</dt>
-                    <dd title="Works we re-read from their source archive in the last week">
+                    <dd title="Works re-read from their source archive in the last week">
                       {fmt(totals.checked_last_week)}
                     </dd>
                   </div>
@@ -134,27 +136,31 @@ export default function IndexStatus() {
             )}
 
             {/* A bar per archive: the share each contributes is the thing worth
-                seeing, and a column of raw numbers doesn't convey it. */}
+                seeing, and a column of raw numbers doesn't convey it. The shares
+                are of the same total printed above, because both now come from
+                one scan. */}
+            {sites.length > 0 && (
             <div className="index-status__sites">
-              {sites.map(s => {
-                const pct = siteTotal ? (s.count / siteTotal) * 100 : 0
+              {sites.map(([site, count]) => {
+                const pct = siteTotal ? (count / siteTotal) * 100 : 0
                 return (
-                  <div key={s.site} className="index-status__site">
+                  <div key={site} className="index-status__site">
                     <div className="index-status__site-row">
-                      <span className={`badge badge--site-${s.site}`}>{SITE_LABELS[s.site] ?? s.site}</span>
+                      <span className={`badge badge--site-${site}`}>{SITE_LABELS[site] ?? site}</span>
                       <span className="index-status__count">
-                        {s.count.toLocaleString()}
+                        {count.toLocaleString()}
                         <span className="index-status__pct">{pct.toFixed(0)}%</span>
                       </span>
                     </div>
                     <div className="index-status__meter">
-                      <div className={`index-status__meter-fill index-status__meter-fill--${s.site}`}
+                      <div className={`index-status__meter-fill index-status__meter-fill--${site}`}
                         style={{ width: `${Math.max(pct, 0.5)}%` }} />
                     </div>
                   </div>
                 )
               })}
             </div>
+            )}
 
             {built && (
               <p className="index-status__build">
@@ -167,7 +173,7 @@ export default function IndexStatus() {
               {newestIndexed
                 ? <>Last new story indexed <strong>{ago(newestIndexed)}</strong>. Updates to
                    tracked fandoms are picked up automatically.</>
-                : <>Built from public archive releases, and topped up from the archives as people search.</>}
+                : <>Built from public archive releases, and extended from live fetches.</>}
             </p>
           </div>
         </>

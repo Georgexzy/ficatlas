@@ -9,7 +9,7 @@ import type { SearchParams, SearchResponse, StoryCard, Suggestion } from "@/lib/
 import { fetchWithTimeout, fetchBackground, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/net"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
-         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getTopHubs, type TopHub, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
+         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getLandingBrowse, type LandingBrowse, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, quoteValue, type ParsedToken } from "@/lib/queryParser"
 import SiteIcon from "./SiteIcon"
 import { storyLink, isSeedUrl } from "@/lib/storyLinks"
@@ -261,6 +261,140 @@ function TagList({ tags, className, kind = "tags", tagClass = "", limit = 5 }: {
 }
 
 // ── Collapsible filter section ────────────────────────────────────────────────
+// The state of every collapsed section, persisted.
+//
+// It is `useState(defaultOpen || highlighted)` per instance with no storage, and
+// the whole page is keyed on the query string (SearchPageKeyed) — so every
+// navigation, every filter change and every back-button press remounted the
+// sidebar and put all twenty sections back to shut. Someone narrowing a search
+// has a section open, clicks a result card, comes back, and it is shut again.
+//
+// `null` for "never touched" is the part that matters. Writing `defaultOpen`
+// into storage on first run would freeze today's defaults into every browser
+// for ever, and the defaults are supposed to move — a section that starts
+// `defaultOpen` because it is the commonest filter today should not stay open
+// because someone used it in September. So the stored value is only consulted
+// once the reader has actually toggled something, and a `highlighted` section
+// still forces itself open regardless.
+const SECTION_OPEN_KEY = "ficatlas:open-filters"
+type OpenState = Record<string, boolean>
+
+function readOpenSections(): OpenState | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.localStorage.getItem(SECTION_OPEN_KEY)
+    if (!raw) return null
+    const v = JSON.parse(raw)
+    if (!v || typeof v !== "object" || Array.isArray(v)) return null
+    // Validated per key: storage is user-writable and this feeds `useState` for
+    // a boolean, so a string where a boolean was expected would render
+    // `class=filter-section--lit` off a truthy "false".
+    const out: OpenState = {}
+    for (const [k, val] of Object.entries(v)) if (typeof val === "boolean") out[k] = val
+    return Object.keys(out).length ? out : null
+  } catch { return null }
+}
+
+function writeOpenSections(s: OpenState) {
+  if (typeof window === "undefined") return
+  try { window.localStorage.setItem(SECTION_OPEN_KEY, JSON.stringify(s)) } catch { /* private mode */ }
+}
+
+function useOpenSection(label: string, defaultOpen: boolean, highlighted: boolean) {
+  const [open, setOpen] = useState<boolean>(() => {
+    const stored = readOpenSections()?.[label]
+    if (typeof stored === "boolean") return stored
+    return defaultOpen || highlighted
+  })
+  // A section that now holds one of your own filters opens itself, whatever
+  // you last chose. Landing on a page where "Word count" is shut but active
+  // is the state this whole change exists to stop.
+  useEffect(() => { if (highlighted) setOpen(true) }, [highlighted])
+  const toggle = useCallback(() => setOpen(o => {
+    const next = !o
+    // `readOpenSections` merged rather than replaced, so a section opened for
+    // the first time does not wipe the other nineteen.
+    writeOpenSections({ ...(readOpenSections() ?? {}), [label]: next })
+    return next
+  }), [label])
+  return [open, toggle] as const
+}
+
+// Finding one of twenty sections by scrolling.
+//
+// The sidebar is twenty collapsible sections in three groups, sixteen of them
+// shut, and the one you want is somewhere in the middle of the list with no
+// label visible — so "I know this filter exists and I cannot find it" is the
+// normal experience of using it. A browser's find-in-page cannot see it either,
+// because the text is inside a `display: none` body, which is why this is a
+// real gap rather than an obvious workaround.
+//
+// It searches the SECTION LABELS, not the values inside them. Searching the
+// values would need the whole facet vocabulary loaded and matched per section,
+// and would make the box jumpy as you type; the labels are the words somebody
+// remembers asking for ("word count", "language", "crossover").
+//
+// It works by unhiding matches rather than by filtering the list out, because a
+// filtered list means a reader who mistypes sees an empty sidebar and cannot
+// tell whether they guessed the label wrong or there is no such filter. Non-
+// matches are dimmed and taken out of the tab order; the matches are opened.
+function FilterFinder() {
+  const [q, setQ] = useState("")
+  const [n, setN] = useState(0)
+  const needle = q.trim().toLowerCase()
+
+  useEffect(() => {
+    const secs = Array.from(document.querySelectorAll<HTMLElement>(".filter-section"))
+    if (!needle) { setN(0); return }
+    let hits = 0
+    for (const s of secs) {
+      const label = (s.dataset.filter ?? "").toLowerCase()
+      const match = label.includes(needle)
+      if (match) hits++
+      s.classList.toggle("filter-section--found", match)
+      // Dimming rather than removing, so the shape of the sidebar does not
+      // change under the reader's eyes as they type and then delete.
+      s.classList.toggle("filter-section--missed", !match)
+      // A match opens. Opening is the point: a highlighted shut section is a
+      // section you still have to click.
+      const body = s.querySelector<HTMLElement>(".filter-section__body")
+      const chev = s.querySelector<HTMLElement>(".filter-section__chevron")
+      if (match && !body) {
+        const toggle = s.querySelector<HTMLElement>(".filter-section__toggle")
+        toggle?.click()
+      } else if (match && chev) {
+        chev.classList.add("open")
+      }
+    }
+    setN(hits)
+  }, [needle])
+
+  // Clearing the classes on unmount matters: the effect only runs when `needle`
+  // changes, so navigating away with a search still in the box would leave
+  // every section dimmed.
+  useEffect(() => () => {
+    document.querySelectorAll(".filter-section--found, .filter-section--missed")
+      .forEach(s => s.classList.remove("filter-section--found", "filter-section--missed"))
+  }, [])
+
+  return (
+    <div className="filter-finder">
+      <label className="visually-hidden" htmlFor="filter-finder">Find a filter</label>
+      <input id="filter-finder" className="input-sm filter-finder__input" type="search"
+        value={q} onChange={e => setQ(e.target.value)}
+        placeholder="Find a filter…"
+        aria-describedby="filter-finder-status" />
+      {needle && (
+        <p className="filter-finder__status" id="filter-finder-status" role="status">
+          {n === 0
+            ? `Nothing matches “${needle}” — try “word”, “language”, “rating”.`
+            : n === 1 ? "1 section — opened below" : `${n} sections — opened below`}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function FilterSection({ label, children, defaultOpen = false, highlighted = false,
                         count = 0, note = null }: {
   label: string; children: React.ReactNode; defaultOpen?: boolean; highlighted?: boolean
@@ -271,17 +405,18 @@ function FilterSection({ label, children, defaultOpen = false, highlighted = fal
    *  are about to use the thing the note is about. */
   note?: string | null
 }) {
-  const [open, setOpen] = useState(defaultOpen || highlighted)
-  useEffect(() => { if (highlighted) setOpen(true) }, [highlighted])
+  const [open, toggle] = useOpenSection(label, defaultOpen, highlighted)
   return (
-    <div className={`filter-section ${highlighted ? "filter-section--lit" : ""}`}>
-      <button className="filter-section__toggle" onClick={() => setOpen(o => !o)}>
+    <div className={`filter-section ${highlighted ? "filter-section--lit" : ""}`}
+      data-filter={label}>
+      <button className="filter-section__toggle" onClick={toggle}
+        aria-expanded={open}>
         <span className="filter-section__label">
           {label}
           {count > 0 && <span className="filter-section__count">{count}</span>}
           {highlighted && <span className="filter-section__dot" />}
         </span>
-        <span className={`filter-section__chevron ${open ? "open" : ""}`}>▸</span>
+        <span className={`filter-section__chevron ${open ? "open" : ""}`} aria-hidden="true">▸</span>
       </button>
       {open && (
         <div className="filter-section__body">
@@ -1053,12 +1188,28 @@ function ArchiveBadges() {
   const [sites, setSites] = useState<Record<string, number> | null>(null)
   useEffect(() => {
     getIndexTotals()
-      .then(d => { if (d && typeof d === "object" && (d as any).sites) setSites((d as any).sites) })
+      .then(d => { if (d?.sites) setSites(d.sites) })
       .catch(() => {})
   }, [])
   if (!sites) return null
   const rows = ARCHIVE_ORDER.filter(s => (sites[s] ?? 0) > 0)
   if (rows.length === 0) return null
+  // The exact total, so it can be quoted alongside the rounded headline above.
+  //
+  // These figures and that headline are the same measurement now — the server
+  // derives `stories` from this breakdown rather than counting beside it (see
+  // `_with_sites` in backend/api/stats.py) — but they are ROUNDED differently,
+  // and three independent roundings do not sum to a fourth. Measured: the parts
+  // read 14.2M + 6.6M + 30k, which is 20.83M, against a headline that rounds to
+  // 20.9M. The 0.07M is rounding slack, not a disagreement, and no amount of
+  // fixing the data source removes it — it is arithmetic about how many digits
+  // are shown.
+  //
+  // So it is stated rather than fudged: the headline is a rounded magnitude, and
+  // the exact figures are available on the breakdown itself. Fudging the
+  // headline down to 20.8M to make the addition land would trade a visible
+  // rounding artifact for a number that understates the index.
+  const total = rows.reduce((a, s) => a + (sites[s] ?? 0), 0)
   return (
     // A list, because it is one: three archives with a count each. The heading
     // is visually hidden rather than absent so a screen reader arrives at
@@ -1067,7 +1218,8 @@ function ArchiveBadges() {
       <h2 className="archives__label">Archives indexed</h2>
       <ul className="archives__list">
         {rows.map(site => (
-          <li key={site} className={`archives__item archives__item--${site}`}>
+          <li key={site} className={`archives__item archives__item--${site}`}
+            title={`${SITE_LABELS[site] ?? site}: ${(sites[site] ?? 0).toLocaleString()} of ${total.toLocaleString()} works`}>
             <SiteIcon site={site} />
             <span className="archives__name">{SITE_LABELS[site] ?? site}</span>
             <span className="archives__count">{fmtCount(sites[site])}</span>
@@ -1120,21 +1272,18 @@ function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q
           does it. Emitting it in both places would put two <h1>s on the page,
           which is the accessibility bug the heading was added to fix. */}
       <p className="empty__nudge">
-        Type anything above, or press <kbd>?</kbd> in the search bar to see what you can filter by.
+        Type a query, or press <kbd>?</kbd> in the search bar for the available filters.
       </p>
       <button className="empty__surprise" onClick={onSurprise}>🎲 Surprise me</button>
 
       {/* Somewhere to go for the reader who has no particular search in mind.
           The landing page previously offered exactly one action — type — and
           below the fold was empty, which asks a first-time visitor to already
-          know what they want from twenty million works. These are the fandoms
-          the index actually holds the most of, so every one of them leads
-          somewhere dense rather than to four results and an apology.
-
-          They fill the query box rather than navigating away, because the thing
-          worth learning on this page is that the box takes `fandom:` — the next
-          search someone runs is then their own, not another click. */}
-      <TopHubs onPick={onPick} />
+          know what they want from twenty million works. And it offered only
+          fandoms, which is the wrong third of this index to start from: fic
+          readers arrive thinking of a character or a pairing, and naming a
+          universe first is the one step this site exists to remove. */}
+      <BrowseExplorer onPick={onPick} />
       <LandingPromises />
     </div>
   )
@@ -1154,36 +1303,96 @@ const DYM_KIND_LABEL: Record<string, string> = {
   author: "author",
 }
 
-// The browse-able list of the biggest hubs in the index, which gives the
-// landing page somewhere to go beyond the search box.
-function TopHubs({ onPick }: { onPick: (q: string) => void }) {
-  const [hubs, setHubs] = useState<TopHub[]>([])
-  useEffect(() => { getTopHubs(12).then(setHubs) }, [])
+// Where to go when you have no search in mind.
+//
+// This was twelve fandoms, and fandoms are the wrong third of the index to start
+// a fic-finder reader from. A reader arriving at this site overwhelmingly wants
+// a CHARACTER or a PAIRING — the person they are thinking of — and being asked
+// to name a universe first is the one step this index exists to remove. The
+// three groups below are the three things you can arrive by that are not a
+// guess about the plot, which is exactly why they are the three shown.
+//
+// The counts are DRAWN as bars as well as printed, scaled to the largest entry
+// in the list. That is the point of showing them at all: "Harry Potter 1.19M,
+// Supernatural 299k" reads as two numbers and a reader cannot tell from a column
+// of them that the third entry is already a quarter of the first. A bar says it
+// in a glance, and the number is still there for anyone who wants it exactly.
+//
+// Bars are scaled to the LARGEST entry rather than to the total, because these
+// are ranked lists and the question is how they compare with each other — a bar
+// scaled to a total would make the top entry look small for every list but the
+// first.
+//
+// Each button fills the query box rather than navigating away. The thing worth
+// teaching someone on this page is that the box takes `fandom:`, `ship:` and
+// `tag:`, so their next action is their own search rather than another click
+// through a page they did not choose.
+const BROWSE_TABS = [
+  { key: "fandom", label: "Fandoms", op: "fandom", more: "/fandoms", moreLabel: "Every fandom" },
+  { key: "ship", label: "Pairings", op: "ship", more: "/ships", moreLabel: "Every pairing" },
+  { key: "tag", label: "Tags & tropes", op: "tag", more: null, moreLabel: null },
+] as const
+
+function BrowseExplorer({ onPick }: { onPick: (q: string) => void }) {
+  const [data, setData] = useState<LandingBrowse | null>(null)
+  const [tab, setTab] = useState<(typeof BROWSE_TABS)[number]["key"]>("ship")
+  useEffect(() => { getLandingBrowse().then(setData) }, [])
+
+  // Pairings are the default tab, not fandoms. Fandoms used to be the only
+  // option here, and it made the landing page read as "browse universes" for a
+  // site whose distinguishing feature is searching across them at once.
+  const rows = data?.[tab] ?? []
+  if (!data) return null
+  if (rows.length === 0) return null
+  const peak = Math.max(...rows.map(r => r.work_count), 1)
+
   return (
-    <>
-      {hubs.length > 0 && (
-        <div className="empty__browse">
-          <h2 className="empty__browse-title">Biggest fandoms in the index</h2>
-          <ul className="empty__hubs">
-            {hubs.map(h => (
-              <li key={h.slug}>
-                <button
-                  className="empty__hub"
-                  onClick={() => onPick(`fandom: ${h.name}`)}
-                  title={`Search ${h.name}`}
-                >
-                  <span className="empty__hub-name">{h.name}</span>
-                  <span className="empty__hub-count">{fmtCount(h.work_count)}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          <p className="empty__browse-more">
-            <a href="/fandoms">Every fandom in the index →</a>
-          </p>
-        </div>
-      )}
-    </>
+    <div className="browse">
+      {/* Real tabs, as buttons with `aria-selected`, rather than three stacked
+          lists. Stacking all three would be 42 rows of a long scroll for a
+          reader who wants one of them, and this is below the fold on a phone
+          where a long scroll is the difference between finding it and not. */}
+      <div className="browse__tabs" role="tablist" aria-label="Browse the index by">
+        {BROWSE_TABS.map(t => {
+          const n = (data?.[t.key] ?? []).length
+          if (!n) return null
+          return (
+            <button key={t.key} role="tab" type="button"
+              aria-selected={tab === t.key}
+              className={"browse__tab" + (tab === t.key ? " browse__tab--on" : "")}
+              onClick={() => setTab(t.key)}>
+              {t.label}
+              <span className="browse__tab-n">{n}</span>
+            </button>
+          )
+        })}
+      </div>
+
+      <ul className="browse__list" role="tabpanel" aria-label={BROWSE_TABS.find(t => t.key === tab)?.label}>
+        {rows.map(r => (
+          <li key={r.name}>
+            <button className="browse__row"
+              onClick={() => onPick(`${BROWSE_TABS.find(t => t.key === tab)!.op}: ${r.name}`)}
+              title={`Search ${r.name}`}>
+              <span className="browse__name">{r.name}</span>
+              <span className="browse__track" aria-hidden="true">
+                <span className="browse__fill" style={{ width: `${100 * r.work_count / peak}%` }} />
+              </span>
+              <span className="browse__count">{fmtCount(r.work_count)}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      <p className="browse__more">
+        {BROWSE_TABS.map(t => t.more && t.key === tab && (
+          <a key={t.key} href={t.more}>{t.moreLabel} →</a>
+        ))}
+        <span className="browse__more-hint">
+          Click anything to put it in the search box — the filters are all there.
+        </span>
+      </p>
+    </div>
   )
 }
 
@@ -2590,30 +2799,15 @@ function SearchPageInner() {
             <span>Filters</span>
             <button className="sidebar__close" onClick={() => setFiltersOpen(false)} aria-label="Close filters">✕</button>
           </div>
+          {/* Where you sort moved to the top of the results, beside the list it
+              reorders. It lived here, above twenty filter sections, which made
+              the single control that changes which works you are looking at the
+              hardest thing on the page to reach — and put it in a panel called
+              "Filters", which is not what a sort is. The caveat it printed
+              inline moves with it, because that caveat is the whole reason it
+              was worth having. */}
           <div className="sidebar__top">
-            <label className="sidebar__label">
-              Sort
-              {/* Explains the sort that is CURRENTLY selected, not all nine.
-                  The caveat worth reading differs per option — engagement
-                  counts are missing for most of the index, word counts are not
-                  — and a single paragraph cannot say that at the moment it
-                  applies. */}
-              <HelpTip label={`About the ${(SORT_OPTIONS.find(o => o.value === sort)?.label ?? "current").toLowerCase()} sort`}>
-                <strong>{SORT_OPTIONS.find(o => o.value === sort)?.label}</strong>{" "}
-                {SORT_OPTIONS.find(o => o.value === sort)?.help}
-              </HelpTip>
-            </label>
-            <select value={sort} onChange={e => setSort(e.target.value)} className="select"
-              aria-label="Sort results">
-              {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-            {/* Inline, not in the tip above. The caveat was already written and
-                already accurate, and it sat behind a click — so the ordering it
-                explains ("why is this all AO3?") read as a bug rather than as
-                the coverage it is. This is the same treatment the facet filters
-                already get from coverageWarning; the sorts had simply never
-                been given it. */}
-            {sortNote && <p className="sidebar__hint sidebar__hint--warn">{sortNote}</p>}
+            <FilterFinder />
           </div>
 
           <div className="sidebar__group">
@@ -2640,7 +2834,7 @@ function SearchPageInner() {
               <p>When you filter by a ship or a character, only stories that
               <em> list </em> that ship or character are returned. Untagged
               stories are left out — even if the fic is actually about them —
-              because we cannot tell from empty metadata.</p>
+              because empty metadata does not say otherwise.</p>
               <p>Tick this to also include stories whose ship/character fields
               are empty. Free-text search and fandom filters are unaffected;
               those already work across every archive.</p>
@@ -3078,7 +3272,7 @@ function SearchPageInner() {
                       every reader who pressed it. */}
                   <span className="url-detected__sub">
                     {!user
-                      ? "Sign in and we'll fetch the full text so you can read it here. Your copy stays yours — it is not added to the public index."
+                      ? "Sign in and the full text will be fetched so you can read it here. Your copy stays yours — it is not added to the public index."
                       : user.can_manage
                       ? "Fetched via FicHub and added to the shared index — readable in-app and searchable by everyone."
                       : "Fetched via FicHub onto your own shelf — readable in-app, and visible only to you."}
@@ -3295,6 +3489,41 @@ function SearchPageInner() {
                   thing without moving the reader's place on the screen. */}
               {pending && <div className="results__progress" aria-hidden="true" />}
               <div className="results-bar">
+                {/* The sort, HERE rather than in the sidebar.
+                    It was the first control in a panel of twenty filter
+                    sections, which made the single thing that decides which
+                    works you are looking at the hardest control on the page to
+                    reach — and put it somewhere labelled "Filters", which a
+                    sort is not. It belongs beside the list it reorders, and it
+                    belongs before the count, because the count is only
+                    interpretable once you know what the order is: 5,000 of
+                    41,513 is a different statement under "Relevance" than under
+                    "Kudos". */}
+                <div className="results-bar__sort">
+                  <label className="results-bar__sort-label" htmlFor="sort-results">
+                    Sort
+                    {/* Explains the sort that is CURRENTLY selected, not all
+                        nine. The caveat worth reading differs per option —
+                        engagement counts are missing for most of the index,
+                        word counts are not — and a single paragraph cannot say
+                        that at the moment it applies. */}
+                    <HelpTip label={`About the ${(SORT_OPTIONS.find(o => o.value === sort)?.label ?? "current").toLowerCase()} sort`}>
+                      <strong>{SORT_OPTIONS.find(o => o.value === sort)?.label}</strong>{" "}
+                      {SORT_OPTIONS.find(o => o.value === sort)?.help}
+                    </HelpTip>
+                  </label>
+                  <select id="sort-results" value={sort} className="select"
+                    onChange={e => setSort(e.target.value)}>
+                    {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                  {/* Inline, not in the tip above. The caveat was already
+                      written and already accurate, and it sat behind a click —
+                      so the ordering it explains ("why is this all AO3?") read
+                      as a bug rather than as the coverage it is. This is the
+                      same treatment the facet filters already get from
+                      coverageWarning; the sorts had simply never been given it. */}
+                  {sortNote && <p className="sidebar__hint sidebar__hint--warn">{sortNote}</p>}
+                </div>
                 {/* Visible in the results bar rather than buried in the sidebar:
                     the person who needs it arrived from a link that applied
                     filters they never chose, so it has to be where they are
@@ -3515,7 +3744,7 @@ function SearchPageInner() {
               {readAs && shown.results.length > 0 && (
                 <div className="read-as">
                   <p className="read-as__lead">
-                    Nothing matched those words exactly, so we read them as a search:
+                    Nothing matched those words exactly, so they were read as a search:
                   </p>
                   <p className="read-as__terms">
                     {readAs.terms.slice(0, 6).map(t => (
