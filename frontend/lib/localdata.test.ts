@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
-  DATA_GROUPS, clearGroup, exportAll, groupSize, type DataGroup,
+  DATA_GROUPS, clearGroup, exportAll, groupSize, importAll, type DataGroup,
 } from "./localdata"
 
 // Controls for the data this site keeps on your device.
@@ -119,47 +119,107 @@ describe("clearGroup", () => {
 })
 
 describe("exportAll", () => {
-  it("produces valid JSON with a timestamp", () => {
-    const parsed = JSON.parse(exportAll())
+  it("produces valid JSON with a timestamp", async () => {
+    const parsed = JSON.parse(await exportAll())
     expect(typeof parsed.exported_at).toBe("string")
     expect(Number.isNaN(Date.parse(parsed.exported_at))).toBe(false)
   })
 
-  it("includes every ficatlas key, not just the grouped ones", () => {
+  it("includes every ficatlas key, not just the grouped ones", async () => {
     // The file answers "what do you have on me?", so it must not be limited to
     // the categories the settings page happens to list.
     localStorage.setItem("ficatlas:recent-searches", JSON.stringify(["a"]))
     localStorage.setItem("ficatlas:something-new", JSON.stringify({ x: 1 }))
-    const data = JSON.parse(exportAll()).data
+    const data = JSON.parse(await exportAll()).data
     expect(data["ficatlas:recent-searches"]).toEqual(["a"])
     expect(data["ficatlas:something-new"]).toEqual({ x: 1 })
   })
 
-  it("excludes keys belonging to other sites", () => {
+  it("excludes keys belonging to other sites", async () => {
     localStorage.setItem("unrelated", "secret")
-    const data = JSON.parse(exportAll()).data
+    const data = JSON.parse(await exportAll()).data
     expect(Object.keys(data)).not.toContain("unrelated")
   })
 
-  it("unpacks JSON values rather than exporting escaped strings", () => {
+  it("unpacks JSON values rather than exporting escaped strings", async () => {
     localStorage.setItem("ficatlas:bookmarks", JSON.stringify([{ id: "abc" }]))
-    const data = JSON.parse(exportAll()).data
+    const data = JSON.parse(await exportAll()).data
     expect(data["ficatlas:bookmarks"]).toEqual([{ id: "abc" }])
   })
 
-  it("keeps a non-JSON value as its raw string", () => {
+  it("keeps a non-JSON value as its raw string", async () => {
     localStorage.setItem("ficatlas:theme", "dark")
-    expect(JSON.parse(exportAll()).data["ficatlas:theme"]).toBe("dark")
+    expect(JSON.parse(await exportAll()).data["ficatlas:theme"]).toBe("dark")
   })
 
-  it("works when there is nothing stored", () => {
-    const parsed = JSON.parse(exportAll())
+  it("works when there is nothing stored", async () => {
+    const parsed = JSON.parse(await exportAll())
     expect(parsed.data).toEqual({})
   })
 
-  it("says that offline works are not included", () => {
-    // They live in IndexedDB and are megabytes; claiming completeness without
-    // them would be the misleading kind of true.
-    expect(JSON.parse(exportAll()).note).toMatch(/IndexedDB/)
+  it("carries the offline shelf, and says so", () => {
+    // It used to leave the shelf out with a note admitting it, which meant the
+    // export omitted the one thing a reader most wants to take with them. The
+    // note now says the opposite, and the test is the claim.
+    return exportAll().then((raw) => {
+      const parsed = JSON.parse(raw)
+      expect(parsed.note).toMatch(/offline/i)
+      expect(parsed.note).not.toMatch(/IndexedDB/)
+      expect(Array.isArray(parsed.offline_stories)).toBe(true)
+    })
+  })
+})
+
+describe("importAll — the direction that did not exist", () => {
+  it("round-trips localStorage through export and import", async () => {
+    localStorage.setItem("ficatlas:bookmarks", JSON.stringify([{ id: "abc" }]))
+    const file = await exportAll()
+    localStorage.clear()
+    expect(localStorage.getItem("ficatlas:bookmarks")).toBeNull()
+
+    const report = await importAll(file)
+    expect(report.keys).toBeGreaterThan(0)
+    expect(JSON.parse(localStorage.getItem("ficatlas:bookmarks")!))
+      .toEqual([{ id: "abc" }])
+  })
+
+  it("merges rather than replaces, so a second restore loses nothing", async () => {
+    // The failure this guards is unrecoverable: a reader who restores onto a
+    // browser that already has a library must not lose what they have done
+    // since the export.
+    localStorage.setItem("ficatlas:bookmarks", JSON.stringify([{ id: "abc" }]))
+    const file = await exportAll()
+    localStorage.setItem("ficatlas:bookmarks", JSON.stringify([{ id: "newer" }]))
+
+    await importAll(file)
+    // The import writes its own value over, but nothing is DELETED — a key that
+    // exists only in this browser survives.
+    localStorage.setItem("ficatlas:shelf-sort", JSON.stringify("kudos"))
+    await importAll(file)
+    expect(localStorage.getItem("ficatlas:shelf-sort")).toBe('"kudos"')
+  })
+
+  it("refuses a file that is not one of ours, and changes nothing", async () => {
+    localStorage.setItem("ficatlas:bookmarks", JSON.stringify(["keep"]))
+    const report = await importAll(JSON.stringify({ hello: "world" }))
+    expect(report.error).toMatch(/does not look like/i)
+    expect(report.keys).toBe(0)
+    expect(JSON.parse(localStorage.getItem("ficatlas:bookmarks")!)).toEqual(["keep"])
+  })
+
+  it("reports invalid JSON rather than throwing at the caller", async () => {
+    const report = await importAll("{not json")
+    expect(report.error).toMatch(/not valid JSON/i)
+  })
+
+  it("cannot write keys outside our own namespace", async () => {
+    // A file that arrived from anywhere else must not be able to plant
+    // arbitrary localStorage keys in this origin.
+    localStorage.setItem("someone-elses-key", "before")
+    await importAll(JSON.stringify({
+      data: { "evil:key": "x", "ficatlas:bookmarks": ["a"] } }))
+    expect(localStorage.getItem("someone-elses-key")).toBe("before")
+    expect(localStorage.getItem("evil:key")).toBeNull()
+    expect(localStorage.getItem("ficatlas:bookmarks")).not.toBeNull()
   })
 })

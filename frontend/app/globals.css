@@ -6759,3 +6759,13 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
     scroll-behavior: auto !important;
   }
 }
+
+/* Present to a screen reader and to the keyboard, absent from the page. The
+   file input behind the "Choose file" button in Settings is the one place this
+   is used, and it must not be display:none — an input the browser cannot focus
+   is an input a screen reader cannot find either. */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
