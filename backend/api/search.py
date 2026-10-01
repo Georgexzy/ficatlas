@@ -704,6 +704,73 @@ def _pair_lookup(db, a: str, b: str) -> str:
     return found
 
 
+# A pairing written as two initial codes: "RL/SB", "SS/HG".
+#
+# `_PAIR_RE` requires three characters a side, so this shape never reached
+# `_resolve_pair` at all — and it is a shape the archives themselves use. The
+# 760 relationship facets matching this pattern include `Hr/R` (870), `D/H`
+# (528) and `RL/SB` (388), against `Harry Potter - Ron Weasley` and
+# `Draco Malfoy/Harry Potter` on tens of thousands. Measured on the request
+# that prompted this: `q=rl/sb` returned 925 works, a free-text match, where
+# `Sirius Black/Remus Lupin` is 44,730 — a reader naming a ship by the
+# abbreviation a whole fandom uses got a twentieth of the answer and nothing
+# about the page said so.
+#
+# One character IS allowed, because the archives file that way too — `Hr/R` is
+# 870 works and `D/H` 528, against tens of thousands for the spelled-out names,
+# and the fiction-alley codes this table exists for are mostly one letter. What
+# keeps `a/b` and `x/y` out is not the length but the lookup: a one-letter half
+# resolves only when the alias table names that exact code
+# (`character_variants("R")` is `R, Ron, Ron Weasley` and nothing else), and
+# only when the expanded full names form a pairing that actually exists. `a`
+# and `x` are in no alias entry, so the shape reaches the database and returns
+# empty rather than guessing.
+_INITIAL_PAIR_RE = re.compile(r"\b([A-Za-z]{1,3})\s*(?:/|x)\s*([A-Za-z]{1,3})\b")
+
+
+def _initial_pair(db, q: str) -> tuple[str, str] | None:
+    """`RL/SB` -> the pairing the archives file it under, and the other words.
+
+    Resolved through the SAME alias table the filters use, so `RL` becomes
+    `Remus Lupin` by exactly the rule that makes `relationships=RL/SB` work —
+    that filter already returned the full 5,000 where free text returned 925,
+    so the alias table is not what was missing. The pairing is then looked up
+    on the expanded names, which is what reaches `Sirius Black/Remus Lupin`.
+
+    Alias expansion rather than a new table, for the reason `api/hubs.py`
+    imports instead of copying: two vocabularies of what a character is called
+    would drift, and the one that drifts is the one the reader typed.
+    """
+    for m in _INITIAL_PAIR_RE.finditer(q):
+        a, b = m.group(1), m.group(2)
+        if a.lower() == b.lower():
+            continue
+        va, vb = character_variants(a), character_variants(b)
+        # Both halves must be known. One known half means the other is a real
+        # name the reader typed out and this is not an initials pairing at all.
+        if not va or not vb:
+            continue
+        # The LONGEST spelling of each half, and only that one. Trying every
+        # combination and keeping the best-attested answer was the first
+        # version, and it is wrong in a way that only shows up on the short
+        # codes: `_pair_lookup` matches halves as SUBSTRINGS, so `hr` + `r`
+        # finds `Alex Claremont-Diaz/Henry Fox-...`, `r` matching inside
+        # `Henry` — and `hermione` + `r` finds `Hermione Granger/Draco Malfoy`,
+        # `r` matching inside `Draco`. Both are real pairings, both are more
+        # used than the answer, and best-attested made it pick them.
+        #
+        # A full name cannot be a substring of the wrong half by accident:
+        # `Hermione Granger` and `Ron Weasley` are what the archives call them.
+        la = max(va, key=len).lower()
+        lb = max(vb, key=len).lower()
+        canonical = _pair_lookup(db, la, lb)
+        if canonical:
+            rest = (q[:m.start()] + " " + q[m.end():]).strip()
+            rest = re.sub(r"\s+", " ", rest)
+            return canonical, rest
+    return None
+
+
 def _spelled_out_pair(db, q: str) -> tuple[str, str] | None:
     """"Bts jin and jimin" -> the pairing, and the words that were not the ship.
 
@@ -721,16 +788,20 @@ def _spelled_out_pair(db, q: str) -> tuple[str, str] | None:
     # containing " and " paid a facets lookup for a shape that is almost never
     # a pairing.
     if len(words) > 8:
-        return None
+        return _initial_pair(db, q)
     parts = re.split(r"\s+(?:and|x|/|\+)\s+", q.strip(), flags=re.I)
     if len(parts) != 2:
-        return None
+        # `rl/sb` has no space either side of the slash, so the split above
+        # never sees two parts. Tried before returning rather than only from the
+        # long-query path, because this is the only shape a reader who writes
+        # a ship as initials ever types.
+        return _initial_pair(db, q)
     left, right = parts[0].split(), parts[1].split()
     if not left or not right:
         return None
     a, b = left[-1].strip(_STRIP).lower(), right[0].strip(_STRIP).lower()
     if len(a) < 3 or len(b) < 3 or a == b:
-        return None
+        return _initial_pair(db, q)
     if a in _NOT_A_NAME or b in _NOT_A_NAME:
         return None
     canonical = _pair_lookup(db, a, b)
