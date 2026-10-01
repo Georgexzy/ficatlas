@@ -1924,33 +1924,71 @@ _DYM_AUTHOR_MIN_SIM = float(os.getenv("SEARCH_DYM_AUTHOR_MIN_SIM", "0.30"))
 _AUTHOR_OPERATOR_RE = re.compile(r"^\s*author\s*:\s*(?P<value>.+)$", re.IGNORECASE)
 
 
+def _rescue_targets(raw: str) -> list[tuple[str | None, str]]:
+    """What a spelling rescue should match against, and which KIND it names.
+
+    A trigram match cannot tell an operator from a value, so matching the raw
+    query string was matching the operator too. Measured: `author: Ionibal`
+    rescued to the tag `mlm author` and the character `The Author`, and
+    `fandom: Harry Poter` had no rescue at all. Rather than special-case
+    `author:`, this asks the parser that already ran what the reader wrote —
+    the KEY is the kind of thing they asked for, the VALUE is the thing to
+    match, and neither ever contains an operator word.
+
+    Longest value first, so `fandom:Harry Potter fluff` is rescued as
+    `Harry Potter` rather than `fluff`; the reader led with the fandom, and a
+    five-word phrase is a more deliberate misspelling than a one-word leftover.
+    A query with no operators yields one target of (None, the clean text), which
+    is the original behaviour exactly.
+
+    Anything the parser cannot read falls back to the raw string, so a syntax
+    error degrades to what it always did rather than to no suggestions.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    try:
+        pq = parse_query(raw)
+    except Exception:
+        return [(None, raw)]
+    found = [(t.get("key"), str(t.get("value") or "").strip())
+             for t in (pq.tokens or [])]
+    found = [(k, v) for k, v in found if v]
+    if found:
+        return sorted(found, key=lambda kv: len(kv[1]), reverse=True)
+    text = (pq.clean_text or "").strip()
+    return [(None, text)] if text else []
+
+
 def _spelling_rescues(db, q: str, min_sim: float | None = None) -> list[Suggestion]:
     """The spelling rescues for a query, in the order that respects what the
     reader ASKED for rather than what the text happens to resemble.
 
-    An explicit `author:` operator puts the author rescue FIRST, and that is the
-    whole point of this function. The facet rescue matches the query as a
-    STRING, so `author: Ionibal` was matching the OPERATOR WORD: measured, it
-    returned the tag `mlm author` and the character `The Author` and stopped
-    there, because `or` takes the first non-empty list. The reader who typed
-    their own pen name mistyped was handed two other things called "author" —
-    which is worse than no suggestion, because one of them looks like an answer.
+    `min_sim` is passed through to the facet rescue because the near-miss path
+    needs its LOWER floor (SUGGEST_NEAR_SIM, 0.30) and the empty path uses the
+    0.35 default. It is the same lookup with a different bar, and routing both
+    through here is what stops a refactor quietly handing the near-miss path the
+    stricter one — which would have stopped `romoine` being rescued at all.
 
-    That is the general shape of the fault: a trigram match does not know which
-    word in the query is the subject. When the reader has said with an operator
-    which KIND of thing they want, that is stronger evidence than string
-    resemblance and is preferred over it. For a bare word the two run in the
-    original order, facets first — `Ionibal` alone is far more often a mistyped
-    tag than a mistyped author, and the facet rescue is the older, better
+    The ORDER is decided by the operator, because when the reader has said which
+    KIND of thing they want that is stronger evidence than string resemblance:
+    `author: Ionibal` is an author, even though a tag called `ionibal` is
+    equally similar. Without an operator, facets go first — a bare `Ionibal` is
+    far more often a mistyped tag, and the facet rescue is the older, better
     exercised path.
     """
-    if _AUTHOR_OPERATOR_RE.match(q or ""):
-        return (_did_you_mean_authors(db, q)
-                or _typed_rescues(db, q)
-                or _did_you_mean(db, q, min_sim=min_sim))
-    return (_typed_rescues(db, q)
-            or _did_you_mean(db, q, min_sim=min_sim)
-            or _did_you_mean_authors(db, q))
+    for kind, value in _rescue_targets(q):
+        if kind == "author":
+            out = (_did_you_mean_authors(db, value)
+                   or _typed_rescues(db, value)
+                   or _did_you_mean(db, value, min_sim=min_sim))
+        else:
+            out = (_typed_rescues(db, value)
+                   or _did_you_mean(db, value, min_sim=min_sim)
+                   or (_did_you_mean_authors(db, value) if kind is None else []))
+        if out:
+            return out
+    return []
 
 
 def _did_you_mean_authors(db, q: str) -> list[Suggestion]:
@@ -2553,6 +2591,10 @@ def search(          # NOT async — see below
 
     # ── Parse q for embedded operators ───────────────────────────────────────
     parsed_tokens = []
+    # What the reader typed, before the parser moves operators out of it. The
+    # spelling rescues run against THIS. Set before the branch so it is defined
+    # whether or not there is a `q` to parse.
+    raw_query = (q or "").strip()
     if q:
         pq = parse_query(q)
         parsed_tokens = pq.tokens
@@ -2589,6 +2631,16 @@ def search(          # NOT async — see below
             in_series = parsed_params["in_series"]
 
         # Replace q with just the clean free text
+        #
+        # `raw_query` is kept because the SPELLING RESCUES have to run against
+        # what the reader actually TYPED, and this line is what makes that
+        # impossible. `parse_query` moves an entire `author: Ionibal` into
+        # `tokens` and leaves `clean_text` EMPTY, so every rescue below — all of
+        # which are gated on `q` being non-empty — silently did nothing for a
+        # query that is nothing BUT an operator. That is not an author quirk:
+        # `fandom: Harry Poter` and `tag: Fluffx` were equally unrescuable, and
+        # measured `fandom: Harry Poter` returns 2 unrelated works saying
+        # nothing at all, which is the near-miss case this feature exists for.
         q = pq.clean_text or None
 
     # ── Site list ─────────────────────────────────────────────────────────────
@@ -4794,7 +4846,12 @@ def search(          # NOT async — see below
     #     found 11 is not help.
     # It costs ~200-500ms and only on this path.
     _suggestions: list[Suggestion] = []
-    _typed = (q or "").strip()
+    # THE RAW QUERY, not `q`. See `raw_query` above: a query that is entirely an
+    # operator leaves `q` empty, and the old gate on `q` therefore meant "never
+    # suggest anything for the queries where a suggestion is most obviously
+    # needed" — a mistyped `author:` or `fandom:` is a reader who has named the
+    # field they want and got it wrong.
+    _typed = raw_query
     if _typed and total == 0 and not merged:
         # The typed rescues run FIRST and, when one lands, instead of the
         # trigram pass rather than alongside it. A mistyped operator or a
@@ -4817,9 +4874,9 @@ def search(          # NOT async — see below
         # the reason for it; `_misspelt_title` and `_describe_suggestion` stay
         # here because they are a different kind of answer (a title, a reading of
         # a sentence) and are the last two things a reader should be offered.
-        _suggestions = (_spelling_rescues(db, q)
-                        or _misspelt_title(db, q)
-                        or _describe_suggestion(db, q))
+        _suggestions = (_spelling_rescues(db, _typed)
+                        or _misspelt_title(db, _typed)
+                        or _describe_suggestion(db, _typed))
     elif (_typed and 0 < total <= SUGGEST_MAX_RESULTS
             and len(_typed.split()) <= SUGGEST_MAX_WORDS):
         # A LOWER similarity floor than the zero-result path, and it is the
@@ -4840,7 +4897,7 @@ def search(          # NOT async — see below
         # exactly the `romoine` case, and the reader has no way to tell.
         # SUGGEST_NEAR_SIM goes in, not the 0.35 default: the lower floor is the
         # difference between catching `romoine` -> `romione` (0.333) and not.
-        _suggestions = _spelling_rescues(db, q, min_sim=SUGGEST_NEAR_SIM)
+        _suggestions = _spelling_rescues(db, _typed, min_sim=SUGGEST_NEAR_SIM)
 
     # ── And the failure that came first: they typed a sentence ─────────────
     #
