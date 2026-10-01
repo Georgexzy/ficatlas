@@ -85,7 +85,6 @@ body {
 a { color: inherit; text-decoration: none; }
 button { cursor: pointer; font-family: inherit; }
 input, select { font-family: inherit; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 .w-full { width: 100%; }
 
 /* ── Header ────────────────────────────────────────────────────────────────── */
@@ -179,10 +178,6 @@ input, select { font-family: inherit; }
      line of its own. One group, one line, wherever it lands. */
   min-width: 0; flex-wrap: nowrap; justify-content: flex-end;
 }
-
-input:checked + .toggle-track { background: var(--accent); }
-input:checked + .toggle-track .toggle-thumb { left: 16px; }
-
 /* ── Layout ────────────────────────────────────────────────────────────────── */
 .shell { display: flex; flex-direction: column; min-height: 100vh; }
 .layout { display: flex; flex: 1; align-items: flex-start; }
@@ -556,9 +551,7 @@ input:checked + .toggle-track .toggle-thumb { left: 16px; }
   max-width: 44ch;
 }
 
-/* ── Syntax help ───────────────────────────────────────────────────────────── */
-.syntax-help { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); z-index: 10; }
-/* 24px, not 20. WCAG 2.5.8 (AA, new in 2.2) sets 24x24 CSS px as the floor for
+/* ── Syntax help ───────────────────────────────────────────────────────────── *//* 24px, not 20. WCAG 2.5.8 (AA, new in 2.2) sets 24x24 CSS px as the floor for
  * a pointer target, and this was 20 — flagged on a live scan. The input already
  * reserves 70px of right padding for this button and the clear (x), and at
  * right:10 and right:38 their centres stay 28px apart, so widening both to 24
@@ -1073,7 +1066,6 @@ kbd {
  * always the intent, and the selector was simply wrong. Measured after: the
  * button sits inside the field with a 10px inset instead of hanging off it.
  */
-.search-input-wrap .syntax-help,
 .search-input-wrap .syntax-help__btn {
   position: absolute;
   right: 10px;
@@ -1314,7 +1306,7 @@ kbd {
   .takedown-card__buttons { width: 100%; }
   .takedown-card__buttons .btn { flex: 1 1 auto; }
   .filter-section__chevron { font-size: 17px; opacity: 0.9; }
-  .curated-check, .site-check, .filter-check { padding: 6px 0; }
+  .curated-check, .filter-check { padding: 6px 0; }
 
   .main { padding: 12px 14px 32px; }
   .search-bar { flex-wrap: wrap; }
@@ -1329,8 +1321,6 @@ kbd {
   .header { gap: 8px;
 }
   .header__link { font-size: 13px; }
-  .toggle-label { font-size: 12px; }
-
   /* Cards: comfortable touch spacing */
   .card { padding: 16px; }
   .card__title { font-size: 17px; }
@@ -2296,7 +2286,6 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   background: var(--green-bg); border: 1px solid var(--green);
   border-radius: var(--radius); padding: 9px 12px;
 }
-.perm-manage-link a { color: var(--accent); text-decoration: underline; }
 .perm-bulk { margin: 4px 0 22px; }
 .perm-works { list-style: none; padding: 0; margin: 0 0 22px; }
 .perm-work {
@@ -2621,13 +2610,6 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 }
 
 @keyframes skel { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
-
-.active-filter-chip button {
-  background: none; border: none; color: var(--text-faint); cursor: pointer;
-  font-size: 14px; line-height: 1; padding: 0; transition: color 0.15s;
-}
-.active-filter-chip button:hover { color: var(--accent); }
-
 /* ── Reader themes (sepia / dark) ────────────────────────────────────────── */
 /* The shell is a centered 760px column, so painting its background alone leaves
    the rest of the viewport the app's dark colour. We paint a fixed full-viewport
@@ -3062,12 +3044,6 @@ body:has(.reader-shell[data-theme="default"]) {
 .offline-msg {
   margin-top: 10px; font-size: 13px; color: var(--green);
 }
-.offline-tab__note {
-  font-size: 12px; color: var(--text-dim); margin-bottom: 12px;
-  padding: 8px 10px; background: var(--surface2); border-radius: 6px;
-  border: 1px solid var(--border);
-}
-
 /* Whether the browser will protect saved stories from eviction. Coloured by
    answer, because "protected" and "may be cleared without warning" are not the
    same news and should not look the same. */
@@ -3084,17 +3060,6 @@ body:has(.reader-shell[data-theme="default"]) {
   background: color-mix(in srgb, var(--warn) 10%, var(--surface2));
   color: var(--text);
 }
-.offline-item {
-  display: flex; align-items: center; gap: 8px;
-}
-.offline-item__main { flex: 1; min-width: 0; }
-.offline-item__remove {
-  flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px;
-  background: var(--surface3); border: 1px solid var(--border2);
-  color: var(--text-faint); font-size: 12px; cursor: pointer;
-  transition: all 0.12s;
-}
-.offline-item__remove:hover { border-color: var(--red); color: var(--red); }
 
 /* Author name as a browse link. Clicking it lists everything that author wrote
    across every archive in the index — AO3 and FF.net can each only show you what
@@ -3308,8 +3273,7 @@ body:has(.reader-shell[data-theme="default"]) {
   body:has(.tabbar) .main,
   body:has(.tabbar) .library-shell,
   body:has(.tabbar) .settings-shell,
-  body:has(.tabbar) .reader-shell,
-  body:has(.tabbar) .account-shell {
+  body:has(.tabbar) .reader-shell {
     padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
   }
 
@@ -4957,8 +4921,7 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   }
   /* Small icon affordances (clear-search, help, close) get their tap area
      extended without growing visually, so the layout is unchanged. */
-  .tag-input__clear, .helptip__btn, .index-status__btn,
-  .site-header a, .site-header button {
+  .tag-input__clear, .helptip__btn, .index-status__btn {
     position: relative;
   }
   .tag-input__clear::after, .helptip__btn::after {
