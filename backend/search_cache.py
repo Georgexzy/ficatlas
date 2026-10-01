@@ -238,7 +238,7 @@ def key_for_page(query_string: str, is_operator: bool, page: int) -> str:
 # arbitrary slice. Same URL, same shape, different order — and a very different
 # one: on `fandoms=Harry Potter` the first result changes from a work nobody
 # would name to the most-read work on the site.
-SCHEMA_VERSION = "v16"   # an author: operator is rescued as a name, not as the word "author"
+SCHEMA_VERSION = "v17"   # spelling rescues run against the parsed operator VALUE, so every operator is rescuable
 
 # Expired rows are swept probabilistically on write rather than by a scheduled
 # job: 1 write in 200 pays for the cleanup, which at any real request rate keeps
