@@ -858,17 +858,40 @@ def rebuild_facets(db: Session, min_count: int = 1) -> dict:
         if carried:
             built["carried_over"] = carried
 
+        # INDEXES ARE BUILT HERE, ON THE STAGING TABLE, BEFORE THE SWAP.
+        #
+        # They were created after the renames, and `CREATE INDEX IF NOT EXISTS`
+        # matches on the NAME IN THE SCHEMA, not on which table the name is
+        # attached to. An index follows its table through a rename, so at that
+        # point `ix_facets_kind_value_trgm` still existed — on `facets_old`.
+        # Both creations were therefore skipped without a word, and the very next
+        # statement dropped the table they were on.
+        #
+        # The result was a `facets` table carrying nothing but its primary key,
+        # which is how a tag lookup stopped being an index lookup: with the GIN
+        # trigram index gone, every facet resolution scans 2M rows, and the
+        # count index that autocomplete orders by was gone with it. Measured on
+        # the live index after the 2026-10-01 rebuild: `pg_indexes` listed
+        # `facets_rebuild_pkey1` and nothing else, and `tags=Fluff` — the site's
+        # most-used tag, 1.25M works — was returning 503 on a statement timeout
+        # while `harry potter` answered in 63ms.
+        #
+        # Built on the staging table, they arrive already named and attached: an
+        # index follows its table, so the rename needs no further thought and
+        # there is no window in which the live table lacks them.
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm "
+            "ON facets_rebuild USING gin (value gin_trgm_ops)"
+        ))
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_facets_kind_count "
+            "ON facets_rebuild (kind, count DESC)"
+        ))
+
         # Swap. Readers see the old table right up until this commit.
         db.execute(text("DROP TABLE IF EXISTS facets_old"))
         db.execute(text("ALTER TABLE facets RENAME TO facets_old"))
         db.execute(text("ALTER TABLE facets_rebuild RENAME TO facets"))
-        db.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm "
-            "ON facets USING gin (value gin_trgm_ops)"
-        ))
-        db.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_facets_kind_count ON facets (kind, count DESC)"
-        ))
         db.execute(text("DROP TABLE IF EXISTS facets_old"))
         db.commit()
     except Exception:
