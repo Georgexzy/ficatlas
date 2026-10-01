@@ -394,6 +394,71 @@ export async function saveStoryOffline(story: OfflineStory): Promise<void> {
   })
 }
 
+/** Every saved work, for the data export. The shelf is the thing a reader is
+ *  most likely to want to take with them, and `exportAll` could not reach it:
+ *  it reads localStorage, and the works live in IndexedDB. So an export that
+ *  omitted them was omitting the part people would miss.
+ *
+ *  Merged in memory rather than written into the JSON as base64: this is a file
+ *  a person may open and read, and a wall of encoded chapter text would make it
+ *  unreadable while being no more correct. */
+export async function exportOfflineStories(): Promise<OfflineStory[]> {
+  try {
+    const db = await openDB()
+    return await new Promise<OfflineStory[]>((resolve, reject) => {
+      const out: OfflineStory[] = []
+      const tx = db.transaction(STORE, "readonly")
+      const req = tx.objectStore(STORE).openCursor()
+      req.onsuccess = () => {
+        const cur = req.result
+        if (!cur) { db.close(); resolve(out); return }
+        out.push(cur.value as OfflineStory)
+        cur.continue()
+      }
+      req.onerror = () => { db.close(); reject(req.error) }
+    })
+  } catch {
+    // A private-mode browser with IndexedDB disabled must still be able to
+    // export whatever IS in localStorage. An empty shelf is the right answer
+    // here, not a failed export.
+    return []
+  }
+}
+
+/** Put exported works back. Never overwrites: a restore is a merge, so a
+ *  reader who has re-downloaded a work since the export keeps the newer copy. */
+export async function importOfflineStories(
+  stories: OfflineStory[],
+): Promise<{ restored: number; skipped: number }> {
+  if (!stories.length) return { restored: 0, skipped: 0 }
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    let restored = 0, skipped = 0
+    const tx = db.transaction(STORE, "readwrite")
+    const store = tx.objectStore(STORE)
+    for (const story of stories) {
+      // The same guard the writer applies, so a malformed file cannot put a
+      // record the rest of the module will choke on later.
+      if (!story || typeof story.id !== "string" || !story.id) { skipped++; continue }
+      const existing = store.get(story.id)
+      existing.onsuccess = () => {
+        if (existing.result) { skipped++; return }
+        store.put(story); restored++
+      }
+    }
+    tx.oncomplete = () => { db.close(); resolve({ restored, skipped }) }
+    tx.onerror = () => {
+      db.close()
+      const e = tx.error
+      reject(e?.name === "QuotaExceededError"
+        ? new Error("This device does not have room for the saved works in that "
+                  + "file. Remove some from your Library's Offline tab and try again.")
+        : e)
+    }
+  })
+}
+
+
 export async function getOfflineStory(id: string): Promise<OfflineStory | null> {
   try {
     const db = await openDB()

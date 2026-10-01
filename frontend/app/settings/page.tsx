@@ -1,7 +1,7 @@
 "use client"
 
 import ThemeToggle from "../ThemeToggle"
-import { useEffect, useState, useMemo } from "react"
+import { useEffect, useState, useMemo, useRef } from "react"
 import Link from "next/link"
 import BackLink from "../BackLink"
 import SiteHeader from "../SiteHeader"
@@ -10,7 +10,8 @@ import { writePref, mergePrefs, type Prefs } from "@/lib/prefs"
 import { fetchJson } from "@/lib/errors"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 import { EMPTY_MUTES, loadMutes, muteCount, saveMutes, type MuteList } from "@/lib/mutelist"
-import { DATA_GROUPS, clearGroup, downloadExport, groupSize } from "@/lib/localdata"
+import { DATA_GROUPS, clearGroup, downloadExport, groupSize,
+         importFromFile } from "@/lib/localdata"
 import { fmtBytes, storageEstimate, type StorageEstimate } from "@/lib/offline"
 import AccountTab from "./AccountTab"
 
@@ -225,7 +226,35 @@ export default function SettingsPage() {
   // How much of each kind of data is actually here, so "Clear" is never offered
   // for something that is already empty.
   const [dataSizes, setDataSizes] = useState<Record<string, number>>({})
+  const [importMsg, setImportMsg] = useState("")
+  const importInputRef = useRef<HTMLInputElement>(null)
   const [storage, setStorage] = useState<StorageEstimate | null>(null)
+
+  /** Restore a chosen export, and say what actually happened.
+   *
+   *  The message reports the file's own numbers rather than a cheerful "done",
+   *  because "nothing was restored" and "everything was restored" are both
+   *  outcomes a reader needs to be told apart — and a silent success is
+   *  indistinguishable from a control that did nothing. The sizes are re-read
+   *  afterwards so the group totals above reflect what landed. */
+  async function onPickImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    // Cleared so choosing the same file twice in a row fires a second time.
+    e.target.value = ""
+    if (!file) return
+    setImportMsg("Restoring…")
+    try {
+      const report = await importFromFile(file)
+      if (report.error) { setImportMsg(report.error); return }
+      const parts = [`${report.keys} ${report.keys === 1 ? "setting" : "settings"}`]
+      if (report.stories) parts.push(`${report.stories} saved ` +
+        `${report.stories === 1 ? "work" : "works"}`)
+      setImportMsg(`Restored ${parts.join(" and ")}.`)
+      void refreshSizes()
+    } catch (err) {
+      setImportMsg(err instanceof Error ? err.message : "That file could not be read.")
+    }
+  }
   const refreshSizes = () =>
     setDataSizes(Object.fromEntries(DATA_GROUPS.map(g => [g.id, groupSize(g)])))
   useEffect(() => {
@@ -709,13 +738,50 @@ export default function SettingsPage() {
           <div className="setting-row__label">
             <span className="setting-row__name">Export everything</span>
             <span className="setting-row__hint">
-              A JSON file of everything above, so you can read it yourself rather
-              than take our word for what is here.
+              A JSON file of everything above — including the works you saved for
+              offline reading — so you can read it yourself, keep it somewhere
+              safe, or move to another browser.
             </span>
           </div>
           <button className="btn btn--ghost btn--sm" onClick={downloadExport}>
             Download
           </button>
+        </div>
+
+        {/* The other direction. There was an export button and no import for as
+            long as this section existed, which made it a one-way door in the
+            one control whose purpose is to let somebody leave: a reader who
+            chose not to make an account could dump their library and never get
+            it back, and for a signed-out reader that browser was the only copy.
+
+            A MERGE, stated in the button's own hint, because that is the
+            property that has to be believed rather than discovered: restoring
+            never deletes and never overwrites, so doing it twice, or onto a
+            browser that already has a library, cannot lose anything. */}
+        <div className="setting-row">
+          <div className="setting-row__label">
+            <span className="setting-row__name">Restore from a file</span>
+            <span className="setting-row__hint">
+              Put an export back — after switching browsers, clearing your data, or
+              moving to another device. Adds to what is here; nothing is deleted
+              or replaced.{" "}
+              {importMsg && <strong className="setting-row__msg">{importMsg}</strong>}
+            </span>
+          </div>
+          {/* A real <button>, not a <label> wearing .btn. A label is not
+              focusable and is announced as a label rather than a control, so
+              that version of this could not be reached from the keyboard at
+              all — and this is the only way back into a library for a reader
+              who has lost one. The input stays in the DOM, hidden, and is
+              clicked programmatically, so the file dialog is still the
+              browser's own. */}
+          <button type="button" className="btn btn--ghost btn--sm"
+                  onClick={() => importInputRef.current?.click()}>
+            Choose file
+          </button>
+          <input ref={importInputRef} type="file" accept="application/json,.json"
+                 className="visually-hidden" onChange={onPickImport}
+                 aria-label="Choose a FicAtlas export to restore" />
         </div>
       </section>
 
