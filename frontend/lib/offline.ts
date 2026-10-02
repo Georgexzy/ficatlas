@@ -39,6 +39,8 @@ export interface OfflineStory {
   summary?: string
   fandoms?: string[]
   word_count?: number
+  /** How many chapters THIS DEVICE HOLDS. Not the work's length — a partial save
+   *  of a 199-chapter work stores 4 here. See `chapter_count_total`. */
   chapter_count: number
   chapters: OfflineChapter[]
   savedAt: string   // ISO timestamp
@@ -46,10 +48,56 @@ export interface OfflineStory {
   bytes?: number
   /** Schema version that wrote this record, so migrations can be selective. */
   schema?: number
+
+  // ── Everything below arrived in v3 ──────────────────────────────────────
+  //
+  // The story page is where a reader LANDS after reading a saved chapter, and it
+  // renders a metadata block: rating, kudos, hits, updated date, completion
+  // status, fandoms, relationships, characters, tags. Until v3 the save kept
+  // none of that, and the page filled the gaps with `status: "unknown"`,
+  // `kudos: 0`, `language: "English"` and empty tag arrays.
+  //
+  // Those are not blanks, they are assertions, and three of them were wrong in a
+  // way that changed a reader's decision. A work with 1,039 kudos and 59,744
+  // hits rendered with no kudos row at all, because the render hides anything
+  // under `kudos > 0` — so a popular work looked unread. A work marked Complete
+  // rendered "Not stated", which is the same claim STATUS_LABEL goes out of its
+  // way to avoid for the 5.3M FF.net works whose completion is genuinely unknown.
+  // And the cast, the pairings and the tags — the three things a reader browses a
+  // story page by — were simply gone.
+  //
+  // All of it is already in hand when the save runs: it fetches
+  // `/api/stories/{id}` for the title and word count before it fetches a single
+  // chapter. Storing it costs a few hundred bytes against a record that holds
+  // megabytes of chapter text, and it is the difference between a saved page that
+  // is honest and one that is confidently wrong.
+  //
+  // All optional, because records written by v1 and v2 are still on readers'
+  // devices and a missing field must degrade to "not shown" rather than to a
+  // fabricated value.
+
+  /** The work's real chapter count, so the page can read "4/199" on a partial
+   *  save. `chapter_count` alone rendered "4/?", which told a reader nothing
+   *  about whether they had the whole work. */
+  chapter_count_total?: number
+  status?: string
+  rating?: string
+  kudos?: number
+  hits?: number
+  bookmarks?: number
+  comments?: number
+  language?: string
+  published_at?: string
+  updated_at?: string
+  relationships?: string[]
+  characters?: string[]
+  tags?: string[]
+  warnings?: string[]
+  categories?: string[]
 }
 
 /** Bumped whenever the record shape changes; written into each record. */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 const DB_NAME = "ficatlas-offline"
 // Version 2 exists to establish that migrating is possible at all, before it is
@@ -459,6 +507,57 @@ export async function importOfflineStories(
 }
 
 
+/**
+ * The story-page view of a saved copy, for a reader with no connection.
+ *
+ * Lives here rather than inline in the story page so it can be tested: the bug it
+ * replaces was a mapping inside a React effect, which is exactly where a wrong
+ * constant goes unnoticed — nothing throws, the page renders, and every value is
+ * quietly false.
+ *
+ * The rule it follows is that a missing field must not become an invented one. A
+ * saved record either carries a value or it does not, and "does not" has to render
+ * as absent. The previous version substituted `status: "unknown"`, `kudos: 0`,
+ * `language: "English"` and empty tag arrays for every record regardless of
+ * contents, which on a work with 1,039 kudos and 59,744 hits produced a page with
+ * no kudos row (the render hides anything `> 0`), and "Not stated" in place of
+ * Complete.
+ *
+ * The defaults below exist only for records written before v3, which genuinely
+ * lack the fields, so an un-re-saved story looks exactly as it did before.
+ */
+export function savedStoryToDetail(saved: OfflineStory) {
+  return {
+    ...saved,
+    // What this device holds, and what the work actually has. Rendered as
+    // `4/199`, so a partial save says so instead of showing "4/?".
+    chapter_count: saved.chapters.length,
+    chapter_count_total: saved.chapter_count_total ?? undefined,
+    chapters: saved.chapters.map(c => ({
+      id: `${saved.id}-${c.number}`,
+      number: c.number,
+      title: c.title,
+      word_count: 0,   // per-chapter length is not stored; the story total is
+    })),
+    fandoms: saved.fandoms ?? [],
+    relationships: saved.relationships ?? [],
+    characters: saved.characters ?? [],
+    tags: saved.tags ?? [],
+    warnings: saved.warnings ?? [],
+    categories: saved.categories ?? [],
+    status: saved.status ?? "unknown",
+    language: saved.language ?? "English",
+    kudos: saved.kudos ?? 0,
+    hits: saved.hits ?? 0,
+    bookmarks: saved.bookmarks ?? 0,
+    comments: saved.comments ?? 0,
+    rating: saved.rating,
+    updated_at: saved.updated_at,
+    is_hosted: true,
+    word_count: saved.word_count ?? 0,
+  }
+}
+
 export async function getOfflineStory(id: string): Promise<OfflineStory | null> {
   try {
     const db = await openDB()
@@ -659,10 +758,32 @@ export async function downloadStoryForOffline(
     fandoms: meta.fandoms,
     word_count: meta.word_count,
     chapter_count: chapters.length,   // what we actually hold, not what was claimed
+    // The work's real length, kept separately. The story page renders
+    // `chapter_count/chapter_count_total`, so without this a partial save of a
+    // 199-chapter work reads "4/?" — true, and useless to somebody deciding
+    // whether their download is worth keeping.
+    chapter_count_total: meta.chapter_count ?? undefined,
     chapters,
     bytes,
     schema: SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
+    // The metadata the story page shows, taken from the response already fetched
+    // above. See the v3 note on OfflineStory for why a missing value must not be
+    // replaced with a fabricated one at read time.
+    status: meta.status ?? undefined,
+    rating: meta.rating ?? undefined,
+    kudos: meta.kudos ?? undefined,
+    hits: meta.hits ?? undefined,
+    bookmarks: meta.bookmarks ?? undefined,
+    comments: meta.comments ?? undefined,
+    language: meta.language ?? undefined,
+    published_at: meta.published_at ?? undefined,
+    updated_at: meta.updated_at ?? undefined,
+    relationships: meta.relationships ?? [],
+    characters: meta.characters ?? [],
+    tags: meta.tags ?? [],
+    warnings: meta.warnings ?? [],
+    categories: meta.categories ?? [],
     // How many chapters had text when this was written. The distinction that
     // matters later is "became empty" (evicted) versus "was always empty" — a
     // real chapter can legitimately hold no text, and treating those as damage
