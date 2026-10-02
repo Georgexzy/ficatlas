@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import BackLink from "../../BackLink"
-import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory, getOfflineStory } from "@/lib/offline"
+import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory, getOfflineStory, savedStoryToDetail } from "@/lib/offline"
 import { localFirst } from "@/lib/localFirst"
 import { fetchWithTimeout, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/net"
 import { useAuth } from "@/lib/auth"
@@ -133,18 +133,11 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
     const readSaved = async (): Promise<StoryDetail | null> => {
       const saved = await getOfflineStory(id)
       if (!saved || done) return null
-      return {
-        ...(saved as any),
-        chapter_count: saved.chapters.length,
-        chapters: saved.chapters.map(c => ({
-          id: `${saved.id}-${c.number}`, number: c.number, title: c.title, word_count: 0,
-        })),
-        fandoms: saved.fandoms ?? [], relationships: [], characters: [], tags: [],
-        warnings: [], categories: [],
-        status: "unknown", language: "English", is_hosted: true,
-        kudos: 0, hits: 0, bookmarks: 0, comments: 0,
-        word_count: saved.word_count ?? 0,
-      } as StoryDetail
+      // The mapping lives in lib/offline.ts so it can be tested. It used to be
+      // inline here, where it replaced every saved story's real metadata with
+      // `status: "unknown"`, `kudos: 0` and empty tag arrays — see
+      // savedStoryToDetail for what that did to a popular, finished work.
+      return savedStoryToDetail(saved) as unknown as StoryDetail
     }
 
     localFirst<StoryDetail>({
