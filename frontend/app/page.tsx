@@ -19,7 +19,8 @@ import { saveSearch, removeSaved, isSaved, noteRun, searchId, loadSaved,
          newSince, SAVED_CHANGED, type SavedSearch } from "@/lib/savedSearches"
 import { saveScroll, restoreScroll, clearScroll } from "@/lib/scrollMemory"
 import { describeError, type Failure } from "@/lib/errors"
-import { readAllPrefs, type Prefs } from "@/lib/prefs"
+import { readAllPrefs, readPref, type Prefs } from "@/lib/prefs"
+import { urlQueryString } from "@/lib/searchUrl"
 import WordCountSlider from "./WordCountSlider"
 import DlpStars, { dlpRating } from "./DlpStars"
 import SiteHeader from "./SiteHeader"
@@ -153,17 +154,6 @@ function joinCsv(arr: string[]): string | undefined {
 //     when parameters are present and 50 would silently become 20.
 //   * ratings — "G,T,M,NR" is the explicit toggle restated (see the note in
 //     api/search.py), regenerated from `explicit` on the other side.
-const URL_DEFAULTS: Record<string, string> = {
-  sites: "ao3,ffnet,fictionalley",
-  match_mode: "all",
-  sort: "relevance",
-  page: "1",
-  per_page: "20",
-  include_unknown: "false",
-  explicit: "false",
-  crossovers: "include",
-  ratings: "G,T,M,NR",
-}
 function detectFicUrl(s: string): { site: string; url: string } | null {
   const t = s.trim()
   if (/^https?:\/\/(www\.)?archiveofourown\.org\/works\/\d+/.test(t)) return { site: "ao3", url: t }
@@ -1559,7 +1549,28 @@ function SearchPageInner() {
   // bar. One flag makes the direction explicit per edit.
   const barEditedRef = useRef(false)
   const [sites,   setSites]   = useState<string[]>(csv(get("sites") ?? "ao3,ffnet,fictionalley"))
-  const [explicit, setExplicit] = useState(get("explicit") === "true")
+  // Tier 2, adult and deliberately disturbing content. Seeded from this reader's
+  // OWN setting, synchronously, and never from the URL.
+  //
+  // Two separate mistakes are corrected here, and they pull in opposite
+  // directions, so both are load-bearing.
+  //
+  // Not from the URL. Every other state on this page follows "a shared link
+  // should show what the sender saw", which is right for per_page and wrong for
+  // this one: the sender's taste is not the recipient's consent. See NEVER_IN_URL.
+  //
+  // Not from an EFFECT either — and this is the one that measured. The mount
+  // effect already applied the reader's preferences via `setExplicit`, but the
+  // run-on-mount search reads `buildParams`, which was captured at render, so it
+  // asked on the value from BEFORE the update. A reader who had turned "Show
+  // adult content" on in Settings and then followed any filtered link — a fandom
+  // hub, a tag, an author, a search they had themselves run — got `explicit=false`
+  // and `ratings=G,T,M,NR`. Confirmed against the deployed build, not reasoned
+  // about: one request, `explicit=false`, with `ficatlas:show_explicit` set to
+  // "true". Reading the preference in the initialiser puts it in the FIRST render,
+  // which is the only point from which the search can see it.
+  const [explicit, setExplicit] = useState(
+    () => readPref("show_explicit") === "true")
   // Was hard-coded to 20, so the Results-per-page setting had never once had an
   // effect. Seeded from the URL first — a shared link should show what the
   // sender saw, not what the recipient prefers.
@@ -1627,7 +1638,13 @@ function SearchPageInner() {
   // Tier 1, and deliberately its own state rather than a mode of `explicit`.
   // That toggle is about taste and readers leave it on; this one decides what
   // a link shows a stranger. See content_gates.py.
-  const [showUnderage, setShowUnderage] = useState(get("include_underage") === "true")
+  //
+  // Seeded from this reader's own setting and not from the URL, for the two
+  // reasons given for `explicit` above — and the second of them, the effect
+  // ordering that made the preference invisible to the search that runs on mount,
+  // applies here identically.
+  const [showUnderage, setShowUnderage] = useState(
+    () => readPref("show_underage") === "true")
 
   // More options
   const [status,       setStatus]       = useState<string[]>(csv(get("status")))
@@ -1995,11 +2012,18 @@ function SearchPageInner() {
     // result set they had already opted out of being filtered by. Applied
     // unless the URL names `explicit` itself, in which case the link wins.
     if (rawParams.toString()) {
-      if (rawParams.get("explicit") === null) {
-        const mine = readAllPrefs()
-        if (mine.show_explicit !== undefined) setExplicit(mine.show_explicit === "true")
-        if (mine.show_underage !== undefined) setShowUnderage(mine.show_underage === "true")
-      }
+      // The reader's own preferences apply to an inbound link too, unconditionally.
+      //
+      // This used to be skipped when "the URL names `explicit` itself, in which
+      // case the link wins" — which made a link able to switch on adult content
+      // for whoever opened it, overriding the setting they had chosen. That is the
+      // opposite of what consent means, and it was the only reason a content
+      // preference was ever read from the address. Nothing writes it now (see
+      // NEVER_IN_URL), so an inbound `explicit=true` is either hand-typed or left
+      // over from before, and neither should outrank the reader's own choice.
+      const mine = readAllPrefs()
+      if (mine.show_explicit !== undefined) setExplicit(mine.show_explicit === "true")
+      if (mine.show_underage !== undefined) setShowUnderage(mine.show_underage === "true")
       return
     }
     const API_BASE = ""  // relative — handled by Next.js rewrite to backend
@@ -2380,15 +2404,10 @@ function SearchPageInner() {
     if (resetPage) setStale(null)
     const p = buildParams(pg, explicitQuery)
 
-    const qs = new URLSearchParams()
-    for (const [k, v] of Object.entries(p)) {
-      if (v === undefined || v === null || v === "") continue
-      // A value the page defaults to anyway carries no information — see
-      // URL_DEFAULTS. Dropped from the ADDRESS only; `p` still goes to the API
-      // in full, so nothing about the request changes.
-      if (URL_DEFAULTS[k] === String(v)) continue
-      qs.set(k, String(v))
-    }
+    // What goes in the ADDRESS. `p` still goes to the API in full, so nothing
+    // about the request changes — see urlQueryString, which is also what the
+    // prefetch keys on, so the two cannot drift apart.
+    const qs = new URLSearchParams(urlQueryString(p))
     // The words the reader actually typed, when this search is a reading of
     // them. Carried in the address so the explanation survives being shared,
     // and consumed here so it lands on the interpreted search rather than on
@@ -2572,13 +2591,12 @@ function SearchPageInner() {
   const prefetchPage = useCallback((target: number) => {
     if (target < 1) return
     const p = buildParams(target)
-    const qs = new URLSearchParams()
-    for (const [k, v] of Object.entries(p)) {
-      if (v === undefined || v === null || v === "") continue
-      if (URL_DEFAULTS[k] === String(v)) continue
-      qs.set(k, String(v))
-    }
-    const key = qs.toString()
+    // The same string doSearch navigates to, built by the same function. This is a
+    // cache key: `prefetched` is stored under it and looked up under the `qs`
+    // built there, so a divergence would make every hover issue a request whose
+    // result nothing could ever claim — pure waste, and it would present as
+    // prefetching having quietly stopped working.
+    const key = urlQueryString(p)
     if (prefetched.has(key)) return
     // Reserve the key before awaiting, so hovering twice does not fetch twice.
     prefetched.set(key, undefined as any)
