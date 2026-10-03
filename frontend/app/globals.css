@@ -5251,10 +5251,68 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .empty__browse-more a { color: var(--text-dim); text-decoration: none; }
 .empty__browse-more a:hover { color: var(--accent); text-decoration: underline; }
 
-@media (max-width: 700px) {
-  .empty__browse { margin-top: 36px; padding-top: 22px; }
-  .empty__hub { padding: 8px 13px; }
+/* The browse section below the promises — where the front door's hub lists
+   live. It is the biggest thing on the landing page after the search bar, so
+   it gets its own space rather than sharing the promises' tight margin. */
+.browse {
+  margin: 48px auto 0; max-width: 720px;
 }
+.browse__tabs {
+  display: flex; gap: 4px; margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.browse__tab {
+  background: none; border: 0; padding: 8px 14px;
+  font: inherit; color: var(--text-faint); cursor: pointer;
+  font-size: 13px; font-weight: 500;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color 0.12s;
+}
+.browse__tab:hover { color: var(--text); }
+.browse__tab--on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+/* The chips are the content, and every one of them is a link to a hub page.
+   They were a ranked bar chart with a proportional fill — the most conspicuous
+   thing on the front door, and a different genre from the pills every other list
+   on the site is made of. Thirty names in a wrapping grid says the same thing
+   ("here are thirty places to start") without asking the reader to compare
+   lengths, which was the only thing the bars were for. */
+.browse__list {
+  list-style: none; margin: 0; padding: 0;
+  display: grid;
+  /* `minmax(150px, 1fr)` not a fixed column count: at 320px this is two columns
+     and at 1440px it is nine, with no breakpoint in between. */
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.browse__list li {
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 8px; padding: 9px 12px;
+  transition: border-color 0.12s, background 0.12s;
+}
+.browse__list li:hover {
+  border-color: var(--accent-dim); background: var(--surface);
+}
+/* One rule for the link, and it fills the tile: the tile is the hover target and
+   the hit area, so the whole chip is clickable rather than just the words. */
+.browse__list a {
+  display: block; color: var(--accent); text-decoration: none;
+  /* Two lines rather than one. A pairing name like "Castiel/Dean Winchester" is
+     22 characters and a fandom name runs longer; truncating to one line with an
+     ellipsis turns the two most distinctive things about a hub into "...", and
+     `overflow-wrap` handles the unbroken case rather than overflowing the grid
+     track. */
+  font-size: 13px; line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.browse__list a:hover { text-decoration: underline; }
+
+.browse__more {
+  margin: 18px 0 0; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 14px;
+  align-items: baseline; justify-content: center;
+}
+.browse__more a { color: var(--accent); }
+.browse__more-hint { color: var(--text-faint); font-size: 11.5px; }
 
 /* ── Role preview banner ───────────────────────────────────────────────────
    Loud on purpose. The failure this prevents is forgetting you are in preview
@@ -7088,27 +7146,18 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 
 /* ── the landing page's browse surface ──────────────────────────────────────
-   Tabs rather than three stacked lists: 42 rows of scroll for a reader who
-   wants one of them, on a page where the browse block is below the fold. */
-.browse { margin: 26px 0 22px; }
-.browse__tabs {
-  display: flex; gap: 2px; margin: 0 0 12px;
-  border-bottom: 1px solid var(--border);
-}
-.browse__tab {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 12px; border: 0; background: none; cursor: pointer;
-  font-size: 13px; color: var(--text-dim);
-  border-bottom: 2px solid transparent; margin-bottom: -1px;
-}
-.browse__tab:hover { color: var(--text); }
-.browse__tab--on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-.browse__tab-n { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+   The layout, chips and tabs are declared in ONE place, in the block above near
+   the landing page's other front-door styles. This block used to redeclare
+   `.browse__tabs`, `.browse__tab`, `.browse__tab--on`, `.browse__list` and
+   `.browse__more` with different values, and because it came later in the file
+   it silently won: the grid the chip list depends on was being overridden by a
+   bare `list-style: none` from down here. Two rules for one selector, one of
+   them a no-op-looking subset, is the whole bug — a later `list-style` does not
+   look like something that can break a `display: grid`.
 
-.browse__list { list-style: none; margin: 0; padding: 0; }
-.browse__more {
-  margin: 10px 0 0; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 14px;
-  align-items: baseline;
-}
-.browse__more a { color: var(--accent); }
-.browse__more-hint { color: var(--text-faint); font-size: 11.5px; }
+   What is left here is only what is genuinely unique to this location, which is
+   the count that used to sit beside each tab label and no longer exists:
+
+   Tabs rather than two stacked lists: 30 rows of scroll for a reader who wants
+   one of them, on a page where the browse block is below the fold. */
+.browse__tab-n { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }

@@ -459,19 +459,23 @@ export function getTopHubs(limit = 12): Promise<TopHub[]> {
 // leave the front door permanently bare after the first importer run.
 /** One row in the front door's browse lists.
  *
- *  `slug` is present for the two hub-backed tabs and ABSENT for tags. A fandom or
- *  a pairing is a place with a page of its own — `/fandom/harry-potter`,
- *  `/ship/draco-malfoy-harry-potter` — and those are server-rendered, crawlable
- *  and bounded, which is why a row addresses one. A tag has no page anywhere on
- *  this site, so a tag row can only become a search, and the absence of `slug` is
- *  how the UI tells the two apart. Optional rather than nullable for that reason:
- *  `"slug" in entry` is the test, and a null would be a third case to handle.
+ *  Every row has a `slug`, and every row is therefore a hub PAGE:
+ * `/fandom/harry-potter`, `/ship/draco-malfoy-harry-potter`. Both are
+ *  server-rendered, crawlable and bounded, which is why a row addresses one
+ *  rather than a query — robots.txt blocks the `/?q=…` space these lists used to
+ *  link into, so a button that filled the search box was a dead end for a
+ *  crawler and a worse answer for a reader than the page already on the site.
+ *
+ *  There is no tag list. A tag has no page anywhere on this site, so a tag row
+ *  could only ever become a search, and showing one list as links and another
+ *  as searches read as an oversight rather than a choice. `slug` is therefore
+ *  required rather than optional: making it nullable would leave the frontend a
+ *  third case to handle for a row the endpoint can no longer emit.
  */
-export interface LandingEntry { name: string; work_count: number; slug?: string }
+export interface LandingEntry { name: string; work_count: number; slug: string }
 export interface LandingBrowse {
   fandom?: LandingEntry[]
   ship?: LandingEntry[]
-  tag?: LandingEntry[]
 }
 
 function landingCache() {

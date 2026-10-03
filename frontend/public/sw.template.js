@@ -25,6 +25,62 @@
 const CACHE = "__CACHE_VERSION__"
 const PRECACHE = __PRECACHE_MANIFEST__
 
+// The name minus its stamp, so the generations of this cache can be told apart
+// from anything else on the origin. The stamp is fixed-width digits, so it
+// sorts chronologically as a string — which is what makes "the one before this
+// one" expressible without a bookkeeping column.
+const CACHE_PREFIX = CACHE.slice(0, CACHE.lastIndexOf("-") + 1)
+
+// KEEP_GENERATIONS.
+//
+// It was 1, which meant a deploy deleted the previous cache, and with it every
+// page the reader had opened. "Open it once while online and it will be here
+// after that" was true right up to the next deploy, which is several times a
+// day, so in practice a reader's offline world was whatever they had opened
+// since lunchtime. Nothing about that is a cache-size problem: the pages are
+// already on the device and are already paid for.
+//
+// Keeping the last TWO generations is what makes an upgrade survivable, and the
+// reason it is safe is that a cached page and the chunks it references are only
+// useful TOGETHER. Old HTML points at old `/_next/static/…` filenames; delete
+// the old generation and that HTML is a dead shell no matter how complete the
+// new one is. Retained whole, each generation is a self-consistent app.
+//
+// Two rather than more because the third generation is dead weight: the browser
+// evicts a cache long before a reader gets three builds deep offline, and every
+// retained generation is also a generation that has to be searched.
+const KEEP_GENERATIONS = 2
+
+/** The generation before this one, if it is still on the device. */
+async function previousCacheName() {
+  const names = (await caches.keys())
+    .filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE)
+    .sort()
+    .reverse()
+  return names[0] || null
+}
+
+/**
+ * The caches worth reading, newest first. Writes always go to `CACHE` — see
+ * `caches.open(CACHE)` at every call site — so a stale generation can only ever
+ * be READ, never added to, and cannot become a place new pages are kept.
+ */
+async function readableCaches() {
+  const out = [await caches.open(CACHE)]
+  const prev = await previousCacheName()
+  if (prev) out.push(await caches.open(prev))
+  return out
+}
+
+/** `cache.match` across every readable generation. */
+async function matchAny(request) {
+  for (const c of await readableCaches()) {
+    const hit = await c.match(request)
+    if (hit) return hit
+  }
+  return undefined
+}
+
 // The entries without which the app cannot start at all: the shell HTML plus
 // the framework, webpack runtime and app-entry chunks. Everything else can be
 // missing and the app still boots and fetches it later; these cannot.
@@ -121,8 +177,15 @@ self.addEventListener("activate", (event) => {
       return keys.some((r) => new URL(r.url).pathname.startsWith(p))
     }))
     if (holds.every(Boolean)) {
-      const keys = await caches.keys()
-      await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+      // Delete everything older than the last KEEP_GENERATIONS of ours, and
+      // nothing that is not ours — another app on the same origin, or a cache
+      // this worker never wrote, is not ours to remove.
+      const ours = (await caches.keys())
+        .filter((k) => k.startsWith(CACHE_PREFIX))
+        .sort()
+        .reverse()
+      const doomed = ours.slice(KEEP_GENERATIONS)
+      await Promise.all(doomed.map((k) => caches.delete(k)))
     }
     await self.clients.claim()
   })())
@@ -138,16 +201,23 @@ self.addEventListener("activate", (event) => {
 //
 // `wantChapter` picks the reader shell vs the story-detail shell — they are
 // different pages and serving the wrong one would render the wrong screen.
-async function cachedStoryShell(cache, wantChapter) {
-  const keys = await cache.keys()
+//
+// Reads across every retained generation, because the fallback below is "any
+// real visited story", and a story visited before the last deploy is in the
+// previous generation. The dedicated placeholder is precached into the current
+// one on every install, so this only matters when that fetch failed.
+async function cachedStoryShell(caches_, wantChapter) {
+  const keys = []
+  for (const c of caches_) keys.push(...(await c.keys()))
   let fallback = null
   for (const req of keys) {
     const p = new URL(req.url).pathname
     if (!p.startsWith("/story/")) continue
     const isChapter = p.includes("/chapter/")
     if (isChapter !== wantChapter) continue
-    const hit = await cache.match(req)
-    if (hit) {
+    for (const c of caches_) {
+      const hit = await c.match(req)
+      if (!hit) continue
       // Prefer the dedicated placeholder; fall back to any real visited story.
       if (p.startsWith("/story/offline-shell")) return hit
       if (!fallback) fallback = hit
@@ -166,14 +236,33 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET" || url.origin !== self.location.origin) return
 
   // Immutable hashed assets → cache-first.
+  //
+  // `/sw.js` is excluded, and it was not: it ends in `.js`, so the extension test
+  // below claimed it, which made the worker cache ITSELF. Everything else here is
+  // immutable by construction — the filename carries a content hash — and sw.js
+  // is precisely the one script on the origin that is NOT, since it changes on
+  // every build while keeping its name. The consequence is invisible from outside
+  // the worker and very confusing inside it: a page asking the active worker
+  // which build it is running is handed the PREVIOUS build's answer, forever,
+  // because the only thing that could correct it is the thing being answered
+  // wrongly. It also means this file's own build stamp cannot be read back at
+  // runtime, which is the one thing the stamp exists to do — see /build.json.
   const isHashedAsset =
-    url.pathname.startsWith("/_next/static/") ||
-    url.pathname.match(/\.(?:js|css|woff2?|ttf|otf|png|svg|ico|webp|jpg|jpeg|gif)$/)
+    url.pathname !== "/sw.js" && (
+      url.pathname.startsWith("/_next/static/") ||
+      url.pathname.match(/\.(?:js|css|woff2?|ttf|otf|png|svg|ico|webp|jpg|jpeg|gif)$/)
+    )
 
   if (isHashedAsset) {
     event.respondWith(
       caches.open(CACHE).then(async (cache) => {
-        const hit = await cache.match(request)
+        // Read across generations, write to this one. This is the branch that
+        // makes a retained generation actually usable: the HTML of a page opened
+        // before the last deploy asks for the chunk filenames THAT build
+        // produced, so serving it from this build's cache alone would return a
+        // shell whose JavaScript 404s — the page would render as markup and
+        // never boot.
+        const hit = await matchAny(request)
         if (hit) return hit
         try {
           // Longer than NET_TIMEOUT_MS: nothing is cached for this URL, so
@@ -224,9 +313,12 @@ self.addEventListener("fetch", (event) => {
   // whole cache.
   if (request.mode === "navigate") {
     event.respondWith((async () => {
-      const cache = await caches.open(CACHE)
-      const cached = (await cache.match(request)) ||
-                     (await cache.match(url.origin + url.pathname))
+      const cache = await caches.open(CACHE)          // writes go here
+      // Reads span generations — see KEEP_GENERATIONS. A page opened before the
+      // last deploy is in the previous generation and nowhere else, and without
+      // this it is unreachable offline again the moment a build lands.
+      const cached = (await matchAny(request)) ||
+                     (await matchAny(url.origin + url.pathname))
       if (cached) {
         // Refresh in the background; the reader is not made to wait for it.
         event.waitUntil((async () => {
@@ -262,15 +354,14 @@ self.addEventListener("fetch", (event) => {
           return res
         })
         .catch(async () => {
-          const cache = await caches.open(CACHE)
-          // Exact, then pathname-only.
-          let hit = (await cache.match(request)) ||
-                    (await cache.match(url.origin + url.pathname))
+          // Exact, then pathname-only, across every generation we still hold.
+          let hit = (await matchAny(request)) ||
+                    (await matchAny(url.origin + url.pathname))
           if (hit) return hit
           // Dynamic story routes: serve the matching cached shell, which then
           // reads the story from IndexedDB.
           if (url.pathname.startsWith("/story/")) {
-            hit = await cachedStoryShell(cache, url.pathname.includes("/chapter/"))
+            hit = await cachedStoryShell(await readableCaches(), url.pathname.includes("/chapter/"))
             if (hit) return hit
           }
       // Known shells, then a last resort.
@@ -299,8 +390,8 @@ self.addEventListener("fetch", (event) => {
             // read localStorage, so the reader's chosen theme is not available here;
             // prefers-color-scheme is the honest signal, and it is still a great deal
             // better than flashing a light-mode reader a black page.
-return (await cache.match("/library")) ||
-        (await cache.match("/")) ||
+return (await matchAny("/library")) ||
+        (await matchAny("/")) ||
         new Response(
           "<!doctype html><meta charset=utf-8><title>Offline</title>" +
           "<style>body{font-family:system-ui,sans-serif;margin:0;padding:2rem;" +

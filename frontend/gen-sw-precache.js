@@ -35,7 +35,26 @@ function walk(dir, baseUrl) {
 const assetUrls = walk(STATIC_DIR, "/_next/static")
 
 // Static page shells.
-const pageUrls = ["/", "/library", "/login", "/settings", "/account"]
+//
+// Measured, because "add the pages a reader might want" is how a precache
+// becomes several megabytes of someone's data plan. HTML as served:
+//   /            19 KB     /library  20 KB     /settings  19 KB
+//   /login       14 KB     /about    30 KB     /permissions  20 KB
+//   /account     308 — a redirect, not a page. It was here and cost 12 KB to
+//               store a redirect that leads to /library, which is already in
+//               this list. Dropped rather than left as dead weight.
+//   /fandoms     2.0 MB    /ships    3.0 MB
+//
+// The two browse indexes are the reason this list is not "everything": they
+// render one row per hub, which is 5,025 and 6,165 rows. Precaching them would
+// add ~5 MB to every install, on a phone, to make two list pages available with
+// no connection. An individual hub is 350-400 KB for the same reason — they are
+// pages to be CACHED WHEN VISITED, which the navigation branch does, not pages
+// to be shipped to every reader whether they want them or not. A failed
+// `cache.add` on any entry here is recorded and ignored unless it is ESSENTIAL,
+// so a 3 MB entry that timed out would not have broken install; it would simply
+// have quietly not been there.
+const pageUrls = ["/", "/library", "/login", "/settings", "/about", "/permissions"]
 
 // The story and reader routes are dynamic — one URL per story — so no specific
 // instance can be precached. But every /story/<id> and /story/<id>/chapter/<n>

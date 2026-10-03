@@ -1254,7 +1254,7 @@ function LandingPromises() {
   )
 }
 
-function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q: string) => void }) {
+function EmptyState({ onSurprise }: { onSurprise: () => void }) {
   return (
     <div className="empty">
       {/* LandingIntro is NOT rendered here any more — it moved above the search
@@ -1273,7 +1273,7 @@ function EmptyState({ onSurprise, onPick }: { onSurprise: () => void; onPick: (q
           fandoms, which is the wrong third of this index to start from: fic
           readers arrive thinking of a character or a pairing, and naming a
           universe first is the one step this site exists to remove. */}
-      <BrowseExplorer onPick={onPick} />
+      <BrowseExplorer />
       <LandingPromises />
     </div>
   )
@@ -1297,23 +1297,25 @@ const DYM_KIND_LABEL: Record<string, string> = {
 //
 // This was twelve fandoms, and fandoms are the wrong third of the index to start
 // a fic-finder reader from. A reader arriving at this site overwhelmingly wants
-// a CHARACTER or a PAIRING — the person they are thinking of — and being asked
-// to name a universe first is the one step this index exists to remove. The
-// three groups below are the three things you can arrive by that are not a
-// guess about the plot, which is exactly why they are the three shown.
+// a CHARACTER or a PAIRING, not a universe. Asking them to name a fandom first
+// is the one step this index exists to avoid.
 //
 // THE ROWS ARE LINKS TO HUB PAGES, and they were not: each row used to be a
 // button that filled the search box with `ship: Castiel/Dean Winchester`, so a
 // reader who arrived with a pairing in mind was handed a search for it rather
 // than the page about it. That page already exists, it is server-rendered and
 // bounded, and it is the only route a crawler has into the index because
-// robots.txt blocks the `/?q=…` space this was linking into. So the two hub
-// tabs now navigate to `/fandom/<slug>` and `/ship/<slug>`.
+// robots.txt blocks the `/?q=…` space this was linking into. So both tabs now
+// navigate to `/fandom/<slug>` and `/ship/<slug>`.
 //
-// The argument it was built on — that the box takes `ship:` and the reader's
-// next action should be their own search — is not discarded, it is moved: a TAG
-// has no page anywhere on this site, so a tag chip still fills the box, and the
-// search box is in the header on every page including the one a chip leads to.
+// WHICH IS WHY THERE IS NO TAG TAB any more. A tag has no page anywhere on this
+// site, so a tag row could only ever be a search — and one list of links next to
+// one list of search-buttons, differing by an invisible rule the reader has to
+// guess at, reads as an oversight rather than a choice. Removing the tab removed
+// the ambiguity rather than documenting it, and it removed the last caller of
+// `onPick`, so the component below no longer needs to reach into the search box
+// at all. A reader who wants to search has the box, in the header, on the hub
+// page a chip leads to.
 //
 // The counts were DRAWN as bars as well as printed, scaled to the largest entry.
 // They were the most conspicuous thing on the front door and the reason it did
@@ -1323,28 +1325,18 @@ const DYM_KIND_LABEL: Record<string, string> = {
 // extracted from the hub pages' related nav rather than copied, because this and
 // that are the same widget: a list of hubs, and how much of the index carries
 // each one.
-//
-// Each button fills the query box rather than navigating away. The thing worth
-// teaching someone on this page is that the box takes `fandom:`, `ship:` and
-// `tag:`, so their next action is their own search rather than another click
-// through a page they did not choose.
 const BROWSE_TABS = [
-  { key: "fandom", label: "Fandoms", op: "fandom", hub: "fandom" as const,
+  { key: "fandom", label: "Fandoms", hub: "fandom" as const,
     more: "/fandoms", moreLabel: "Every fandom" },
-  { key: "ship", label: "Pairings", op: "ship", hub: "ship" as const,
+  { key: "ship", label: "Pairings", hub: "ship" as const,
     more: "/ships", moreLabel: "Every pairing" },
-  { key: "tag", label: "Tags & tropes", op: "tag", hub: null,
-    more: null, moreLabel: null },
 ] as const
 
-function BrowseExplorer({ onPick }: { onPick: (q: string) => void }) {
+function BrowseExplorer() {
   const [data, setData] = useState<LandingBrowse | null>(null)
-  const [tab, setTab] = useState<(typeof BROWSE_TABS)[number]["key"]>("ship")
+  const [tab, setTab] = useState<(typeof BROWSE_TABS)[number]["key"]>("fandom")
   useEffect(() => { getLandingBrowse().then(setData) }, [])
 
-  // Pairings are the default tab, not fandoms. Fandoms used to be the only
-  // option here, and it made the landing page read as "browse universes" for a
-  // site whose distinguishing feature is searching across them at once.
   const rows = data?.[tab] ?? []
   if (!data) return null
   if (rows.length === 0) return null
@@ -1352,60 +1344,40 @@ function BrowseExplorer({ onPick }: { onPick: (q: string) => void }) {
 
   return (
     <div className="browse">
-      {/* Real tabs, as buttons with `aria-selected`, rather than three stacked
-          lists. Stacking all three would be 42 rows of a long scroll for a
-          reader who wants one of them, and this is below the fold on a phone
-          where a long scroll is the difference between finding it and not. */}
+      {/* The front door is the whole index, and it is divided into two kinds
+          of place: a fandom (a universe, 5,025 hubs) and a pairing (a romantic
+          relationship, 6,165 hubs). Both are real pages with their own lists of
+          works — the only routes a crawler can reach, since robots.txt blocks
+          the `/?q=…` search space. */}
       <div className="browse__tabs" role="tablist" aria-label="Browse the index by">
         {BROWSE_TABS.map(t => {
-          const n = (data?.[t.key] ?? []).length
-          if (!n) return null
+          if (!(data?.[t.key] ?? []).length) return null
           return (
             <button key={t.key} role="tab" type="button"
               aria-selected={tab === t.key}
               className={"browse__tab" + (tab === t.key ? " browse__tab--on" : "")}
               onClick={() => setTab(t.key)}>
               {t.label}
-              <span className="browse__tab-n">{n}</span>
             </button>
           )
         })}
       </div>
 
-      {/* A link where there is a page, a button where there is not.
-          `slug` is what tells them apart, and its absence is not a gap to
-          paper over with a fallback href: a tag has no page on this site, so the
-          only honest thing it can do is become a search. A chip that navigated to
-          `/?tag=` would be the search page wearing a hub's clothes. */}
-      <ul className="hub-chips" role="tabpanel" aria-label={current.label}>
+      {/* A grid of names, not a ranked bar chart. Every row is a link, so the
+          count is decoration rather than the reason to click: it answers "is
+          this worth it" without being the thing being compared. */}
+      <ul className="browse__list" role="tabpanel" aria-label={current.label}>
         {rows.map(r => (
-          <li key={r.name}>
-            {r.slug ? (
-              <Link href={`/${current.hub}/${r.slug}`}>
-                {r.name}
-                <span className="hub-chips-count"> {fmtCount(r.work_count)}</span>
-              </Link>
-            ) : (
-              <button type="button" onClick={() => onPick(`${current.op}: ${r.name}`)}
-                title={`Search ${r.name}`}>
-                {r.name}
-                <span className="hub-chips-count"> {fmtCount(r.work_count)}</span>
-              </button>
-            )}
+          <li key={r.slug}>
+            <Link href={`/${current.hub}/${r.slug}`}>{r.name}</Link>
           </li>
         ))}
       </ul>
 
       <p className="browse__more">
         {current.more && <a href={current.more}>{current.moreLabel} →</a>}
-        {/* Said per tab, because the two tabs now do different things and one
-            sentence cannot describe both. Telling a reader a click "puts it in
-            the search box" on a tab that navigates away is the kind of small
-            untruth that makes a whole page feel unreliable. */}
         <span className="browse__more-hint">
-          {current.hub
-            ? "Every one of these has a page of its own."
-            : "Click anything to put it in the search box — the filters are all there."}
+          Every one of these has a page of its own.
         </span>
       </p>
     </div>
@@ -4027,13 +3999,10 @@ function SearchPageInner() {
           )}
 
           {!shown && !loading && (
-            <EmptyState
-              onSurprise={surpriseMe}
-              // Same shape as the recent-search picker above, and for the same
-              // reason: setQuery has not flushed when this runs, and doSearch is
-              // captured from this render, so the query has to be handed over
-              // explicitly or the first click searches for nothing.
-              onPick={q => { setQuery(q); doSearch(true, undefined, q) }} />
+            /* No onPick: every browse row is a link to a hub page, so nothing on
+               this screen fills the query box any more. The search box is above
+               it and a hub page has one in its header. */
+            <EmptyState onSurprise={surpriseMe} />
           )}
         </main>
       </div>

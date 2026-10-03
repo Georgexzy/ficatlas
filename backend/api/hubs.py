@@ -467,9 +467,9 @@ def list_hubs(
 # The landing page asked a first-time visitor with no search in mind to pick from
 # twelve fandoms, and a fic-finder site's readers overwhelmingly arrive looking
 # for a CHARACTER or a PAIRING, not a universe. Asking them to name a fandom
-# first is the one step this index exists to avoid. The three groups are also
-# the three things `search` can filter on that are not expressible as a guess
-# about the plot.
+# first is the one step this index exists to avoid. The two lists below are the
+# two things `search` can filter on that are not expressible as a guess about
+# the plot — and the two that have a page of their own.
 #
 # Read from the two hub tables rather than from `facets`, for the reason this
 # file already exists: both tables are written by `hub_build.build_groups` and
@@ -478,17 +478,22 @@ def list_hubs(
 # `GROUP BY kind, value` over 1.98M rows, which is the query the watchdog note
 # in this repo is about.
 #
-# `limit` is capped at 20 because the widest column is a two-column grid on a
-# phone; asking for more is a phone number, not a browse list.
-# 300 works, and not a count of rows: a tag list is only worth having if
-# every entry leads somewhere dense, and the tail of this vocabulary is very
-# long — the two-thousandth commonest tag is on a few hundred works, which
-# is a link to almost nothing and reads as a broken promise. See the
-# measurement in `_did_you_mean` in api/search.py, which uses the same
-# 200 floor for the same reason: a facet nobody has used much is not a
-# suggestion anybody wanted.
-LANDING_TAG_FLOOR = 300
-LANDING_LIMITS = {"fandom": 12, "ship": 12, "tag": 18}
+# The front door's two lists, and why a tag is not one of them.
+#
+# A row here is a LINK to a hub page, which is the only crawlable, bounded,
+# server-rendered route into the index — robots.txt blocks the `/?q=…` search
+# space, so a button that filled the query box was a dead end for a crawler and
+# a worse answer for a reader than the page already on the site. A TAG has no
+# page anywhere on this site, so a tag row could only ever be a search, and
+# showing the same list in two different idioms on one screen read as an
+# oversight rather than a choice. The tag list is therefore GONE from the front
+# door, not disabled: `LANDING_LIMITS` has no tag key, so the response has no
+# empty `tag: []` for the frontend to keep a tab alive on.
+#
+# 30 rather than 12, because twelve was a phone-screen budget applied to a
+# desktop page. Both lists are ordered by `work_count DESC, slug ASC` over
+# already-materialised rows, so the cost is the same.
+LANDING_LIMITS = {"fandom": 30, "ship": 30}
 
 
 @router.get("/landing", response_model=dict)
@@ -501,23 +506,12 @@ def landing_browse(
     already public through the hub pages it links to."""
     out: dict[str, list[dict]] = {}
     for kind, cap in LANDING_LIMITS.items():
-        if kind == "tag":
-            rows = db.execute(text("""
-                SELECT value, count FROM facets
-                 WHERE kind = 'tag' AND count >= :floor
-                 ORDER BY count DESC, value ASC
-                 LIMIT :lim
-            """), {"floor": LANDING_TAG_FLOOR, "lim": cap}).fetchall()
-            out[kind] = [{"name": r[0], "work_count": r[1]} for r in rows]
-            continue
         table = "fandom_hubs" if kind == "fandom" else "ship_hubs"
-        # `slug` is selected, not just ordered by, because the front door's rows
-        # address the hub PAGES. They are the crawlable, bounded, server-rendered
-        # way into the index — a fandom or a pairing is a place with a page, and
-        # making a reader click one to be handed a search box for it is a worse
-        # answer than the page already on the site. Tags have no hub, which is
-        # exactly why they keep the search behaviour, so `slug` is absent for them
-        # rather than null: the frontend tells the two cases apart by presence.
+        # `slug` is selected, not just ordered by, because every row addresses a
+        # hub PAGE. It is returned rather than joined into a URL server-side
+        # because the frontend builds `/${kind}/${slug}`, and the kind it holds is
+        # the one this loop is iterating — so a row cannot be rendered against
+        # the wrong hub type.
         rows = db.execute(text(f"""
             SELECT slug, name, work_count FROM {table}
              ORDER BY work_count DESC, slug ASC
