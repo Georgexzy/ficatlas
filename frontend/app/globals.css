@@ -370,7 +370,19 @@ input, select { font-family: inherit; }
 .compass.compass--spin .compass__needle {
   transform-box: view-box;
   transform-origin: 50% 50%;
-  animation: compass-seek 1.6s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+  /* `linear`, not a cubic ease. The keyframes carry their own per-segment
+     easing, and a cycle-level ease on top of that was the difference between a
+     needle being pushed and a needle being wound: symmetric in and symmetric
+     out, so it breathed rather than overshot. All three needles — this button,
+     the results loader and the scrape spinner — share the keyframes and differ
+     only in duration, because they are one mark and a reader should not be able
+     to tell which of them they are looking at.
+
+     1.6s against the loader's 2.4s: the settle is 38% of the cycle either way,
+     so here it is ~0.6s rather than ~0.9s. That is the floor at which the
+     damping still reads — below about 1.2s the three corrections blur into one
+     reversal and it is a spinner wearing a compass costume. */
+  animation: compass-seek 1.6s linear infinite;
 }
 .compass.compass--spin .compass__needle-n { fill: currentColor; }
 .compass.compass--spin .compass__needle-s { fill: currentColor; opacity: 0.45; }
@@ -2466,7 +2478,12 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 .scrape-spinner .compass__needle {
   transform-box: view-box;
   transform-origin: 50% 50%;
-  animation: compass-seek 2.4s ease-in-out infinite;
+  /* Same keyframes as the two bigger needles. At 13px the damping is genuinely
+     below the threshold of visibility and it reads as a small rotation, which
+     is the correct degradation — a needle is still a needle at 13px, and this
+     sits inside a line of text where a large sweeping motion would be
+     distracting rather than informative. */
+  animation: compass-seek 2.4s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .scrape-spinner .compass__needle { animation: none; }
@@ -2519,28 +2536,64 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
      the first was visible:
 
      A real needle is attracted to north and is *pushed* off it, so it comes to
-     rest AT north. Resting at 180° put the needle's lit end pointing at the
-     bottom of the mark, so the spinning state showed the needle pointing the
-     opposite way from the static logo above it. The same mark said two opposite
-     things about which way was up depending on whether a search was running.
+     rest AT north. Resting at 180° put the needle's lit half at the bottom of
+     the mark, so the spinning state showed the needle pointing the opposite way
+     up from the static logo in the header — the same mark saying two opposite
+     things about which way was north depending on whether a search was running.
 
-     The 200° overshoot is right and is kept — a needle that arrives without
-     overshooting is a servo motor, not an instrument — but a real one overshoots
-     once and damps out. Two oscillations read as a wobble, not a settle.
+     The overshoot is right and is kept, because a needle that arrives without
+     overshooting is a servo motor rather than an instrument. But a real one
+     overshoots once and damps out; two oscillations read as a wobble, not a
+     settle, so this is one overshoot followed by halving corrections.
 
      And the settle has to be slow enough to watch, or the damping is invisible
      and it is just a spin with extra steps. 62%–100% is 38% of the duration on
-     the settle, which at 2.4s is ~0.9s of visible damping.
+     the settle, which is ~0.9s of visible damping at 2.4s.
+
+     The `animation-timing-function` on each KEYFRAME rather than on the
+     animation is the part that makes it read as an instrument. A cycle-level
+     `ease-in-out` is symmetric — the needle leaves north slowly, arrives
+     quickly and comes back slowly, which is a pendulum, not a compass. The
+     three segments are taken from the physics of a damped oscillator rather
+     than hand-tuned, because hand-tuned curves are how the previous version
+     ended up breathing:
+
+       0 → 38%   `ease-out`    a released needle is at MAXIMUM velocity as it
+                               leaves north and decelerates all the way to the
+                               far extreme, where the restoring force has built
+                               up. A curve that starts slowly here (y₁ = 0)
+                               reads as a hesitation before the search starts.
+       38 → 62%  `ease-in-out` the return crosses equilibrium — the fastest part
+                               of the whole motion — so it accelerates in and
+                               decelerates out. This is the segment that carries
+                               the overshoot.
+       62 → 100% `ease-out`    each correction is friction: it arrives at rest
+                               rather than bouncing straight back out of it.
 
      The loop point is invisible because the needle is a 180°-symmetric kite:
      360° renders identically to 0°. */
-  0%   { transform: rotate(0deg); }
+  0% {
+    transform: rotate(0deg);
+    animation-timing-function: ease-out;
+  }
   /* Out past north — fast, because nothing stops a needle until it arrives. */
-  38%  { transform: rotate(74deg); }
+  38% {
+    transform: rotate(74deg);
+    animation-timing-function: ease-in-out;
+  }
   /* First overshoot, then one smaller counter-swing, then rest. */
-  62%  { transform: rotate(-13deg); }
-  78%  { transform: rotate(7deg); }
-  89%  { transform: rotate(-3deg); }
+  62% {
+    transform: rotate(-13deg);
+    animation-timing-function: ease-out;
+  }
+  78% {
+    transform: rotate(7deg);
+    animation-timing-function: ease-out;
+  }
+  89% {
+    transform: rotate(-3deg);
+    animation-timing-function: ease-out;
+  }
   100% { transform: rotate(0deg); }
 }
 @media (prefers-reduced-motion: reduce) {
