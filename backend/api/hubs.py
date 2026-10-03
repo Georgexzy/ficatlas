@@ -511,12 +511,19 @@ def landing_browse(
             out[kind] = [{"name": r[0], "work_count": r[1]} for r in rows]
             continue
         table = "fandom_hubs" if kind == "fandom" else "ship_hubs"
+        # `slug` is selected, not just ordered by, because the front door's rows
+        # address the hub PAGES. They are the crawlable, bounded, server-rendered
+        # way into the index — a fandom or a pairing is a place with a page, and
+        # making a reader click one to be handed a search box for it is a worse
+        # answer than the page already on the site. Tags have no hub, which is
+        # exactly why they keep the search behaviour, so `slug` is absent for them
+        # rather than null: the frontend tells the two cases apart by presence.
         rows = db.execute(text(f"""
-            SELECT name, work_count FROM {table}
+            SELECT slug, name, work_count FROM {table}
              ORDER BY work_count DESC, slug ASC
              LIMIT :lim
         """), {"lim": cap}).fetchall()
-        out[kind] = [{"name": r[0], "work_count": r[1]} for r in rows]
+        out[kind] = [{"slug": r[0], "name": r[1], "work_count": r[2]} for r in rows]
 
     response.headers["Cache-Control"] = "public, max-age=600, s-maxage=3600"
     return out

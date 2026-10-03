@@ -340,11 +340,11 @@ export default async function ShipHub(
       {!!hub.related?.length && (
         <nav className="hub__related" aria-label="Related pages">
           <h2>More to read</h2>
-          <ul>
+          <ul className="hub-chips">
             {hub.related.map(r => (
               <li key={`${r.kind}-${r.slug}`}>
                 <Link href={`/${r.kind}/${r.slug}`}>{r.name}</Link>
-                <span className="hub__related-count">
+                <span className="hub-chips-count">
                   {r.work_count.toLocaleString()}
                 </span>
               </li>

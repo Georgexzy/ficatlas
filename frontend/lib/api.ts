@@ -457,7 +457,17 @@ export function getTopHubs(limit = 12): Promise<TopHub[]> {
 // navigation is a request per navigation forever. It is NOT an empty-list cache
 // — an empty list is a real answer on a fresh install, and caching one would
 // leave the front door permanently bare after the first importer run.
-export interface LandingEntry { name: string; work_count: number }
+/** One row in the front door's browse lists.
+ *
+ *  `slug` is present for the two hub-backed tabs and ABSENT for tags. A fandom or
+ *  a pairing is a place with a page of its own — `/fandom/harry-potter`,
+ *  `/ship/draco-malfoy-harry-potter` — and those are server-rendered, crawlable
+ *  and bounded, which is why a row addresses one. A tag has no page anywhere on
+ *  this site, so a tag row can only become a search, and the absence of `slug` is
+ *  how the UI tells the two apart. Optional rather than nullable for that reason:
+ *  `"slug" in entry` is the test, and a null would be a third case to handle.
+ */
+export interface LandingEntry { name: string; work_count: number; slug?: string }
 export interface LandingBrowse {
   fandom?: LandingEntry[]
   ship?: LandingEntry[]

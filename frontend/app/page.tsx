@@ -1302,25 +1302,39 @@ const DYM_KIND_LABEL: Record<string, string> = {
 // three groups below are the three things you can arrive by that are not a
 // guess about the plot, which is exactly why they are the three shown.
 //
-// The counts are DRAWN as bars as well as printed, scaled to the largest entry
-// in the list. That is the point of showing them at all: "Harry Potter 1.19M,
-// Supernatural 299k" reads as two numbers and a reader cannot tell from a column
-// of them that the third entry is already a quarter of the first. A bar says it
-// in a glance, and the number is still there for anyone who wants it exactly.
+// THE ROWS ARE LINKS TO HUB PAGES, and they were not: each row used to be a
+// button that filled the search box with `ship: Castiel/Dean Winchester`, so a
+// reader who arrived with a pairing in mind was handed a search for it rather
+// than the page about it. That page already exists, it is server-rendered and
+// bounded, and it is the only route a crawler has into the index because
+// robots.txt blocks the `/?q=…` space this was linking into. So the two hub
+// tabs now navigate to `/fandom/<slug>` and `/ship/<slug>`.
 //
-// Bars are scaled to the LARGEST entry rather than to the total, because these
-// are ranked lists and the question is how they compare with each other — a bar
-// scaled to a total would make the top entry look small for every list but the
-// first.
+// The argument it was built on — that the box takes `ship:` and the reader's
+// next action should be their own search — is not discarded, it is moved: a TAG
+// has no page anywhere on this site, so a tag chip still fills the box, and the
+// search box is in the header on every page including the one a chip leads to.
+//
+// The counts were DRAWN as bars as well as printed, scaled to the largest entry.
+// They were the most conspicuous thing on the front door and the reason it did
+// not look like the rest of the site: a ranked bar chart is a different genre
+// from the pills every other list on the site is made of, and the comparison it
+// bought was available as a number in a pill. `hub-chips` is that pill —
+// extracted from the hub pages' related nav rather than copied, because this and
+// that are the same widget: a list of hubs, and how much of the index carries
+// each one.
 //
 // Each button fills the query box rather than navigating away. The thing worth
 // teaching someone on this page is that the box takes `fandom:`, `ship:` and
 // `tag:`, so their next action is their own search rather than another click
 // through a page they did not choose.
 const BROWSE_TABS = [
-  { key: "fandom", label: "Fandoms", op: "fandom", more: "/fandoms", moreLabel: "Every fandom" },
-  { key: "ship", label: "Pairings", op: "ship", more: "/ships", moreLabel: "Every pairing" },
-  { key: "tag", label: "Tags & tropes", op: "tag", more: null, moreLabel: null },
+  { key: "fandom", label: "Fandoms", op: "fandom", hub: "fandom" as const,
+    more: "/fandoms", moreLabel: "Every fandom" },
+  { key: "ship", label: "Pairings", op: "ship", hub: "ship" as const,
+    more: "/ships", moreLabel: "Every pairing" },
+  { key: "tag", label: "Tags & tropes", op: "tag", hub: null,
+    more: null, moreLabel: null },
 ] as const
 
 function BrowseExplorer({ onPick }: { onPick: (q: string) => void }) {
@@ -1334,7 +1348,7 @@ function BrowseExplorer({ onPick }: { onPick: (q: string) => void }) {
   const rows = data?.[tab] ?? []
   if (!data) return null
   if (rows.length === 0) return null
-  const peak = Math.max(...rows.map(r => r.work_count), 1)
+  const current = BROWSE_TABS.find(t => t.key === tab)!
 
   return (
     <div className="browse">
@@ -1358,28 +1372,40 @@ function BrowseExplorer({ onPick }: { onPick: (q: string) => void }) {
         })}
       </div>
 
-      <ul className="browse__list" role="tabpanel" aria-label={BROWSE_TABS.find(t => t.key === tab)?.label}>
+      {/* A link where there is a page, a button where there is not.
+          `slug` is what tells them apart, and its absence is not a gap to
+          paper over with a fallback href: a tag has no page on this site, so the
+          only honest thing it can do is become a search. A chip that navigated to
+          `/?tag=` would be the search page wearing a hub's clothes. */}
+      <ul className="hub-chips" role="tabpanel" aria-label={current.label}>
         {rows.map(r => (
           <li key={r.name}>
-            <button className="browse__row"
-              onClick={() => onPick(`${BROWSE_TABS.find(t => t.key === tab)!.op}: ${r.name}`)}
-              title={`Search ${r.name}`}>
-              <span className="browse__name">{r.name}</span>
-              <span className="browse__track" aria-hidden="true">
-                <span className="browse__fill" style={{ width: `${100 * r.work_count / peak}%` }} />
-              </span>
-              <span className="browse__count">{fmtCount(r.work_count)}</span>
-            </button>
+            {r.slug ? (
+              <Link href={`/${current.hub}/${r.slug}`}>
+                {r.name}
+                <span className="hub-chips-count"> {fmtCount(r.work_count)}</span>
+              </Link>
+            ) : (
+              <button type="button" onClick={() => onPick(`${current.op}: ${r.name}`)}
+                title={`Search ${r.name}`}>
+                {r.name}
+                <span className="hub-chips-count"> {fmtCount(r.work_count)}</span>
+              </button>
+            )}
           </li>
         ))}
       </ul>
 
       <p className="browse__more">
-        {BROWSE_TABS.map(t => t.more && t.key === tab && (
-          <a key={t.key} href={t.more}>{t.moreLabel} →</a>
-        ))}
+        {current.more && <a href={current.more}>{current.moreLabel} →</a>}
+        {/* Said per tab, because the two tabs now do different things and one
+            sentence cannot describe both. Telling a reader a click "puts it in
+            the search box" on a tab that navigates away is the kind of small
+            untruth that makes a whole page feel unreliable. */}
         <span className="browse__more-hint">
-          Click anything to put it in the search box — the filters are all there.
+          {current.hub
+            ? "Every one of these has a page of its own."
+            : "Click anything to put it in the search box — the filters are all there."}
         </span>
       </p>
     </div>
