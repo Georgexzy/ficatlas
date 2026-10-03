@@ -58,7 +58,7 @@ export default async function ShipsIndex() {
   const letters = [...groups.keys()].sort()
 
   return (
-    <div className="hub-page hub">
+    <main id="main" className="hub-page hub">
       {/* current="browse" so the header marks this as the browse section too —
           /ships is the other half of it, not a page outside it. */}
       <SiteHeader current="browse" />
@@ -127,6 +127,6 @@ export default async function ShipsIndex() {
           ))}
         </>
       )}
-    </div>
+    </main>
   )
 }

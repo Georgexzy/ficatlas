@@ -672,7 +672,7 @@ export default function ChapterPage() {
     story?.chapter_count_total || numbers.length || story?.chapter_count || "?"
 
   return (
-    <div className="reader-shell" data-width={width} data-font={fontFamily}
+    <main id="main" className="reader-shell" data-width={width} data-font={fontFamily}
       data-theme={theme === "site" ? siteTheme : theme}>
       {/* Keyboard users land on the toolbar first and would otherwise tab through
           every control before reaching a word of the story. */}
@@ -961,6 +961,6 @@ export default function ChapterPage() {
           <p className="reader-hint">Keys: ← → chapters · + − text size · t theme · j justify. Line spacing, serif/sans &amp; column width: buttons above.</p>
         </>
       )}
-    </div>
+</main>
   )
 }

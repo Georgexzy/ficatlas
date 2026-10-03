@@ -97,7 +97,7 @@ function LoginPageInner() {
   }
 
   return (
-    <div className="auth-shell">
+    <main id="main" className="auth-shell">
       <Link href="/" className="auth-logo">Fic<em>Atlas</em></Link>
       <form className="auth-card" onSubmit={submit}>
         {/* The page had NO h1 — its first heading was `<h2>Why make an
@@ -253,7 +253,7 @@ function LoginPageInner() {
           Following WIPs across three archives is the one thing here that no
           archive can do for a reader, and it was not mentioned at all. */}
       <WhyAccount />
-    </div>
+    </main>
   )
 }
 

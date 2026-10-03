@@ -18,7 +18,7 @@ export const metadata = {
 // important thing on this page for the person most likely to need it.
 export default function About() {
   return (
-    <div className="page-prose">
+    <main id="main" className="page-prose">
       {/* Was a lone "← Back to search" pointing at "/", which threw away
           whatever you had searched. The shared header instead: same one click
           home, plus Library and Settings, and its Search remembers your
@@ -172,6 +172,6 @@ export default function About() {
         <Link href="/takedown">removal form</Link> asks nothing of you and takes
         effect immediately.
       </p>
-    </div>
+    </main>
   )
 }

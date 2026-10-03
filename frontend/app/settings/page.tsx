@@ -378,11 +378,11 @@ export default function SettingsPage() {
   }
 
   if (!prefs) return (
-    <div className="settings-shell">
+    <main id="main" className="settings-shell">
       <SiteHeader current="settings" />
       <BackLink fallback="/" fallbackLabel="Back to search" />
       <p className="loading">Loading…</p>
-    </div>
+    </main>
   )
 
   const sites = prefs.default_sites.split(",").filter(Boolean)
@@ -396,7 +396,7 @@ export default function SettingsPage() {
     ADMIN_KEYS.some(k => (admin[k] ?? "") !== (adminSaved[k] ?? ""))
 
   return (
-    <div className="settings-shell">
+    <main id="main" className="settings-shell">
       <SiteHeader current="settings" />
       <BackLink fallback="/" fallbackLabel="Back to search" />
       <h1 className="settings-title">Settings</h1>
@@ -1019,7 +1019,7 @@ export default function SettingsPage() {
           shelf and your place in every story. Everything here works without one.
         </p>
       )}
-    </div>
+    </main>
   )
 }
 

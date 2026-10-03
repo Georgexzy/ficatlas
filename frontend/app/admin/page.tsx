@@ -483,8 +483,8 @@ export default function AdminPage() {
   // be in flight at once without one silently overwriting the other's result.
 
   if (authLoading) return (
-    <div className="settings-shell"><SiteHeader />
-      <BackLink fallback="/settings" fallbackLabel="Settings" /><p className="loading">Loading…</p></div>
+    <main id="main" className="settings-shell"><SiteHeader />
+      <BackLink fallback="/settings" fallbackLabel="Settings" /><p className="loading">Loading…</p></main>
   )
   // TWO DIFFERENT FAILURES, told apart.
   //
@@ -495,7 +495,7 @@ export default function AdminPage() {
   // an actual demotion — the account, its role, its sessions and every
   // endpoint were verified fine end to end while the screen said "Not found".
   if (!user) return (
-    <div className="page-prose">
+    <main id="main" className="page-prose">
       <SiteHeader />
       <h1>Sign in to continue</h1>
       <p>
@@ -512,11 +512,11 @@ export default function AdminPage() {
         <Link href="/login" className="card-btn card-btn--primary">Sign in</Link>{" "}
         <Link href="/" className="card-btn">Back to search</Link>
       </p>
-    </div>
+</main>
   )
 
   if (!isAdmin) return (
-    <div className="page-prose">
+    <main id="main" className="page-prose">
       <SiteHeader />
       <h1>Not for this account</h1>
       <p>
@@ -524,11 +524,11 @@ export default function AdminPage() {
         read and keep a library — this page needs the owner role.
       </p>
       <p><Link href="/" className="card-btn card-btn--primary">Back to search</Link></p>
-    </div>
+</main>
   )
 
   return (
-    <div className="settings-shell">
+    <main id="main" className="settings-shell">
       <SiteHeader />
       <BackLink fallback="/settings" fallbackLabel="Settings" />
 
@@ -1054,7 +1054,7 @@ export default function AdminPage() {
       )}
       </>
       )}
-    </div>
+</main>
   )
 }
 

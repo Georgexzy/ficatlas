@@ -93,7 +93,7 @@ export default function ForgotClient(
 
   if (done) {
     return (
-      <div className="page-prose">
+      <main id="main" className="page-prose">
         <h1>Password changed</h1>
         <p>You can sign in with your new password now.</p>
         <p className="page-prose__muted">
@@ -101,12 +101,12 @@ export default function ForgotClient(
           the old password still has access.
         </p>
         <p><Link href="/login" className="card-btn card-btn--primary">Sign in</Link></p>
-      </div>
+</main>
     )
   }
 
   return (
-    <div className="page-prose">
+    <main id="main" className="page-prose">
       <p className="page-prose__back"><Link href="/login">← Back to sign in</Link></p>
       <h1>Reset your password</h1>
 
@@ -183,6 +183,6 @@ export default function ForgotClient(
           </form>
         </>
       )}
-    </div>
+</main>
   )
 }

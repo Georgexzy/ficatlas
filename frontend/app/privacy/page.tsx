@@ -39,7 +39,7 @@ const LAST_UPDATED = "27 September 2026"
 
 export default function Privacy() {
   return (
-    <div className="page-prose">
+    <main id="main" className="page-prose">
       <SiteHeader />
       <h1>Privacy</h1>
 
@@ -254,6 +254,6 @@ export default function Privacy() {
         at the top is updated. It describes the behaviour of the software as
         deployed, and is checked against the source each time it is revised.
       </p>
-    </div>
+    </main>
   )
 }

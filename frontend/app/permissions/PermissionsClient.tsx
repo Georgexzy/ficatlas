@@ -175,7 +175,7 @@ export default function PermissionsClient() {
   }
 
   return (
-    <div className="page-prose">
+    <main id="main" className="page-prose">
       <SiteHeader />
       <BackLink fallback="/" fallbackLabel="Back to search" />
 
@@ -418,6 +418,6 @@ taken down without any verification at all.</>}
           </div>
         </>
       )}
-    </div>
+    </main>
   )
 }

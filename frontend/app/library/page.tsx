@@ -990,7 +990,7 @@ export default function LibraryPage() {
   }
 
   return (
-    <div className="library-shell">
+    <main id="main" className="library-shell">
       <SiteHeader current="library" />
       <BackLink fallback="/" fallbackLabel="Back to search" />
       <h1 className="library-title">My Library</h1>
@@ -1910,7 +1910,7 @@ sudo docker compose exec backend python ffnet_sqlite_importer.py \\
           )}
         </div>
       )}
-    </div>
+    </main>
   )
 }
 

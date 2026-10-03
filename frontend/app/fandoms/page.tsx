@@ -69,7 +69,7 @@ export default async function FandomsIndex() {
   const letters = [...groups.keys()].sort()
 
   return (
-    <div className="hub-page hub">
+    <main id="main" className="hub-page hub">
       <SiteHeader current="browse" />
       {/* The two browse axes, as one control. The phone tab bar cannot grow a
           fifth item (six overflow a 375px screen — see SiteHeader), so this is
@@ -129,6 +129,6 @@ export default async function FandomsIndex() {
           ))}
         </>
       )}
-    </div>
+    </main>
   )
 }

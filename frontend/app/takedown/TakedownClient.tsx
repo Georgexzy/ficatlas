@@ -65,7 +65,7 @@ export default function TakedownClient() {
 
   if (sent) {
     return (
-      <div className="page-prose">
+      <main id="main" className="page-prose">
         <SiteHeader />
       <BackLink fallback="/about" fallbackLabel="About FicAtlas" />
         <h1>{sent.hidden || sent.delisted
@@ -95,12 +95,12 @@ export default function TakedownClient() {
           effect.
         </p>
         <p><Link href="/" className="card-btn card-btn--primary">Back to search</Link></p>
-      </div>
+</main>
     )
   }
 
   return (
-    <div className="page-prose">
+    <main id="main" className="page-prose">
       <SiteHeader />
       {/* Replaces a hard-coded "← About FicAtlas", which was a guess about
           where you came from — and wrong for anyone arriving from the footer,
@@ -252,6 +252,6 @@ export default function TakedownClient() {
         and set a standing choice. That needs no proof either, unless you are
         giving permission rather than withdrawing it.
       </p>
-    </div>
+</main>
   )
 }
