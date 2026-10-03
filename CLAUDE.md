@@ -507,6 +507,39 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **Deploying from a worktree took the site down, and the script said it
+  succeeded.** `deploy/promote.sh` set `ACTIVE_CONF="$ROOT/deploy/upstreams/
+  active.conf"`, on the assumption that `$ROOT` is the tree nginx bind-mounts.
+  Promoted from `/home/george/ficatlas` the two are the same file and nothing is
+  wrong — which is why it survived. Promoted from a worktree they are not: the
+  script rewrote its own copy, reloaded nginx, and nginx re-read the **live
+  tree's unchanged file**, still naming blue.
+    - **The reload then reported success, because the outgoing colour was still
+      up and answered.** `verify_through_nginx` hits `127.0.0.1:8080` inside the
+      nginx container, and its own comment claims it catches "a switch that
+      pointed at the wrong place". It cannot: any colour answers, and
+      `GRACE_SECONDS=120` guarantees one does. The site died when promote
+      **stopped** blue — the first moment the question had an answer. Every
+      request failed `upstream timed out (110) while connecting to upstream`
+      against `172.22.0.2`, a container that no longer existed.
+    - **`live_colour` had the same blind spot inverted.** It read `$ROOT`'s file
+      — which promote.sh writes itself — so after a failed run it believed blue
+      was live while nginx served green. Its comment is *"the single source of
+      truth for what is live is what nginx is pointed at, not a file we keep
+      alongside it that could disagree"*, and then it does precisely that.
+    - **Two copies of one question is one too many.** `resolve_active_conf` now
+      asks the container where its file is (`docker inspect` on the
+      `/etc/nginx/upstreams` mount) and uses that answer, falling back to `$ROOT`
+      only when nginx is not running. `check_upstreams_visible` refuses to switch
+      when the two disagree, turning a silent outage into a **refused deploy**.
+      And the switch is verified again *after* the old colour is stopped,
+      restoring it if that fails.
+    - Verified by running it against the live mismatch: refused, printed both
+      paths, exited 1, site stayed 200. Then a real deploy reported *"Verified
+      through nginx with blue stopped"*.
+    - Same failure class as the nginx.conf bind-mount note further down: an
+      `nginx -s reload` cannot pick up a bind-mounted file changed in another
+      tree.
 - **A browser audit writes to the audience figures, and there is no sandbox to
   be casual in.** `visit_events` has a `bot` column and the Audience tab reads
   the same table, so driving real Chromium with a real human's UA puts a fake
