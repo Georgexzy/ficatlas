@@ -35,6 +35,58 @@ log = logging.getLogger(__name__)
 RANK = ("kudos DESC NULLS LAST, hits DESC NULLS LAST, "
         "word_count DESC NULLS LAST")
 
+
+def content_at_sql(table: str) -> str:
+    """The `content_at` assignment for an upsert into `table`.
+
+    This is the sitemap's <lastmod>, and it is the one value on a hub page that
+    has to be *true* rather than merely recent: Google states plainly that it
+    uses lastmod only when it is consistently accurate, so a site that stamps
+    everything daily is no better off than one that stamps nothing.
+
+    It has already broken once, in the direction that looks like diligence.
+    Measured 2026-09-08: 3,185 of 6,165 ship hubs had content_at set that day
+    and 963 the day before — 52% of the sitemap claiming to have changed
+    today, every day. Two of the three tests were too sensitive:
+
+      * work_count moves for almost every popular hub every day, because the
+        crawler indexes ~15,000 works a day. 52,120 -> 52,121 is not a reason to
+        re-fetch a page. It has to move MATERIALLY — 1%, or 10 works on a small
+        hub, whichever is larger. The floor is what keeps small hubs honest: 1%
+        of 90 works is one work, and a hub that gains ten has visibly changed.
+      * top_ids is the whole list, so a swap at position 140 counted as a
+        change. Only the leading entries are what a reader or a crawler sees the
+        page as being about.
+
+    The name still counts on its own: that is the page's identity and the thing
+    it ranks for.
+
+    `IS DISTINCT FROM` rather than `<>` so a NULL on either side compares as a
+    change rather than as unknown. That is defensive, not load-bearing, and it
+    is worth being precise about why: `name`, `work_count` and `top_ids` are all
+    NOT NULL and content_at is NOT NULL too, and measured on the live table 0 of
+    12,469 hubs has a NULL top_ids. So no NULL can reach this expression today.
+    It is written this way because `<>` would silently become a no-op on the
+    first nullable column, which is the kind of change nobody notices until the
+    sitemap stops moving.
+
+    Defined here, as a function, rather than inlined in the statement: the rule
+    is the whole value of the column and it had no test at all. A test that
+    restated this SQL would drift from it, which is exactly how
+    content_gates.py and api/search.py came to hold two different lists of what
+    counts as adult content. Importing the one definition is the only version of
+    this test that can be trusted later.
+    """
+    return f"""CASE
+                    WHEN {table}.name IS DISTINCT FROM EXCLUDED.name
+                      OR {table}.top_ids[1:20]
+                           IS DISTINCT FROM EXCLUDED.top_ids[1:20]
+                      OR abs({table}.work_count - EXCLUDED.work_count)
+                           > greatest(10, {table}.work_count / 100)
+                    THEN now()
+                    ELSE {table}.content_at
+                END"""
+
 def build_groups(
     db: Session,
     *,
@@ -151,45 +203,10 @@ def build_groups(
                 top_by_site = EXCLUDED.top_by_site,
                 site_counts = EXCLUDED.site_counts,
                 built_at = EXCLUDED.built_at,
-                -- content_at moves only when the page would actually LOOK
-                -- different. It is the sitemap's <lastmod>, and Google is
-                -- explicit that an inaccurate one gets ignored — bumping it on
-                -- every nightly rebuild would claim all 7,584 hubs changed
-                -- daily, which is both untrue and self-defeating.
-                --
-                -- That was the intent and it was not achieved. Measured
-                -- 2026-09-08: 3,185 of 6,165 ship hubs had content_at set that
-                -- day, and 963 the day before — 52% of the sitemap claiming to
-                -- have changed today, every day, which is precisely the pattern
-                -- the comment above set out to avoid. Two of the three tests
-                -- were too sensitive:
-                --
-                --   * work_count moves for almost every popular ship every day,
-                --     because the crawler indexes ~15,000 works a day. Going
-                --     from 52,120 to 52,121 is not a reason to re-fetch a page.
-                --     It has to move MATERIALLY — 1%, or 10 works on a small
-                --     hub, whichever is larger. The floor is what keeps small
-                --     hubs honest: 1% of 90 works is one work, and a hub that
-                --     gains ten has visibly changed.
-                --   * top_ids is the whole list, so a swap at position 140
-                --     counted as a change. Only the leading entries are what a
-                --     reader or a crawler sees the page as being about, so only
-                --     those are compared.
-                --
-                -- The name still counts on its own: that is the page's identity
-                -- and the thing it ranks for.
-                --
-                -- `IS DISTINCT FROM` rather than `<>` so a NULL on either side
-                -- compares as a change rather than as unknown.
-                content_at = CASE
-                    WHEN {table}.name IS DISTINCT FROM EXCLUDED.name
-                      OR {table}.top_ids[1:20]
-                           IS DISTINCT FROM EXCLUDED.top_ids[1:20]
-                      OR abs({table}.work_count - EXCLUDED.work_count)
-                           > greatest(10, {table}.work_count / 100)
-                    THEN now()
-                    ELSE {table}.content_at
-                END
+                -- When this page would actually LOOK different. See
+                -- content_at_sql for why each of the three tests is there and
+                -- what happens when one of them is too sensitive.
+                content_at = {content_at_sql(table)}
         """), {"slug": slug, "name": group["name"], "variants": variants,
                "wc": exact, "top": top, "by_site": json.dumps(by_site),
                "counts": json.dumps(site_counts)})
