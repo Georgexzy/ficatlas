@@ -21,6 +21,7 @@ import { saveScroll, restoreScroll, clearScroll } from "@/lib/scrollMemory"
 import { describeError, type Failure } from "@/lib/errors"
 import { readAllPrefs, readPref, type Prefs } from "@/lib/prefs"
 import { urlQueryString } from "@/lib/searchUrl"
+import { clampQuery } from "@/lib/displayText"
 import WordCountSlider from "./WordCountSlider"
 import DlpStars, { dlpRating } from "./DlpStars"
 import SiteHeader from "./SiteHeader"
@@ -3492,7 +3493,7 @@ function SearchPageInner() {
                 {shown && (
                   <h1 className="visually-hidden">
                     {query.trim()
-                      ? `Results for ${query.trim()}`
+                      ? `Results for ${clampQuery(query)}`
                       : activeFilters > 0
                         ? `Results filtered by ${activeFilters} ${
                             activeFilters === 1 ? "filter" : "filters"}`
@@ -3501,8 +3502,7 @@ function SearchPageInner() {
                 )}
                 <span className="search-exit__what">
                 {query.trim() ? (
-                  <>Searching <strong>{query.trim().length > 44
-                    ? query.trim().slice(0, 44) + "…" : query.trim()}</strong></>
+                  <>Searching <strong>{clampQuery(query)}</strong></>
                 ) : activeFilters > 0 ? (
                   <>Browsing with <strong>{activeFilters}</strong>{" "}
                     {activeFilters === 1 ? "filter" : "filters"}</>

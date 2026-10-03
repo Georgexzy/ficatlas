@@ -463,9 +463,12 @@ Get the DB password from `docker inspect ficatlas-backend-1` (env `DATABASE_URL`
 # setup and does not render React.
 docker compose run --rm --no-deps -T frontend npx vitest run
 
-# Against working-copy sources without rebuilding the image:
+# Against working-copy sources without rebuilding the image. BOTH mounts matter:
+# the suite reads `app/page.tsx`, `app/globals.css` and friends as text, so
+# mounting only `lib/` silently tests whatever the image was built from.
 docker compose run --rm --no-deps -T \
-  -v "$PWD/frontend/lib:/app/lib" frontend npx vitest run
+  -v "$PWD/frontend/lib:/app/lib" -v "$PWD/frontend/app:/app/app" \
+  frontend npx vitest run
 ```
 
 ## Live workflow
@@ -504,6 +507,68 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **A browser audit writes to the audience figures, and there is no sandbox to
+  be casual in.** `visit_events` has a `bot` column and the Audience tab reads
+  the same table, so driving real Chromium with a real human's UA puts a fake
+  reader into the numbers — one search per pageview and a fresh visitor hash per
+  run. Set a UA that `tracking._BOT_RE` already matches (`playwright`,
+  `headless`, …) so the rows are `bot = true` by construction, and **verify it
+  rather than assume**: `visitors_human` must not move across the session.
+  Measured over a full audit, 216 rows tagged `bot_kind='playwright'` and
+  `visitors_human` unchanged at 936 — while the 16 human rows that did appear
+  were two genuine readers, one from `duckduckgo.com`. Never delete rows
+  afterwards; deleting to tidy a measurement is how you lose the number.
+  - **Cloudflare serves headless Chromium a challenge page, and it reads as a
+    total site failure.** The first audit run went to `ficatlas.com` and
+    reported no `.browse__list` on any page, no header links, four 403s — all of
+    it Cloudflare's "Just a moment…" interstitial, which renders its own
+    `.cf-screenshot-container` div 960px wide. `ai_bots_protection` is on, so
+    any automation UA is refused. This is the same trap as the `/story/`
+    challenge below: a managed challenge cannot tell "botnet blocked" from
+    "everyone blocked". **Audit the origin, not the tunnel.**
+  - **The review stack writes to the LIVE database.** `ficatlas-review-be` sits
+    on `ficatlas_default` and its `db` hostname resolves to `172.21.0.6`, which
+    is the live `ficatlas-db-1` — the same 20.5M-row index production reads.
+    There is no review database, which is why the bot-classified UA above is
+    mandatory rather than tidy. Check with
+    `docker exec ficatlas-review-be python3 -c "import socket; print(socket.gethostbyname('db'))"`
+    against `docker inspect ficatlas-db-1 --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'`.
+  - **And the review image goes stale, which audits code that is not there.**
+    A `:3100` run reported a third BrowseExplorer with a "Tags & tropes" tab
+    deleted in `b58dfe5`, because the container was running an image built
+    before the change. Rebuild it (`docker compose -p review -f
+    docker-compose.yml -f docker-compose.review.yml build frontend`) and confirm
+    the DOM matches the working copy before believing any finding.
+- **An `<h1>` on the landing page does not mean the results page has one.** The
+  heading lives in `LandingIntro`, which renders only when there are no results,
+  so every page a reader actually reads on — and every one a crawler indexes —
+  had a headingless document. Measured: `/` h1 = 1, `/?q=drarry` h1 = 0, and
+  `/login` started at an `<h2>` three sections down. **A state added to a page
+  needs its own heading; adding one to the default state is not the same
+  change.** Both now carry an `<h1>`, and every route measures exactly one.
+  The two branches are mutually exclusive — checked by polling the count through
+  a live search transition, where it reads 1 → 0 → 1 and never 2 — so they can
+  both be written without a duplicate, which is the bug the landing heading was
+  originally added to fix.
+- **Derived from the labels, not from taste.** The browse chips were
+  `repeat(auto-fill, minmax(150px, 1fr))`, which put the column count wherever
+  the capped container crossed a multiple of 158px — and it crossed between
+  **375px and 390px**, so one phone got a single 307px-wide bar and the next got
+  two 157px ones. Row heights measured 38 / 55 / 73 / 95px. The comment claimed
+  "two columns at 320px and nine at 1440px"; it was one and four. Sizing the
+  ladder from the labels themselves — worst case over all 24 hub names is
+  `Dazai Osamu/Nakahara Chuuya (Bungou Stray Dogs)` at 49 characters, four lines
+  at a 150px track and two at 210px — gives 1 → 2 → 3 columns and, with
+  `min-height` reserving two lines, **55px at every width from 320 to 1440**.
+  A CSS comment describing layout is a claim about layout: measure it.
+- **`min-width: 0` or nothing, on any flex item that must shrink.**
+  `.badge` is `white-space: nowrap` and a series name is unbounded, so a badge
+  was 313px wide inside a 258px `.card__badges` with its right edge at 344px on
+  a 320px viewport. Every ancestor was `overflow-x: visible` and `body` is
+  `overflow-x: clip`, so 24px of it was not scrollable to either — and it only
+  appears on results carrying a long series, which is why reading the code never
+  finds it. `max-width: 100%` alone changes nothing: a flex item defaults to
+  `min-width: auto` and refuses to shrink below its content.
 - **`count(col)` visits the heap; `count()` does not, and here that was 66x.**
   `/api/library/hosted` counted its shelf with
   `db.query(func.count(Story.id)).filter(Story.is_hosted == True)`. Naming a
