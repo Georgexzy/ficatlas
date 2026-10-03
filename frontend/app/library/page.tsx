@@ -9,7 +9,7 @@ import { fetchWithTimeout, fetchBackground, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_
 import CompassMark from "../CompassMark"
 import {
   listOfflineStories, deleteOfflineStory, isStoryOffline, downloadStoryForOffline,
-  persistenceState, storageEstimate, fmtBytes,
+  persistenceState, storageEstimate, fmtBytes, offlineHoles, offlineRetryable,
   type PersistState, type StorageEstimate,
 } from "@/lib/offline"
 import SiteHeader from "../SiteHeader"
@@ -336,6 +336,10 @@ export default function LibraryPage() {
   // inactivity — so the saved LIST is not proof anything is still readable. The
   // difference between learning that here, online, and learning it on a plane.
   const [broken, setBroken] = useState<{ id: string; title: string; reason: string }[]>([])
+  // Which downloads have holes, derived rather than tested at the call site —
+  // three separate `?.length ?? 0` reads on two different fields is how a story
+  // with a missing chapter came to claim it was completely saved.
+  const holey = offlineStories.filter(s => offlineHoles(s) > 0)
   const [protecting, setProtecting] = useState(false)
   // The one offline failure the app cannot fix in itself — see offlineBlocker.
   const [blocker, setBlocker] = useState<{ reason: string; detail: string } | null>(null)
@@ -1259,11 +1263,28 @@ export default function LibraryPage() {
                   Save {broken.length === 1 ? "it" : "them"} again while you have a connection.
                 </p>
               )}
-              {offlineStories.some(s => (s.missingChapters?.length ?? 0) > 0) && (
-                <p className="offline-elsewhere__hint" role="status">
-                  Some downloads are unfinished — they stopped when the connection
-                  did, and will complete on their own next time you are online.
-                </p>
+              {/* Named, and per-story. This was an aggregate boolean over
+                  `missingChapters` — "some downloads are unfinished" — which
+                  cannot answer the only question a reader has here, which is
+                  WHICH one, and left the row itself showing no sign of it. */}
+              {holey.length > 0 && (
+                <div className="offline-elsewhere__hint" role="status">
+                  <p style={{ margin: "0 0 4px" }}>
+                    {holey.length === 1 ? "One download is" : `${holey.length} downloads are`}
+                    {" "}unfinished:
+                  </p>
+                  <ul className="offline-holes">
+                    {holey.map(s => (
+                      <li key={s.id}>
+                        <Link href={`/story/${s.id}`}>{s.title}</Link>
+                        {" — "}
+                        {offlineRetryable(s) > 0
+                          ? `${offlineRetryable(s)} chapter${offlineRetryable(s) === 1 ? "" : "s"} still to download, and it will finish on its own next time you are online`
+                          : `${offlineHoles(s)} chapter${offlineHoles(s) === 1 ? "" : "s"} not on the archive`}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
               <p className={`offline-tab__persist offline-tab__persist--${persist}`}>
                 {persist === "persisted"

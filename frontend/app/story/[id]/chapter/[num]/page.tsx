@@ -31,7 +31,22 @@ interface ChapterFull {
 
 interface StoryMin {
   id: string; title: string; author: string; chapter_count: number;
+  // How long the work actually is, as distinct from `chapter_count`. They are
+  // different numbers offline and the difference is the whole bug: offline
+  // `chapter_count` is how many chapters this device holds, so a 4-of-199 work
+  // rendered "Chapter 3 of 4". `savedStoryToDetail` has always carried this
+  // field for the story page; the reader's type was the one place it was
+  // missing, which is why it read as absent rather than as unread.
+  chapter_count_total?: number
   language?: string
+  characters?: string[]
+  relationships?: string[]
+  tags?: string[]
+  warnings?: string[]
+  site?: string
+  url?: string
+  summary?: string
+  word_count?: number
   chapters: { number: number; title?: string }[]
 }
 
@@ -248,7 +263,28 @@ export default function ChapterPage() {
       const ch = saved.chapters.find(c => c.number === Number(num))
       setStory({
         id: saved.id, title: saved.title, author: saved.author,
+        // How many this device HOLDS, which is not how long the work is. Both of
+        // these fields were already on the record and neither was read, so an
+        // offline chapter of a 199-chapter novel carried the breadcrumb
+        // "Chapter 3 of 4" — a number that is not merely wrong but reads as a
+        // complete four-chapter work, and sends a reader looking for chapter 5.
         chapter_count: saved.chapters.length,
+        chapter_count_total: saved.chapter_count_total ?? saved.chapters.length,
+        // Dropped here before, so every offline chapter of a non-English work
+        // was announced and typeset as English. It is stored; it was simply
+        // never carried across.
+        language: saved.language,
+        // The cast and pairings are server-rendered into the story page, not the
+        // chapter page, so nothing here needs them — but the record has them and
+        // passing them through costs nothing.
+        characters: saved.characters,
+        relationships: saved.relationships,
+        tags: saved.tags,
+        warnings: saved.warnings,
+        site: saved.site,
+        url: saved.url,
+        summary: saved.summary,
+        word_count: saved.word_count,
         chapters: saved.chapters.map(c => ({ number: c.number, title: c.title })),
       } as any)
       if (!ch) return null
@@ -626,7 +662,14 @@ export default function ChapterPage() {
   const dir = RTL.has(langCode) ? "rtl" : undefined
   const minutes = Math.max(1, Math.round((chapter?.word_count || 0) / WORDS_PER_MINUTE))
 
-  const totalLabel = numbers.length || story?.chapter_count || "?"
+  // `chapter_count_total` before `chapter_count`, and the distinction is the whole
+// fix. Offline, `chapter_count` is how many chapters this device happens to
+  // hold, so preferring it made the breadcrumb read "Chapter 3 of 4" on a
+  // 199-chapter work — a figure that does not look like a bug in the breadcrumb,
+  // it looks like the work is four chapters long. `chapter_count_total` is the
+  // server's own count and is stored on every record.
+  const totalLabel =
+    story?.chapter_count_total || numbers.length || story?.chapter_count || "?"
 
   return (
     <div className="reader-shell" data-width={width} data-font={fontFamily}

@@ -25,9 +25,27 @@ export interface OfflineChapter {
 }
 
 export interface OfflineStory {
-  /** Chapters not yet fetched, when a download was cut short. Present means
-   *  resumable; absent means complete. */
+  /** Chapters not yet fetched because the download was cut short or the server
+   *  was unwell. Retryable, and the ONLY field `resumeInterruptedDownloads`
+   *  acts on — so a chapter recorded here is one the reader can still get. */
   missingChapters?: number[]
+  /** Chapters the server answered 404 for: the archive does not have them and
+   *  never will, because a chapter number that once resolved and now does not
+   *  is a deletion rather than an outage.
+   *
+   *  Kept apart from `missingChapters` because the two want opposite treatment.
+   *  Folding them together — which is what recording a 404 as missing does —
+   *  makes `resumeInterruptedDownloads` re-download the entire work on every
+   *  library open and every `online` event, forever, in pursuit of a chapter
+   *  that is not there. For a 199-chapter novel that is 199 requests per page
+   *  load, and it is the kind of thing that gets a reader's IP throttled.
+   *
+   *  Shown to the reader as part of the hole count, because from where they sit
+   *  "chapter 90 is not on this device" and "chapter 90 does not exist" are the
+   *  same fact: they cannot read it. Absent on every record written before this
+   *  field existed, which is correct — those downloads skipped 404s silently
+   *  rather than recording them. */
+  absentChapters?: number[]
   /** Chapters that had text when saved. Absent on records written before this
    *  existed, which is why the audit falls back to "any text at all". */
   textChapters?: number
@@ -369,24 +387,82 @@ export async function resumeInterruptedDownloads(
   onStory?: (title: string, done: number, total: number) => void,
 ): Promise<number> {
   if (typeof navigator !== "undefined" && !navigator.onLine) return 0
+  // Only ONE resume at a time, per process.
+  //
+  // This is called on every `online` event as well as on load, and a browser
+  // fires that event freely — flapping between wifi and mobile re-runs it
+  // several times in a minute. Two runs at once means two sequential
+  // re-downloads of the same stories, and two `saveStoryOffline` writes racing
+  // on the same ids, which is a lost update at best and a corrupt record at
+  // worst. There is no harm in refusing: the work is idempotent and the next
+  // caller gets the same list.
+  if (_resuming) return 0
+  _resuming = true
+  try {
+    return await _resume(onStory)
+  } finally {
+    _resuming = false
+  }
+}
+
+let _resuming = false
+
+async function _resume(
+  onStory?: (title: string, done: number, total: number) => void,
+): Promise<number> {
   let saved: OfflineStory[]
   try {
     saved = await listOfflineStories()
   } catch {
     return 0
   }
+  // `missingChapters` and NOT the hole count. A chapter the archive answered 404
+  // for is recorded as absent precisely so that this filter does not match it:
+  // otherwise every work with a deleted chapter in it is re-downloaded in full
+  // on every page load, forever, chasing a chapter that is not there.
   const partial = saved.filter(s => (s.missingChapters?.length ?? 0) > 0)
   let finished = 0
   for (const story of partial) {
     try {
       await downloadStoryForOffline(story.id, (d, t) => onStory?.(story.title, d, t))
-      finished++
     } catch {
       // Still unreachable, or interrupted again. It stays partial and will be
       // picked up next time rather than being treated as a failure.
+      continue
     }
+    // Counted only once the record is re-read, because `downloadStoryForOffline`
+    // RESOLVES on the lost-connection path too — it keeps what it fetched
+    // rather than throwing. So incrementing straight after the await reported a
+    // story that is still half-downloaded as finished, which is the one number
+    // this function exists to produce and the one a reader watches while it
+    // runs. A story whose chapters are all there now is finished; one that ran
+    // out of connection again is not, and stays on the list for next time.
+    const after = await getOfflineStory(story.id).catch(() => null)
+    if ((after?.missingChapters?.length ?? 0) === 0) finished++
   }
   return finished
+}
+
+/** Chapters on this record that the reader cannot read.
+ *
+ *  Retryable holes and permanently absent ones together, because from where
+ *  the reader sits they are the same fact: the chapter is not on this device.
+ *  They are stored apart because they want opposite treatment from
+ *  `resumeInterruptedDownloads`, not because the reader should be told apart
+ *  from one another more than the copy manages.
+ *
+ *  One function so that "how much of this story is here" cannot have two
+ *  answers: three call sites read this count and each had its own `?? 0` on a
+ *  different field, which is how a story with a hole in the middle of it came
+ *  to claim it was completely saved.
+ */
+export function offlineHoles(s: Pick<OfflineStory, "missingChapters" | "absentChapters"> | null | undefined): number {
+  return (s?.missingChapters?.length ?? 0) + (s?.absentChapters?.length ?? 0)
+}
+
+/** Whether anything here is worth fetching again. `absentChapters` never is. */
+export function offlineRetryable(s: Pick<OfflineStory, "missingChapters"> | null | undefined): number {
+  return s?.missingChapters?.length ?? 0
 }
 
 /** Put anything already downloaded onto the shelf.
@@ -423,7 +499,46 @@ export async function reconcileShelf(): Promise<number> {
   return missing.length
 }
 
+/** Is this shaped like a record the rest of this module can read?
+ *
+ *  A record is only as good as its weakest reader, and the weakest one is
+ *  `savedStoryToDetail`, which does `.length` and `.map` on `chapters` during a
+ *  React render. A hand-edited or truncated export file puts a record where
+ *  `chapters` is not an array, and the consequence is not a bad story — it is a
+ *  TypeError inside a render, so a BLANK story page with no error and nothing in
+ *  the console pointing at the file the reader restored from. The same record
+ *  also breaks `auditOfflineStories`, whose `.filter` throws far enough out that
+ *  the whole audit fails and the Library reports nothing wrong with anything.
+ *
+ *  So both the writer and the importer ask this, and it asks about SHAPE rather
+ *  than about plausibility. `saveStoryOffline` had no guard at all despite a
+ *  comment in the importer claiming it applied "the same guard the writer
+ *  applies" — one of the two was always doing nothing.
+ */
+function isUsableRecord(s: unknown): s is OfflineStory {
+  if (!s || typeof s !== "object") return false
+  const r = s as Record<string, unknown>
+  if (typeof r.id !== "string" || !r.id) return false
+  if (typeof r.title !== "string") return false
+  // The array-ness of `chapters` is the one that actually crashes a render, so
+  // it is required rather than defaulted. A record with no chapters is legal
+  // (eviction can empty one) and is `[]`, not absent.
+  if (!Array.isArray(r.chapters)) return false
+  // The chapter numbers are read with `===` against a route parameter, so a
+  // non-number here is a chapter that can never be found again.
+  if (r.chapters.some(c => !c || typeof (c as { number?: unknown }).number !== "number")) return false
+  return true
+}
+
+/** Exported for the test that holds this to what the comment above claims.
+ *  The function itself is deliberately not part of the module's public surface —
+ *  nothing outside should be deciding what a valid record is. */
+export const isUsableRecordForTest = isUsableRecord
+
 export async function saveStoryOffline(story: OfflineStory): Promise<void> {
+  if (!isUsableRecord(story)) {
+    throw new Error("That saved story is malformed and was not written.")
+  }
   const db = await openDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite")
@@ -449,8 +564,19 @@ export async function saveStoryOffline(story: OfflineStory): Promise<void> {
  *
  *  Merged in memory rather than written into the JSON as base64: this is a file
  *  a person may open and read, and a wall of encoded chapter text would make it
- *  unreadable while being no more correct. */
-export async function exportOfflineStories(): Promise<OfflineStory[]> {
+ *  unreadable while being no more correct.
+ *
+ *  `warn` exists because returning `[]` for "there are none" and `[]` for "the
+ *  store could not be read" are the same value, and only the second one is a
+ *  problem. The caller cannot tell them apart, so a browser with IndexedDB
+ *  disabled produced a file whose note promised "including the works you saved
+ *  for offline reading" above an empty array — a reader would restore that file
+ *  onto a new device, get nothing, and have no way to tell the export lied from
+ *  the data being gone. The note is the only place in an export file a person
+ *  will ever read, so the warning goes there. */
+export async function exportOfflineStories(
+  warn?: (message: string) => void,
+): Promise<OfflineStory[]> {
   try {
     const db = await openDB()
     return await new Promise<OfflineStory[]>((resolve, reject) => {
@@ -468,7 +594,11 @@ export async function exportOfflineStories(): Promise<OfflineStory[]> {
   } catch {
     // A private-mode browser with IndexedDB disabled must still be able to
     // export whatever IS in localStorage. An empty shelf is the right answer
-    // here, not a failed export.
+    // here, not a failed export — but it must SAY that it is empty for a reason
+    // it could not check.
+    warn?.("This browser would not let the page read saved offline stories, so "
+      + "they are not in this file. Everything else — bookmarks, progress, "
+      + "preferences — is here.")
     return []
   }
 }
@@ -485,9 +615,10 @@ export async function importOfflineStories(
     const tx = db.transaction(STORE, "readwrite")
     const store = tx.objectStore(STORE)
     for (const story of stories) {
-      // The same guard the writer applies, so a malformed file cannot put a
-      // record the rest of the module will choke on later.
-      if (!story || typeof story.id !== "string" || !story.id) { skipped++; continue }
+      // The writer's own guard, so a malformed file cannot put a record the rest
+      // of the module will choke on later — and the comment that used to claim
+      // this guard existed here while it existed nowhere was itself the bug.
+      if (!isUsableRecord(story)) { skipped++; continue }
       const existing = store.get(story.id)
       existing.onsuccess = () => {
         if (existing.result) { skipped++; return }
@@ -668,6 +799,13 @@ export async function downloadStoryForOffline(
   const existing = await getOfflineStory(storyId).catch(() => null)
   const have = new Map((existing?.chapters ?? []).map(c => [c.number, c]))
   const missing: number[] = []
+  // Chapters the archive answered 404 for. Separate from `missing` because they
+  // are not retryable — see `absentChapters` on the interface for why folding
+  // them together costs a full re-download on every page load.
+  //
+  // Seeded from the existing record so a chapter that 404s once stays recorded
+  // across attempts instead of being re-requested on every resume.
+  const absent: number[] = [...(existing?.absentChapters ?? [])]
   for (const [i, n] of numbers.entries()) {
     const already = have.get(n)
     if (already && already.content && already.content.trim()) {
@@ -723,7 +861,29 @@ export async function downloadStoryForOffline(
     if (!r || !r.ok) {
       // Skip a chapter we can't fetch rather than losing the whole download.
       // A partially saved story is far more useful than nothing.
-      if (r && r.status === 404) continue
+      //
+      // A 404 is recorded as ABSENT as well as skipped, and that second half is
+      // the fix. It used to `continue` alone, so the chapter was dropped and
+      // never recorded anywhere, which made a story with holes in it
+      // indistinguishable from a complete one — and that is wrong in four
+      // separate places at once:
+      //
+      //   * the record had no `missingChapters` at all, so the story page showed
+      //     "✓ Saved offline" rather than "◐ Saved, N to go";
+      //   * the chapter list had a hole in it with nothing marking it;
+      //   * the shelf row had no incomplete state to show;
+      //   * and Next simply skipped the hole — chapter 3 went to chapter 5 —
+      //     which is the one a reader notices, and notices as a bug in the
+      //     archive rather than in here.
+      //
+      // `absent` and not `missing`, because recording it as retryable is worse
+      // than recording nothing at all: `resumeInterruptedDownloads` re-downloads
+      // a whole work whenever `missingChapters` is non-empty, so a permanently
+      // absent chapter would mean 199 requests on every library open forever, in
+      // pursuit of a chapter the archive deleted. The reader's count still
+      // includes it — see `StoryClient` — because from where they sit a hole is
+      // a hole.
+      if (r && r.status === 404) { absent.push(n); continue }
       throw new Error(`Chapter ${n} failed (HTTP ${r ? r.status : "no response"})`)
     }
     const ch = await r.json()
@@ -792,7 +952,14 @@ export async function downloadStoryForOffline(
     // Chapters still to fetch, if the connection went away part-way. Their
     // presence is what makes this record resumable rather than merely
     // incomplete.
+    //
+    // Retryable only. A chapter the archive does not have is recorded separately
+    // below precisely so that its presence does NOT make this record resumable.
     missingChapters: missing.length ? missing : undefined,
+    // Permanently unavailable, and deliberately not a reason to resume. A record
+    // with only these is as complete as it will ever be, so `missing` stays
+    // undefined and the work stops being re-downloaded on every page load.
+    absentChapters: absent.length ? absent : undefined,
   })
 
   // Read it back before claiming success.
@@ -839,7 +1006,16 @@ export async function downloadStoryForOffline(
   try {
     if (typeof caches !== "undefined") {
       const keys = await caches.keys()
-      const shell = keys.find(k => k.startsWith("ficatlas-shell-"))
+      // SORTED, and it has to be the newest generation. `caches.keys()` returns
+      // CacheStorage's own order, which is creation order and NOT specified by
+      // the API — so with two generations retained this could pick the PREVIOUS
+      // one and prime story shells into a cache that the service worker's
+      // `activate` is about to delete, moments later. The symptom would be a
+      // saved story whose page does not open offline, on a device that had just
+      // been updated, which is exactly when somebody is checking whether the
+      // update worked. `previousCacheName` in the worker sorts too; this is the
+      // same rule in the second place it is needed.
+      const shell = keys.filter(k => k.startsWith("ficatlas-shell-")).sort().pop()
       if (shell) {
         const cache = await caches.open(shell)
         // Both routes: the reader AND the story detail page. Caching only the

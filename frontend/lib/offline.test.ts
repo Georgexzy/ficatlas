@@ -14,7 +14,16 @@
 //      it happened to store.
 
 import { describe, it, expect } from "vitest"
-import { savedStoryToDetail, SCHEMA_VERSION, type OfflineStory } from "./offline"
+import {
+  savedStoryToDetail, SCHEMA_VERSION,
+  offlineHoles, offlineRetryable, isUsableRecordForTest as isUsableRecord,
+  type OfflineStory,
+} from "./offline"
+
+// The smallest thing that must be accepted, so the validator tests are about
+// the one field they are checking rather than about assembling a full record.
+const VALID = { id: "abc", title: "A Work", author: "Someone", site: "ao3",
+                url: "https://example.org/abc", chapters: [{ number: 1, content: "text" }] }
 
 const base = (over: Partial<OfflineStory> = {}): OfflineStory => ({
   id: "story-1",
@@ -119,5 +128,91 @@ describe("SCHEMA_VERSION", () => {
     // v3 added the story metadata. A record stamped 2 does not carry it, and a
     // migration that assumes otherwise would read undefined as a real value.
     expect(SCHEMA_VERSION).toBe(3)
+  })
+})
+// ── what a reader is actually missing ───────────────────────────────────────
+//
+// Two of these functions exist because three call sites each had their own
+// `?.length ?? 0` against a different field, and a story with a hole in the
+// middle of it came to claim it was completely saved. One definition of "hole"
+// is the fix; the tests are what stops the third call site reappearing.
+
+describe("offlineHoles — every chapter the reader cannot read", () => {
+  it("counts retryable and permanent holes together", () => {
+    // From where the reader sits these are the same fact: the chapter is not on
+    // this device. They are stored apart because resume treats them oppositely,
+    // not because the reader should be told apart.
+    expect(offlineHoles({ missingChapters: [4, 5], absentChapters: [9] } as any)).toBe(3)
+  })
+
+  it("is zero for a record with no holes, and for a record with neither field", () => {
+    expect(offlineHoles({} as any)).toBe(0)
+    expect(offlineHoles(null)).toBe(0)
+    expect(offlineHoles(undefined)).toBe(0)
+    expect(offlineHoles({ missingChapters: [], absentChapters: [] } as any)).toBe(0)
+  })
+
+  it("counts a permanent hole even when nothing is retryable", () => {
+    // The case this whole split exists for: the download is as complete as it
+    // will ever be, and the reader must still be told there is a gap.
+    expect(offlineHoles({ absentChapters: [1, 2, 3] } as any)).toBe(3)
+  })
+})
+
+describe("offlineRetryable — only what another attempt could fetch", () => {
+  it("ignores absent chapters entirely", () => {
+    // If this counted absent chapters, `resumeInterruptedDownloads` would
+    // re-download every work with a deleted chapter in it on every page load,
+    // for ever, chasing a chapter the archive does not have.
+    expect(offlineRetryable({ absentChapters: [1, 2, 3] } as any)).toBe(0)
+  })
+
+  it("counts only the retryable ones when both are present", () => {
+    expect(offlineRetryable({ missingChapters: [7, 8], absentChapters: [1] } as any)).toBe(2)
+  })
+
+  it("agrees with offlineHoles whenever there is nothing permanent", () => {
+    for (const rec of [{}, { missingChapters: [1] }, { missingChapters: [1, 2, 3] }]) {
+      expect(offlineRetryable(rec as any)).toBe(offlineHoles(rec as any))
+    }
+  })
+})
+
+describe("a saved record must be readable by the rest of the module", () => {
+  // The consequence of getting this wrong is not a bad story, it is a blank
+  // page: `savedStoryToDetail` does `.length` and `.map` on `chapters` during a
+  // React render, and `auditOfflineStories` filters over it. A malformed record
+  // restored from a hand-edited export throws inside both, and the audit's throw
+  // is swallowed — so one bad record stops the Library reporting damage to any
+  // record.
+  it("rejects a record whose chapters are not an array", () => {
+    expect(isUsableRecord({ ...VALID, chapters: "not an array" })).toBe(false)
+    expect(isUsableRecord({ ...VALID, chapters: {} })).toBe(false)
+    expect(isUsableRecord({ ...VALID, chapters: undefined })).toBe(false)
+  })
+
+  it("rejects a record with no id or no title", () => {
+    expect(isUsableRecord({ ...VALID, id: "" })).toBe(false)
+    expect(isUsableRecord({ ...VALID, id: 42 })).toBe(false)
+    expect(isUsableRecord({ ...VALID, title: undefined })).toBe(false)
+    expect(isUsableRecord(null)).toBe(false)
+    expect(isUsableRecord("a string")).toBe(false)
+  })
+
+  it("rejects a chapter with no usable number", () => {
+    // Chapter numbers are compared with `===` against a route parameter, so a
+    // string "3" is a chapter that can never be found again.
+    expect(isUsableRecord({ ...VALID, chapters: [{ number: "3", content: "x" }] })).toBe(false)
+    expect(isUsableRecord({ ...VALID, chapters: [{ content: "x" }] })).toBe(false)
+  })
+
+  it("accepts a record with an empty chapter list", () => {
+    // Eviction can empty a record, and that is a real state the audit reports
+    // rather than a malformed one.
+    expect(isUsableRecord({ ...VALID, chapters: [] })).toBe(true)
+  })
+
+  it("accepts a well-formed record", () => {
+    expect(isUsableRecord(VALID)).toBe(true)
   })
 })

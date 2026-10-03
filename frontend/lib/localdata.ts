@@ -49,7 +49,26 @@ export const DATA_GROUPS: DataGroup[] = [
   {
     id: "bookmarks",
     name: "Bookmarks",
-    hint: "Works you saved to your shelf, and the ones kept for offline reading.",
+    // Was: "Works you saved to your shelf, and the ones kept for offline
+    // reading." The second clause was a lie with two edges, and both of them
+    // mattered.
+    //
+    // The shelf is a localStorage KEY, so clearing this group removes the list
+    // of names — while the megabytes of chapter text sit untouched in
+    // IndexedDB, which no group here can reach. The reader clicks "Clear",
+    // watches the list empty, and has freed nothing.
+    //
+    // And it was worse than doing nothing: the next Library visit calls
+    // `reconcileShelf`, whose whole job is to re-add anything downloaded to the
+    // shelf, so every entry just deleted came straight back. The one
+    // data-deletion control on the site deleted the data and then restored it.
+    //
+    // Offline downloads have their own control with their own copy, on the
+    // Library's Offline tab, where the size is on screen. Saying where it is
+    // beats claiming to do it.
+    hint: "Works you saved to your shelf. The offline copies of stories are "
+        + "deleted separately, from your Library's Offline tab — they take up "
+        + "much more room and are worth checking before you clear anything.",
     keys: keysForGroup("bookmarks"),
   },
   {
@@ -121,7 +140,15 @@ export async function exportAll(): Promise<string> {
   // meant the export omitted the one thing a reader would most want to take
   // with them, and there was no way to put anything back even for the parts
   // that were included.
-  out.offline_stories = await exportOfflineStories()
+  //
+  // The note promises the offline works are in here. That promise is only
+  // honest if the one case where they are not says so IN the file, because the
+  // file is the thing that travels and the page around it is not. Collected
+  // rather than thrown: a browser that will not open IndexedDB must still be
+  // able to take its bookmarks and its reading progress with it.
+  const warnings: string[] = []
+  out.offline_stories = await exportOfflineStories(m => warnings.push(m))
+  if (warnings.length) out.note += " " + warnings.join(" ")
   return JSON.stringify(out, null, 2)
 }
 

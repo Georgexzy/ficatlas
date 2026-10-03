@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import BackLink from "../../BackLink"
-import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory, getOfflineStory, savedStoryToDetail } from "@/lib/offline"
+import { downloadStoryForOffline, isStoryOffline, deleteOfflineStory, getOfflineStory, savedStoryToDetail, offlineHoles, offlineRetryable } from "@/lib/offline"
 import { localFirst } from "@/lib/localFirst"
 import { fetchWithTimeout, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/net"
 import { useAuth } from "@/lib/auth"
@@ -227,9 +227,10 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
   useEffect(() => {
     if (id) isStoryOffline(id).then(setOfflineSaved).catch(() => {})
     // How much of it is actually here. A download cut short by a lost
-    // connection keeps what it fetched, so "Saved offline" alone would be a
+    // connection keeps what it fetched, and a chapter the archive does not have
+    // is a hole whatever the cause, so "Saved offline" alone would be a
     // half-truth on a work that is missing sixty chapters.
-    if (id) getOfflineStory(id).then(s => setOfflinePending(s?.missingChapters?.length ?? 0))
+    if (id) getOfflineStory(id).then(s => setOfflinePending(offlineHoles(s)))
               .catch(() => {})
   }, [id])
 
@@ -244,11 +245,20 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
       // here would be the one moment the app is most likely to be wrong, and
       // the reader would find out when they opened chapter 155 on a train.
       const stored = await getOfflineStory(id).catch(() => null)
-      const pending = stored?.missingChapters?.length ?? 0
+      // Retryable and permanent holes are counted together but they are not the
+      // same news. "This will finish by itself when you have a connection" is
+      // true of a lost connection and FALSE of a chapter the archive answered 404
+      // for — so the copy is chosen from which kind of hole it is, because a
+      // promise the app cannot keep is worse than no promise.
+      const pending = offlineHoles(stored)
+      const retryable = offlineRetryable(stored)
       setOfflinePending(pending)
       setOfflineMsg(pending
-        ? `Saved ${n} chapter${n === 1 ? "" : "s"}. ${pending} still to download — `
-          + `this will finish by itself when you have a connection.`
+        ? (retryable
+            ? `Saved ${n} chapter${n === 1 ? "" : "s"}. ${retryable} still to download — `
+              + `this will finish by itself when you have a connection.`
+            : `Saved ${n} chapter${n === 1 ? "" : "s"}. ${pending} chapter${pending === 1 ? " is" : "s are"} `
+              + `not on the archive and cannot be downloaded.`)
         : `✓ Saved ${n} chapter${n === 1 ? "" : "s"} for offline reading.`)
     } catch (e: any) {
       setOfflineMsg(`Couldn't save offline: ${e.message || e}`)
