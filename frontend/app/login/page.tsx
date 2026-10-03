@@ -100,6 +100,24 @@ function LoginPageInner() {
     <div className="auth-shell">
       <Link href="/" className="auth-logo">Fic<em>Atlas</em></Link>
       <form className="auth-card" onSubmit={submit}>
+        {/* The page had NO h1 — its first heading was `<h2>Why make an
+            account</h2>`, three sections down, from `WhyAccount`. Every other
+            route here has exactly one h1 naming what the page is, and the
+            codebase has already had this argument once: the landing page "had no
+            heading at all — so a screen reader navigating by headings found
+            nothing on the site's front door". This is the signed-out front door
+            and it was the one page still missing it.
+
+            Visually hidden rather than promoted from something already on
+            screen. The wordmark says "FicAtlas", which is a logo and not a
+            statement of what the page does; the two tabs are buttons, not
+            headings, and they change what the page is for. So the heading is
+            added, it names the actual task, and it tracks `mode` — a reader who
+            switched to "Create account" should not still be told they are
+            signing in. Nothing moves on screen. */}
+        <h1 className="visually-hidden">
+          {mode === "login" ? "Sign in to FicAtlas" : "Create a FicAtlas account"}
+        </h1>
         <div className="auth-tabs">
           <button type="button" className={`auth-tab ${mode === "login" ? "auth-tab--on" : ""}`}
             onClick={() => setMode("login")}>Sign in</button>

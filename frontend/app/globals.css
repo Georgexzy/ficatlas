@@ -3989,6 +3989,24 @@ body.is-resizing * { cursor: col-resize !important; }
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent); text-decoration: none;
   border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  /* A series name is unbounded — `Dazai Osamu/Nakahara Chuuya (Bungou Stray
+     Dogs)` is a real one — and `.badge` is `white-space: nowrap`, so the badge
+     grew to fit it whatever the card was doing. Measured at a 320px viewport on
+     `/?q=drarry`: the badge was 313px wide inside a 258px `.card__badges`, its
+     right edge at 344px. Every ancestor was `overflow-x: visible` and `body` is
+     `overflow-x: clip`, so those 24px were not scrollable to either — the card
+     simply ran off the screen, and only for the results that happen to carry a
+     long series, which is why no amount of reading the code finds it.
+
+     `min-width: 0` is the load-bearing line: a flex item defaults to
+     `min-width: auto`, which refuses to shrink below its content no matter what
+     `max-width` says, so `max-width: 100%` alone changes nothing. The `title`
+     attribute on this badge already carries the full name for hover and
+     long-press, so the ellipsis costs a phone reader nothing they had. */
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .badge--series:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 
@@ -5302,45 +5320,31 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    Sits below the promises because it is the second thing offered, not the
    first: the search bar is still the answer for anyone who knows what they
    want. It exists for everyone else, who previously got an empty two-thirds
-   of a screen. */
-.empty__browse {
-  margin: 52px auto 0; max-width: 720px;
-  border-top: 1px solid var(--border); padding-top: 28px;
-}
-.empty__browse-title {
-  font-family: var(--font-mono); font-size: 11px; font-weight: 400;
-  text-transform: uppercase; letter-spacing: 0.12em;
-  color: var(--text-faint); margin: 0 0 16px; text-align: center;
-}
-.empty__hubs {
-  list-style: none; padding: 0; margin: 0;
-  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
-}
-.empty__hub {
-  display: inline-flex; align-items: baseline; gap: 8px;
-  background: var(--surface2); border: 1px solid var(--border2);
-  color: var(--text); border-radius: 999px;
-  padding: 7px 14px; font-size: 13px; cursor: pointer;
-  font-family: inherit;
-  transition: border-color 0.12s, color 0.12s;
-}
-.empty__hub:hover { border-color: var(--accent-dim); color: var(--accent); }
-.empty__hub:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-/* The count is what makes one of these worth clicking over another, so it is
-   present but never competes with the name. */
-.empty__hub-count {
-  font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
-}
-.empty__hub:hover .empty__hub-count { color: inherit; }
-.empty__browse-more { margin: 18px 0 0; text-align: center; font-size: 13px; }
-.empty__browse-more a { color: var(--text-dim); text-decoration: none; }
-.empty__browse-more a:hover { color: var(--accent); text-decoration: underline; }
+   of a screen.
+
+   Everything that used to live here — `.empty__browse`, `.empty__browse-title`,
+   `.empty__hubs`, `.empty__hub`, `.empty__hub-count`, `.empty__browse-more`,
+   nine rules and two comments including the note explaining why the per-chip
+   count was "present but never competing with the name" — was deleted with the
+   markup in b58dfe5 and the styles were missed. Zero references in any .tsx.
+
+   Left behind because the classes read as plausible and a future reader would
+   assume they were live; the count comment in particular described behaviour
+   that no longer exists, so it was documentation of a feature rather than of
+   CSS. The live block is `.browse*` immediately below. */
 
 /* The browse section below the promises — where the front door's hub lists
    live. It is the biggest thing on the landing page after the search bar, so
    it gets its own space rather than sharing the promises' tight margin. */
 .browse {
-  margin: 48px auto 0; max-width: 720px;
+  margin: 48px auto 0;
+  /* 46rem, not 720px — the same measure as `.landing-hero` and
+     `.search-wrap--hero` directly above it. At 720px this block was 16px
+     narrower than the search bar it sits under, and both are centred, so it read
+     as an 8px inset on each side. Nobody chose 720 to be narrower than 46rem;
+     it was a number that happened to be there. Measured at 1440px: hero left
+     352 / width 736, browse left 360 / width 720. */
+  max-width: 46rem;
 }
 .browse__tabs {
   display: flex; gap: 4px; margin-bottom: 20px;
@@ -5362,14 +5366,44 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    on the site is made of. Thirty names in a wrapping grid says the same thing
    ("here are thirty places to start") without asking the reader to compare
    lengths, which was the only thing the bars were for. */
+
+/* The column ladder is EXPLICIT, and the reason it used to be `auto-fill` with a
+   150px minimum is that arithmetic nobody chose:
+
+   `repeat(auto-fill, minmax(150px, 1fr))` puts the column count wherever the
+   container width happens to cross a multiple of 158px, and this container is
+   capped, so it crossed at three points a reader actually has a phone at.
+   Measured, 12 rows of tiles, the whole ladder:
+
+     320px  1 column   252px tracks     <- a 252px-wide, 38px-tall bar
+     375px  1 column   307px tracks     <- one bar per row, 539px of them
+     390px  2 columns  157px tracks     <- the SAME page halves at 15px wider
+
+   375 → 390 is a 15px width difference and it is the difference between one
+   wide box and two narrow ones, which is what "the box size is weird and
+   inconsistent" was describing. The old comment claimed "two columns at 320px
+   and nine at 1440px"; it was one and four.
+
+   A ladder rather than arithmetic also lets the track stay WIDE ENOUGH FOR THE
+   NAMES, which is the other half of the ragged boxes. Measured worst case over
+   all 24 hub names — `Dazai Osamu/Nakahara Chuuya (Bungou Stray Dogs)`, 49
+   characters — tile height by track width:
+
+     150px → 113px (4 lines)   210px → 77px (2)    292px → 77px (2)
+     167px →  95px (3 lines)   236px → 77px (2)    412px → 60px (1)
+
+   So one column until there is room for two ~218px tracks, then two, then three
+   at the cap. Every name lands on two lines or fewer at every step, which is
+   what makes `min-height` below hold for all of them. */
 .browse__list {
   list-style: none; margin: 0; padding: 0;
   display: grid;
-  /* `minmax(150px, 1fr)` not a fixed column count: at 320px this is two columns
-     and at 1440px it is nine, with no breakpoint in between. */
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
 }
+@media (min-width: 32rem) { .browse__list { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 48rem) { .browse__list { grid-template-columns: repeat(3, 1fr); } }
+
 .browse__list li {
   background: var(--surface2); border: 1px solid var(--border2);
   border-radius: 8px; padding: 9px 12px;
@@ -5389,6 +5423,15 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
      track. */
   font-size: 13px; line-height: 1.35;
   overflow-wrap: anywhere;
+  /* ...and TWO lines of height reserved on every tile, which is what makes the
+     boxes the same size. Grid stretches within a row but not between rows, so
+     with content-driven heights the measured rows came out 38px, 55px and 73px
+     on one page and a single row was 95px at the old 174px track — a grid of
+     chips at four different heights. This is a MINIMUM and not a height: a name
+     that somehow needed a third line still grows the tile rather than being
+     clipped, so nothing is lost when the vocabulary has a surprise in it. The
+     ladder above is chosen so that in practice nothing has to. */
+  min-height: calc(2 * 1.35em);
 }
 .browse__list a:hover { text-decoration: underline; }
 
@@ -6557,9 +6600,11 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 
 /* The promises and the hub list are lists and stay left-aligned inside a
-   centred column — centred body text is hard to read at any length. */
-.main--landing .empty__promises,
-.main--landing .empty__hubs {
+   centred column — centred body text is hard to read at any length.
+   `.empty__hubs` was dropped from this group when the markup went in b58dfe5;
+   it matched nothing, so the rule silently applied to the promises alone and
+   the hub chips kept inheriting centred text from `.browse__more`. */
+.main--landing .empty__promises {
   text-align: left;
 }
 

@@ -175,6 +175,9 @@ export default function SiteHeader(
   const [searchHref, setSearchHref] = useState("/")
   useEffect(() => { setSearchHref(lastSearchHref()) }, [current])
   const backToResults = searchHref !== "/"
+  // The tab bar's first slot is home unless returning to a remembered search is
+  // somewhere else — see the call site for why the condition is this narrow.
+  const showResults = backToResults && current !== "search"
 
   const link = (key: NavKey, href: string, label: string, offline = false,
                 title?: string) => {
@@ -198,6 +201,13 @@ export default function SiteHeader(
 // download, and this has to render with no network at all — the tab bar is how
 // you reach the offline library.
 const ICONS: Record<string, React.ReactNode> = {
+  // A house, and it has to stay distinguishable from `library` (an open book)
+  // and `browse` (four squares) at 21px — the roofline does that, so the shape
+  // carries the roof rather than filling it in like a solid block would.
+  home: (
+    <><path d="M4 10.6 12 4.2l8 6.4V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z" />
+      <path d="M9.5 20v-5.6h5V20" /></>
+  ),
   search: (
     <><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2" /></>
   ),
@@ -261,9 +271,19 @@ function TabIcon({ name }: { name: string }) {
             already expect, and it was previously not a link at all. */}
         {/* The wordmark stays a clean slate even when "Search" beside it goes
             back to your results — logo-means-home is the older convention and
-            people use it to start over. */}
+            people use it to start over.
+
+            The title is unconditionally "FicAtlas home" because the href always
+            was "/", on every route — checked in a browser at all nine. It used to
+            read "Start a fresh search" whenever a search was remembered, which
+            described a destination this link does not have: a remembered search
+            is `/?q=drarry`, and from `/library` this link takes you to `/` and
+            nowhere near it. A tooltip that disagrees with the href is worse than
+            no tooltip, and the wordmark is the one control on the page whose
+            meaning must not vary. `backToResults` still drives the Search link
+            beside it, which is the control that does go back to results. */}
         <Link href="/" className="logo logo--link" aria-label="FicAtlas home"
-          title={backToResults ? "Start a fresh search" : "FicAtlas home"}>
+          title="FicAtlas home">
           {/* The mark and the name, one link. The rose was on the tab icon and
               the share card and nowhere on the site itself, so the thing a
               reader had in their browser tab did not appear on the page it
@@ -301,7 +321,25 @@ function TabIcon({ name }: { name: string }) {
       </header>
 
       <nav className="tabbar" aria-label="Primary">
-        {tab("search", searchHref, "Search", "search")}
+        {/* HOME is the default for this slot, and it was not before.
+
+            This item pointed at `searchHref`, so with a search remembered it went
+            to `/?q=drarry` while carrying the word "Search" — and the wordmark
+            one tap away went to `/`. Two controls, one page, two answers to
+            "where does this go", checked in a browser from `/library`. On a
+            phone installed as a PWA that slot is the whole primary nav, so the
+            ambiguity was not a nicety.
+
+            Home is now the default, and the item only becomes "Results" when
+            there is a remembered search AND the reader is not already on the
+            search page — the one case where returning to it is a different
+            destination from standing here. `lastSearchHref` is untouched: a PWA
+            with no back button still has its way back to what it was reading,
+            and it is now labelled for what it does. Four items either way, so
+            the 375px overflow the comment above warns about cannot arrive. */}
+        {tab("search", showResults ? searchHref : "/",
+              showResults ? "Results" : "Home",
+              showResults ? "search" : "home")}
         {tab("browse", "/fandoms", "Browse", "browse")}
         {tab("library", "/library", "Library", "library", true)}
         {tab("settings", "/settings", "Settings", "settings")}

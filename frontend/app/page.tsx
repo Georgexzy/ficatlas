@@ -3466,8 +3466,40 @@ function SearchPageInner() {
               button people hesitate over. Only rendered when there is something
               to leave. */}
           {searchIsActive && (
-            <div className="search-exit">
-              <span className="search-exit__what">
+<div className="search-exit">
+                {/* The results state had NO heading at all, and the landing page
+                    has one — so this was the same bug the empty state was fixed
+                    for, in the other state. `LandingIntro`'s <h1> ("Find fic
+                    across three archives at once") only renders when there are
+                    no results, which means every page a reader actually reads on
+                    — and every one a search engine indexes — had a headingless
+                    document. Measured: `/` h1 = 1, `/?q=drarry` h1 = 0.
+
+                    The line below already says this out loud ("Searching
+                    drarry", "Browsing with 3 filters"), so it was the obvious
+                    candidate — but it is a flex sibling of the "Start over"
+                    button inside `.search-exit`, it is truncated at 44
+                    characters, and it is conditionally absent while
+                    `searchIsActive` is false. Promoting it would have put the
+                    document's only heading behind a conditional and behind a
+                    truncation.
+
+                    So the heading is separate, visually hidden, and unconditional
+                    for the results state — which is also why it must NOT be the
+                    visible line: two h1s on one page is the bug the empty state's
+                    comment above warns about, and this branch renders alongside
+                    `LandingIntro` during the transition out of it. */}
+                {shown && (
+                  <h1 className="visually-hidden">
+                    {query.trim()
+                      ? `Results for ${query.trim()}`
+                      : activeFilters > 0
+                        ? `Results filtered by ${activeFilters} ${
+                            activeFilters === 1 ? "filter" : "filters"}`
+                        : "Search results"}
+                  </h1>
+                )}
+                <span className="search-exit__what">
                 {query.trim() ? (
                   <>Searching <strong>{query.trim().length > 44
                     ? query.trim().slice(0, 44) + "…" : query.trim()}</strong></>
