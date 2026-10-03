@@ -21,6 +21,8 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException
@@ -690,27 +692,238 @@ def overview(refresh: bool = False,
     return {**out, "cached": False, "age_s": 0}
 
 
-# Background passes an operator can start by hand. Each is already on a timer;
-# these exist for "I have just fixed the thing that was blocking it and do not
-# want to wait 30 minutes to find out whether it worked".
-_JOBS = {
-    "ao3_stubs": ("ao3_stub_enrich", "Fill AO3 rows indexed as bare titles"),
-    "ffnet_meta": ("ffnet_enrich", "Backfill FF.net characters and genres from Wayback"),
+# ── the passes an operator can start by hand ────────────────────────────────
+#
+# Every one of these is already on a timer. The buttons exist for "I have just
+# fixed the thing that was blocking it and do not want to wait half an hour to
+# find out whether it worked".
+#
+# The panel could see twenty-eight loops and start TWO of them, which is the
+# wrong way round: the loops an operator most wants to poke are the heavy
+# repairs, and those are exactly the ones with no button. The reason is visible
+# in what this used to be — a two-entry dict of (module, description) plus an
+# `if job == "ao3_stubs"` chain in the runner, because the two jobs happened to
+# have different call signatures. Adding a third meant editing three places, so
+# it never happened. The registry below makes the signature part of the entry,
+# so adding a pass is one dict row.
+#
+# `dry_run` is the DEFAULT and not an option. Eight of these take one and every
+# one of them implements it, so a dry run is the cheapest possible proof that a
+# pass is wired up and the safest possible way to find out what it would do —
+# `content_gates.run(dry_run=True)` reports the rows it would rewrite without
+# touching a single one. An operator who wants the real thing has to say so, and
+# the UI makes that a second click rather than the first one.
+#
+# `minutes` is a floor for "how long should I not leave this running", not a
+# promise. popularity_rank measured 3h51m over 2.4M rows, so it says 240.
+@dataclass(frozen=True)
+class _Job:
+    label: str
+    blurb: str
+    # Called as fn(limit, dry_run) -> str. Returns what the pass did or would do,
+    # which is shown to the operator verbatim — a pass that reports nothing is a
+    # pass whose result has to be found in a 75,000-line log.
+    fn: Callable[[int, bool], str]
+    # A pass that makes outbound requests is throttled by a rate limiter shared
+    # with the crawler, so starting one by hand competes with indexing. Said in
+    # the UI rather than prevented: an operator fixing a crawl blocker is
+    # exactly the case where running it is right.
+    networked: bool = False
+    minutes: int = 0
+
+
+def _wrap_simple(module: str, attr: str = "run") -> Callable[[int, bool], str]:
+    """Adapter for the `run(dry_run=False)` shape eight of the passes share.
+
+    The module is imported lazily inside the returned callable: importing all of
+    them at module scope would pull the whole maintenance surface into every
+    API worker, and one of them is the 3h51m popularity pass.
+    """
+    import importlib
+
+    def call(limit: int, dry_run: bool) -> str:
+        result = getattr(importlib.import_module(module), attr)(dry_run=dry_run)
+        return _describe(result)
+
+    return call
+
+
+def _ao3_stubs(limit: int, dry_run: bool) -> str:
+    import asyncio
+
+    import ao3_stub_enrich
+
+    asyncio.run(ao3_stub_enrich.enrich(limit, dry_run))
+    return f"checked up to {limit:,} AO3 rows"
+
+
+def _ffnet_meta(limit: int, dry_run: bool) -> str:
+    from ffnet_enrich import run as enrich_run
+
+    enrich_run(limit, dry_run, 0.0, 25, 600.0)
+    return f"checked up to {limit:,} FF.net rows"
+
+
+def _describe(result: object) -> str:
+    """A pass's return value, in a sentence.
+
+    Most of these return a dict of counters and one returns a bare int, and the
+    dict is the useful part: `{"scanned": 847113, "fixed": 0}` says the pass ran
+    and found nothing, which is the answer an operator wanted and the one a log
+    line three screens up does not give them.
+    """
+    if result is None:
+        return "finished"
+    if isinstance(result, int):
+        return f"{result:,}"
+    if isinstance(result, dict):
+        bits = [f"{k} {v:,}" if isinstance(v, int) else f"{k} {v}"
+                for k, v in result.items() if v not in (None, "", [], {})]
+        return ", ".join(bits) if bits else "nothing to do"
+    return str(result)
+
+
+_JOBS: dict[str, _Job] = {
+    # ── repairs that rewrite `stories` in bulk ──
+    "content_gates": _Job(
+        "Recompute the content gates",
+        "Re-derives the gate columns from the term lists after a list changes. "
+        "The trigger has no way to retrofit a new term onto rows written before "
+        "it, so this is the only thing that applies one.",
+        _wrap_simple("content_gates"), minutes=45,
+    ),
+    "crossover": _Job(
+        "Rebuild the crossover flag",
+        "Recounts distinct franchises per work. The flag is derived from the "
+        "row's own fandoms, so a trigger normally keeps it right — this is for "
+        "a change to the definition itself.",
+        _wrap_simple("crossover"), minutes=30,
+    ),
+    "series_wordcount": _Job(
+        "Refresh series word totals",
+        "The add-on that lets a long read be found when no single part is long "
+        "enough. Sweeps until a sweep writes nothing.",
+        _wrap_simple("series_wordcount"), minutes=30,
+    ),
+    "popularity_rank": _Job(
+        "Rebuild the popularity percentile",
+        "The only sort that compares archives honestly, and it runs offline over "
+        "millions of rows. By far the longest pass here — budget hours, not "
+        "minutes.",
+        _wrap_simple("popularity_rank"), minutes=240,
+    ),
+    # ── passes that fetch from a third party ──
+    "ao3_stubs": _Job(
+        "Fill AO3 rows with no fandom",
+        "Only the rows the listing harvest cannot reach, worst gaps first. One "
+        "request each, so this is deliberately the small half of the job.",
+        _ao3_stubs, networked=True,
+    ),
+    "ffnet_meta": _Job(
+        "Backfill FF.net characters",
+        "From Wayback captures — FF.net publishes characters and pairings, but "
+        "neither bulk dump carries them.",
+        _ffnet_meta, networked=True,
+    ),
+    "ao3_title_repair": _Job(
+        "Repair truncated AO3 titles",
+        "The bulk metadata dump ships titles cut mid-phrase, and 688k rows are "
+        "affected. One request per work, so it will not catch up.",
+        lambda limit, dry: _ao3_titles(limit, dry), networked=True,
+    ),
+    "indexnow": _Job(
+        "Submit changed hub URLs",
+        "Tells search engines which hub pages moved. Bounded by the key; does "
+        "nothing without one.",
+        lambda limit, dry: str(_indexnow(limit, dry)), networked=True,
+    ),
+    "reddit_recs": _Job(
+        "Import reader recommendations",
+        "Community rec lists, written as the `community_recs` marker the recs "
+        "filter reads. Reddit refuses unauthenticated traffic from this host, "
+        "so this will usually report a backoff.",
+        lambda limit, dry: _describe(_reddit_recs(dry)), networked=True,
+    ),
+    "tropedia_recs": _Job(
+        "Import Tropedia recommendations",
+        "The same marker from ~900 fandom wikis. Commits in batches of 25 "
+        "pages, so an interruption costs the pages not yet read.",
+        lambda limit, dry: _describe(_tropedia_recs(limit, dry)), networked=True,
+    ),
 }
 
+
+def _ao3_titles(limit: int, dry_run: bool) -> str:
+    import ao3_title_repair
+
+    ao3_title_repair.run(limit, dry_run, 0.0)
+    return f"checked up to {limit:,} truncated titles"
+
+
+def _indexnow(limit: int, dry_run: bool) -> int:
+    import indexnow
+
+    return indexnow.run(limit, dry_run)
+
+
+def _reddit_recs(dry_run: bool):
+    import reddit_recs_import
+
+    return reddit_recs_import.run(dry_run)
+
+
+def _tropedia_recs(limit: int, dry_run: bool):
+    import tropedia_recs_import
+
+    return tropedia_recs_import.run(dry_run, limit or None)
+
+
 _running: dict[str, float] = {}
+# The last outcome per pass, read back by GET /run/{job}. Process memory and no
+# persistence, deliberately: it is a progress readout for a pass an operator is
+# watching, not a job history, and nothing here should outlive the container
+# that produced it. See `job_result` for why that lifetime is enough.
+_results: dict[str, dict] = {}
+
+
+@router.get("/jobs")
+def list_jobs(_admin: User = Depends(require_admin)):
+    """What can be started, so the UI is driven by this rather than by a copy.
+
+    The previous two buttons were hardcoded in the panel while the list of
+    passes lived here, so the two could disagree and nothing would say so. This
+    is the same argument as `adminTabs` and the two query parsers: one list, and
+    the second copy is the bug.
+    """
+    return {
+        "jobs": [
+            {
+                "key": key,
+                "label": j.label,
+                "blurb": j.blurb,
+                "networked": j.networked,
+                "minutes": j.minutes,
+            }
+            for key, j in _JOBS.items()
+        ]
+    }
 
 
 @router.post("/run/{job}")
-def run_job(job: str, limit: int = Form(200),
-                  db: Session = Depends(get_db),
+def run_job(job: str, limit: int = Form(200), dry_run: bool = Form(True),
                   _admin: User = Depends(require_admin)):
-    """Start one enrichment pass in the background.
+    """Start one pass in the background — a DRY RUN unless asked otherwise.
 
     Deliberately fire-and-forget with a single-flight guard rather than a job
     queue: these are idempotent passes that pick their own targets, so the worst
     a duplicate does is waste requests against a rate limiter that is already
     shared. A queue would be more machinery than the problem has.
+
+    The guard is per job key, and it is in this process's memory — which is the
+    same limit it always had, now worth saying: with two uvicorn workers and a
+    reload, two clicks can still start two passes. That is acceptable for
+    idempotent work and would not be for anything else, which is part of why
+    there is no job queue here.
     """
     if job not in _JOBS:
         raise HTTPException(404, f"No such job. Known: {', '.join(sorted(_JOBS))}")
@@ -720,18 +933,27 @@ def run_job(job: str, limit: int = Form(200),
     _running[job] = time.time()
 
     import asyncio
-    module, _desc = _JOBS[job]
+    spec = _JOBS[job]
+    cap = min(max(int(limit), 1), 2000)
+    result: dict = {"job": job, "limit": cap, "dry_run": dry_run, "state": "running"}
+    # Published before the work starts, so a poll immediately after the click
+    # reads "running" rather than "never-run" — which is the same state a pass
+    # that never started is in, and would leave the panel looking broken for the
+    # whole of a four-hour rebuild.
+    _results[job] = result
 
     def _go():
         try:
-            if job == "ao3_stubs":
-                import ao3_stub_enrich
-                asyncio.run(ao3_stub_enrich.enrich(min(limit, 2000), False))
-            else:
-                from ffnet_enrich import run as enrich_run
-                enrich_run(min(limit, 2000), False, 0.0, 25, 600.0)
+            # The pass's own words, kept. A dry run is only useful if it says what
+            # it found, and "started" is not that — an operator who previewed the
+            # gate rebuild needs to know whether there were 1.4M rows to rewrite
+            # or none at all before deciding to run it for real.
+            result["report"] = spec.fn(cap, dry_run)
+            result["state"] = "done"
         except Exception as e:
             log.warning(f"admin job {job} failed: {type(e).__name__}: {e}")
+            result["state"] = "failed"
+            result["error"] = f"{type(e).__name__}: {e}"
 
     # _go is synchronous and blocking, and this endpoint runs in a FastAPI
     # threadpool thread, so asyncio.get_event_loop() here would raise
@@ -740,8 +962,32 @@ def run_job(job: str, limit: int = Form(200),
     # threadpool thread; the helper's done-callback also surfaces any error the
     # inner try/except missed.
     from live_fetch.jobs import run_in_background
-    run_in_background(lambda: asyncio.to_thread(_go))
-    return {"started": job, "limit": min(limit, 2000)}
+    started = run_in_background(lambda: asyncio.to_thread(_go))
+    if started is None:
+        # The helper returns None when there is no loop to schedule on, after
+        # logging it and carrying on. Ignoring that return value — which is what
+        # this did — leaves `state: running` on the panel for a pass that never
+        # started, and a four-hour rebuild that is never going to finish looks
+        # exactly like one that is. Said plainly instead.
+        result["state"] = "failed"
+        result["error"] = "could not start: no event loop on this worker"
+    return result
+
+
+@router.get("/run/{job}")
+def job_result(job: str, _admin: User = Depends(require_admin)):
+    """How the last run of a pass went, including its own report.
+
+    A pass takes minutes to hours, so the button that started it has long since
+    returned `state: running` and the panel needs somewhere to ask again. The
+    result is kept per key and overwritten by the next start, which is the whole
+    lifetime an operator needs: the answer to "did that work" is read once, and
+    the evidence it concerns is a row count or a timestamp that is still there
+    afterwards.
+    """
+    if job not in _JOBS:
+        raise HTTPException(404, f"No such job. Known: {', '.join(sorted(_JOBS))}")
+    return _results.get(job) or {"job": job, "state": "never-run"}
 
 
 @router.get("/users")

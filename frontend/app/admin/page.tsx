@@ -7,7 +7,7 @@ import OutreachTab from "./OutreachTab"
 import { adminTabFor, type AdminTab } from "@/lib/adminTabs"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 import BackLink from "../BackLink"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 
@@ -221,6 +221,192 @@ function Group({ title, alwaysOpen = false, children }: {
   )
 }
 
+// ── the maintenance console ─────────────────────────────────────────────────
+//
+// Driven by GET /api/admin/jobs rather than by a list written here, because the
+// previous two buttons were hardcoded in this file while the passes lived in
+// `api/admin.py`. The two could disagree and nothing would say so — which is how
+// the panel came to show twenty-eight loops and offer two.
+//
+// PREVIEW IS THE DEFAULT, and that is the whole design. Every one of these
+// passes already implements `dry_run`, so the first click answers "what would
+// this do?" without touching a row, and only an explicit second click commits.
+// A bulk rewrite of a 20.9M-row table is the sort of thing an operator clicks
+// to see whether it worked and then has to go and undo.
+//
+// The preview is not free, and the row says so where it matters: the heavy
+// repairs take minutes to hours, and `content_gates`' own dry run measured 76s
+// for a single count. What a preview buys is the ANSWER, not the time.
+//
+// Two things a single `note` string could not carry, and which is why each pass
+// keeps its own state: a four-hour rebuild and a nine-second one can be running
+// at the same time, and "Started." for both tells you nothing about either.
+interface AdminJob {
+  key: string; label: string; blurb: string; networked: boolean; minutes: number
+}
+type JobState =
+  | { phase: "idle" }
+  | { phase: "previewing" }
+  | { phase: "starting" }
+  | { phase: "running"; dry: boolean }
+  | { phase: "done"; report: string; dry: boolean }
+  | { phase: "failed"; error: string }
+
+function PassRunner() {
+  const [jobs, setJobs] = useState<AdminJob[] | null>(null)
+  const [listError, setListError] = useState<string | null>(null)
+  const [state, setState] = useState<Record<string, JobState>>({})
+  const [limit, setLimit] = useState("200")
+  // Set per key while a poll is in flight, and read by the cleanup below, so a
+  // pass that is unmounted mid-poll stops asking rather than setting state on a
+  // component that is gone.
+  const pollRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+
+  useEffect(() => {
+    let live = true
+    ;(async () => {
+      try {
+        const r = await fetchWithTimeout("/api/admin/jobs",
+          { credentials: "include" }, USER_TIMEOUT_MS)
+        if (!live) return
+        if (!r.ok) throw new Error(`Could not load the pass list (${r.status})`)
+        const d = await r.json()
+        setJobs(d.jobs)
+      } catch (e: any) {
+        if (live) setListError(e?.message ?? "Could not load the pass list.")
+      }
+    })()
+    const timers = pollRef.current
+    return () => {
+      live = false
+      for (const t of Object.values(timers)) clearTimeout(t)
+    }
+  }, [])
+
+  const poll = (key: string, dry: boolean) => {
+    pollRef.current[key] = setTimeout(async () => {
+      try {
+        const r = await fetchWithTimeout(`/api/admin/run/${key}`,
+          { credentials: "include" }, USER_TIMEOUT_MS)
+        const d = await r.json().catch(() => null)
+        if (d?.state === "running") { poll(key, dry); return }
+        if (d?.state === "done") {
+          setState(s => ({ ...s, [key]: { phase: "done", report: d.report ?? "finished", dry: d.dry_run } }))
+        } else if (d?.state === "failed") {
+          setState(s => ({ ...s, [key]: { phase: "failed", error: d.error ?? "it failed" } }))
+        } else {
+          // never-run while we are polling means the process that started it
+          // restarted. Say so rather than spinning forever.
+          setState(s => ({ ...s, [key]: { phase: "failed", error: "lost track of it — the worker restarted" } }))
+        }
+      } catch {
+        // A failed poll is not a failed pass. Keep asking: the pass is in
+        // another process and this is only the window onto it.
+        poll(key, dry)
+      }
+    }, 3000)
+  }
+
+  const start = async (key: string, dry: boolean) => {
+    setState(s => ({ ...s, [key]: { phase: dry ? "previewing" : "starting" } }))
+    try {
+      const fd = new FormData()
+      fd.append("limit", String(Math.min(Math.max(Number(limit) || 200, 1), 2000)))
+      fd.append("dry_run", dry ? "true" : "false")
+      const r = await fetchWithTimeout(`/api/admin/run/${key}`,
+        { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
+      const d = await r.json().catch(() => null)
+      if (!r.ok) throw new Error(d?.detail ?? `Could not start (${r.status})`)
+      if (d?.state === "failed") throw new Error(d.error ?? "it could not start")
+      setState(s => ({ ...s, [key]: { phase: "running", dry } }))
+      poll(key, dry)
+    } catch (e: any) {
+      setState(s => ({ ...s, [key]: { phase: "failed", error: e?.message ?? "could not start" } }))
+    }
+  }
+
+  if (listError) return <p className="admin-note admin-note--warn">{listError}</p>
+  if (!jobs) return <p className="admin-note">Loading the passes…</p>
+
+  return (
+    <>
+      {/* One limit for all of them, and it is a LIMIT on the work rather than a
+          budget: these passes pick their own targets, so `limit` is how many
+          they may consider. 200 is the historical default and the reason a
+          click "does not seem to do anything" on a 20.9M-row table — worth
+          being able to raise it without leaving the page. */}
+      <div className="admin-actions">
+        <label className="admin-pass__limitlabel" htmlFor="pass-limit">Max rows per run</label>
+        <input id="pass-limit" className="queue__search" type="number"
+          min={1} max={2000} value={limit}
+          onChange={e => setLimit(e.target.value)} />
+      </div>
+
+      <div className="admin-passes">
+        {jobs.map(j => {
+          const s = state[j.key] ?? { phase: "idle" as const }
+          const busy = s.phase === "previewing" || s.phase === "starting" || s.phase === "running"
+          return (
+            <div key={j.key} className={`admin-pass admin-pass--${s.phase}`}>
+              <div className="admin-pass__head">
+                <span className="admin-pass__name">{j.label}</span>
+                <span className="admin-pass__cost">
+                  {j.minutes > 0
+                    ? <span className="admin-pass__long">~{j.minutes >= 60
+                        ? `${Math.round(j.minutes / 60)}h` : `${j.minutes}m`}</span>
+                    : <span>quick</span>}
+                  {j.networked && <span className="admin-pass__net" title="Makes outbound requests, so it shares a rate limiter with the crawler">networked</span>}
+                </span>
+              </div>
+              <p className="admin-pass__blurb">{j.blurb}</p>
+
+              <div className="admin-pass__actions">
+                <button className="btn btn--ghost" disabled={busy}
+                  onClick={() => start(j.key, true)}>
+                  {s.phase === "previewing" ? "Previewing…" : "Preview"}
+                </button>
+                {/* Committing is behind the preview on purpose, but not behind a
+                    modal: this is the operator's own page and the button says
+                    what it does. A pass that has just been previewed shows what
+                    the preview found, which is the information that makes the
+                    second click informed rather than hopeful. */}
+                <button className="btn btn--ghost btn--warn" disabled={busy}
+                  onClick={() => start(j.key, false)}>
+                  {s.phase === "starting" ? "Starting…" : s.phase === "running" && !s.dry
+                    ? "Running…" : "Run for real"}
+                </button>
+              </div>
+
+              {s.phase === "running" && (
+                <p className="admin-pass__state">
+                  {s.dry ? "Previewing" : "Running"} — this page polls every 3s.
+                  The pass keeps going whatever this tab does.
+                </p>
+              )}
+              {s.phase === "done" && (
+                <p className={`admin-pass__state ${s.dry ? "admin-pass__state--preview" : "admin-pass__state--done"}`}>
+                  <strong>{s.dry ? "Would do" : "Did"}</strong> {s.report}
+                </p>
+              )}
+              {s.phase === "failed" && (
+                <p className="admin-pass__state admin-pass__state--bad">{s.error}</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <p className="admin-pass__foot">
+        A preview writes nothing and is always the first button. A pass that
+        takes longer than a minute keeps running after you close this tab — the
+        buttons are fire-and-forget, and what you see above is the only report
+        there is, so check the row rather than the worker log.
+        {" "}<code>dry_run</code> is the endpoint's default for the same reason.
+      </p>
+    </>
+  )
+}
+
 // Who has an account, and — the column that actually matters — whether they
 // could ever get back into it. See /api/admin/users.
 interface Person {
@@ -253,7 +439,10 @@ export default function AdminPage() {
   const [issued, setIssued] = useState<{ username: string; code: string } | null>(null)
   const [issuing, setIssuing] = useState("")
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
+  // `note` belongs to ACCOUNT RECOVERY, not to the pass runner. They were one
+  // shared string before PassRunner, which is fine for a single form and wrong
+  // for a page that can have ten passes in flight at once — so the job half
+  // took its own state and this kept what it was already doing.
   const [note, setNote] = useState<string | null>(null)
 
   const load = useCallback(async (fresh = false) => {
@@ -280,19 +469,10 @@ export default function AdminPage() {
 
   useEffect(() => { if (isAdmin) load() }, [isAdmin, load])
 
-  const runJob = async (job: string) => {
-    setBusy(job); setNote(null)
-    try {
-      const fd = new FormData(); fd.append("limit", "300")
-      const r = await fetchWithTimeout(`/api/admin/run/${job}`,
-        { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
-      const d = await r.json().catch(() => null)
-      setNote(r.ok
-        ? "Started. It runs in the background — reload in a few minutes to see the coverage move."
-        : (d?.detail || `Could not start (${r.status}).`))
-    } catch { setNote("Could not start that pass.") }
-    finally { setBusy(null) }
-  }
+  // `runJob` used to live here and set one shared `busy`/`note` pair for the
+  // whole page. Both are gone: PassRunner owns its own per-pass state, because a
+  // shared note could not say WHICH pass it was about — so two passes could not
+  // be in flight at once without one silently overwriting the other's result.
 
   if (authLoading) return (
     <div className="settings-shell"><SiteHeader />
@@ -855,34 +1035,7 @@ export default function AdminPage() {
               have just fixed whatever was blocking one and do not want to wait
               half an hour to find out whether it worked.
             </p>
-            {note && <p className="admin-note">{note}</p>}
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">Fill AO3 rows with no fandom</span>
-                <span className="setting-row__hint">
-                  Only the rows the listing harvest cannot reach, worst gaps first.
-                  One request each, so this is deliberately the small half of the
-                  job — the cheap bulk route handles everything with a fandom.
-                </span>
-              </div>
-              <button className="btn btn--ghost" disabled={busy === "ao3_stubs"}
-                onClick={() => runJob("ao3_stubs")}>
-                {busy === "ao3_stubs" ? "Starting…" : "Run"}
-              </button>
-            </div>
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">Backfill FF.net characters</span>
-                <span className="setting-row__hint">
-                  From Wayback captures — FF.net publishes characters and pairings,
-                  but neither bulk dump carries them.
-                </span>
-              </div>
-              <button className="btn btn--ghost" disabled={busy === "ffnet_meta"}
-                onClick={() => runJob("ffnet_meta")}>
-                {busy === "ffnet_meta" ? "Starting…" : "Run"}
-              </button>
-            </div>
+            <PassRunner />
           </Group>
 
           <div className="settings-actions">

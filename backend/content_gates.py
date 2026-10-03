@@ -196,6 +196,21 @@ def _run_locked(dry_run: bool = False) -> dict:
                 text("SELECT pg_try_advisory_lock(:k)"), {"k": _LOCK_KEY}).scalar():
             log.warning("content_gates: another run holds the lock; skipping")
             return {"skipped": True}
+
+        # No statement timeout, on BOTH paths. This used to sit below the
+        # dry-run return, which meant the preview inherited the pooled 60s
+        # default and died on its own count(*) over 20.9M rows — so the one
+        # thing the dry run exists for, finding out whether there is any work to
+        # do, was the only thing it could not do. Found by running it: the
+        # operator-triggered button in the admin panel is a dry run by default,
+        # and it reported `QueryCanceled` every time.
+        #
+        # The reasoning below it applies unchanged to a full-table count. The
+        # pooled default is tuned so a slow SEARCH fails fast rather than
+        # holding a connection; this is not a search. Set per-session, so nothing
+        # else is affected.
+        db.execute(text("SET statement_timeout = 0"))
+
         if dry_run:
             row = db.execute(text("""
                 SELECT count(*) FILTER (WHERE warnings && CAST(:uw AS text[])
@@ -211,12 +226,6 @@ def _run_locked(dry_run: bool = False) -> dict:
         # The trigger FIRST, so that anything the crawler writes while the
         # backfill below is running is already gated. Doing it the other way
         # round leaves a window the length of the backfill.
-        # No statement timeout. This is a maintenance job, not a request: the
-        # pooled default is tuned so a slow SEARCH fails fast rather than
-        # holding a connection, and inheriting it here just means the backfill
-        # can never finish. Set per-session, so nothing else is affected.
-        db.execute(text("SET statement_timeout = 0"))
-
         install_trigger(db)
         db.commit()
         log.info("content_gates: write-time trigger installed")

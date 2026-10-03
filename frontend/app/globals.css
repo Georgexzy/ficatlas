@@ -2493,8 +2493,14 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
    Not a constant spin either: a needle hunting north overshoots and settles,
    which is what gives it away as an instrument rather than a loading icon. 2.4s
    because a cold search on a 20M-row index is seconds, not milliseconds —
-   anything faster looks frantic beside a wait this long. The wrap from 180 back
-   to 0 is invisible because the needle is a 180°-symmetric kite.
+   anything faster looks frantic beside a wait this long.
+
+   `ease-in-out` on the WHOLE cycle is what made the settle read as rubber. The
+   easing is applied per-segment by the keyframes instead, so the outbound swing
+   accelerates out and decelerates into the overshoot, and the damping after it
+   is a series of ever-smaller corrections rather than one symmetric ease in and
+   back out. That is the difference between a needle being pushed and a needle
+   being wound.
 
    `transform-box: view-box` is what makes `transform-origin: 50% 50%` mean the
    CENTRE of the 32-unit viewBox rather than the group's own bounding box, which
@@ -2502,14 +2508,40 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 .search-loading__rose .compass__needle {
   transform-box: view-box;
   transform-origin: 50% 50%;
-  animation: compass-seek 2.4s ease-in-out infinite;
+  animation: compass-seek 2.4s linear infinite;
 }
 @keyframes compass-seek {
+  /* A needle finding NORTH, which is the one thing a compass does.
+
+     The previous version swept 0° → 200° → 178° → 184° → 180°, i.e. it overshot
+     and then oscillated in a ±10° band around SOUTH — which is the "odd" reading
+     reported from the search loader. Three things were wrong with it, and only
+     the first was visible:
+
+     A real needle is attracted to north and is *pushed* off it, so it comes to
+     rest AT north. Resting at 180° put the needle's lit end pointing at the
+     bottom of the mark, so the spinning state showed the needle pointing the
+     opposite way from the static logo above it. The same mark said two opposite
+     things about which way was up depending on whether a search was running.
+
+     The 200° overshoot is right and is kept — a needle that arrives without
+     overshooting is a servo motor, not an instrument — but a real one overshoots
+     once and damps out. Two oscillations read as a wobble, not a settle.
+
+     And the settle has to be slow enough to watch, or the damping is invisible
+     and it is just a spin with extra steps. 62%–100% is 38% of the duration on
+     the settle, which at 2.4s is ~0.9s of visible damping.
+
+     The loop point is invisible because the needle is a 180°-symmetric kite:
+     360° renders identically to 0°. */
   0%   { transform: rotate(0deg); }
-  55%  { transform: rotate(200deg); }
-  70%  { transform: rotate(178deg); }
-  85%  { transform: rotate(184deg); }
-  100% { transform: rotate(180deg); }
+  /* Out past north — fast, because nothing stops a needle until it arrives. */
+  38%  { transform: rotate(74deg); }
+  /* First overshoot, then one smaller counter-swing, then rest. */
+  62%  { transform: rotate(-13deg); }
+  78%  { transform: rotate(7deg); }
+  89%  { transform: rotate(-3deg); }
+  100% { transform: rotate(0deg); }
 }
 @media (prefers-reduced-motion: reduce) {
   .search-loading__rose .compass__needle { animation: none; }
@@ -2535,11 +2567,11 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 }
 .search-loading__rose { opacity: 0.8; }
 .search-loading__rose svg { width: 96px; height: 96px; }
-.search-loading__rose .compass__needle {
-  transform-box: view-box;
-  transform-origin: 50% 50%;
-  animation: compass-seek 2.4s ease-in-out infinite;
-}
+/* The needle's animation is NOT repeated here. This block used to carry a second,
+   byte-identical copy of the rule at line 2508 — same selector, same duration,
+   same easing — so the loader's needle was declared twice and the later one won.
+   Same-shape declarations are the ones that survive review, which is exactly why
+   they are worth deleting rather than leaving as harmless redundancy. */
 .search-loading__text {
   margin: 22px 0 0; font-size: 0.82rem;
   letter-spacing: 0.14em; text-transform: uppercase;
@@ -6104,6 +6136,89 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 .admin-job__budget { font-size: 10px; color: var(--text-faint); letter-spacing: .02em; }
 .admin-job__why { margin: 2px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--text-dim); }
+
+/* ── the maintenance console ──────────────────────────────────────────────────
+   Ten passes where there were two, so the grid carries the shape rather than a
+   list: `auto-fit minmax(300px, 1fr)` puts three across on a desktop and one on
+   a phone without a breakpoint, and each card is tall enough for its blurb and
+   two buttons to sit without the row heights going ragged.
+
+   The status rail is the same one `.admin-job` uses above, deliberately — this
+   panel and the background-jobs panel are the same widget twice, one reporting
+   what a loop left behind and one offering to start one, and they should not
+   look like two products. A left border rather than a tint, so eleven idle
+   cards read as calm rather than as eleven things wanting attention. */
+.admin-passes {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 10px; margin: 10px 0 0;
+}
+.admin-pass {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.admin-pass--running     { border-left-color: var(--accent); }
+.admin-pass--done        { border-left-color: var(--green); }
+/* A dry run that succeeded is not the same as a pass that succeeded, and
+   painting both green would make a preview look like a repair. Amber reads as
+   "here is the answer, nothing was written", which is what it is. */
+.admin-pass--done:has(.admin-pass__state--preview) { border-left-color: var(--warn); }
+.admin-pass--failed      { border-left-color: var(--red); }
+
+.admin-pass__head { display: flex; align-items: baseline; gap: 8px; }
+.admin-pass__name { font-size: 13px; font-weight: 600; color: var(--text); }
+/* Pushed right, and the two tags are ordered cost-then-kind so a row of cards
+   scans as "this one is the four-hour one" without reading any of them. */
+.admin-pass__cost {
+  margin-left: auto; display: inline-flex; gap: 5px; align-items: baseline;
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text-ghost); white-space: nowrap;
+}
+.admin-pass__long { color: var(--warn); }
+.admin-pass__net {
+  color: var(--text-faint);
+  border-left: 1px solid var(--border2); padding-left: 5px;
+}
+.admin-pass__blurb {
+  margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--text-dim);
+  /* Two lines, clamped. Eleven blurbs of unequal length made a ragged grid, and
+     the third line of each was the same "one request per row" caveat anyway. */
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.admin-pass__actions { display: flex; gap: 6px; margin-top: auto; padding-top: 4px; }
+.admin-pass__actions .btn { flex: 1; font-size: 11.5px; padding: 5px 8px; }
+/* "Run for real" is the destructive one, so it is the only coloured button on
+   the card. Preview stays ghost: it is the safe one and it is the default. */
+.admin-pass__actions .btn--warn {
+  color: var(--warn); border-color: rgba(217,163,74,0.4);
+}
+.admin-pass__actions .btn--warn:hover:not(:disabled) {
+  background: rgba(217,163,74,0.12); border-color: var(--warn);
+}
+.admin-pass__state {
+  margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--text-dim);
+  font-family: var(--font-mono);
+  padding: 6px 8px; border-radius: 4px; background: var(--surface2);
+  /* The report is the whole point of the panel, so it is allowed to wrap
+     rather than being truncated: "scanned 2,487,976, rebuilt 2,487,978" is two
+     facts and cutting either one makes the row a worse answer than silence. */
+  overflow-wrap: anywhere;
+}
+.admin-pass__state--preview { color: var(--warn); background: rgba(217,163,74,0.08); }
+.admin-pass__state--done    { color: var(--green); background: var(--green-bg); }
+.admin-pass__state--bad     { color: var(--red); background: var(--red-bg); }
+.admin-pass__foot {
+  margin: 12px 0 0; font-size: 11px; line-height: 1.55; color: var(--text-faint);
+}
+.admin-pass__limitlabel { font-size: 11.5px; color: var(--text-dim); align-self: center; }
+.admin-pass__limitlabel + .queue__search { width: 90px; }
+/* Where the list itself could not be fetched. Distinct from the neutral
+   `.admin-note` because it is the one case where the panel below it is absent
+   rather than merely empty, and an operator needs to know the difference. */
+.admin-note--warn { color: var(--warn); border-color: rgba(217,163,74,0.35); }
 
 .admin-queues {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

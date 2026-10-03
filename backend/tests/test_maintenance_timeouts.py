@@ -54,6 +54,49 @@ def test_the_helper_exists_and_is_shared():
 
 # ---------------------------------------------------------------------------
 
+#: Passes whose `run(dry_run=True)` reports by counting or scanning the whole
+#: table, so it cannot finish inside the pooled 60s default.
+_DRY_RUN_SCANS = ["content_gates", "crossover", "series_wordcount", "popularity_rank"]
+
+
+@pytest.mark.parametrize("job", _DRY_RUN_SCANS)
+def test_the_timeout_is_lifted_BEFORE_the_dry_run_branch(job):
+    """A dry run must be able to finish. This is the batch rule's other half.
+
+    `content_gates.py` lifted the timeout on the write path only, with the lift
+    sitting BELOW the `if dry_run:` early return. So the preview inherited the
+    pooled 60-second default and died on its own `count(*)` over 20.9M rows:
+
+        canceling statement due to statement timeout
+
+    measured at 75.9s for that count, so it was never going to fit. The
+    consequence is sharper than a broken button: the dry run exists to answer
+    "is there any work to do", and it was the one path that could not answer
+    it — while the real run, which is far more work, completed fine.
+
+    Found by wiring the pass to a button that is a dry run by default, which is
+    the argument for the button existing. `crossover`, `series_wordcount` and
+    `popularity_rank` all already lifted first, so this was one pass wrong
+    rather than a shared mistake — which is exactly why it is asserted for all
+    four instead of fixed once and forgotten.
+    """
+    src = (ROOT / f"{job}.py").read_text()
+    start = src.find("def _run_locked")
+    if start < 0:
+        start = src.find("def run(")
+    assert start >= 0, f"{job} has no run() or _run_locked()"
+    body = src[start:]
+
+    lift = body.find("statement_timeout")
+    dry = body.find("if dry_run")
+    assert lift >= 0, f"{job} never lifts the statement timeout"
+    assert dry < 0 or lift < dry, (
+        f"{job} lifts the statement_timeout AFTER its `if dry_run:` branch, so a "
+        f"dry run inherits the pooled default and cannot finish on the big table")
+
+
+# ---------------------------------------------------------------------------
+
 @pytest.mark.parametrize("job", ["content_gates", "series_wordcount", "crossover"])
 def test_the_job_actually_runs(job, db):
     """IMPORTING a module proves nothing about whether its main function runs.
