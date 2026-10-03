@@ -64,6 +64,36 @@ require_env() {
     fi
 }
 
+# WHICH FILE IS LIVE. Not $ROOT's copy — nginx's.
+#
+# $ROOT is wherever this script was invoked from, and the original code assumed
+# that is the tree nginx bind-mounts. Promote from a worktree and it is not: the
+# script rewrites its own deploy/upstreams/active.conf, reloads nginx, nginx
+# re-reads the LIVE tree's unchanged copy, and the deploy reports success
+# because the outgoing colour is still up and answers. Then promote stops it.
+#
+# Not hypothetical — it took ficatlas.com down for about two minutes with every
+# request failing "upstream timed out while connecting to upstream" against a
+# container that no longer existed. And live_colour read the same wrong file, so
+# the script believed blue was live while nginx served green.
+#
+# Two copies of one question is one too many. Ask the container where its file
+# is and use that answer. Falls back to $ROOT when nginx is not running (a cold
+# host), which is the old behaviour and is correct there because nothing else can
+# disagree yet.
+resolve_active_conf() {
+    local cid src
+    cid=$("${COMPOSE[@]}" ps -q nginx 2>/dev/null | head -1)
+    [ -n "$cid" ] || return 0
+    src=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/nginx/upstreams"}}{{.Source}}{{end}}{{end}}' "$cid" 2>/dev/null)
+    [ -n "$src" ] && [ -f "$src/active.conf" ] || return 0
+    if [ "$src/active.conf" != "$ACTIVE_CONF" ]; then
+        c_ok "    live upstream file: $src/active.conf"
+        c_ok "    (not $ROOT's copy — this script was run from a worktree)"
+    fi
+    ACTIVE_CONF="$src/active.conf"
+}
+
 write_upstreams() {
     local colour=$1
     cat > "$ACTIVE_CONF" <<EOF
@@ -84,6 +114,42 @@ upstream api_active {
     keepalive 32;
 }
 EOF
+}
+
+# The file just written is only the one nginx reads if this script's ROOT is the
+# tree nginx mounts. Promoted from a worktree it is not: nginx bind-mounts
+# /home/george/ficatlas/deploy/upstreams, so the reload re-reads the LIVE tree's
+# copy, still naming the old colour.
+#
+# This cost a full outage rather than a failed deploy. The switch reported
+# success, because verify_through_nginx passed -- the old colour was still up for
+# the grace period and answered. Nothing looked wrong until promote stopped it,
+# at which point every request through nginx was "upstream timed out while
+# connecting to upstream" against a container that no longer existed.
+#
+# So compare what nginx actually sees with what was just written, and refuse to
+# switch while they disagree. Refusing is the safe direction: the live colour is
+# untouched and the operator is told exactly which file to sync.
+nginx_sees_upstreams() {
+    "${COMPOSE[@]}" exec -T nginx cat /etc/nginx/upstreams/active.conf 2>/dev/null
+}
+
+check_upstreams_visible() {
+    local colour=$1 want have seen
+    # Read once. Asking twice gave an empty answer the second time, so the
+    # diagnostic contradicted the comparison that had just failed.
+    seen=$(nginx_sees_upstreams)
+    want=$(grep -c "server web-${colour}:3000" "$ACTIVE_CONF" || true)
+    have=$(printf '%s\n' "$seen" | grep -c "server web-${colour}:3000" || true)
+    [ "$want" = "$have" ] && [ "$want" -gt 0 ] && return 0
+
+    c_err "nginx is not reading the file this script just wrote."
+    c_err "  wrote     : ${ACTIVE_CONF} (expects web-${colour})"
+    c_err "  nginx has : $(printf '%s\n' "$seen" | grep -m1 'server web_' || echo '(nothing readable at /etc/nginx/upstreams/active.conf)')"
+    c_err "nginx bind-mounts the LIVE tree's deploy/upstreams, and this script's ROOT is ${ROOT}."
+    c_err "Refusing to switch. Either run this from the live tree, or sync the file first:"
+    c_err "  cp ${ACTIVE_CONF} /home/george/ficatlas/deploy/upstreams/active.conf"
+    return 1
 }
 
 wait_healthy() {
@@ -227,6 +293,7 @@ cmd_promote() {
 
     step "Switching nginx ${live} -> ${target}"
     write_upstreams "$target"
+    check_upstreams_visible "$target" || { c_err "${live} is untouched and still live."; exit 1; }
     reload_nginx
 
     if ! verify_through_nginx; then
@@ -242,6 +309,26 @@ cmd_promote() {
     echo "    deploy/promote.sh --rollback   # if anything looks wrong"
     sleep "$GRACE_SECONDS"
     COMPOSE_PROFILES=$live "${COMPOSE[@]}" --profile "$live" stop "api-${live}" "web-${live}" >/dev/null 2>&1 || true
+
+    # The only moment this check means anything.
+    #
+    # verify_through_nginx above ran while ${live} was still up, so it could not
+    # distinguish "now serving ${target}" from "still serving ${live}" — any
+    # colour answers, and the grace period guarantees one does. That is why a
+    # switch pointing at a container nginx had no route to looked green.
+    #
+    # Retiring ${live} is what makes the question real. If the answer is no, put
+    # it back: a deploy that ends with the site down and a green script is worse
+    # than one that fails loudly here.
+    if ! verify_through_nginx; then
+        c_err "FAILED after retiring ${live} — nginx cannot reach ${target}. Restoring ${live}."
+        COMPOSE_PROFILES=$live "${COMPOSE[@]}" --profile "$live" up -d "api-${live}" "web-${live}" >/dev/null 2>&1 || true
+        write_upstreams "$live"
+        reload_nginx
+        c_err "Rolled back to ${live}. The site is up; ${target} did not take. Investigate before retrying."
+        exit 1
+    fi
+    c_ok "Verified through nginx with ${live} stopped."
     c_ok "Stopped ${live}. Deploy complete."
 
     step "Reclaiming disk"
@@ -270,9 +357,9 @@ cmd_promote() {
 }
 
 case "${1:-}" in
-    --status)   cmd_status ;;
-    --rollback) cmd_rollback ;;
-    --dry-run)  cmd_promote yes ;;
-    "")         cmd_promote no ;;
+    --status)   resolve_active_conf; cmd_status ;;
+    --rollback) resolve_active_conf; cmd_rollback ;;
+    --dry-run)  resolve_active_conf; cmd_promote yes ;;
+    "")         resolve_active_conf; cmd_promote no ;;
     *) echo "usage: $0 [--dry-run|--rollback|--status]" >&2; exit 2 ;;
 esac
