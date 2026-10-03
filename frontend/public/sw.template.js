@@ -273,16 +273,50 @@ self.addEventListener("fetch", (event) => {
             hit = await cachedStoryShell(cache, url.pathname.includes("/chapter/"))
             if (hit) return hit
           }
-          // Known shells, then a friendly fallback.
-          return (await cache.match("/library")) ||
-            (await cache.match("/")) ||
-            new Response(
-              "<!doctype html><meta charset=utf-8><title>Offline</title>" +
-              "<body style='font-family:system-ui;background:#0e0e10;color:#eee;padding:2rem'>" +
-              "<h1>You're offline</h1><p>This page wasn't saved for offline use. " +
-              "Open it once while online, then it'll be available here.</p>" +
-              "<p><a style='color:#a5b4fc' href='/library'>Go to your library</a></p></body>",
-              { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } })
+      // Known shells, then a last resort.
+            //
+            // This page is very nearly unreachable, which is worth knowing before
+            // anyone invests in it as a surface. Navigations are cache-first (see the
+            // branch above) and every successful fetch stores its own URL, so any page
+            // this device has requested once is already served from the cache without
+            // reaching here — and "successfully fetched" includes a 404 and a 308,
+            // because the handler never checks res.ok. What is left is a URL never
+            // requested on this device that is also not /library or /, which on a
+            // healthy install means the precache itself failed to store its pages.
+            //
+            // So what it says has to be true rather than reassuring. Two systems are in
+            // play and they do not expire alike: a PAGE is cached as a side effect of
+            // being fetched, and the next build replaces every cached page; a STORY is
+            // saved deliberately into IndexedDB and survives that. The old copy said
+            // "wasn't saved for offline use" — borrowing the word the app uses for
+            // "Save offline", which is a different mechanism — and then promised
+            // "open it once" without mentioning the rebuild that revokes it.
+            //
+            // The palette is the site's own. It was hardcoded #0e0e10, which is not
+            // even this site's default --bg (#111010) but a different theme's, with
+            // #eee against --text #ede9e0 and an indigo link against a gold accent
+            // that is deliberately constant across all three papers. A worker cannot
+            // read localStorage, so the reader's chosen theme is not available here;
+            // prefers-color-scheme is the honest signal, and it is still a great deal
+            // better than flashing a light-mode reader a black page.
+return (await cache.match("/library")) ||
+        (await cache.match("/")) ||
+        new Response(
+          "<!doctype html><meta charset=utf-8><title>Offline</title>" +
+          "<style>body{font-family:system-ui,sans-serif;margin:0;padding:2rem;" +
+          "background:#111010;color:#ede9e0;line-height:1.55}" +
+          "h1{font-size:1.3rem;margin:0 0 .8rem}" +
+          "p{margin:0 0 .8rem;max-width:34rem}" +
+          "a{color:#c8a96e}" +
+          "@media (prefers-color-scheme:light){body{background:#f4ecd8;color:#4a3f2f}}</style>" +
+          "<body><h1>You're offline</h1>" +
+          "<p>This page isn't stored on this device, so there's no copy to show.</p>" +
+          "<p>Open it once while you're connected and it will be here after " +
+          "that, until the next update of FicAtlas replaces the stored pages.</p>" +
+          "<p>Your library, and any story you saved with &#x2913; Save offline, " +
+          "keep working offline regardless.</p>" +
+          "<p><a href='/library'>Go to your library</a></p></body>",
+          { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } })
         })
     })())
   }
