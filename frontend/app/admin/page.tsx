@@ -424,6 +424,14 @@ interface ResetRequest {
 
 export default function AdminPage() {
   const [tab, setTab] = useState<AdminTab>("index")
+  // The Audience tab's zero-result queries, handed to the Outreach tab.
+  //
+  // Held here rather than in either panel because it crosses a tab boundary:
+  // the two panels know about each other's SUBJECT and neither can reach the
+  // other, so the one place that sees both tabs is the place that carries it.
+  // Kept as text on purpose — a blank box for the operator to look at before
+  // acting, not a report that silently changed shape.
+  const [outreachPrefill, setOutreachPrefill] = useState<string | undefined>(undefined)
   useEffect(() => {
     // The old names still work — see lib/adminTabs, which is where the mapping
     // lives so it can be tested rather than trusted.
@@ -555,8 +563,9 @@ export default function AdminPage() {
           onClick={() => setTab("moderation")}>Moderation</button>
       </div>
 
-      {tab === "outreach" ? <OutreachTab /> :
-       tab === "audience" ? <TrafficPanel /> :
+      {tab === "outreach" ? <OutreachTab prefill={outreachPrefill} /> :
+       tab === "audience" ? <TrafficPanel
+         onGoToOutreach={q => { setOutreachPrefill(q); setTab("outreach") }} /> :
        tab === "moderation" ? <TakedownQueue /> : (
       <>
       <h1 className="settings-title">Index health</h1>

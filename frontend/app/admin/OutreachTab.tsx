@@ -16,7 +16,14 @@ import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
  * The queue is the index and the finder is the page. Picking a post hands it
  * straight over; marking it answered clears the pane and returns the list.
  */
-export default function OutreachTab() {
+// `prefill` is how the Audience tab hands over. It is lifted to here rather than
+// passed down from admin/page.tsx because OutreachTab is what owns the panel's
+// box, and a value passed two levels down to reach it would have to be threaded
+// through the tab switch as well — at which point switching TO this tab could
+// not carry anything at all.
+export default function OutreachTab({
+  prefill,
+}: { prefill?: string } = {}) {
   const [picked, setPicked] = useState<Post | null>(null)
   const [waiting, setWaiting] = useState<number | null>(null)
   // The list as the queue currently has it, so finishing one post can hand
@@ -67,7 +74,8 @@ export default function OutreachTab() {
           {/* Keyed on the post so switching to another one resets the search
               rather than leaving the previous answer's results underneath a
               new question. */}
-          <OutreachPanel key={picked?.id ?? "blank"} post={picked}
+          <OutreachPanel key={picked?.id ?? prefill ?? "blank"} post={picked}
+            prefill={picked ? undefined : prefill}
                          onAnswered={onAnswered} />
         </section>
       </div>

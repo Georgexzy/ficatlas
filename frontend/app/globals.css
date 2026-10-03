@@ -7329,3 +7329,32 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    Tabs rather than two stacked lists: 30 rows of scroll for a reader who wants
    one of them, on a page where the browse block is below the fold. */
 .browse__tab-n { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+/* ── audience: copy feedback, and the hand-off to Outreach ────────────────────
+   `copyPlain` writes into one shared live region rather than each button
+   relabelling itself, because two copy buttons pressed within a couple of
+   seconds of each other otherwise leave two labels claiming different outcomes
+   and no way to tell which one belongs to the press you just made. */
+.traffic-flash {
+  margin: 6px 0 0; min-height: 1.1em;
+  font-size: 11.5px; color: var(--text-faint);
+}
+.traffic-flash[data-state="copied"] { color: var(--green); }
+.traffic-flash[data-state="failed"] { color: var(--red); }
+/* "legacy" means the async API was refused and execCommand did it — success by
+   another route, so it reads as success rather than as a warning. */
+.traffic-flash[data-state="legacy"] { color: var(--green); }
+
+/* The hand-off sits ABOVE the table it summarises, because it is an action
+   about the whole section rather than a control on any one row. */
+.traffic-handoff {
+  margin: 0 0 12px; padding: 11px 13px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+}
+.traffic-handoff p {
+  margin: 0 0 8px; font-size: 11.5px; line-height: 1.55; color: var(--text-dim);
+  max-width: 62ch;
+}
+.traffic-handoff__actions { display: flex; flex-wrap: wrap; gap: 6px; }

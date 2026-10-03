@@ -200,10 +200,21 @@ export interface HandedOver {
 }
 
 export default function OutreachPanel(
-  { post, onAnswered }: { post?: HandedOver | null
-                          onAnswered?: (id: string) => void } = {},
+  // `prefill` is what the Audience tab hands over: the zero-result queries a
+  // reader ran, one per line. They arrive as TEXT and go into the same box a
+  // pasted fic-finder post goes into, deliberately — they are the same request
+  // in a different shape, and the panel already knows how to reduce a block of
+  // prose to a query that returns something.
+  //
+  // It is a prop rather than anything shared, so switching tabs and coming back
+  // does not silently re-fill a box somebody had already emptied on purpose. The
+  // `key` on this component in OutreachTab is what makes a new prefill take.
+  { post, onAnswered, prefill }:
+  { post?: HandedOver | null
+    onAnswered?: (id: string) => void
+    prefill?: string } = {},
 ) {
-  const [raw, setRaw] = useState("")
+  const [raw, setRaw] = useState(prefill ?? "")
   const [q, setQ] = useState("")
   const [found, setFound] = useState("")
   const [res, setRes] = useState<Result | null>(null)

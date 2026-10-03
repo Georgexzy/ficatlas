@@ -280,6 +280,57 @@ function TableTools({ table, columns, rows }: {
   )
 }
 
+/** Copy plain text, saying whether it worked.
+ *
+ *  The per-table copier above reports `Copied` or `Cannot copy`, and this does
+ *  the same for the same reason: a button that claims a copy it did not make
+ *  is discovered at the paste, which is the worst place to find out. It also
+ *  prefers the async Clipboard API and falls back to execCommand, because the
+ *  admin page is opened over plain http on the machine it is administered from
+ *  and `navigator.clipboard` does not exist outside a secure context.
+ */
+function copyPlain(text: string): "yes" | "no" {
+  try {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => flash("copied"),
+        () => flash("legacy"),
+      )
+      return "yes"
+    }
+  } catch { /* fall through */ }
+  try {
+    const ta = document.createElement("textarea")
+    ta.value = text
+    ta.style.cssText = "position:fixed;top:-1000px;left:-1000px;opacity:0"
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand("copy")
+    document.body.removeChild(ta)
+    flash(ok ? "copied" : "failed")
+    return ok ? "yes" : "no"
+  } catch {
+    flash("failed")
+    return "no"
+  }
+}
+
+let _flashTimer: ReturnType<typeof setTimeout> | null = null
+/** One banner for the whole page, because two copy buttons pressed at once
+ *  should not leave two labels claiming different outcomes. */
+function flash(what: "copied" | "failed" | "legacy"): void {
+  if (typeof window === "undefined") return
+  const el = document.getElementById("traffic-flash")
+  if (!el) return
+  el.textContent =
+    what === "copied" ? "Copied to your clipboard."
+    : what === "legacy" ? "Copied."
+    : "Could not reach the clipboard — select the text and copy it."
+  el.setAttribute("data-state", what)
+  if (_flashTimer) clearTimeout(_flashTimer)
+  _flashTimer = setTimeout(() => { el.textContent = "" }, 2600)
+}
+
 interface Day { day: string; views: number; searches: number; visitors: number }
 interface Summary {
   days: Day[]
@@ -511,7 +562,13 @@ const bytes = (n: number) => {
   return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`
 }
 
-export default function TrafficPanel() {
+export default function TrafficPanel(
+  // The one thing this page cannot do by itself. Zero-result searches are what
+  // the Outreach tab is for, and the two were adjacent tabs that could not hand
+  // anything to each other, so the operator had to copy a list by hand and
+  // trust that nothing was lost. Optional, so the panel still stands alone.
+  { onGoToOutreach }: { onGoToOutreach?: (queries: string) => void } = {},
+) {
   const [days, setDays] = useState(30)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [pages, setPages] = useState<PageRow[] | null>(null)
@@ -557,6 +614,10 @@ export default function TrafficPanel() {
   // by, so the first render is exactly what it was before any of this existed.
   const tTop   = useTable<SearchRow>(searches?.top, "runs", ["query"])
   const tEmpty = useTable<EmptyRow>(searches?.empty, "runs", ["query"])
+  // The full unfiltered list, for the hand-off. `tEmpty.view` is what is on
+  // screen after the cap and the filter box, and the Outreach tab needs every
+  // query rather than the twenty that happen to fit.
+  const zeroQueries = (searches?.empty ?? []).map((e: EmptyRow) => e.query)
   const tPages = useTable<PageRow>(pages, "views", ["path", "label"])
   const tRefs  = useTable<RefRow>(refs, "hits", ["host"])
 
@@ -640,6 +701,11 @@ export default function TrafficPanel() {
         </p>
 
         <SectionNav sections={SECTIONS} active={active} onJump={jump} />
+        {/* One polite live region for every copy on the page. `role="status"`
+            rather than an alert: a finished copy is information, and a screen
+            reader interrupting whatever it was reading to say so would be a
+            worse trade than the silence it replaces. */}
+        <p id="traffic-flash" className="traffic-flash" role="status" aria-live="polite" />
       </div>
 
       {/* THE FLAG. Everything else on this page describes an audience; this
@@ -1192,6 +1258,36 @@ export default function TrafficPanel() {
       {!!searches?.empty?.length && (
         <Section id="empty" title="Searches that found nothing" onActive={onActive}
           note="The most direct answer there is to “what should be crawled next”: each of these is a reader who left with nothing, and it names the gap exactly. The date says whether it is still being asked.">
+          {/* The hand-off, and the reason it sits here rather than only being a
+              table. A zero-result search is the same shape of thing the
+              Outreach tab exists to answer: somebody asked for a story in
+              words and the index could not give it to them. Two panels already
+              knew that and neither could hand the other anything, so whoever
+              was reading had to spot the coincidence themselves. The queries go
+              across as text — a blank box to paste into, not a silently
+              different report. */}
+          <div className="traffic-handoff">
+            <p>
+              Each of these is a reader asking for something this index does not
+              have. That is the request the Outreach tab is built to answer: it
+              takes the words, finds what does exist, and writes a reply worth
+              posting.
+            </p>
+            <div className="traffic-handoff__actions">
+              <button type="button" className="traffic-tools__copy"
+                onClick={() => copyPlain(zeroQueries.join("\n"))}
+                title="Copy every zero-result query, one per line">
+                Copy the {zeroQueries.length} quer{zeroQueries.length === 1 ? "y" : "ies"}
+              </button>
+              {onGoToOutreach && (
+                <button type="button" className="traffic-tools__copy"
+                  onClick={() => onGoToOutreach(zeroQueries.join("\n"))}
+                  title="Open the Outreach tab with these queries pasted in">
+                  Take them to Outreach →
+                </button>
+              )}
+            </div>
+          </div>
           <TableTools table={tEmpty} rows={tEmpty.view}
             columns={[{ id: "query", label: "Query" }, { id: "runs", label: "Runs" },
                       { id: "last_seen", label: "Last run" }]} />
