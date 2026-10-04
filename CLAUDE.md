@@ -507,6 +507,28 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **FF.net metadata comes from LISTING pages now, not one archived page at a
+  time.** FanFiction.net refuses this server's story fetches, so characters were
+  filled from archive.org at ~500 works a day against 6.47M missing — while
+  `ffnet-harvester` was reading ~247k listing rows a day and keeping three
+  counts out of each. It now stages the whole metadata line in
+  `ffnet_listing_meta`; `ffnet_listing.apply_batch` parses it with the ONE
+  parser (`parse_ffn_meta(..., listing=True)`) and writes it with the ONE writer
+  (`_write_batch`). First hour: 4,058 works written, 3,782 with characters.
+  ~40% of listing rows are works the index does not hold at all — the next
+  coverage lever, not yet used.
+- **Audit what a loop WROTE, not what its parser claims.** Field coverage on
+  rows touched in the last 48h, by site, found in one query what reading code
+  had not: FF.net works ADDED by the Wayback route had a fandom 9% of the time
+  (99.8% archive-wide), because `parse_story_snapshot` never read the
+  breadcrumb, and `persist_live_results` hard-coded `published_at=None` on
+  every insert. Existing rows were intact — split recent rows by `indexed_at`
+  before concluding a writer is wiping data.
+- **A date with no year is relative to when the page was SHOWN.** FF.net
+  drops the year for the current one ("10/8", "Aug 22"). For an archived page
+  that is the capture year (from the `/web/<14 digits>/` URL); resolving it
+  against today writes a confidently wrong date. `_ffn_date` returns None
+  without a reference.
 - **Admin passes run on the WORKER, and their state is a row, not a dict.**
   `admin_jobs.py`: the API queues into `app_settings` (`admin_job:<key>`), the
   worker's `_admin_jobs_loop` claims by compare-and-set and runs it. The first
