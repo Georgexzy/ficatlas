@@ -507,6 +507,28 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **`ref_host` means two things.** For a pageview it is where the visitor came
+  FROM; for an `out` click it is where they went TO. The Referrers report
+  counted both, so every "Read on AO3" made AO3 the "top referrer" (156, all
+  outbound) above Google's 108 real arrivals. Any query treating `ref_host` as
+  a source must say `kind <> 'out'`.
+- **Startup DDL must not lock `stories` to find out it has nothing to do.**
+  `ADD COLUMN IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` take the table lock
+  BEFORE checking; 51 startup statements did that, so every restart during a
+  long write queued reads and writes behind no-ops. `init_db.already_applied()`
+  checks the catalogue first.
+- **The weekly popularity write rests between slices** (10k rows, then a rest
+  as long as the slice took). Back-to-back 50k slices of scattered uuid IO
+  doubled search latency for four hours and timed one browse out.
+- **Origin-level crawler refusals live in `deploy/nginx.conf`'s
+  `$refused_agent` map** (ShapBot today) because the deploy token cannot edit
+  Cloudflare firewall rules; the matching rule is also in
+  `cloudflare_bot_rule.py`. Applying nginx.conf means recreating nginx and
+  cloudflared (see the bind-mount note below).
+- **A "found nothing" search runs several rescues, and they cost.** A 40-word
+  sentence took 22s: the title rescue trigram-matched 20.8M titles and the
+  extractor ran twice. Title rescue now reads `title_facets` (well-read,
+  UN-GATED titles) and skips anything over 10 words; `_extract_once` memoises.
 - **Reddit is read from the public archives, not from Reddit.** Reddit answers
   this server about one request in six and no API app can be registered.
   `reddit_archive.atom_for()` answers the exact Reddit feed URLs the consumers
