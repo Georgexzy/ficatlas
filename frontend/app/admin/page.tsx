@@ -696,10 +696,12 @@ export default function AdminPage() {
                 sub="Every account, and the column that matters: whether it could recover a password."
                 explain={<p>An account with no email address cannot be recovered at all — there
                   is nothing to send a reset to and nothing to check a claim against.
-                  Signup did not ask for one until 2026-09-08. This instance cannot send
-                  email, so a reset is a code you issue below and pass on yourself.
-                  The list never shows codes: seeing that somebody is locked out and
-                  choosing to vouch for them are separate actions.</p>} />
+                  Signup did not ask for one until 2026-09-08. Resets are emailed
+                  automatically when an account has an address; the button below is
+                  the fallback, for an account with none or a request whose email did
+                  not go out — you issue a code and pass it on yourself. The list never
+                  shows codes: seeing that somebody is locked out and choosing to
+                  vouch for them are separate actions.</p>} />
               <section className="cc-card">
                 {people === null ? <p className="cc-dim">Loading…</p> : people.length === 0 ? <p className="cc-empty">No accounts yet.</p> : (
                   <table className="cc-table">
@@ -721,14 +723,22 @@ export default function AdminPage() {
                 )}
               </section>
               <section className="cc-card">
-                <header className="cc-card__head"><h3>Password resets</h3></header>
+                <header className="cc-card__head">
+                  <h3>Password resets</h3>
+                  <p>Emailed automatically. Issue a code by hand only for a request marked “not sent”, or an account with no email.</p>
+                </header>
                 {resets && resets.length > 0 ? (
                   <table className="cc-table cc-table--compact">
-                    <thead><tr><th>Waiting</th><th>Email</th><th>Asked</th><th>Expires</th></tr></thead>
+                    <thead><tr><th>Account</th><th>Email</th><th>Code</th><th>Asked</th><th>Expires</th></tr></thead>
                     <tbody>
                       {resets.map(r => (
                         <tr key={r.username + r.created_at}>
                           <td>{r.username}</td><td>{r.email ?? <em>none on file</em>}</td>
+                          {/* Emailed means they already have the code and need
+                              nothing from you; only the other rows are waiting
+                              on a person. */}
+                          <td>{r.emailed ? <span className="cc-ok">emailed</span>
+                            : <span className="cc-bad">not sent — needs you</span>}</td>
                           <td>{agoStamp(r.created_at)}</td><td>{new Date(r.expires_at).toLocaleTimeString()}</td>
                         </tr>
                       ))}
