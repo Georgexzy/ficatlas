@@ -65,6 +65,11 @@ _ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7,
           "xiv": 14, "xv": 15, "xx": 20}
 
 
+_MID = re.compile(
+    r"[\s\-–—:,(\[]+\b(?:p(?:ar)?t|book|vol(?:ume)?|day|week|round|prompt|entry|ch(?:apter)?)\.?\s*"
+    r"(\d{1,3}|[ivxlc]{1,6})[a-z]?(?=\s*(?:[-–—:,.!?(\[]|$)|\s+\w)", re.I)
+
+
 def _as_int(raw: str) -> int | None:
     raw = raw.strip().lower()
     if raw.isdigit():
@@ -116,6 +121,20 @@ def split_position(title: str) -> tuple[str, int | None, str | None]:
         if len(normalise(stem)) < 3:
             continue          # "Part 2" alone is not a series stem
         return normalise(stem), pos, kind
+
+    # The number is not always LAST. "God Help Me, Part 10a", "Part 11--All
+    # The Way to The End" and "Ghostober Day 10 Body" all state a position the
+    # anchored patterns above cannot see, so those works fell into a second,
+    # unnumbered group under the same name — and the detector's upsert by name
+    # merged the two, putting Part 10a at position 1 beside the real Part 1.
+    # Only the explicit sequence words count here; a bare number mid-title
+    # ("Seven Days", "21 Questions") is not a position.
+    m = _MID.search(t)
+    if m:
+        pos = _as_int(m.group(1))
+        stem = t[:m.start()].strip(" -–—:,()[]")
+        if pos is not None and len(normalise(stem)) >= 3:
+            return normalise(stem), pos, "mid"
 
     return normalise(t), None, None
 

@@ -160,6 +160,62 @@ def plausible_position(pos: int | None) -> int | None:
     return pos if 1 <= pos <= MAX_PLAUSIBLE_POSITION else None
 
 
+# Above this share of repeated numbers, the numbers are a CYCLE, not one
+# sequence: "Ghostober Day 1-31" written two Octobers running is 62 works on 31
+# numbers. Below it they are sub-parts ("Part 10a", "Part 10b").
+CYCLE_REPEAT_SHARE = 0.25
+
+
+def resolve_positions(members: list[dict]) -> bool:
+    """Give every numbered member its own position. -> whether anything moved.
+
+    Two works on one number make a series page read as broken, and 761 series
+    built by this detector had them. Members need `pos`, `numeric_id` and
+    `published_at`; `pos` None means unnumbered (a side story) and is left so.
+
+    Sub-parts keep the author's order — sorted by stated number, then site id —
+    and are renumbered consecutively. A repeated cycle cannot be ordered by its
+    numbers at all (every Day 1 sorts together), so it is ordered by site id,
+    which both archives assign in publication order.
+    """
+    numbered = [m for m in members if m.get("pos") is not None]
+    if len({m["pos"] for m in numbered}) == len(numbered):
+        return False
+    repeat = 1 - len({m["pos"] for m in numbered}) / len(numbered)
+    by_id = lambda m: (m.get("numeric_id") is None, m.get("numeric_id") or 0,
+                       m.get("published_at") is None, m.get("published_at") or 0)
+    if repeat > CYCLE_REPEAT_SHARE:
+        numbered.sort(key=by_id)
+    else:
+        numbered.sort(key=lambda m: (m["pos"], *by_id(m)))
+    for n, m in enumerate(numbered, 1):
+        m["pos"] = n
+    return True
+
+
+def merge_same_named(groups: list[tuple]) -> list[tuple]:
+    """Fold groups that will be stored under the same name into one.
+
+    The series row is keyed on (author, name), so two groups with one name were
+    silently merged by the INSERT ... ON CONFLICT anyway — each with its own
+    numbering, which is where most of the duplicate positions came from. Doing
+    it here, before positions are assigned, lets them be numbered as one.
+    """
+    out: dict[str, list] = {}
+    for name, members, score, source in groups:
+        key = name.strip().lower()
+        if key not in out:
+            out[key] = [name, list(members), score, source]
+            continue
+        cur = out[key]
+        have = {m["id"] for m in cur[1]}
+        cur[1].extend(m for m in members if m["id"] not in have)
+        # The stronger evidence names the merged group.
+        if score > cur[2] or (source == "stated" and cur[3] != "stated"):
+            cur[2], cur[3] = max(score, cur[2]), source
+    return [tuple(v) for v in out.values()]
+
+
 def order_by_sequel_edges(members: list[dict]) -> int:
     """Fill in `pos` from "Sequel to X" edges, where nothing else can.
 
@@ -516,7 +572,7 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                     name = f"{name} series"
                 groups.append((name, members, 30.0, "inferred"))
 
-            for name, members, score, source in groups:
+            for name, members, score, source in merge_same_named(groups):
                 found += 1
                 # Author-stated position wins; otherwise publication order, which
                 # is AO3's own fallback for a series with no positions set.
@@ -591,6 +647,7 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                         m["published_at"] is None, m["published_at"]))
                     for n, m in enumerate(members, 1):
                         m["pos"] = n
+                resolve_positions(members)
                 if dry_run:
                     log.info(f"  {author} — {name} (score {score:.1f})")
                     for m in sorted(members, key=lambda m: (m["pos"] or 99)):
@@ -720,14 +777,68 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
     return len(authors)
 
 
+def repair_collisions(db, dry_run: bool = False) -> dict:
+    """Renumber stored detector series that hold two works on one number.
+
+    The detector fixes them going forward; this mends the ones it already
+    wrote. AO3 series (ao3_id set) are left to ao3_series_fill, which can ask
+    AO3 what the numbers really are.
+    """
+    ids = [r[0] for r in db.execute(sql_text("""
+        SELECT se.id FROM series se JOIN series_works sw ON sw.series_id = se.id
+         WHERE se.ao3_id IS NULL
+         GROUP BY se.id HAVING count(sw.position) <> count(DISTINCT sw.position)
+    """))]
+    moved = 0
+    for sid in ids:
+        rows = db.execute(sql_text("""
+            SELECT sw.story_id, sw.position, st.published_at,
+                   CASE WHEN st.site_id ~ '^[0-9]+$' THEN st.site_id::bigint END,
+                   st.title
+              FROM series_works sw JOIN stories st ON st.id = sw.story_id
+             WHERE sw.series_id = :s
+        """), {"s": sid}).fetchall()
+        # The STORED numbers are the broken ones — "Part 10a" was stored as 1 —
+        # so re-read each work's number from its title first, with the same
+        # parser the detector now uses, and fall back to the stored number only
+        # where the title states none. Sorting by the stored numbers interleaved
+        # Part 10a between Parts 1 and 2.
+        from series_titles import split_position
+        members = []
+        for r in rows:
+            stated = plausible_position(split_position(r[4] or "")[1])
+            members.append({"id": r[0], "pos": stated if stated is not None else r[1],
+                            "old": r[1], "published_at": r[2], "numeric_id": r[3]})
+        resolve_positions(members)
+        if all(m["pos"] == m["old"] for m in members):
+            continue
+        for m in members:
+            if m["pos"] != m["old"]:
+                moved += 1
+                if not dry_run:
+                    db.execute(sql_text(
+                        "UPDATE series_works SET position = :p WHERE series_id = :s AND story_id = :w"),
+                        {"p": m["pos"], "s": sid, "w": m["id"]})
+    if not dry_run:
+        db.commit()
+    return {"series": len(ids), "positions_moved": moved}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Group works into series")
+    ap.add_argument("--repair-collisions", action="store_true",
+                    help="renumber stored series holding two works on one number, then exit")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--author", default=None)
     ap.add_argument("--limit-authors", type=int, default=20000)
     ap.add_argument("--offset", type=int, default=0,
                     help="skip the first N authors (the background loop walks these)")
     args = ap.parse_args()
+    if args.repair_collisions:
+        from db.session import db_session
+        with db_session() as db:
+            print(repair_collisions(db, args.dry_run))
+        return 0
     return run(args.dry_run, args.author, args.limit_authors, args.offset)
 
 
