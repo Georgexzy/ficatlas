@@ -174,7 +174,7 @@ async def _dedup_loop() -> None:
                 # taking the Harry Potter hub down. Its own connection for the
                 # whole pass, because the merge loop below commits per group and
                 # a lock released at the first commit is not a lock.
-                with heavy_pass():
+                with heavy_pass("dedup"):
                     with db_session() as db:
                         # THE BUG THIS PASS HAS BEEN FAILING ON SINCE AT LEAST
                         # 2026-09-30, every three hours, without once merging
@@ -1612,7 +1612,7 @@ async def _facets_loop() -> None:
                 # Its own connection for the whole pass, or the lock is released
                 # at the first commit — which is exactly the bug that made three
                 # other loops' "one at a time" claim untrue.
-                with heavy_pass():
+                with heavy_pass("facets"):
                     with db_session() as db:
                         # The rebuild is four grouped scans of 20.5M rows and
                         # commits once at the end, so there is no batch boundary

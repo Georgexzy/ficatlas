@@ -117,3 +117,20 @@ def test_the_job_actually_runs(job, db):
     mod = __import__(job)
     result = mod.run(dry_run=True)
     assert isinstance(result, dict) and result, f"{job}.run(dry_run=True) returned {result!r}"
+
+
+def test_every_heavy_pass_names_itself():
+    """`heavy_pass(name)` has no default, and two worker loops called it bare.
+
+    The dedup pass and the daily facets rebuild both raised TypeError on every
+    run from the moment the worker picked the code up — the first thing it
+    logged after the 2026-10-04 restart. Nothing imported them under test, so
+    the suite stayed green. A bare call anywhere is that bug again.
+    """
+    import pathlib
+    import re
+    root = pathlib.Path(__file__).resolve().parent.parent
+    bare = [f"{p.name}:{i}" for p in root.glob("*.py")
+            for i, line in enumerate(p.read_text().splitlines(), 1)
+            if re.search(r"\bheavy_pass\(\s*\)", line)]
+    assert not bare, f"heavy_pass() called without a name at {bare}"
