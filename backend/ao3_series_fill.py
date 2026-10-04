@@ -90,7 +90,12 @@ def incomplete_series(db, limit: int) -> list[tuple[str, str, str | None]]:
         GROUP BY se.id, se.ao3_id, se.name
         HAVING min(sw.position) > 1
             OR (max(sw.position) - min(sw.position) + 1) <> count(*)
-        ORDER BY (max(sw.position) - min(sw.position) + 1 - count(*))
+            OR count(*) <> count(DISTINCT sw.position)
+        ORDER BY
+               -- Two works on one number first: that is a series page that
+               -- reads as broken, where a gap only reads as incomplete.
+               (count(*) - count(DISTINCT sw.position)) DESC,
+               (max(sw.position) - min(sw.position) + 1 - count(*))
                + (min(sw.position) - 1) DESC
         LIMIT :lim
     """), {"lim": limit, "retry_days": RETRY_AFTER_DAYS}).fetchall()
@@ -174,6 +179,8 @@ def fill_one(db, series_id: str, ao3_id: str, entries: list[dict],
     indexed = persist_live_results(db, entries)
 
     linked = 0
+    key = ao3_id.split(":", 1)[-1]
+    placed: dict[str, int] = {}
     for i, e in enumerate(entries, start=1):
         url = e.get("url")
         if not url:
@@ -182,10 +189,19 @@ def fill_one(db, series_id: str, ao3_id: str, entries: list[dict],
             "SELECT id FROM stories WHERE url = :u LIMIT 1"), {"u": url}).scalar()
         if not story_id:
             continue
-        # Position comes from the LISTING ORDER, which is the author's sequence.
+        # The position the BLURB states ("Part 3 of Head Cases"), not the
+        # work's index in the list. AO3 leaves works restricted to logged-in
+        # readers off the page we can see, so list order shifts every later
+        # work down: Head Cases is five works on AO3 and was stored as Part 3
+        # at position 1, Part 4 at 2, Part V at 3 — colliding with Episodes 1
+        # and 2. List order is only the fallback when a blurb states nothing.
+        stated = next((int(x["position"]) for x in (e.get("series") or [])
+                       if str(x.get("ao3_id")) == key and x.get("position")), None)
+        pos = stated or i
+        placed[str(story_id)] = pos
         linked += ao3_series.record(
             db, str(story_id), e.get("author"),
-            [{"position": i, "ao3_id": ao3_id.split(":", 1)[-1], "name": name}])
+            [{"position": pos, "ao3_id": key, "name": name}])
 
     # Tidy up anything the page did not account for.
     #
@@ -204,6 +220,14 @@ def fill_one(db, series_id: str, ao3_id: str, entries: list[dict],
     if not complete:
         return (indexed, linked)
 
+    # Stale = a member the page did not list that EITHER sits past the end OR
+    # sits on a number a listed work now holds. Only past-the-end was handled,
+    # so a work the author removed from the front kept "Part 1" beside the real
+    # Part 1 — measured: 1,349 AO3 series with two works on one number.
+    # A member that is unlisted but on a FREE number is left alone: AO3 hides
+    # restricted works from the page we can read, and those are still members
+    # at their true position.
+    maxpos = max([len(entries), *placed.values()])
     db.execute(sql_text("""
         WITH stale AS (
             SELECT sw.story_id,
@@ -212,13 +236,17 @@ def fill_one(db, series_id: str, ao3_id: str, entries: list[dict],
                                                sw.story_id) AS rn
             FROM series_works sw
             JOIN stories st ON st.id = sw.story_id
-            WHERE sw.series_id = :s AND sw.position > :maxpos
+            WHERE sw.series_id = :s
+              AND NOT (CAST(sw.story_id AS text) = ANY(:listed))
+              AND (sw.position IS NULL OR sw.position > :maxpos
+                   OR sw.position = ANY(:taken))
         )
         UPDATE series_works sw
            SET position = :maxpos + stale.rn
           FROM stale
          WHERE sw.series_id = :s AND sw.story_id = stale.story_id
-    """), {"s": series_id, "maxpos": len(entries)})
+    """), {"s": series_id, "maxpos": maxpos, "listed": list(placed.keys()),
+           "taken": sorted(set(placed.values()))})
     return (indexed, linked)
 
 
