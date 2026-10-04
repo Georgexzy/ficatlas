@@ -175,22 +175,54 @@ RECS_DAYS = int(os.getenv("HUB_RECS_DAYS", "30"))
 RECS_LIMIT = int(os.getenv("HUB_RECS_LIMIT", "6"))
 
 
-def _recommended(db, variants: list[str], days: int = RECS_DAYS,
-                 limit: int = RECS_LIMIT) -> list["RecommendedWork"]:
-    """What this fandom has been recommending, in the last `days`.
+# How many DIFFERENT people must have recommended a work before it is "what this
+# fandom is recommending". It was one: any single mention qualified, so the
+# block was mostly one person's list. Measured 2026-10-04 over 30 days: 54
+# works mentioned, every one by exactly one person.
+#
+# It scales with the fandom's own recommendation ACTIVITY — distinct people
+# recommending anything in it in the window — not with its size in the index:
+# a fandom can hold 100,000 works and have three people talking about it this
+# month. Two agreeing people mean something in a quiet fandom; in a busy one
+# two is noise, so the bar rises.
+RECS_TIERS = ((30, 2), (100, 3), (300, 4))
+RECS_TOP_PEOPLE = 5
+# A quiet fandom gets a longer window before the block is given up on. The
+# block states its window, so a reader always knows which it is.
+RECS_WIDE_DAYS = int(os.getenv("HUB_RECS_WIDE_DAYS", "90"))
+RECS_MIN_WORKS = 3
 
-    THE CONTENT GATES APPLY IN FULL, and this is the third surface to need
-    that argument written out: a hub has no Explicit toggle, because it is a
-    static page a search engine hands to a stranger, so the safe default is the
-    only setting it has. Both the indexed columns AND the arrays, for the reason
-    the work-list query above gives — the columns are a cache maintained by a
-    trigger, and a column that defaults to `false` reads as safe.
 
-    It is cheap for the same reason the work list is: the candidate set is what
-    a handful of threads mentioned in a month, which is tens of rows, not the
-    20.8M the search path has to defend against.
-    """
-    rows = db.execute(text("""
+def min_people_for(activity: int) -> int:
+    for ceiling, need in RECS_TIERS:
+        if activity < ceiling:
+            return need
+    return RECS_TOP_PEOPLE
+
+
+_RECS_GATED = """
+           AND s.fandoms && CAST(:variants AS text[])
+           AND NOT s.gate_underage
+           AND NOT s.gate_adult
+           AND NOT (COALESCE(s.warnings,'{}') && CAST(:gate_uw AS text[]))
+           AND NOT (COALESCE(s.tags,'{}')     && CAST(:gate_ut AS text[]))
+           AND NOT (COALESCE(s.warnings,'{}') && CAST(:gate_aw AS text[]))
+           AND NOT (COALESCE(s.tags,'{}')     && CAST(:gate_at AS text[]))
+"""
+
+
+def _recommended_in(db, variants: list[str], days: int, limit: int) -> list["RecommendedWork"]:
+    params = {"days": days, "variants": variants, "limit": limit,
+              "gate_uw": _UNDERAGE_WARNINGS, "gate_ut": _UNDERAGE_TAGS,
+              "gate_aw": _ADULT_WARNINGS,    "gate_at": _ADULT_TAGS}
+    activity = db.execute(text(f"""
+        SELECT count(DISTINCT m.recommender)
+          FROM rec_mentions m JOIN stories s ON s.id = m.story_id
+         WHERE m.mentioned_at > now() - make_interval(days => :days)
+        {_RECS_GATED}
+    """), params).scalar() or 0
+    params["need"] = min_people_for(int(activity))
+    rows = db.execute(text(f"""
         SELECT s.id, s.title, s.author, s.summary, s.site, s.word_count,
                s.status,
                count(DISTINCT m.recommender) AS people,
@@ -199,23 +231,15 @@ def _recommended(db, variants: list[str], days: int = RECS_DAYS,
           FROM rec_mentions m
           JOIN stories s ON s.id = m.story_id
          WHERE m.mentioned_at > now() - make_interval(days => :days)
-           AND s.fandoms && CAST(:variants AS text[])
-           AND NOT s.gate_underage
-           AND NOT s.gate_adult
-           AND NOT (COALESCE(s.warnings,'{}') && CAST(:gate_uw AS text[]))
-           AND NOT (COALESCE(s.tags,'{}')     && CAST(:gate_ut AS text[]))
-           AND NOT (COALESCE(s.warnings,'{}') && CAST(:gate_aw AS text[]))
-           AND NOT (COALESCE(s.tags,'{}')     && CAST(:gate_at AS text[]))
+        {_RECS_GATED}
          GROUP BY s.id, s.title, s.author, s.summary, s.site, s.word_count, s.status
+        HAVING count(DISTINCT m.recommender) >= :need
          -- Most people first, then most recent. Recency breaks the tie rather
          -- than leading, or a single mention today would outrank four last
          -- week and the block would rewrite itself every day.
          ORDER BY people DESC, last_at DESC
          LIMIT :limit
-    """), {"days": days, "variants": variants, "limit": limit,
-           "gate_uw": _UNDERAGE_WARNINGS, "gate_ut": _UNDERAGE_TAGS,
-           "gate_aw": _ADULT_WARNINGS,    "gate_at": _ADULT_TAGS,
-           }).fetchall()
+    """), params).fetchall()
     return [
         RecommendedWork(
             id=str(r[0]), title=r[1], author=r[2], summary=r[3], site=r[4],
@@ -228,6 +252,33 @@ def _recommended(db, variants: list[str], days: int = RECS_DAYS,
         )
         for r in rows
     ]
+
+
+def _recommended(db, variants: list[str], limit: int = RECS_LIMIT
+                 ) -> tuple[list["RecommendedWork"], int]:
+    """What this fandom has been recommending lately -> (works, window in days).
+
+    THE CONTENT GATES APPLY IN FULL, and this is the third surface to need
+    that argument written out: a hub has no Explicit toggle, because it is a
+    static page a search engine hands to a stranger, so the safe default is the
+    only setting it has. Both the indexed columns AND the arrays — the columns
+    are a cache maintained by a trigger, and a column that defaults to `false`
+    reads as safe.
+
+    A work needs `min_people_for(activity)` different recommenders. RECS_DAYS
+    first; a quiet fandom with fewer than RECS_MIN_WORKS qualifying works gets
+    RECS_WIDE_DAYS before the block is dropped. Cheap: the candidate set is
+    what a handful of threads mentioned, tens of rows.
+    """
+    works = _recommended_in(db, variants, RECS_DAYS, limit)
+    if len(works) >= RECS_MIN_WORKS:
+        return works, RECS_DAYS
+    wide = _recommended_in(db, variants, RECS_WIDE_DAYS, limit)
+    if len(wide) >= RECS_MIN_WORKS:
+        return wide, RECS_WIDE_DAYS
+    # Not enough agreement in either window: say nothing rather than present
+    # one person's list as the fandom's.
+    return [], 0
 
 
 def _related(db, kind: str, slug: str, name: str,
@@ -439,15 +490,15 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     # page: this is a new table fed by a rate-limited harvest, so an empty or
     # broken result must cost the block and nothing else.
     try:
-        recommended = _recommended(db, list(hub[6] or []))
+        recommended, rec_days = _recommended(db, list(hub[6] or []))
     except Exception:
         log.warning("hub %s: recommended block unavailable", hub[0], exc_info=True)
-        recommended = []
+        recommended, rec_days = [], 0
 
     return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2],
                      nicknames=nicknames, works=works, sections=sections,
                      related=related, recommended=recommended,
-                     recommended_days=RECS_DAYS if recommended else 0)
+                     recommended_days=rec_days)
 
 
 @router.get("", response_model=list[HubSummary])

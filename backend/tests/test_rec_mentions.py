@@ -111,3 +111,38 @@ def test_one_comment_naming_a_work_twice_is_stored_once(db):
     db.commit()
     assert db.execute(text(
         "SELECT count(*) FROM rec_mentions WHERE comment_id='same-comment'")).scalar_one() == 1
+
+
+# ── the threshold for "recommended lately" ──────────────────────────────────
+
+def test_the_bar_rises_with_the_fandoms_activity():
+    from api.hubs import min_people_for
+    assert min_people_for(0) == 2 and min_people_for(29) == 2
+    assert min_people_for(30) == 3 and min_people_for(99) == 3
+    assert min_people_for(299) == 4 and min_people_for(5000) == 5
+
+
+def test_one_persons_mention_never_makes_the_block(db):
+    """Measured: all 54 works in the 30-day window had exactly one recommender,
+    and the block showed them as what the fandom was recommending."""
+    from api.hubs import _recommended
+    for n in range(5):
+        _mention(db, _story(db, f"Solo {n}"), f"reader{n}", days_ago=2)
+    db.commit()
+    works, days = _recommended(db, [FANDOM])
+    assert works == [] and days == 0
+
+
+def test_agreement_qualifies_and_a_quiet_fandom_gets_the_wider_window(db):
+    from api.hubs import _recommended
+    agreed = [_story(db, f"Agreed {n}") for n in range(3)]
+    for sid in agreed:
+        # Two people each, but 60 days ago: outside 30, inside 90.
+        _mention(db, sid, "alice", days_ago=60)
+        _mention(db, sid, "bob", days_ago=61)
+    _mention(db, _story(db, "Only once"), "carol", days_ago=1)
+    db.commit()
+    works, days = _recommended(db, [FANDOM])
+    assert days == 90
+    assert sorted(w.title for w in works) == ["Agreed 0", "Agreed 1", "Agreed 2"]
+    assert all(w.people == 2 for w in works)
