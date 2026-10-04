@@ -285,7 +285,19 @@ UPDATE stories s
 
 # Rows per transaction. Small enough that no other writer waits long, large
 # enough that the per-batch planning and commit overhead stays irrelevant.
-WRITE_BATCH = int(os.getenv("POPULARITY_WRITE_BATCH", "50000"))
+#
+# 10,000 rather than 50,000, with a REST after each slice. The ids are uuids, so
+# every slice is scattered random IO across the whole table; at 50,000 a slice
+# took ~4 minutes and the next began immediately, for four hours, holding the
+# disk the search path reads from. Measured 2026-10-04 during a pass: `drarry`
+# 7.6s uncached against ~3.4s on a quiet box, and one `fandom:Harry Potter`
+# browse timed out at 60s. Resting as long as the slice took leaves readers half
+# the disk; the pass takes about twice as long, once a week, and nobody waits
+# on it.
+WRITE_BATCH = int(os.getenv("POPULARITY_WRITE_BATCH", "10000"))
+# Rest after each slice, as a multiple of how long the slice took (capped).
+WRITE_REST = float(os.getenv("POPULARITY_WRITE_REST", "1.0"))
+WRITE_REST_MAX_S = float(os.getenv("POPULARITY_WRITE_REST_MAX_S", "120"))
 
 
 # Each percentile is keyed by id with a PK, so the planner joins on exact
@@ -478,6 +490,7 @@ def _run_locked(dry_run: bool = False) -> int:
                 {"after": after, "n": WRITE_BATCH}).scalar()
             if upto is None:
                 break
+            began = time.monotonic()
             for attempt in range(1, 11):
                 try:
                     res = db.execute(text(UPDATE_WRITE_SQL),
@@ -496,6 +509,10 @@ def _run_locked(dry_run: bool = False) -> int:
                     log.warning("deadlock with worker, retrying slice (%s/10)", attempt)
                     time.sleep(2)
             after = str(upto)
+            # Give the disk back to readers for a while. See WRITE_REST.
+            rest = min(WRITE_REST_MAX_S, (time.monotonic() - began) * WRITE_REST)
+            if rest > 0:
+                time.sleep(rest)
         _record_evidence(db, total, eligible)
         log.info("popularity written for %s works", f"{total:,}")
         return total
