@@ -52,12 +52,32 @@ const CACHE_PREFIX = CACHE.slice(0, CACHE.lastIndexOf("-") + 1)
 const KEEP_GENERATIONS = 2
 
 /** The generation before this one, if it is still on the device. */
+// Splits the origin's cache names into OUR stamped generations, newest first,
+// and our LEGACY ones — the hand-numbered `ficatlas-shell-v1`…`v8` from before
+// the name came from the build stamp.
+//
+// The split is the point. Sorted as plain strings, "v8" sorts ABOVE every
+// "2026…" stamp ('v' > '2'), so a device that jumped from a v-numbered build
+// straight to this one would treat the August cache as the NEWEST generation:
+// `previousCacheName` would return it forever, and `activate` would keep it and
+// delete the real previous generation on every deploy — the exact loss
+// KEEP_GENERATIONS exists to prevent. A legacy name is never a generation worth
+// reading; it is only ever something to delete.
+function sortGenerations(names, prefix) {
+  const stamped = []
+  const legacy = []
+  for (const k of names) {
+    if (!k.startsWith(prefix)) continue
+    if (/^\d{14}$/.test(k.slice(prefix.length))) stamped.push(k)
+    else legacy.push(k)
+  }
+  stamped.sort().reverse()
+  return { stamped, legacy }
+}
+
 async function previousCacheName() {
-  const names = (await caches.keys())
-    .filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE)
-    .sort()
-    .reverse()
-  return names[0] || null
+  const { stamped } = sortGenerations(await caches.keys(), CACHE_PREFIX)
+  return stamped.find((k) => k !== CACHE) || null
 }
 
 /**
@@ -180,11 +200,8 @@ self.addEventListener("activate", (event) => {
       // Delete everything older than the last KEEP_GENERATIONS of ours, and
       // nothing that is not ours — another app on the same origin, or a cache
       // this worker never wrote, is not ours to remove.
-      const ours = (await caches.keys())
-        .filter((k) => k.startsWith(CACHE_PREFIX))
-        .sort()
-        .reverse()
-      const doomed = ours.slice(KEEP_GENERATIONS)
+      const { stamped: ours, legacy } = sortGenerations(await caches.keys(), CACHE_PREFIX)
+      const doomed = [...ours.slice(KEEP_GENERATIONS), ...legacy]
       await Promise.all(doomed.map((k) => caches.delete(k)))
     }
     await self.clients.claim()

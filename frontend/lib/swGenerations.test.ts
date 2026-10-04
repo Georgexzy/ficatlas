@@ -45,7 +45,31 @@ const precachePages = GEN.slice(GEN.indexOf("const pageUrls"),
 const shells = GEN.slice(GEN.indexOf("const shellUrls"),
                          GEN.indexOf("const manifest"))
 
+// The pure half of the generation logic, lifted out of the worker source and
+// run, because "which cache is newest" is arithmetic on names and a source
+// assertion cannot check arithmetic.
+const sortGenerations = new Function(
+  `${SW.slice(SW.indexOf("function sortGenerations"), SW.indexOf("async function previousCacheName"))}
+   return sortGenerations`)() as (names: string[], prefix: string) =>
+     { stamped: string[]; legacy: string[] }
+
 describe("cache generations", () => {
+  it("orders stamped generations newest first and never mistakes a v-number for one", () => {
+    // 'v' sorts above '2', so a plain string sort put the August-era v8 cache
+    // ahead of every stamped build and made it "the previous generation" forever.
+    const P = "ficatlas-shell-"
+    const { stamped, legacy } = sortGenerations([
+      `${P}v8`, `${P}20261001170000`, `${P}20261003214709`, `${P}20260930120000`,
+      "someone-elses-cache",
+    ], P)
+    expect(stamped).toEqual([`${P}20261003214709`, `${P}20261001170000`, `${P}20260930120000`])
+    expect(legacy).toEqual([`${P}v8`])
+  })
+
+  it("deletes legacy names in activate", () => {
+    expect(activate).toContain("...legacy")
+  })
+
   it("keeps more than one", () => {
     const n = Number(SW.match(/const KEEP_GENERATIONS = (\d+)/)?.[1])
     expect(n).toBeGreaterThan(1)
@@ -56,6 +80,7 @@ describe("cache generations", () => {
     // origin, including anything this worker never wrote.
     expect(activate).toContain("CACHE_PREFIX")
     expect(activate).toContain("ours.slice(KEEP_GENERATIONS)")
+    expect(activate).toContain("sortGenerations(")
     expect(activate).not.toMatch(/keys\.filter\(\(k\) => k !== CACHE\)/)
   })
 
