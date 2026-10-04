@@ -41,7 +41,17 @@ const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
 // even 6s is ~360,000 works a day, which finishes the 6.5M backlog in weeks.
 const DELAY_MS = Number(process.env.FFNET_DELAY_MS || 6000)
 const PAGES_PER_VISIT = Number(process.env.FFNET_PAGES_PER_VISIT || 8)
-const MAX_PAGE = Number(process.env.FFNET_MAX_PAGE || 1000)
+// No practical cap: a section is walked to its end and then starts again. It
+// was 1000, which stopped Harry Potter (~34,000 pages) a thirtieth of the way in.
+const MAX_PAGE = Number(process.env.FFNET_MAX_PAGE || 100000)
+// How many sections each pass visits, taken in rotation from the discovered
+// list (see discoverSections). Each visit is PAGES_PER_VISIT pages.
+const SECTIONS_PER_PASS = Number(process.env.FFNET_SECTIONS_PER_PASS || 25)
+// A fandom with fewer stories than this is not worth a slot in the rotation.
+const MIN_SECTION_STORIES = Number(process.env.FFNET_MIN_SECTION_STORIES || 100)
+const CATEGORIES = ["/anime/", "/book/", "/cartoon/", "/comic/", "/game/",
+                    "/misc/", "/play/", "/movie/", "/tv/"]
+const DISCOVER_EVERY_MS = 7 * 24 * 3600 * 1000
 
 // FF.net sort: 1=updated, 2=published, 3=reviews, 4=favs, 5=follows.
 //
@@ -140,9 +150,12 @@ const UPDATE_SQL = `
 // (backend/ffnet_listing.py -> ffnet_enrich.parse_ffn_meta) so there is ONE
 // FF.net parser; this only stores what the page said.
 const STAGE_SQL = `
-  INSERT INTO ffnet_listing_meta (site_id, line, seen_at)
-  SELECT * FROM UNNEST($1::bigint[], $2::text[], $3::timestamptz[])
-  ON CONFLICT (site_id) DO UPDATE SET line = EXCLUDED.line, seen_at = EXCLUDED.seen_at
+  INSERT INTO ffnet_listing_meta (site_id, line, seen_at, title, author, author_url, summary, fandom)
+  SELECT * FROM UNNEST($1::bigint[], $2::text[], $3::timestamptz[],
+                       $4::text[], $5::text[], $6::text[], $7::text[], $8::text[])
+  ON CONFLICT (site_id) DO UPDATE SET line = EXCLUDED.line, seen_at = EXCLUDED.seen_at,
+    title = EXCLUDED.title, author = EXCLUDED.author, author_url = EXCLUDED.author_url,
+    summary = EXCLUDED.summary, fandom = EXCLUDED.fandom
 `
 
 // One listing page, fetched in a browser context of its own.
@@ -173,11 +186,26 @@ async function loadListing(browser, url) {
       // The metadata line on its own — "Rated: … - Harry P. - Complete" — which
       // FF.net renders in a separate grey element. See STAGE_SQL below.
       const meta = e.querySelector(".z-padtop2, .xgray")
+      const title = e.querySelector("a.stitle")
+      const author = e.querySelector('a[href^="/u/"]')
+      const indent = e.querySelector(".z-indent")
+      const clean = t => (t || "").replace(/\s+/g, " ").trim()
+      // The summary is the indent's text with the metadata line taken off.
+      let summary = indent ? clean(indent.textContent) : ""
+      if (meta && summary.endsWith(clean(meta.textContent)))
+        summary = summary.slice(0, -clean(meta.textContent).length).trim()
       return { href: a ? a.getAttribute("href") : null,
                text: (e.textContent || "").replace(/\s+/g, " "),
-               line: meta ? (meta.textContent || "").replace(/\s+/g, " ").trim() : null }
+               line: meta ? clean(meta.textContent) : null,
+               title: title ? clean(title.textContent) : null,
+               author: author ? clean(author.textContent) : null,
+               authorUrl: author ? "https://www.fanfiction.net" + author.getAttribute("href") : null,
+               summary: summary || null }
     }))
-    return { status: 200, rows }
+    // "Harry Potter FanFiction Archive | FanFiction" -> "Harry Potter", which is
+    // how FF.net names the category and how the index already files its works.
+    const fandom = ((await page.title()) || "").replace(/\s*FanFiction Archive.*$/i, "").trim() || null
+    return { status: 200, rows, fandom }
   } catch (e) {
     return { status: null, rows: null, error: String(e).slice(0, 90) }
   } finally {
@@ -202,16 +230,26 @@ async function harvestSection(browser, db, section) {
       console.log(`  ${section} p${p}: ${res.error || "HTTP " + res.status} — cursor held`)
       break
     }
-    if (!res.rows.length) { console.log(`  ${section} p${p}: no rows, stopping`); break }
+    if (!res.rows.length) {
+      // Past the end of the section. The cursor used to stay HERE, so every
+      // later visit asked for the same empty page and the section never
+      // started again — "/comic/Batman/ p713: no rows" on every pass. Wrap.
+      console.log(`  ${section} p${p}: no rows — end of section, back to page 1`)
+      if (pagesOk === 0) { await cursorSet(db, key, 1); return { seen, updated, pagesOk } }
+      break
+    }
     pagesOk++
 
     const stageIds = [], stageLines = [], stageAt = []
+    const stTitle = [], stAuthor = [], stAuthorUrl = [], stSummary = [], stFandom = []
     for (const r of res.rows) {
       const m = r.href && r.href.match(/^\/s\/(\d+)\//)
       if (!m) continue
       seen++
       if (r.line && r.line.startsWith("Rated:")) {
         stageIds.push(m[1]); stageLines.push(r.line); stageAt.push(new Date().toISOString())
+        stTitle.push(r.title); stAuthor.push(r.author); stAuthorUrl.push(r.authorUrl)
+        stSummary.push(r.summary); stFandom.push(res.fandom)
       }
       const v = parseRow(r.text)
       // Nothing to say about a work whose line carried none of the three.
@@ -222,7 +260,8 @@ async function harvestSection(browser, db, section) {
     }
     if (stageIds.length) {
       try {
-        await db.query(STAGE_SQL, [stageIds, stageLines, stageAt])
+        await db.query(STAGE_SQL, [stageIds, stageLines, stageAt,
+                                   stTitle, stAuthor, stAuthorUrl, stSummary, stFandom])
         staged += stageIds.length
       } catch (e) {
         // Most likely the table does not exist yet (the backend creates it at
@@ -249,6 +288,64 @@ const WEDGE_MS = Number(process.env.FFNET_WEDGE_H || 6) * 3600 * 1000
 // A pass that achieved nothing sleeps for longer each time, to this ceiling.
 const IDLE_MIN_MS = 30000
 const IDLE_MAX_MS = Number(process.env.FFNET_IDLE_MAX_MIN || 60) * 60 * 1000
+
+// Every FF.net fandom worth walking, biggest first, from the site's own
+// category pages ("Avatar: Last Airbender (46.4K)"). The fixed list of twenty
+// walked ~500,000 works of a 6.5M+ archive; this is all of it. Refreshed
+// weekly, cached in app_settings, and the fixed list is the fallback when
+// discovery cannot get a category page.
+function parseCount(t) {
+  const m = /\(([\d.,]+)\s*([KM]?)\)\s*$/i.exec(t || "")
+  if (!m) return 0
+  const n = Number(m[1].replace(/,/g, ""))
+  return Math.round(n * (m[2].toUpperCase() === "K" ? 1e3 : m[2].toUpperCase() === "M" ? 1e6 : 1))
+}
+
+async function loadCategory(browser, path) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 900 } })
+    await ctx.route("**/*", r => ["image", "font", "media"].includes(r.request().resourceType()) ? r.abort() : r.continue())
+    try {
+      const page = await ctx.newPage()
+      const res = await page.goto("https://www.fanfiction.net" + path, { waitUntil: "domcontentloaded", timeout: 45000 })
+      if (res && res.status() === 200) {
+        return await page.$$eval(`a[href^="${path}"]`, (as, path) => as
+          .filter(a => a.getAttribute("href") !== path)
+          .map(a => [a.getAttribute("href"), (a.parentElement && a.parentElement.textContent) || ""]), path)
+      }
+    } catch (e) {
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+    await sleep(DELAY_MS)
+  }
+  return null
+}
+
+async function discoverSections(browser, db) {
+  if (process.env.FFNET_SECTIONS) return SECTIONS
+  const cached = await db.query("SELECT value FROM app_settings WHERE key='ffnet_sections'")
+    .then(r => r.rows.length ? JSON.parse(r.rows[0].value) : null).catch(() => null)
+  if (cached && Date.now() - cached.at < DISCOVER_EVERY_MS && cached.sections.length)
+    return cached.sections.map(x => x[0])
+  const found = []
+  for (const cat of CATEGORIES) {
+    const links = await loadCategory(browser, cat)
+    if (links) for (const [href, text] of links) {
+      const n = parseCount(text.replace(/\s+/g, " ").trim())
+      if (n >= MIN_SECTION_STORIES && /^\/[a-z]+\/[^/]+\/$/.test(href)) found.push([href, n])
+    }
+    await sleep(DELAY_MS)
+  }
+  if (found.length < SECTIONS.length) {
+    console.log(`discover: only ${found.length} sections found — keeping the fixed list`)
+    return cached && cached.sections.length ? cached.sections.map(x => x[0]) : SECTIONS
+  }
+  const uniq = [...new Map(found.map(x => [x[0], x])).values()].sort((a, b) => b[1] - a[1])
+  await cursorSet(db, "ffnet_sections", JSON.stringify({ at: Date.now(), sections: uniq }))
+  console.log(`discover: ${uniq.length} sections, ${uniq.reduce((a, x) => a + x[1], 0).toLocaleString()} stories`)
+  return uniq.map(x => x[0])
+}
 
 async function main() {
   const once = process.argv.includes("--once")
@@ -293,7 +390,14 @@ async function main() {
   let idleMs = IDLE_MIN_MS
   do {
     let seen = 0, updated = 0, pages = 0
-    for (const s of SECTIONS) {
+    // This pass's share of the rotation, so every fandom is reached in turn
+    // rather than the same twenty on every pass.
+    const all = await discoverSections(browser, db)
+    const rot = (await cursorGet(db, "ffnet_section_rot")) - 1
+    const take = Array.from({ length: Math.min(SECTIONS_PER_PASS, all.length) },
+                            (_, i) => all[(rot + i) % all.length])
+    await cursorSet(db, "ffnet_section_rot", ((rot + take.length) % all.length) + 1)
+    for (const s of take) {
       const r = await harvestSection(browser, db, s)
       seen += r.seen; updated += r.updated; pages += r.pagesOk
     }

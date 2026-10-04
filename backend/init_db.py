@@ -1125,6 +1125,13 @@ CREATE TABLE IF NOT EXISTS ffnet_listing_meta (
     line     TEXT NOT NULL,
     seen_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Enough of the row to ADD a work we do not hold: ~40% of listing rows are
+-- works newer than the bulk dumps. NULL on rows staged before these existed.
+ALTER TABLE ffnet_listing_meta ADD COLUMN IF NOT EXISTS title      TEXT;
+ALTER TABLE ffnet_listing_meta ADD COLUMN IF NOT EXISTS author     TEXT;
+ALTER TABLE ffnet_listing_meta ADD COLUMN IF NOT EXISTS author_url TEXT;
+ALTER TABLE ffnet_listing_meta ADD COLUMN IF NOT EXISTS summary    TEXT;
+ALTER TABLE ffnet_listing_meta ADD COLUMN IF NOT EXISTS fandom     TEXT;
 
 CREATE TABLE IF NOT EXISTS ffnet_captures (
     site_id     BIGINT PRIMARY KEY,

@@ -120,3 +120,36 @@ def test_every_ffnet_rating_maps_to_a_real_rating():
     assert _RATING_MAP["K+"] == RatingEnum.teen     # the bulk importer's convention
     assert _RATING_MAP["T"] == RatingEnum.teen
     assert _RATING_MAP["M"] == RatingEnum.mature
+
+
+def test_a_listing_row_for_a_work_we_lack_becomes_a_new_work(db):
+    """~40% of listing rows are works newer than the bulk dumps. One with a
+    title and author is indexed, fully filed, through the shared save routine."""
+    from sqlalchemy import text
+    from models.story import Story, RatingEnum, StatusEnum
+    import ffnet_listing
+
+    db.execute(text("DELETE FROM ffnet_listing_meta"))
+    db.execute(text("""INSERT INTO ffnet_listing_meta (site_id, line, title, author, author_url, summary, fandom)
+        VALUES (12815952, :l, 'In his Pocket', 'Blandusername',
+                'https://www.fanfiction.net/u/7026983/Blandusername',
+                'A simple decision makes all the difference.', 'Harry Potter')"""),
+               {"l": ("Rated: M - English - Adventure/Mystery - Chapters: 18 - Words: 161,943 - "
+                      "Reviews: 797 - Favs: 4,306 - Follows: 5,466 - Updated: Jun 5, 2021 - "
+                      "Published: Jan 27, 2018 - Harry P., Albus D., Blaise Z., Daphne G.")})
+    db.commit()
+
+    stats = ffnet_listing.apply_batch(100)
+    assert stats["added"] == 1 and stats["matched"] == 0
+
+    s = db.query(Story).filter(Story.site_id == "12815952").one()
+    assert s.title == "In his Pocket" and s.author == "Blandusername"
+    assert s.url == "https://www.fanfiction.net/s/12815952/1/"
+    assert s.fandoms == ["Harry Potter"]
+    assert s.characters == ["Harry P.", "Albus D.", "Blaise Z.", "Daphne G."]
+    assert s.genres == ["Adventure", "Mystery"]
+    assert s.rating == RatingEnum.mature
+    assert s.status == StatusEnum.in_progress
+    assert s.word_count == 161943 and s.kudos == 4306
+    assert s.published_at is not None and s.published_at.year == 2018
+    assert s.summary.startswith("A simple decision")
