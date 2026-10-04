@@ -158,13 +158,113 @@ def test_describe_says_something_useful():
     assert admin._describe({}) == "nothing to do"
 
 
-def test_running_a_pass_reports_a_state_and_stores_it():
-    """Started, then readable. The poll endpoint is the only way to learn what a
-    four-hour rebuild did, and it reads `_results`."""
-    assert hasattr(admin, "_results")
-    assert hasattr(admin, "job_result")
-    # An unrun pass must not look like a finished one.
-    assert admin.job_result("crossover", _admin=None)["state"] == "never-run"
+def test_no_job_state_lives_in_process_memory():
+    """The readout and the single-flight guard were dicts in the API process.
+
+    With WEB_CONCURRENCY=4 a poll reached a worker that had never heard of the
+    pass 3 times in 4, and the panel said "lost track of it — the worker
+    restarted" about a pass running fine. State is in app_settings now; a dict
+    coming back is that bug coming back.
+    """
+    assert not hasattr(admin, "_results")
+    assert not hasattr(admin, "_running")
+    src = inspect.getsource(admin.run_job)
+    assert "run_in_background" not in src, "the API must queue a pass, not run it"
+
+
+def _clear(db):
+    from sqlalchemy import text
+    import admin_jobs
+    admin_jobs._ensure(db)
+    db.execute(text("DELETE FROM app_settings WHERE key LIKE 'admin_job%'"))
+    db.commit()
+
+
+def test_a_queued_pass_reads_the_same_from_any_process(db):
+    """Queue, then read back through the endpoint — the state is a row, so
+    every API worker gives the same answer."""
+    _clear(db)
+    assert admin.job_result("crossover", db=db, _admin=None)["state"] == "never-run"
+    rec = admin.run_job("crossover", limit=50, dry_run=True, db=db, _admin=None)
+    assert rec["state"] == "queued" and rec["dry_run"] is True
+    got = admin.job_result("crossover", db=db, _admin=None)
+    assert got["state"] == "queued" and got["limit"] == 50
+
+
+def test_single_flight_is_enforced_in_the_database(db):
+    from fastapi import HTTPException
+    _clear(db)
+    admin.run_job("crossover", limit=1, dry_run=True, db=db, _admin=None)
+    with pytest.raises(HTTPException) as e:
+        admin.run_job("crossover", limit=1, dry_run=True, db=db, _admin=None)
+    assert e.value.status_code == 409
+
+
+def test_queued_with_no_worker_listening_is_said(db):
+    """The public tier has no worker. 'queued' with nothing coming must not
+    look like 'about to start'."""
+    _clear(db)
+    rec = admin.run_job("crossover", limit=1, dry_run=True, db=db, _admin=None)
+    assert rec.get("stalled") is True
+    import admin_jobs
+    admin_jobs.heartbeat(db)
+    assert admin.job_result("crossover", db=db, _admin=None).get("stalled") is None
+
+
+def test_claim_run_finish_and_requeue(db, monkeypatch):
+    import admin_jobs
+    _clear(db)
+    admin.run_job("crossover", limit=7, dry_run=True, db=db, _admin=None)
+    claimed = admin_jobs.claim_queued(db)
+    assert [c["job"] for c in claimed] == ["crossover"]
+    assert admin_jobs.claim_queued(db) == [], "a claim must not be handed out twice"
+    assert admin_jobs.read(db, "crossover")["state"] == "running"
+
+    seen = {}
+    fake = admin._Job("x", "y", lambda limit, dry: seen.update(limit=limit, dry=dry) or "scanned 3")
+    monkeypatch.setitem(admin._JOBS, "crossover", fake)
+    out = admin.run_claimed(claimed[0])
+    assert out["state"] == "done" and out["report"] == "scanned 3"
+    assert seen == {"limit": 7, "dry": True}
+    assert admin_jobs.history(db)[0]["job"] == "crossover"
+    # Finished, so it can be queued again.
+    assert admin.run_job("crossover", limit=1, dry_run=False, db=db, _admin=None)["state"] == "queued"
+
+
+def test_a_deferred_heavy_pass_is_not_a_failure(db, monkeypatch):
+    import admin_jobs
+    from maintenance_lock import MaintenanceDeferred
+    _clear(db)
+    admin.run_job("crossover", limit=1, dry_run=False, db=db, _admin=None)
+    rec = admin_jobs.claim_queued(db)[0]
+
+    def boom(limit, dry):
+        raise MaintenanceDeferred("crossover")
+    monkeypatch.setitem(admin._JOBS, "crossover", admin._Job("x", "y", boom))
+    assert admin.run_claimed(rec)["state"] == "deferred"
+
+
+def test_a_pass_running_when_the_worker_died_is_released(db):
+    """Otherwise it reads `running` for ever and the 409 guard locks the button."""
+    import admin_jobs
+    _clear(db)
+    admin.run_job("crossover", limit=1, dry_run=True, db=db, _admin=None)
+    admin_jobs.claim_queued(db)
+    assert admin_jobs.abandon_running(db) == 1
+    assert admin_jobs.read(db, "crossover")["state"] == "failed"
+    admin.run_job("crossover", limit=1, dry_run=True, db=db, _admin=None)
+
+
+def test_only_a_queued_pass_can_be_withdrawn(db):
+    import admin_jobs
+    from fastapi import HTTPException
+    _clear(db)
+    admin.run_job("crossover", limit=1, dry_run=True, db=db, _admin=None)
+    assert admin.cancel_job("crossover", db=db, _admin=None)["state"] == "cancelled"
+    admin.run_job("crossover", limit=1, dry_run=True, db=db, _admin=None)
+    admin_jobs.claim_queued(db)
+    with pytest.raises(HTTPException):
+        admin.cancel_job("crossover", db=db, _admin=None)
 
 
 def test_an_unknown_pass_names_the_ones_that_exist():
@@ -175,5 +275,10 @@ def test_an_unknown_pass_names_the_ones_that_exist():
     """
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as e:
-        admin.run_job("not-a-pass", _admin=None)
+        admin.run_job("not-a-pass", db=None, _admin=None)
     assert "content_gates" in e.value.detail
+
+def test_the_worker_runs_the_queue():
+    """The API only queues now; without this loop every button queues for ever."""
+    src = open("worker.py").read()
+    assert '_supervised("admin_jobs_loop", _admin_jobs_loop)' in src

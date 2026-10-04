@@ -878,24 +878,39 @@ def _tropedia_recs(limit: int, dry_run: bool):
     return tropedia_recs_import.run(dry_run, limit or None)
 
 
-_running: dict[str, float] = {}
-# The last outcome per pass, read back by GET /run/{job}. Process memory and no
-# persistence, deliberately: it is a progress readout for a pass an operator is
-# watching, not a job history, and nothing here should outlive the container
-# that produced it. See `job_result` for why that lifetime is enough.
-_results: dict[str, dict] = {}
+# Where a pass RUNS, and where its state lives, is admin_jobs.py — read its
+# docstring before moving either back here. Short version: in-process state was
+# wrong on 3 polls in 4 with WEB_CONCURRENCY=4, and the API is the container a
+# deploy restarts under a four-hour pass.
+
+
+def _job_view(db, key: str, rec: dict | None, seen: float | None) -> dict:
+    import admin_jobs
+    out = dict(rec) if rec else {"job": key, "state": "never-run"}
+    # Queued with nobody listening is a distinct state, and the panel must be
+    # able to say it: the public tier has no worker of its own, and a dev worker
+    # that is down or running older code would otherwise leave "queued" on
+    # screen for ever, indistinguishable from "about to start".
+    if out.get("state") == "queued" and (seen is None or seen > admin_jobs.WORKER_SILENT_S):
+        out["stalled"] = True
+    return out
 
 
 @router.get("/jobs")
-def list_jobs(_admin: User = Depends(require_admin)):
-    """What can be started, so the UI is driven by this rather than by a copy.
+def list_jobs(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+    """What can be started, each pass's last outcome, and whether the worker is
+    listening — one call, so the panel renders state on load instead of only
+    for passes started in this tab.
 
-    The previous two buttons were hardcoded in the panel while the list of
-    passes lived here, so the two could disagree and nothing would say so. This
-    is the same argument as `adminTabs` and the two query parsers: one list, and
-    the second copy is the bug.
+    The registry is still the single list; see `_JOBS`.
     """
+    import admin_jobs
+    state = admin_jobs.read_all(db)
+    seen = admin_jobs.worker_seen_s(db)
     return {
+        "worker_seen_s": None if seen is None else round(seen),
+        "worker_silent_after_s": admin_jobs.WORKER_SILENT_S,
+        "history": admin_jobs.history(db)[:12],
         "jobs": [
             {
                 "key": key,
@@ -903,91 +918,79 @@ def list_jobs(_admin: User = Depends(require_admin)):
                 "blurb": j.blurb,
                 "networked": j.networked,
                 "minutes": j.minutes,
+                "last": _job_view(db, key, state.get(key), seen),
             }
             for key, j in _JOBS.items()
-        ]
+        ],
     }
 
 
 @router.post("/run/{job}")
 def run_job(job: str, limit: int = Form(200), dry_run: bool = Form(True),
-                  _admin: User = Depends(require_admin)):
-    """Start one pass in the background — a DRY RUN unless asked otherwise.
+            db: Session = Depends(get_db),
+            _admin: User = Depends(require_admin)):
+    """Queue one pass for the worker — a DRY RUN unless asked otherwise.
 
-    Deliberately fire-and-forget with a single-flight guard rather than a job
-    queue: these are idempotent passes that pick their own targets, so the worst
-    a duplicate does is waste requests against a rate limiter that is already
-    shared. A queue would be more machinery than the problem has.
-
-    The guard is per job key, and it is in this process's memory — which is the
-    same limit it always had, now worth saying: with two uvicorn workers and a
-    reload, two clicks can still start two passes. That is acceptable for
-    idempotent work and would not be for anything else, which is part of why
-    there is no job queue here.
+    Single-flight across every process: a pass already queued or running is a
+    409, decided in SQL rather than in this process's memory.
     """
     if job not in _JOBS:
         raise HTTPException(404, f"No such job. Known: {', '.join(sorted(_JOBS))}")
-    last = _running.get(job, 0.0)
-    if time.time() - last < 60:
-        raise HTTPException(429, "That pass was started less than a minute ago.")
-    _running[job] = time.time()
-
-    import asyncio
-    spec = _JOBS[job]
+    import admin_jobs
     cap = min(max(int(limit), 1), 2000)
-    result: dict = {"job": job, "limit": cap, "dry_run": dry_run, "state": "running"}
-    # Published before the work starts, so a poll immediately after the click
-    # reads "running" rather than "never-run" — which is the same state a pass
-    # that never started is in, and would leave the panel looking broken for the
-    # whole of a four-hour rebuild.
-    _results[job] = result
+    try:
+        rec = admin_jobs.request(db, job, cap, bool(dry_run))
+    except admin_jobs.Busy:
+        raise HTTPException(409, "That pass is already queued or running.")
+    return _job_view(db, job, rec, admin_jobs.worker_seen_s(db))
 
-    def _go():
-        try:
-            # The pass's own words, kept. A dry run is only useful if it says what
-            # it found, and "started" is not that — an operator who previewed the
-            # gate rebuild needs to know whether there were 1.4M rows to rewrite
-            # or none at all before deciding to run it for real.
-            result["report"] = spec.fn(cap, dry_run)
-            result["state"] = "done"
-        except Exception as e:
-            log.warning(f"admin job {job} failed: {type(e).__name__}: {e}")
-            result["state"] = "failed"
-            result["error"] = f"{type(e).__name__}: {e}"
 
-    # _go is synchronous and blocking, and this endpoint runs in a FastAPI
-    # threadpool thread, so asyncio.get_event_loop() here would raise
-    # RuntimeError on py3.10+ (the job endpoint 500'd every call). Schedule it
-    # through the loop-safe run_in_background helper instead, running _go on a
-    # threadpool thread; the helper's done-callback also surfaces any error the
-    # inner try/except missed.
-    from live_fetch.jobs import run_in_background
-    started = run_in_background(lambda: asyncio.to_thread(_go))
-    if started is None:
-        # The helper returns None when there is no loop to schedule on, after
-        # logging it and carrying on. Ignoring that return value — which is what
-        # this did — leaves `state: running` on the panel for a pass that never
-        # started, and a four-hour rebuild that is never going to finish looks
-        # exactly like one that is. Said plainly instead.
-        result["state"] = "failed"
-        result["error"] = "could not start: no event loop on this worker"
-    return result
+@router.post("/run/{job}/cancel")
+def cancel_job(job: str, db: Session = Depends(get_db),
+               _admin: User = Depends(require_admin)):
+    """Withdraw a queued pass. A running one cannot be stopped from here."""
+    if job not in _JOBS:
+        raise HTTPException(404, f"No such job. Known: {', '.join(sorted(_JOBS))}")
+    import admin_jobs
+    if not admin_jobs.cancel(db, job):
+        raise HTTPException(409, "Only a queued pass can be withdrawn.")
+    return _job_view(db, job, admin_jobs.read(db, job), admin_jobs.worker_seen_s(db))
 
 
 @router.get("/run/{job}")
-def job_result(job: str, _admin: User = Depends(require_admin)):
-    """How the last run of a pass went, including its own report.
-
-    A pass takes minutes to hours, so the button that started it has long since
-    returned `state: running` and the panel needs somewhere to ask again. The
-    result is kept per key and overwritten by the next start, which is the whole
-    lifetime an operator needs: the answer to "did that work" is read once, and
-    the evidence it concerns is a row count or a timestamp that is still there
-    afterwards.
-    """
+def job_result(job: str, db: Session = Depends(get_db),
+               _admin: User = Depends(require_admin)):
+    """How the last run of a pass went, including its own report. Read from the
+    database, so every API worker gives the same answer."""
     if job not in _JOBS:
         raise HTTPException(404, f"No such job. Known: {', '.join(sorted(_JOBS))}")
-    return _results.get(job) or {"job": job, "state": "never-run"}
+    import admin_jobs
+    return _job_view(db, job, admin_jobs.read(db, job), admin_jobs.worker_seen_s(db))
+
+
+def run_claimed(rec: dict) -> dict:
+    """Execute one claimed request and record the outcome. Called by the worker,
+    in a thread; never by a request handler."""
+    import admin_jobs
+    from db.session import db_session
+    from maintenance_lock import MaintenanceDeferred
+    spec = _JOBS.get(rec["job"])
+    try:
+        if spec is None:
+            raise RuntimeError("no longer in the registry")
+        report = spec.fn(int(rec.get("limit") or 200), bool(rec.get("dry_run", True)))
+        with db_session() as db:
+            return admin_jobs.finish(db, rec, report=report)
+    except MaintenanceDeferred as e:
+        # Not a failure: another heavy pass holds the shared slot. Said as such,
+        # so the operator waits rather than debugging.
+        with db_session() as db:
+            return admin_jobs.finish(db, rec, deferred=True,
+                                     error=f"another heavy pass is running ({e})")
+    except Exception as e:
+        log.warning(f"admin job {rec.get('job')} failed: {type(e).__name__}: {e}")
+        with db_session() as db:
+            return admin_jobs.finish(db, rec, error=f"{type(e).__name__}: {e}")
 
 
 @router.get("/users")

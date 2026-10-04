@@ -2195,6 +2195,46 @@ async def _cache_warm_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _admin_jobs_loop() -> None:
+    """Run the passes an operator queued from the admin panel.
+
+    The API only writes a request (see admin_jobs.py for why it stopped running
+    them itself). This loop claims queued requests every POLL_S, runs each in its
+    own thread so a four-hour rebuild does not hold up a dry run queued behind
+    it, and stamps a heartbeat the panel reads to tell "queued" from "nobody is
+    listening". Heavy passes still serialise among themselves through
+    maintenance_lock, and report `deferred` rather than queue behind each other.
+    """
+    import admin_jobs
+    from api import admin
+    from db.session import db_session
+
+    def _start() -> int:
+        with db_session() as db:
+            return admin_jobs.abandon_running(db)
+
+    def _tick() -> list[dict]:
+        with db_session() as db:
+            admin_jobs.heartbeat(db)
+            return admin_jobs.claim_queued(db)
+
+    n = await asyncio.to_thread(_start)
+    if n:
+        log.warning(f"[admin jobs] {n} pass(es) were running when the worker stopped; marked failed")
+    running: set[asyncio.Task] = set()
+    while True:
+        try:
+            for rec in await asyncio.to_thread(_tick):
+                log.info(f"[admin jobs] starting {rec['job']} "
+                         f"({'dry run' if rec.get('dry_run') else 'FOR REAL'}, limit {rec.get('limit')})")
+                t = asyncio.create_task(asyncio.to_thread(admin.run_claimed, rec))
+                running.add(t)
+                t.add_done_callback(running.discard)
+        except Exception as e:
+            log.warning(f"[admin jobs] tick failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(admin_jobs.POLL_S)
+
+
 async def _supervised(name: str, factory) -> None:
     """Run one background loop for ever, surviving its own bugs.
 
@@ -2401,6 +2441,12 @@ async def main() -> None:
         tasks.append(asyncio.create_task(_supervised("wayback_cdx_loop", _wayback_cdx_loop)))
         tasks.append(asyncio.create_task(_supervised("wayback_fetch_loop", _wayback_fetch_loop)))
         log.info("Wayback harvest enabled (AO3 metadata at zero cost to AO3)")
+
+    # The admin panel's "run a pass" buttons. The API queues; this runs. Off
+    # means the buttons queue work nothing will pick up, and the panel says so.
+    if _flag("RUN_ADMIN_JOBS", "true"):
+        tasks.append(asyncio.create_task(_supervised("admin_jobs_loop", _admin_jobs_loop)))
+        log.info("admin pass runner enabled (polls every 10s)")
 
     log.info("worker ready")
     # Idle forever; the scheduler runs on its own timers.
