@@ -26,7 +26,7 @@ import WordCountSlider from "./WordCountSlider"
 import DlpStars, { dlpRating } from "./DlpStars"
 import SiteHeader from "./SiteHeader"
 import WhatYouCanDo from "./WhatYouCanDo"
-import CompassMark from "./CompassMark"
+import CompassDial from "./CompassDial"
 import { useAuth } from "@/lib/auth"
 
 // Last search results, keyed by the exact URL that produced them. Back/forward
@@ -3357,7 +3357,7 @@ function SearchPageInner() {
                     phone — which is where the mark was least visible, because
                     the header is not sticky below 700px and scrolls away the
                     moment you move. */}
-                {loading ? <CompassMark className="compass--spin" /> : "Search"}
+                {loading ? <CompassDial mini /> : "Search"}
               </button>
             </div>
             <TokenStrip tokens={parsedTokens} onRemove={raw => {
@@ -3411,7 +3411,7 @@ function SearchPageInner() {
                   so there is nothing to load and nothing to get wrong in dark
                   mode. */}
               <div className="search-loading__rose" aria-hidden="true">
-                <CompassMark />
+                <CompassDial />
               </div>
               <p className="search-loading__text">Searching</p>
               {/* The result skeletons, back. Restored on request, having read the
@@ -3443,9 +3443,9 @@ function SearchPageInner() {
                   the spinner in the results list as well as the header, so the
                   reader got a compass, the word "Searching", and then a second
                   loader further down the same column. One loader, and this
-                  block is the only place one is rendered — the header's compass
-                  animates (`.compass--spin`) but that is the same mark turning,
-                  not a second one. */}
+                  block is the only place one is rendered — the search button's
+                  mini dial is the same instrument at button size, not a
+                  second loader. */}
               <div className="search-loading__cards" aria-hidden="true">
                 {Array.from({ length: 6 }, (_, i) => (
                   <div className="skeleton-card" key={i}>
