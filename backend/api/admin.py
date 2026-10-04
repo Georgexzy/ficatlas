@@ -328,8 +328,18 @@ _JOB_EVIDENCE = [
      "the fandom listing harvest, title repair and both Wayback passes. They all "
      "stamp crawled_at, so this is the one signal that says the fetching side is "
      "alive at all.", 6,
-     "SELECT max(crawled_at) FROM (SELECT crawled_at FROM stories "
-     " WHERE crawled_at > now() - interval '48 hours' LIMIT 200) s"),
+     # TIERED, one row each. The old form took the newest of ANY 200 rows
+     # from the last 48h, so its answer fell anywhere in 0-48h and it flagged
+     # stale at random: 5.4h on 2026-10-04 while works were being crawled that
+     # minute. Asking for a single row inside 1h, then 6h, stops at the first
+     # match (32ms measured); asking for 200 inside 1h took 10.5s, because the
+     # newest rows sit far into the heap. The answer is an upper bound on the
+     # age, which is what an alarm needs.
+     "SELECT COALESCE("
+     " (SELECT crawled_at FROM stories WHERE crawled_at > now() - interval '1 hour' LIMIT 1),"
+     " (SELECT crawled_at FROM stories WHERE crawled_at > now() - interval '6 hours' LIMIT 1),"
+     " (SELECT max(crawled_at) FROM (SELECT crawled_at FROM stories "
+     "   WHERE crawled_at > now() - interval '48 hours' LIMIT 200) s))"),
     # Cheap, exact, and the reason several things on this page are trustworthy:
     # the planner's row estimates come from here, and CLAUDE.md records a
     # measurement taken while ANALYZE had never run that was wrong by 200x.
