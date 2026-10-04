@@ -131,6 +131,20 @@ const UPDATE_SQL = `
       OR COALESCE(bookmarks,0) < $4)
 `
 
+// The whole metadata line, staged for the worker to parse.
+//
+// This harvester read 246,861 rows a day and kept three counts from each. The
+// same line carries the work's characters, bracketed pairings, genres, words,
+// completion and dates — the fields FF.net is 98% missing in the index, which
+// the archive.org route fills at ~500 works a day. Parsing stays in Python
+// (backend/ffnet_listing.py -> ffnet_enrich.parse_ffn_meta) so there is ONE
+// FF.net parser; this only stores what the page said.
+const STAGE_SQL = `
+  INSERT INTO ffnet_listing_meta (site_id, line, seen_at)
+  SELECT * FROM UNNEST($1::bigint[], $2::text[], $3::timestamptz[])
+  ON CONFLICT (site_id) DO UPDATE SET line = EXCLUDED.line, seen_at = EXCLUDED.seen_at
+`
+
 // One listing page, fetched in a browser context of its own.
 //
 // FF.net's refusal is per SESSION, not per rate. After roughly three listing
@@ -156,8 +170,12 @@ async function loadListing(browser, url) {
     if (!resp || resp.status() !== 200) return { status: resp ? resp.status() : null, rows: null }
     const rows = await page.$$eval(".z-list", els => els.map(e => {
       const a = e.querySelector('a[href^="/s/"]')
+      // The metadata line on its own — "Rated: … - Harry P. - Complete" — which
+      // FF.net renders in a separate grey element. See STAGE_SQL below.
+      const meta = e.querySelector(".z-padtop2, .xgray")
       return { href: a ? a.getAttribute("href") : null,
-               text: (e.textContent || "").replace(/\s+/g, " ") }
+               text: (e.textContent || "").replace(/\s+/g, " "),
+               line: meta ? (meta.textContent || "").replace(/\s+/g, " ").trim() : null }
     }))
     return { status: 200, rows }
   } catch (e) {
@@ -171,7 +189,7 @@ async function harvestSection(browser, db, section) {
   const key = "ffnet_listing_page:" + section
   let start = await cursorGet(db, key)
   if (start > MAX_PAGE) start = 1          // walked to the end; go round again
-  let updated = 0, seen = 0, pagesOk = 0
+  let updated = 0, seen = 0, pagesOk = 0, staged = 0
 
   for (let i = 0; i < PAGES_PER_VISIT; i++) {
     const p = start + i
@@ -187,10 +205,14 @@ async function harvestSection(browser, db, section) {
     if (!res.rows.length) { console.log(`  ${section} p${p}: no rows, stopping`); break }
     pagesOk++
 
+    const stageIds = [], stageLines = [], stageAt = []
     for (const r of res.rows) {
       const m = r.href && r.href.match(/^\/s\/(\d+)\//)
       if (!m) continue
       seen++
+      if (r.line && r.line.startsWith("Rated:")) {
+        stageIds.push(m[1]); stageLines.push(r.line); stageAt.push(new Date().toISOString())
+      }
       const v = parseRow(r.text)
       // Nothing to say about a work whose line carried none of the three.
       if (v.reviews == null && v.favs == null && v.follows == null) continue
@@ -198,13 +220,23 @@ async function harvestSection(browser, db, section) {
         [m[1], v.reviews ?? 0, v.favs ?? 0, v.follows ?? 0])
       updated += q.rowCount
     }
+    if (stageIds.length) {
+      try {
+        await db.query(STAGE_SQL, [stageIds, stageLines, stageAt])
+        staged += stageIds.length
+      } catch (e) {
+        // Most likely the table does not exist yet (the backend creates it at
+        // startup). The count update above already happened; carry on.
+        console.log(`  stage failed: ${String(e).slice(0, 100)}`)
+      }
+    }
     await sleep(DELAY_MS)
   }
   // Advance only over pages that actually answered, so a failure mid-visit is
   // retried next time instead of being skipped silently.
   await cursorSet(db, key, start + Math.max(pagesOk, 0))
   console.log(`listing[ffnet] ${section} pages ${start}-${start + pagesOk - 1}: `
-            + `${seen} works, ${updated} updated`)
+            + `${seen} works, ${updated} updated, ${staged} staged`)
   // pagesOk is what the caller needs to tell "the site answered and there was
   // nothing new" from "the site refused us" — 0 works updated means both.
   return { seen, updated, pagesOk }

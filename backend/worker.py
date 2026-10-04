@@ -2235,6 +2235,37 @@ async def _admin_jobs_loop() -> None:
         await asyncio.sleep(admin_jobs.POLL_S)
 
 
+async def _ffnet_listing_apply_loop() -> None:
+    """Write the characters, pairings and genres the FF.net listing harvest reads.
+
+    See ffnet_listing.py. The harvester stages raw listing lines; this applies
+    them in batches through the same parser and writer the Wayback route uses.
+    Cheap: an indexed lookup per batch and one UPDATE per row we hold.
+    """
+    import ffnet_listing
+    from db.session import db_session
+
+    interval = _num("FFNET_LISTING_APPLY_SEC", 30)
+    batch = int(_num("FFNET_LISTING_APPLY_BATCH", 2000))
+    await asyncio.sleep(_num("FFNET_LISTING_APPLY_DELAY_SEC", 60))
+    while True:
+        try:
+            stats = await asyncio.to_thread(ffnet_listing.apply_batch, batch)
+            if stats["claimed"]:
+                log.info(f"ffnet listing: {stats}")
+                def _rec():
+                    with db_session() as db:
+                        ffnet_listing.record(db, stats)
+                await asyncio.to_thread(_rec)
+            # A full batch means a backlog: go again straight away.
+            if stats["claimed"] >= batch:
+                await asyncio.sleep(1)
+                continue
+        except Exception as e:
+            log.warning(f"ffnet listing apply failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _supervised(name: str, factory) -> None:
     """Run one background loop for ever, surviving its own bugs.
 
@@ -2430,6 +2461,12 @@ async def main() -> None:
     if _flag("RUN_INDEXNOW", "true"):
         tasks.append(asyncio.create_task(_supervised("indexnow_loop", _indexnow_loop)))
         log.info("IndexNow submission enabled (hub changes -> Bing/Yandex)")
+
+    # The listing harvest's metadata lines. Runs whether or not the harvester
+    # is up: with nothing staged it is one empty DELETE every 30 seconds.
+    if _flag("FFNET_LISTING_APPLY", "true"):
+        tasks.append(asyncio.create_task(_supervised("ffnet_listing_apply_loop", _ffnet_listing_apply_loop)))
+        log.info("FF.net listing metadata apply enabled")
 
     if _flag("FFNET_WAYBACK", "true"):
         tasks.append(asyncio.create_task(_supervised("ffnet_wayback_cdx_loop", _ffnet_wayback_cdx_loop)))

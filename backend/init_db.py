@@ -1114,6 +1114,18 @@ CREATE TABLE IF NOT EXISTS rec_threads (
 CREATE INDEX IF NOT EXISTS ix_rec_threads_unread
     ON rec_threads (community, posted_at DESC) WHERE read_at IS NULL;
 
+-- FF.net listing rows waiting to be applied. The browser harvester walks
+-- listing pages, 25 works each, and every row carries the work's metadata line:
+-- characters, pairings, genres, words, status and dates. It used to read only
+-- three counts from it and throw the rest away. It stages the raw line here and
+-- the worker parses it with ffnet_enrich.parse_ffn_meta, so there is still one
+-- parser. Rows are deleted as they are applied, so this stays small.
+CREATE TABLE IF NOT EXISTS ffnet_listing_meta (
+    site_id  BIGINT PRIMARY KEY,
+    line     TEXT NOT NULL,
+    seen_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS ffnet_captures (
     site_id     BIGINT PRIMARY KEY,
     snapshot_ts VARCHAR(20) NOT NULL,

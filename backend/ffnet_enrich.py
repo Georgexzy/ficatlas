@@ -85,11 +85,26 @@ def _ffn_date(value: str):
     line right there on the page carried them.
     """
     value = (value or "").strip()
-    for fmt in ("%m/%d/%Y", "%m-%d-%y", "%m/%d/%y", "%m-%d-%Y"):
+    for fmt in ("%m/%d/%Y", "%m-%d-%y", "%m/%d/%y", "%m-%d-%Y",
+                # The LIVE site's listing pages render dates in words —
+                # "Sep 22, 2013" — and drop the year for the current one:
+                # "Updated: Aug 22". Archived story pages use the numeric forms
+                # above, which is why only those were handled.
+                "%b %d, %Y", "%B %d, %Y"):
         try:
             return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
+    for fmt in ("%b %d", "%B %d"):
+        try:
+            md = datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+        # No year means "this year" — unless that lands in the future, which
+        # can only be last year's date seen across a new year.
+        now = datetime.now(timezone.utc)
+        dt = md.replace(year=now.year, tzinfo=timezone.utc)
+        return dt.replace(year=now.year - 1) if dt > now else dt
     return None
 
 
@@ -170,7 +185,7 @@ def _fichub_fallback(site_id: str) -> dict | None:
     }
 
 
-def parse_ffn_meta(page_text: str) -> dict | None:
+def parse_ffn_meta(page_text: str, listing: bool = False) -> dict | None:
     """Pull the metadata line out of an archived FF.net story page.
 
     The line is a " - " separated list in which almost everything is optional —
@@ -237,7 +252,12 @@ def parse_ffn_meta(page_text: str) -> dict | None:
         genres = _classify_genres(part)
         if genres:
             out["genres"] = genres
-        elif not seen_counts and not out["characters"]:
+        # On a story page the characters come BEFORE the counts; on a listing
+        # row they come AFTER the dates ("... - Published: Sep 8, 2013 -
+        # Harry P. - Complete"). `listing` lifts the ordering rule for the
+        # second shape and nothing else: genres and labelled fields are still
+        # classified first, so only a genuinely unlabelled segment lands here.
+        elif (listing or not seen_counts) and not out["characters"]:
             # FF.net marks a romantic pairing by bracketing it:
             #   "[Renamon, Terriermon] Aayla S., Lopmon"
             # means Renamon/Terriermon are shipped and the rest just appear. That
