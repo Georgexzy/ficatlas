@@ -43,9 +43,30 @@ router = APIRouter()
 
 # ── write ───────────────────────────────────────────────────────────────────
 
+def _search_text(search: str) -> Optional[str]:
+    """The search a click came from, as the search logger itself records it.
+
+    The page sends its URL parameters, not the text in the box — the box can be
+    edited after the search ran — and this builds the row text the same way
+    main.track_search_middleware does (typed text plus serialise_filters), so a
+    click and the search it came from share one string and join.
+    """
+    from starlette.datastructures import QueryParams
+    from query_parser import serialise_filters
+    try:
+        qp = QueryParams((search or "").lstrip("?"))
+    except Exception:
+        return None
+    text_q = (qp.get("q") or "").strip()
+    filters = serialise_filters(qp)
+    out = f"{text_q} {filters}".strip() if text_q and filters else (text_q or filters)
+    return out[:200] or None
+
+
 @router.post("/hit", status_code=204)
 def hit(request: Request, path: str = Form(...), ref: str = Form(""),
         kind: str = Form("page"), seen: str = Form(""),
+        search: str = Form(""), pos: int = Form(0),
         viewer: Optional[User] = Depends(get_current_user)):
     """Record one pageview, or one click through to the archive.
 
@@ -89,7 +110,12 @@ def hit(request: Request, path: str = Form(...), ref: str = Form(""),
     # this function directly rather than over HTTP, so `kind` arrives as
     # FastAPI's Form() sentinel rather than a string, and a strict check
     # silently recorded nothing at all.
-    kind = "out" if kind == "out" else "page"
+    # `click` is a reader opening a SEARCH RESULT: `path` is the work, `q` the
+    # search it came from, `pos` its 1-based position across pages. Still a
+    # fixed set of kinds, for the reason above.
+    kind = kind if kind in ("out", "click") else "page"
+    pos_v = pos if kind == "click" and 0 < pos <= 10000 else None
+    q_v = _search_text(search) if kind == "click" else None
 
     # HAS THIS BROWSER BEEN HERE BEFORE — and nothing else about it.
     #
@@ -142,6 +168,8 @@ def hit(request: Request, path: str = Form(...), ref: str = Form(""),
             bot=tracking.is_bot(ua),
             kind_of_bot=tracking.bot_kind(ua),
             seen=seen,
+            q=q_v or None,
+            pos=pos_v,
         )
     except Exception:
         # Analytics must never be able to fail a request. There is nothing the
@@ -839,6 +867,67 @@ def cloudflare(days: int = Query(30, ge=1, le=365), _owner=Depends(require_owner
     saying so.
     """
     return cloudflare_analytics.fetch(days)
+
+
+# Position buckets for the click report. Page one is the only page most people
+# see, so its positions are kept apart; past it, buckets.
+_POS_BUCKETS = ("1", "2", "3", "4-5", "6-10", "11-20", "21+")
+
+
+@router.get("/clicks")
+def clicks(days: int = Query(30, ge=1, le=365),
+           db: Session = Depends(get_db),
+           _owner=Depends(require_owner)):
+    """Which search results get opened, by position — and which searches
+    get opened at all.
+
+    The funnel said 29% of searchers opened a work and could not say why the
+    other 71% did not. If clicks pile onto positions 1-3, the right work is
+    there and the rest of page one is noise; if they spread or are absent, the
+    ranking is not putting it there. Counted in people per search, from
+    `click` events (kind='click', pos = 1-based position, q = the search).
+    """
+    cut = _window(days)
+    rows = db.execute(text("""
+        SELECT CASE WHEN pos = 1 THEN '1' WHEN pos = 2 THEN '2' WHEN pos = 3 THEN '3'
+                    WHEN pos <= 5 THEN '4-5' WHEN pos <= 10 THEN '6-10'
+                    WHEN pos <= 20 THEN '11-20' ELSE '21+' END AS bucket,
+               count(*) AS clicks, count(DISTINCT visitor) AS people
+          FROM visit_events_public
+         WHERE kind = 'click' AND NOT bot AND pos IS NOT NULL AND at >= :cut
+         GROUP BY 1
+    """), {"cut": cut}).fetchall()
+    by = {r[0]: (r[1], r[2]) for r in rows}
+    total = sum(v[0] for v in by.values())
+    # Searches nobody opened anything from: the queries this report exists to
+    # surface. Only first pages count as a search (paging writes ?page=N).
+    unclicked = db.execute(text("""
+        WITH s AS (
+            SELECT lower(q) AS q, count(*) AS runs, max(results) AS results
+              FROM visit_events_public
+             WHERE kind = 'search' AND NOT bot AND at >= :cut AND q IS NOT NULL
+               AND path = '/api/search' AND coalesce(results, 0) > 0
+             GROUP BY 1),
+        c AS (
+            SELECT lower(q) AS q, count(*) AS clicks
+              FROM visit_events_public
+             WHERE kind = 'click' AND NOT bot AND at >= :cut AND q IS NOT NULL
+             GROUP BY 1)
+        SELECT s.q, s.runs, s.results, coalesce(c.clicks, 0)
+          FROM s LEFT JOIN c USING (q)
+         ORDER BY coalesce(c.clicks, 0) = 0 DESC, s.runs DESC
+         LIMIT 30
+    """), {"cut": cut}).fetchall()
+    since = db.execute(text(
+        "SELECT min(at)::date FROM visit_events_public WHERE kind = 'click'")).scalar()
+    return {
+        "since": since.isoformat() if since else None,
+        "total": total,
+        "positions": [{"bucket": b, "clicks": by.get(b, (0, 0))[0],
+                       "people": by.get(b, (0, 0))[1]} for b in _POS_BUCKETS],
+        "queries": [{"query": r[0], "runs": r[1], "results": r[2], "clicks": r[3]}
+                    for r in unclicked],
+    }
 
 
 @router.get("/referrers")

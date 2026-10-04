@@ -1353,6 +1353,12 @@ CREATE TABLE IF NOT EXISTS visit_events (
     results  INTEGER,
     bot      BOOLEAN NOT NULL DEFAULT FALSE
 );
+-- For kind='click' (a reader opening a search result): the result's position,
+-- 1-based across pages. q holds the search it came from. Which positions get
+-- clicked is the only way to tell a ranking problem from a presentation one.
+ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS pos SMALLINT;
+CREATE OR REPLACE VIEW visit_events_public AS
+    SELECT * FROM visit_events WHERE NOT internal;
 -- Every report is "the last N days", so the ordering column is the one to
 -- index. kind is in the second index because the searches report filters on it
 -- before it sorts, over a table where pageviews will outnumber searches.

@@ -466,6 +466,14 @@ interface HubRow {
   path: string; label: string; sessions: number; views: number
   searched: number; went_out: number
 }
+/** /api/traffic/clicks — which search results get opened, by position. */
+interface Clicks {
+  since: string | null
+  total: number
+  positions: { bucket: string; clicks: number; people: number }[]
+  queries: { query: string; runs: number; results: number | null; clicks: number }[]
+}
+
 interface Entry {
   since: string; entries: EntryRow[]; hubs: HubRow[]
   /** first | week | return | unknown → sessions. See api/traffic.hit: the
@@ -581,6 +589,7 @@ export default function TrafficPanel(
   const [cf, setCf] = useState<Cloudflare | null>(null)
   const [scr, setScr] = useState<Scrapers | null>(null)
   const [entry, setEntry] = useState<Entry | null>(null)
+  const [clk, setClk] = useState<Clicks | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async (d: number) => {
@@ -594,12 +603,12 @@ export default function TrafficPanel(
     try {
       // In parallel: four small aggregates over the same window, and waiting for
       // them one after another would show the page filling in for no reason.
-      const [s, p, q, rf, rt, sc, en] = await Promise.all([
+      const [s, p, q, rf, rt, sc, en, ck] = await Promise.all([
         get("summary"), get("pages"), get("searches"), get("referrers"),
-        get("routes"), get("scrapers"), get("entry"),
+        get("routes"), get("scrapers"), get("entry"), get("clicks").catch(() => null),
       ])
       setSummary(s); setPages(p.pages); setSearches(q); setRefs(rf.referrers)
-      setRoutes(rt); setScr(sc); setEntry(en)
+      setRoutes(rt); setScr(sc); setEntry(en); setClk(ck)
     } catch (e: any) { setError(e.message) }
 
     // Deliberately NOT in the Promise.all above. This one leaves the building
@@ -671,6 +680,7 @@ export default function TrafficPanel(
     // names the section it scrolls to, in the order they appear.
     { id: "entry",      label: "Where visits start" },
     { id: "sources",    label: "Routes to a story" },
+    { id: "clicks",     label: "What gets opened" },
     { id: "searches",   label: "Searches" },
     { id: "empty",      label: "Found nothing" },
     { id: "pages",      label: "Pages" },
@@ -1187,6 +1197,52 @@ export default function TrafficPanel(
           </p>
         </Section>
       )}
+
+      {/* WHICH RESULTS GET OPENED. The funnel says how many searchers open a
+          work; this says which position they open, which separates a ranking
+          problem (the right work is not near the top) from a presentation
+          one (it is, and the cards do not make that obvious). */}
+      <Section id="clicks" title="Which search results get opened" onActive={onActive}
+        note="Counted from the moment a reader opens a result — its page here or its archive page — with the result's position across pages. Tag, fandom and author links on a card are refinements, not choices, and are not counted.">
+        {!clk || clk.total === 0 ? (
+          <p className="admin-note">
+            Nothing recorded yet{clk?.since ? ` since ${longDate(clk.since)}` : ""}.
+            Result clicks are recorded from this build onward.
+          </p>
+        ) : (
+          <>
+            <RankedBars color="var(--chart-2)" total={clk.total}
+              rows={clk.positions.map(p => ({ label: `position ${p.bucket}`, value: p.clicks }))} />
+            <p className="admin-note">
+              {clk.total.toLocaleString()} result{clk.total === 1 ? "" : "s"} opened
+              {clk.since ? ` since ${longDate(clk.since)}` : ""}. Clicks piled onto 1-3
+              mean the right work is near the top; spread across the page, or absent,
+              mean the ranking is not putting it there.
+            </p>
+          </>
+        )}
+        {!!clk?.queries.length && (
+          <>
+            <h3 className="admin-subhead">Searches nobody opened anything from</h3>
+            <table className="traffic-table traffic-table--compact">
+              <thead><tr><th>Query</th><th className="num">Runs</th>
+                <th className="num">Found</th><th className="num">Opened</th></tr></thead>
+              <tbody>
+                {clk.queries.slice(0, 15).map(r => (
+                  <tr key={r.query}>
+                    <td className="traffic-table__q">
+                      <a href={`/?q=${encodeURIComponent(r.query)}`} target="_blank" rel="noopener noreferrer">{r.query}</a>
+                    </td>
+                    <td className="num">{r.runs}</td>
+                    <td className="num">{r.results == null ? "—" : r.results.toLocaleString()}</td>
+                    <td className="num">{r.clicks}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+      </Section>
 
       <div className="cc-cols traffic-pair">
       {searches?.top?.length ? (

@@ -244,7 +244,8 @@ def record(kind: str, path: str, visitor: str, *,
            ref: Optional[str] = None, q: Optional[str] = None,
            results: Optional[int] = None, bot: bool = False,
            kind_of_bot: Optional[str] = None,
-           seen: Optional[str] = None) -> None:
+           seen: Optional[str] = None,
+           pos: Optional[int] = None) -> None:
     """Queue one event. Never raises, never blocks on I/O."""
     global _dropped
     if not ENABLED:
@@ -258,6 +259,7 @@ def record(kind: str, path: str, visitor: str, *,
             "ref_host": (ref or None),
             "q": (q[:200] if q else None),
             "results": results,
+            "pos": pos,
             "bot": bool(bot),
             "bot_kind": (kind_of_bot or None),
             # first | week | return, or nothing. See api/traffic.hit for why
@@ -298,10 +300,10 @@ def flush() -> int:
             db.execute(text("""
                 INSERT INTO visit_events
                     (at, visitor, kind, path, ref_host, q, results, bot,
-                     bot_kind, seen)
+                     bot_kind, seen, pos)
                 VALUES
                     (:at, :visitor, :kind, :path, :ref_host, :q, :results, :bot,
-                     :bot_kind, :seen)
+                     :bot_kind, :seen, :pos)
             """), batch)
             db.commit()
         return len(batch)

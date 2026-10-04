@@ -1399,3 +1399,42 @@ def test_an_outbound_click_is_not_a_referral(db):
     hosts = [r["host"] for r in traffic.referrers(days=7, limit=10, db=db, _owner=None)["referrers"]]
     assert "www.google.com" in hosts
     assert "archiveofourown.org" not in hosts
+
+
+def test_a_result_click_records_its_position_and_its_search(db):
+    req = _FakeRequest(ip="203.0.113.40")
+    v = tracking.visitor_hash("203.0.113.40", req.headers["user-agent"])
+    tracking.record("search", "/api/search", v, q="drarry fandom:\"Harry Potter\"", results=900)
+    traffic.hit(req, path="/story/abc", kind="click", pos=3,
+                search="?q=drarry&fandoms=Harry+Potter", viewer=None)
+    tracking.flush()
+    row = db.execute(text(
+        "SELECT kind, pos, q FROM visit_events WHERE kind = 'click'")).one()
+    assert row.pos == 3
+    # Built the way the search logger builds it, so the two join.
+    searched = db.execute(text("SELECT q FROM visit_events WHERE kind = 'search'")).scalar()
+    from api.traffic import _search_text
+    assert row.q == _search_text("?q=drarry&fandoms=Harry+Potter")
+    out = traffic.clicks(days=7, db=db, _owner=None)
+    assert {p["bucket"]: p["clicks"] for p in out["positions"]}["3"] == 1
+
+
+def test_a_click_kind_cannot_smuggle_a_position_into_a_pageview(db):
+    req = _FakeRequest(ip="203.0.113.41")
+    traffic.hit(req, path="/story/abc", kind="page", pos=7, search="?q=x", viewer=None)
+    traffic.hit(req, path="/story/abc", kind="nonsense", pos=7, viewer=None)
+    tracking.flush()
+    rows = db.execute(text("SELECT kind, pos, q FROM visit_events")).fetchall()
+    assert all(r.kind == "page" and r.pos is None and r.q is None for r in rows)
+
+
+def test_searches_nobody_opened_lead_the_click_report(db):
+    v = tracking.visitor_hash("203.0.113.42", "Firefox")
+    tracking.record("search", "/api/search", v, q="angst", results=5000)
+    tracking.record("search", "/api/search", v, q="angst", results=5000)
+    tracking.record("search", "/api/search", v, q="fluff", results=5000)
+    tracking.record("click", "/story/a", v, q="fluff", pos=1)
+    tracking.flush()
+    q = traffic.clicks(days=7, db=db, _owner=None)["queries"]
+    assert q[0]["query"] == "angst" and q[0]["clicks"] == 0 and q[0]["runs"] == 2
+    assert any(x["query"] == "fluff" and x["clicks"] == 1 for x in q)

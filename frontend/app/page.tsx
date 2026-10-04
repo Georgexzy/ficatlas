@@ -7,6 +7,7 @@ import OfflineLink from "./OfflineLink"
 import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard, Suggestion } from "@/lib/types"
 import { fetchWithTimeout, fetchBackground, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/net"
+import { recordResultClick } from "@/lib/resultClicks"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
          DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getLandingBrowse, type LandingBrowse, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
@@ -554,7 +555,7 @@ function TokenStrip({ tokens, onRemove }: { tokens: ParsedToken[]; onRemove: (ra
 }
 
 // ── Result card ───────────────────────────────────────────────────────────────
-function StoryCard({ story }: { story: StoryCard }) {
+function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
   const { user } = useAuth()
   // Tags that are not already shown as a ship or a character above, and not the
   // internal dlp_stars marker (rendered as stars in the badge row).
@@ -676,7 +677,8 @@ function StoryCard({ story }: { story: StoryCard }) {
     && (story.site === "ao3" || story.site === "ffnet")
 
   return (
-    <article className="card">
+    // data-pos / data-story: read by recordResultClick on the results list.
+    <article className="card" data-pos={pos} data-story={story.id}>
       <div className="card__top">
         <div className="card__title-row">
           <Link href={`/story/${story.id}`} className="card__title">{displayTitle(story.title)}</Link>
@@ -3831,7 +3833,11 @@ function SearchPageInner() {
                 </div>
               )}
 
-              <div className="story-list">
+              {/* One listener for every card: which result was opened, and at
+                  what position. See lib/resultClicks. Capture phase, so it runs
+                  before the link navigates. */}
+              <div className="story-list" onClickCapture={recordResultClick}
+                onAuxClickCapture={recordResultClick}>
                 {shown.results.length === 0 ? (
                   <div className="no-results">
                     <p className="no-results__title">No stories matched</p>
@@ -4018,7 +4024,9 @@ function SearchPageInner() {
                     </p>
                   </div>
                 ) : (
-                  shown.results.map(s => <StoryCard key={s.id} story={s} />)
+                  // 1-based across pages, so position 23 is the third on page 2.
+                  shown.results.map((s, i) => <StoryCard key={s.id} story={s}
+                    pos={(shown.page - 1) * shown.per_page + i + 1} />)
                 )}
               </div>
 
