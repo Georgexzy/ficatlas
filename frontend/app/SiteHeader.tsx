@@ -9,6 +9,7 @@ import IndexStatus from "./IndexStatus"
 import { useAuth } from "@/lib/auth"
 import { fetchWithTimeout } from "@/lib/net"
 import { lastSearchHref } from "@/lib/lastSearch"
+import { announceGoHome } from "@/lib/goHome"
 
 // The one header every page shares.
 //
@@ -256,8 +257,16 @@ function TabIcon({ name }: { name: string }) {
         <span className="tabbar__label">{label}</span>
       </>
     )
-    if (current === key) {
+    // The Home slot stays a LINK on the search page. It used to render as an
+    // inert span whenever `current` was search — which includes every results
+    // page — so on a phone there was no way home from a search except the
+    // wordmark, and that one failed too after "Surprise me" (see lib/goHome).
+    if (current === key && !(key === "search" && href === "/")) {
       return <span className={cls} aria-current="page">{inner}</span>
+    }
+    if (key === "search" && href === "/") {
+      return <Link href="/" className={cls} prefetch onClick={announceGoHome}
+        aria-current={current === key ? "page" : undefined}>{inner}</Link>
     }
     return offline
       ? <OfflineLink href={href} className={cls}>{inner}</OfflineLink>
@@ -283,7 +292,7 @@ function TabIcon({ name }: { name: string }) {
             meaning must not vary. `backToResults` still drives the Search link
             beside it, which is the control that does go back to results. */}
         <Link href="/" className="logo logo--link" aria-label="FicAtlas home"
-          title="FicAtlas home">
+          title="FicAtlas home" onClick={announceGoHome}>
           {/* The mark and the name, one link. The rose was on the tab icon and
               the share card and nowhere on the site itself, so the thing a
               reader had in their browser tab did not appear on the page it

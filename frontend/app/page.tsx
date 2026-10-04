@@ -27,6 +27,7 @@ import DlpStars, { dlpRating } from "./DlpStars"
 import SiteHeader from "./SiteHeader"
 import WhatYouCanDo from "./WhatYouCanDo"
 import CompassDial from "./CompassDial"
+import { GO_HOME_EVENT } from "@/lib/goHome"
 import { useAuth } from "@/lib/auth"
 
 // Last search results, keyed by the exact URL that produced them. Back/forward
@@ -2751,7 +2752,22 @@ function SearchPageInner() {
     { barEditedRef.current = true
       setQuery(q => q.replace(raw, "").replace(/\s+/g, " ").trim()) }
 
+  // Back to the front door when the wordmark or Home tab is pressed while the
+  // address is already bare `/` — see lib/goHome.ts. Bumping the sequence
+  // makes any search or surprise still in flight land on nothing.
+  useEffect(() => {
+    const reset = () => {
+      searchSeqRef.current++
+      setResults(null); setStale(null); setError(null); setLoading(false)
+      setParsedTokens([]); setQuery("")
+      try { window.scrollTo({ top: 0 }) } catch {}
+    }
+    window.addEventListener(GO_HOME_EVENT, reset)
+    return () => window.removeEventListener(GO_HOME_EVENT, reset)
+  }, [])
+
   const surpriseMe = useCallback(async () => {
+    const seq = ++searchSeqRef.current
     setLoading(true); setError(null)
     try {
       const API_BASE = ""
@@ -2762,6 +2778,7 @@ function SearchPageInner() {
       const r = await fetchWithTimeout(`${API_BASE}/api/search/random?${params.toString()}`, {}, USER_TIMEOUT_MS)
       if (!r.ok) throw describeError(null, r.status)
       const cards = await r.json()
+      if (seq !== searchSeqRef.current) return
       setResults({
         total: cards.length, page: 1, per_page: cards.length,
         results: cards, sites_searched: [], live_count: 0,
