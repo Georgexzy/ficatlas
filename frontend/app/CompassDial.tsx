@@ -24,6 +24,10 @@
  * here. aria-hidden: every caller puts a text label beside it.
  */
 const TICKS = Array.from({ length: 36 }, (_, i) => i * 10)
+// Two decimals. Node and the browser disagree in the last digits of cos/sin
+// (9.784711149549633 vs …636), so unrounded coordinates made every search page
+// report a hydration mismatch.
+const r = (n: number) => Math.round(n * 100) / 100
 
 export default function CompassDial({ mini = false, className = "" }: {
   mini?: boolean; className?: string
@@ -42,8 +46,8 @@ export default function CompassDial({ mini = false, className = "" }: {
         return (
           <line key={deg}
             className={`dial__tick ${cardinal ? "dial__tick--cardinal" : ""}`}
-            x1={32 + r1 * Math.cos(a)} y1={32 + r1 * Math.sin(a)}
-            x2={32 + r2 * Math.cos(a)} y2={32 + r2 * Math.sin(a)} />
+            x1={r(32 + r1 * Math.cos(a))} y1={r(32 + r1 * Math.sin(a))}
+            x2={r(32 + r2 * Math.cos(a))} y2={r(32 + r2 * Math.sin(a))} />
         )
       })}
       {/* North, marked ON the bezel rather than as an "N" inside the face: the

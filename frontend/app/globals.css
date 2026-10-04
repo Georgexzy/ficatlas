@@ -7412,3 +7412,23 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   max-width: 62ch;
 }
 .traffic-handoff__actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Phone search header: results sooner ────────────────────────────────────
+   Measured at 390px: the first result started 480px down, under five stacked
+   rows — box, a full-width Search button, Filters, the "Searching …" pill,
+   then sort/copy/save and two count lines. Most of a phone screen spent before
+   the thing searched for. Same controls, fewer rows. Last in the file so it
+   wins over the earlier ≤700px rules it adjusts. */
+@media (max-width: 700px) {
+  /* The button beside the box, as on desktop, rather than a row of its own. */
+  .search-bar { flex-wrap: nowrap; }
+  .search-input-wrap { width: auto; flex: 1 1 auto; min-width: 0; }
+  .search-btn { width: auto; flex: 0 0 auto; padding-left: 16px; padding-right: 16px; }
+  .filters-trigger { margin: 2px 0 10px; padding: 8px 14px; }
+  .search-exit { margin-bottom: 10px; padding: 4px 4px 4px 12px; }
+  /* Sort label beside its menu (it carries the help tip, so it stays). */
+  .results-bar__sort { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; flex: 0 1 auto; }
+  .results-bar__sort select { width: auto; min-width: 0; max-width: 46vw; }
+  /* "Page 1 of 250" is said again by the page controls under the results. */
+  .results-bar__page { display: none; }
+}
