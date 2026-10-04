@@ -1,5 +1,7 @@
 """Idempotent DB initialisation — safe to run multiple times."""
 import os
+import re
+
 from sqlalchemy import text
 from models.story import get_engine
 from db.dsn import default_database_url
@@ -693,6 +695,16 @@ CREATE TABLE IF NOT EXISTS author_facets (
 -- lookup, because if the reader had it exactly they would not need rescuing.
 CREATE INDEX IF NOT EXISTS ix_author_facets_trgm ON author_facets USING gin (value gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_author_facets_count ON author_facets (count DESC);
+-- Titles of well-read works, for the zero-result spelling rescue. The reader's
+-- most repeated empty search was "the arithmancr" (5 runs in 30 days) and the
+-- rescue could only offer tags and authors: a fuzzy match over all 20M titles
+-- runs past a 20s timeout, so the candidates are the works a misspelt title is
+-- likely to mean — 500+ kudos, ~249k titles. `count` holds the best kudos.
+CREATE TABLE IF NOT EXISTS title_facets (
+    value  TEXT PRIMARY KEY,
+    count  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_title_facets_trgm ON title_facets USING gin (value gin_trgm_ops);
 
 -- Which section of a multi-part archive a work came from.
 --
@@ -1448,10 +1460,55 @@ def init():
             guard.commit()
 
 
+_ADD_COL = re.compile(r"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+(\w+)", re.I)
+_ALTER_TABLE = re.compile(r"^\s*ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)\s", re.I)
+_CREATE_IDX = re.compile(
+    r"^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS\s+(\w+)", re.I)
+
+
+def already_applied(stmt: str, columns: set, indexes: set) -> bool:
+    """True when an idempotent statement would do nothing — decided from the
+    catalogue, WITHOUT touching the table.
+
+    `ALTER TABLE stories ADD COLUMN IF NOT EXISTS …` and `CREATE INDEX IF NOT
+    EXISTS … ON stories` both take their lock on the table BEFORE discovering
+    there is nothing to do, and the ALTER's lock is ACCESS EXCLUSIVE. 51 of the
+    179 startup statements touch `stories`, so every backend or worker start
+    queued 51 exclusive-ish locks behind whatever long write was running — the
+    popularity rebuild's slices, for one — each blocking every read and write
+    for up to lock_timeout. Measured 2026-10-04: a restart during the
+    popularity pass held INSERTs, UPDATEs and plain SELECTs on `stories` in
+    Lock:relation behind a no-op ALTER, statement after statement.
+    """
+    m = _CREATE_IDX.match(stmt)
+    if m:
+        return m.group(1).lower() in indexes
+    t = _ALTER_TABLE.match(stmt)
+    if t:
+        cols = _ADD_COL.findall(stmt)
+        # Only when EVERY clause is an ADD COLUMN IF NOT EXISTS that is already
+        # there; any other clause (ALTER COLUMN, ADD CONSTRAINT) still runs.
+        clauses = [c for c in re.split(r",\s*(?=ADD\s|ALTER\s|DROP\s)", stmt.split(t.group(1), 1)[1]) if c.strip()]
+        if cols and len(clauses) == len(cols):
+            table = t.group(1).lower()
+            return all((table, c.lower()) in columns for c in cols)
+    return False
+
+
 def _init_locked():
     statements = _split_statements(SQL)
     failed = []
+    with engine.connect() as cat:
+        columns = {(r[0], r[1]) for r in cat.execute(text(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public'"))}
+        indexes = {r[0] for r in cat.execute(text(
+            "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'"))}
+    skipped_noop = 0
     for stmt in statements:
+        if already_applied(stmt, columns, indexes):
+            skipped_noop += 1
+            continue
         try:
             with engine.connect() as conn:
                 # Never let startup block on someone else's transaction. The
@@ -1470,6 +1527,8 @@ def _init_locked():
             # First line of the statement for a readable log, plus the error.
             head = stmt.splitlines()[0][:80]
             failed.append((head, str(e).splitlines()[0]))
+    if skipped_noop:
+        print(f"Startup DDL: {skipped_noop} statement(s) already applied, not re-run.")
     if failed:
         print(f"Database initialised with {len(failed)} skipped statement(s):")
         for head, err in failed:
