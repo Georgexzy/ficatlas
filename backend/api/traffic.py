@@ -459,6 +459,7 @@ _SWARM = f"""
          WHERE at >= CAST(:first AS date)
            AND at <  CAST(:last AS date) + interval '1 day'
            AND ref_host IS NOT NULL
+           AND kind <> 'out'          -- a destination, not an arrival
            AND ref_host NOT ILIKE '%ficatlas%')
       SELECT visitor FROM first_seen
        WHERE visitor NOT IN (SELECT visitor FROM referred)
@@ -852,6 +853,12 @@ def referrers(days: int = Query(30, ge=1, le=365),
                min(at)::date AS first_seen, max(at)::date AS last_seen
         FROM visit_events_public
         WHERE at >= :cut AND NOT bot AND ref_host IS NOT NULL
+          -- An OUTBOUND click stores its destination in ref_host (see the
+          -- /hit docstring), so without this every "Read on AO3" counted as AO3
+          -- sending a reader here. Measured 2026-10-04: all 156 "AO3
+          -- referrals" and all 9 FF.net ones were outbound clicks, and AO3 sat
+          -- at the top of this list above Google's 108 real arrivals.
+          AND kind <> 'out'
         GROUP BY 1 ORDER BY hits DESC LIMIT :lim
     """), {"cut": _window(days), "lim": limit}).fetchall()
     return {"referrers": [{"host": r[0], "hits": r[1], "visitors": r[2],

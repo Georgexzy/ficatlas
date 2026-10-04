@@ -1386,3 +1386,16 @@ def test_a_quiet_window_still_returns_every_day(db):
     prev = summary(days=7, include_bots=False, db=db, _owner=None)["previous"]
     assert len(prev["days"]) == 7
     assert all(d["views"] == 0 and d["searches"] == 0 for d in prev["days"])
+
+
+def test_an_outbound_click_is_not_a_referral(db):
+    """`out` rows keep their DESTINATION in ref_host. Counted as referrals, every
+    "Read on AO3" made AO3 the site's top referrer (156, all outbound) above
+    Google's real arrivals."""
+    v = tracking.visitor_hash("198.51.100.21", "Firefox")
+    tracking.record("page", "/story/x", v, ref="www.google.com")
+    tracking.record("out", "/story/x", v, ref="archiveofourown.org")
+    tracking.flush()
+    hosts = [r["host"] for r in traffic.referrers(days=7, limit=10, db=db, _owner=None)["referrers"]]
+    assert "www.google.com" in hosts
+    assert "archiveofourown.org" not in hosts
