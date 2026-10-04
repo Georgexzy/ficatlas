@@ -507,6 +507,31 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **Admin passes run on the WORKER, and their state is a row, not a dict.**
+  `admin_jobs.py`: the API queues into `app_settings` (`admin_job:<key>`), the
+  worker's `_admin_jobs_loop` claims by compare-and-set and runs it. The first
+  version ran passes inside the API process and kept state in its memory; with
+  WEB_CONCURRENCY=4 three polls in four said "lost track of it — the worker
+  restarted" about a healthy pass, a second click on another process started
+  a duplicate, and a promote would kill a 3h51m popularity rebuild mid-pass.
+  Any per-request state that must survive the next request belongs in the
+  database here, because the next request is usually a different process.
+  The panel shows "nothing is picking passes up" until the dev worker is
+  restarted on code that has the loop.
+- **A test stack pointed at the live database writes live traffic.** The
+  review backend (`ficatlas-review-be`) uses the live `DATABASE_URL` with
+  tracking on, so every Playwright session against it lands in `visit_events`
+  as a headless visitor — and since 2026-09-28 those rows are no longer marked
+  `internal`, so they lit the Audience tab's "A scraper got through" alarm and
+  counted toward the funnel. Run review stacks with `TRACKING=false`. For
+  screenshots of the real site, block `/api/traffic/hit` in the browser and
+  serve `/api/search` from a fixture fetched with `x-internal-render`; the
+  public site itself refuses headless browsers at the edge.
+- **Cache generation names do not sort as strings.** The worker's cache was
+  `ficatlas-shell-v1`…`v8` before it took the build stamp, and `'v' > '2'`, so
+  a string sort ranks the August cache as the NEWEST generation. Anything
+  that picks "the latest" or "the previous" cache uses `sortGenerations` (or
+  the same `\d{14}` test), never `.sort()` alone.
 - **Deploying from a worktree took the site down, and the script said it
   succeeded.** `deploy/promote.sh` set `ACTIVE_CONF="$ROOT/deploy/upstreams/
   active.conf"`, on the assumption that `$ROOT` is the tree nginx bind-mounts.
