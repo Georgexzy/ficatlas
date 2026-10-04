@@ -475,9 +475,14 @@ def refresh_priorities(db) -> int:
     n = db.execute(sql_text("""
         UPDATE ffnet_wayback_queue q
            SET priority = CASE WHEN j.sid IS NULL THEN 0
+                               -- Held but with no fandom: a row this route
+                               -- added before its parser read the breadcrumb.
+                               -- As invisible to filters as a missing row.
+                               WHEN j.no_fandom THEN 0
                                WHEN j.status IS DISTINCT FROM 'complete' THEN 1
                                ELSE 2 END
-          FROM (SELECT q2.story_id, s.id AS sid, s.status
+          FROM (SELECT q2.story_id, s.id AS sid, s.status,
+                       coalesce(cardinality(s.fandoms), 0) = 0 AS no_fandom
                   FROM ffnet_wayback_queue q2
                   LEFT JOIN stories s
                     ON s.site = 'ffnet' AND s.site_id = q2.story_id::text
