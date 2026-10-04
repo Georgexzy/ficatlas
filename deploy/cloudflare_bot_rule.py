@@ -197,6 +197,18 @@ RULES = [
                       'http.referer eq "https://ficatlas.com")',
     },
     {
+        "description": "Block ShapBot (Parallel Web Systems; ignores robots.txt; ~93% of origin)",
+        # Parallel Web Systems' crawler, which builds a search index sold to AI
+        # agents. Measured 2026-10-04 over ~3.5h of nginx log: 41,840 requests,
+        # ~93% of everything the origin served, 38,523 of them story pages
+        # (each one a second /api/stories fetch from the Next server), up to
+        # ~210/minute from 9 addresses, ZERO robots.txt fetches, and attempts
+        # on /export.epub. Cloudflare's maintained AI-bot list did not have it.
+        # Published as honouring robots.txt; it never asked, so the edge is the
+        # only place a refusal can land. `--remove` reverses it.
+        "expression": '(http.user_agent contains "ShapBot")',
+    },
+    {
         "description": "Block meta-webindexer (ignores robots.txt; 26% of origin traffic)",
         # `contains` rather than an exact match: Meta sends this token inside
         # five different browser-shaped user agents (Windows/Chrome, Mac/Chrome,
