@@ -457,7 +457,10 @@ async function _resume(
  *  to claim it was completely saved.
  */
 export function offlineHoles(s: Pick<OfflineStory, "missingChapters" | "absentChapters"> | null | undefined): number {
-  return (s?.missingChapters?.length ?? 0) + (s?.absentChapters?.length ?? 0)
+  // A SET, not a sum: records saved before the download loop skipped known-404
+  // chapters can hold one twice, and a chapter is one hole however many times
+  // it was recorded.
+  return new Set([...(s?.missingChapters ?? []), ...(s?.absentChapters ?? [])]).size
 }
 
 /** Whether anything here is worth fetching again. `absentChapters` never is. */
@@ -813,6 +816,14 @@ export async function downloadStoryForOffline(
       onProgress?.(i + 1, total)
       continue
     }
+    // Already known to be gone from the archive. The seeding above promised
+    // this — "instead of being re-requested on every resume" — and nothing
+    // kept the promise: the chapter was fetched again, 404'd again, and was
+    // pushed a SECOND time, so one deleted chapter read as two holes.
+    if (absent.includes(n)) {
+      onProgress?.(i + 1, total)
+      continue
+    }
     // Wait out our own rate limiter rather than failing the download.
     //
     // Saving a long work means fetching every chapter as fast as the loop can
@@ -959,7 +970,7 @@ export async function downloadStoryForOffline(
     // Permanently unavailable, and deliberately not a reason to resume. A record
     // with only these is as complete as it will ever be, so `missing` stays
     // undefined and the work stops being re-downloaded on every page load.
-    absentChapters: absent.length ? absent : undefined,
+    absentChapters: absent.length ? [...new Set(absent)].sort((x, y) => x - y) : undefined,
   })
 
   // Read it back before claiming success.
@@ -1015,7 +1026,10 @@ export async function downloadStoryForOffline(
       // been updated, which is exactly when somebody is checking whether the
       // update worked. `previousCacheName` in the worker sorts too; this is the
       // same rule in the second place it is needed.
-      const shell = keys.filter(k => k.startsWith("ficatlas-shell-")).sort().pop()
+      // Stamped names only: a pre-August `ficatlas-shell-v8` sorts above every
+      // "2026…" stamp as a string, and would win this pick. See
+      // sortGenerations in sw.template.js.
+      const shell = keys.filter(k => /^ficatlas-shell-\d{14}$/.test(k)).sort().pop()
       if (shell) {
         const cache = await caches.open(shell)
         // Both routes: the reader AND the story detail page. Caching only the

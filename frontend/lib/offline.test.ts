@@ -157,6 +157,12 @@ describe("offlineHoles — every chapter the reader cannot read", () => {
     // will ever be, and the reader must still be told there is a gap.
     expect(offlineHoles({ absentChapters: [1, 2, 3] } as any)).toBe(3)
   })
+
+  it("counts a chapter once however many times it was recorded", () => {
+    // Re-saving used to re-request a known-404 chapter and record it again.
+    expect(offlineHoles({ absentChapters: [5, 5] } as any)).toBe(1)
+    expect(offlineHoles({ missingChapters: [5], absentChapters: [5] } as any)).toBe(1)
+  })
 })
 
 describe("offlineRetryable — only what another attempt could fetch", () => {
