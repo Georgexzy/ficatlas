@@ -5153,13 +5153,20 @@ body.is-resizing * { cursor: col-resize !important; }
     line-height: 1.45;
   }
   /* The tagline is a sentence, not a link: it spans the row above them. */
-  .site-footer > span:first-child {
+  /* first-of-type, not first-child: the popular-hubs row now comes first. */
+  .site-footer > span:first-of-type {
     grid-column: 1 / -1; text-align: center;
     margin-bottom: 4px; opacity: 0.8;
   }
   .site-footer__sep { display: none; }
   /* Comfortably tappable without turning the footer into a menu. */
   .site-footer a { padding: 3px 0; }
+  /* The hubs row spans both columns and wraps names inline: it is a list of
+     destinations, not part of the two-column menu below it. */
+  .site-footer__hubs { grid-column: 1 / -1; text-align: center; }
+  .site-footer__hubs p { gap: 2px 10px; }
+  .site-footer__hubs a { padding: 2px 0; font-size: 11px; }
+  .site-footer__hubs-k { flex-basis: 100%; }
 }
 
 
@@ -7410,3 +7417,10 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   max-width: 62ch;
 }
 .traffic-handoff__actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Popular hubs in the footer: links a crawler can follow from every page.
+   A full-width row above the footer's own line, quiet like the rest of it. */
+.site-footer__hubs { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px;
+  margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.site-footer__hubs p { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: center; }
+.site-footer__hubs-k { color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
