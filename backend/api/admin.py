@@ -20,6 +20,7 @@ Two things it deliberately does NOT do:
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -1066,3 +1067,132 @@ def list_users(db: Session = Depends(get_db),
             "imported": int(counts[3] or 0),
         })
     return {"users": out}
+
+
+# ── what the database is doing right now ────────────────────────────────────
+#
+# Three of the slow-site investigations recorded in CLAUDE.md ended the same way:
+# the search was not slow, something ELSE was scanning `stories` — the watchdog's
+# max(crawled_at), a second copy of the per-site count in this very module, two
+# heavy passes colliding every week. Each was found by somebody running
+# pg_stat_activity by hand. This is that query, on the page where you go when
+# the site feels slow.
+@router.get("/activity")
+def db_activity(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+    """Live connections, what each is running, and who is waiting on whom.
+
+    Owner-only, and the query text is shown: it can contain a reader's search
+    terms, which the owner already sees on the Audience tab.
+    """
+    rows = db.execute(sql_text("""
+        SELECT a.pid, a.application_name, a.state, a.wait_event_type, a.wait_event,
+               a.backend_type,
+               EXTRACT(EPOCH FROM (now() - a.query_start))  AS running_s,
+               EXTRACT(EPOCH FROM (now() - a.xact_start))   AS xact_s,
+               left(regexp_replace(a.query, '\\s+', ' ', 'g'), 400) AS query,
+               cardinality(pg_blocking_pids(a.pid))          AS blocked_by
+          FROM pg_stat_activity a
+         WHERE a.datname = current_database()
+           AND a.pid <> pg_backend_pid()
+    """)).mappings().all()
+    conns = db.execute(sql_text("""
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE state = 'active')               AS active,
+               count(*) FILTER (WHERE state = 'idle in transaction')  AS idle_in_xact,
+               current_setting('max_connections')::int                AS max
+          FROM pg_stat_activity
+    """)).mappings().first()
+    busy = [dict(r) for r in rows
+            if r["state"] not in (None, "idle") and r["backend_type"] == "client backend"]
+    busy.sort(key=lambda r: -(r["running_s"] or 0))
+    for r in busy:
+        r["running_s"] = round(float(r["running_s"] or 0), 1)
+        r["xact_s"] = round(float(r["xact_s"] or 0), 1)
+    return {
+        "connections": dict(conns),
+        "running": busy[:40],
+        "waiting_on_locks": sum(1 for r in busy if r["blocked_by"]),
+        "longest_s": busy[0]["running_s"] if busy else 0,
+    }
+
+
+# ── one work, everything the index holds about it ───────────────────────────
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+
+
+def _story_key(q: str) -> tuple[str, str] | None:
+    q = (q or "").strip()
+    m = re.search(r"fanfiction\.net/s/(\d+)", q)
+    if m:
+        return ("ffnet", m.group(1))
+    m = re.search(r"archiveofourown\.org/works/(\d+)", q)
+    if m:
+        return ("ao3", m.group(1))
+    m = re.fullmatch(r"(ao3|ffnet|fictionalley)[:/ ](\d+)", q, re.I)
+    if m:
+        return (m.group(1).lower(), m.group(2))
+    return None
+
+
+@router.get("/story")
+def inspect_story(q: str, db: Session = Depends(get_db),
+                  _admin: User = Depends(require_admin)):
+    """Look one work up by id, archive URL or `ao3:123`, and say what the index
+    believes about it — including whether its cached gate columns still agree
+    with the term lists.
+
+    That last check is the reason this exists. The gate columns are a CACHE of
+    gate_terms.py (see CLAUDE.md, "Belt and braces is permanent"), and when a
+    reader reports a work turning up where it should not, the first question is
+    whether the column is stale or the term list is missing something. Before
+    this, answering it meant psql plus reading the trigger.
+    """
+    import gate_terms
+    from crossover import is_crossover
+
+    m = _UUID.search(q or "")
+    if m:
+        where, params = "id = CAST(:id AS uuid)", {"id": m.group(0)}
+    else:
+        key = _story_key(q)
+        if not key:
+            raise HTTPException(400, "Give a story id, an AO3 or FanFiction.net URL, or ao3:<id>.")
+        where, params = "site = :site AND site_id = :sid", {"site": key[0], "sid": key[1]}
+    row = db.execute(sql_text(f"""
+        SELECT id, site::text AS site, site_id, url, title, author, rating::text AS rating,
+               status::text AS status, language, word_count, chapter_count,
+               chapter_count_total, kudos, bookmarks, hits, comments, popularity,
+               gate_underage, gate_adult, is_crossover, series_total_words,
+               fandoms, relationships, characters, tags, warnings,
+               is_hosted, delisted_at, delisted_reason, text_withdrawn_at,
+               published_at, updated_at, crawled_at, indexed_at,
+               summary IS NOT NULL AND summary <> '' AS has_summary
+          FROM stories WHERE {where} LIMIT 1
+    """), params).mappings().first()
+    if not row:
+        raise HTTPException(404, "Not in the index.")
+    r = dict(row)
+    warnings, tags = set(r["warnings"] or []), set(r["tags"] or [])
+    want_u = bool(warnings & set(gate_terms.UNDERAGE_WARNINGS) or tags & set(gate_terms.UNDERAGE_TAGS))
+    want_a = bool(warnings & set(gate_terms.ADULT_WARNINGS) or tags & set(gate_terms.ADULT_TAGS))
+    r["gates"] = {
+        "underage": {"column": r.pop("gate_underage"), "lists": want_u,
+                     "terms": sorted((warnings | tags) & (set(gate_terms.UNDERAGE_WARNINGS) | set(gate_terms.UNDERAGE_TAGS)))},
+        "adult": {"column": r.pop("gate_adult"), "lists": want_a,
+                  "terms": sorted((warnings | tags) & (set(gate_terms.ADULT_WARNINGS) | set(gate_terms.ADULT_TAGS)))},
+    }
+    r["crossover_now"] = is_crossover(r["fandoms"] or [])
+    r["chapters_stored"] = db.execute(sql_text(
+        "SELECT count(*) FROM chapters WHERE story_id = :i"), {"i": r["id"]}).scalar()
+    r["series"] = [dict(s) for s in db.execute(sql_text("""
+        SELECT se.id, se.name AS title, sw.position, se.member_count, se.total_words
+          FROM series_works sw JOIN series se ON se.id = sw.series_id
+         WHERE sw.story_id = :i ORDER BY sw.position NULLS LAST LIMIT 10
+    """), {"i": r["id"]}).mappings()]
+    for k, v in list(r.items()):
+        if isinstance(v, datetime):
+            r[k] = v.isoformat()
+    r["id"] = str(r["id"])
+    for s in r["series"]:
+        s["id"] = str(s["id"])
+    return r
