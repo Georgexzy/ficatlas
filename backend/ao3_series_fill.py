@@ -93,8 +93,13 @@ def incomplete_series(db, limit: int) -> list[tuple[str, str, str | None]]:
             OR count(*) <> count(DISTINCT sw.position)
         ORDER BY
                -- Two works on one number first: that is a series page that
-               -- reads as broken, where a gap only reads as incomplete.
-               (count(*) - count(DISTINCT sw.position)) DESC,
+               -- reads as broken, where a gap only reads as incomplete. Among
+               -- those, SMALLEST first: a series past the page cap cannot be
+               -- walked to its end, so its stale members are never tidied, and
+               -- ranking by duplicate count put exactly those at the head —
+               -- measured, five 200-work partial fetches in a row.
+               (count(*) <> count(DISTINCT sw.position)) DESC,
+               CASE WHEN count(*) <> count(DISTINCT sw.position) THEN count(*) END ASC,
                (max(sw.position) - min(sw.position) + 1 - count(*))
                + (min(sw.position) - 1) DESC
         LIMIT :lim
