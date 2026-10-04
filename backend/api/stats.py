@@ -990,17 +990,23 @@ def rebuild_facets(db: Session, min_count: int = 1) -> dict:
     return {"ok": True, "facets": built}
 
 
-TITLE_FACET_MIN_KUDOS = 500
+TITLE_FACET_MIN_KUDOS = 200
 
 
 def rebuild_title_facets(db) -> None:
+    """Titles a misspelling is likely to mean: well-read and UN-GATED.
+
+    Gated works are left out because a spelling suggestion is shown to a reader
+    who asked for nothing — the same no-toggle surface as a hub. One row per
+    title, carrying the most-read work's kudos and author.
+    """
     db.execute(text("DELETE FROM title_facets"))
     db.execute(text(
-        "INSERT INTO title_facets (value, count) "
-        "SELECT title, max(kudos) FROM stories "
+        "INSERT INTO title_facets (value, count, author) "
+        "SELECT DISTINCT ON (title) title, kudos, author FROM stories "
         "WHERE kudos >= :k AND title IS NOT NULL AND btrim(title) <> '' "
-        "  AND delisted_at IS NULL "
-        "GROUP BY title"), {"k": TITLE_FACET_MIN_KUDOS})
+        "  AND delisted_at IS NULL AND NOT gate_underage AND NOT gate_adult "
+        "ORDER BY title, kudos DESC"), {"k": TITLE_FACET_MIN_KUDOS})
 
 
 @router.post("/refresh-facets")

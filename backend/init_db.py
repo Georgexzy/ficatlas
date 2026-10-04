@@ -699,12 +699,15 @@ CREATE INDEX IF NOT EXISTS ix_author_facets_count ON author_facets (count DESC);
 -- most repeated empty search was "the arithmancr" (5 runs in 30 days) and the
 -- rescue could only offer tags and authors: a fuzzy match over all 20M titles
 -- runs past a 20s timeout, so the candidates are the works a misspelt title is
--- likely to mean — 500+ kudos, ~249k titles. `count` holds the best kudos.
+-- likely to mean — 200+ kudos, UN-GATED works only (a suggestion is shown to
+-- readers who asked for nothing, like a hub). `count` is the best kudos and
+-- `author` that work's author.
 CREATE TABLE IF NOT EXISTS title_facets (
     value  TEXT PRIMARY KEY,
     count  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_title_facets_trgm ON title_facets USING gin (value gin_trgm_ops);
+ALTER TABLE title_facets ADD COLUMN IF NOT EXISTS author TEXT;
 
 -- Which section of a multi-part archive a work came from.
 --

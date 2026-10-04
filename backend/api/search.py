@@ -1353,6 +1353,8 @@ _DYM_TITLE_MIN_KUDOS = int(os.getenv("SEARCH_DYM_TITLE_MIN_KUDOS", "50"))
 # it find a million rows and then throw them away. Measured on "the arithmancr":
 # 0.30 (the default) -> 1,253,555 index rows, 43s; 0.62 -> 139 rows, 364ms.
 _DYM_TITLE_SIM = float(os.getenv("SEARCH_DYM_TITLE_SIM", "0.62"))
+# A query of more words than this is a sentence, not a title to rescue.
+_DYM_TITLE_MAX_WORDS = 10
 _RELAX_LIMIT = int(os.getenv("SEARCH_RELAX_LIMIT", "3"))
 # How high to count for a suggestion. The extractor's cap of 20 answers "are
 # there at least ten?"; a reader deciding whether to click needs a number, and
@@ -1783,7 +1785,7 @@ def _describe_suggestion(db, typed: str) -> list[Suggestion]:
     if len(words) < _DESCRIBE_MIN_WORDS:
         return []
     try:
-        ex = extract(text=typed, db=db)
+        ex = _extract_once(typed, db)
     except Exception:
         log.debug("describe extraction failed", exc_info=True)
         return []
@@ -2037,6 +2039,27 @@ def _probe_total(db, query: str) -> int:
         return 0
 
 
+_EXTRACT_MEMO: dict[str, tuple[float, object]] = {}
+
+
+def _extract_once(text_in: str, db):
+    """`extract`, memoised for two minutes per process.
+
+    A zero-result sentence ran the whole extractor TWICE in one request — once
+    to describe it as a suggestion, once to interpret it — 7.3s of a 22s empty
+    search, measured. Same text, same answer; the second call reads the first.
+    """
+    now = time.monotonic()
+    hit = _EXTRACT_MEMO.get(text_in)
+    if hit and now - hit[0] < 120:
+        return hit[1]
+    out = extract(text=text_in, db=db)
+    if len(_EXTRACT_MEMO) > 256:
+        _EXTRACT_MEMO.clear()
+    _EXTRACT_MEMO[text_in] = (now, out)
+    return out
+
+
 def _misspelt_title(db, q: str) -> list[Suggestion]:
     """A reader who misspelt a TITLE gets nothing at all, and that is a hole.
 
@@ -2081,7 +2104,9 @@ def _misspelt_title(db, q: str) -> list[Suggestion]:
     """
     q = (q or "").strip()
     # Short strings are words rather than titles, and match half the index.
-    if len(q) < 6 or ":" in q:
+    # A long one is a SENTENCE, not a misspelt title: a 40-word fic-finder post
+    # spent 9.7s here trigram-matching all 20.8M titles before giving up.
+    if len(q) < 6 or ":" in q or len(q.split()) > _DYM_TITLE_MAX_WORDS:
         return []
     sp = db.begin_nested()
     try:
@@ -2089,20 +2114,18 @@ def _misspelt_title(db, q: str) -> list[Suggestion]:
         # module constant parsed as a float, so it cannot carry anything else.
         db.execute(sql_text(
             f"SET LOCAL pg_trgm.similarity_threshold = {float(_DYM_TITLE_SIM)}"))
+        # Against `title_facets` — the titles of well-read, UN-GATED works,
+        # rebuilt daily — not `stories`. Same answer for the rescue's purpose (a
+        # misspelling of a title nobody reads is not worth offering), from
+        # ~600k rows instead of 20.8M, so it no longer times out under load and
+        # leaves "the arithmancr" with only author names.
         rows = db.execute(sql_text("""
-            SELECT title, author, COALESCE(kudos, 0) AS k
-              FROM stories
-             WHERE title % :q
-               -- A work nobody has read is not a plausible "did you mean".
-               AND COALESCE(kudos, 0) >= :minkudos
-               -- The reader asked for nothing in particular, so this is a
-               -- no-toggle surface like a hub: the safe default is the only
-               -- setting it has.
-               AND NOT gate_underage
-               AND NOT gate_adult
-             ORDER BY similarity(title, :q) * ln(COALESCE(kudos, 0) + 2) DESC
+            SELECT value, author, count
+              FROM title_facets
+             WHERE value % :q
+             ORDER BY similarity(value, :q) * ln(count + 2) DESC
              LIMIT 3
-        """), {"q": q, "minkudos": _DYM_TITLE_MIN_KUDOS}).fetchall()
+        """), {"q": q}).fetchall()
     except Exception:
         # Never the reason a search fails, and never the reason the NEXT
         # rescue fails either -- see point 3 above.
@@ -2203,14 +2226,14 @@ def _spelling_rescues(db, q: str, min_sim: float | None = None) -> list[Suggesti
     exercised path.
     """
     for kind, value in _rescue_targets(q):
-        # A plain query that is close to a well-read TITLE is most likely that
-        # work, misspelt — "the arithmancr", the most repeated empty search in
-        # the traffic log, was offered three author names. A close title goes
-        # first; a weaker one only fills in after the other rescues.
-        scored = _did_you_mean_titles(db, value) if kind is None else []
-        titles = [sg for sg, _ in scored]
-        if scored and scored[0][1] >= _DYM_TITLE_LEAD_SIM:
-            return titles
+        # A plain query within 0.62 of a well-read TITLE is that work,
+        # misspelt, and goes first. Run last, the title rescue never spoke for
+        # "the arithmancr" — the most repeated empty search in the traffic log —
+        # because three similar pen names answered before it.
+        if kind is None:
+            titles = _misspelt_title(db, value)
+            if titles:
+                return titles
         if kind == "author":
             out = (_did_you_mean_authors(db, value)
                    or _typed_rescues(db, value)
@@ -2218,51 +2241,10 @@ def _spelling_rescues(db, q: str, min_sim: float | None = None) -> list[Suggesti
         else:
             out = (_typed_rescues(db, value)
                    or _did_you_mean(db, value, min_sim=min_sim)
-                   or titles
                    or (_did_you_mean_authors(db, value) if kind is None else []))
         if out:
             return out
     return []
-
-
-# A title at least this alike is offered AHEAD of tags and authors.
-_DYM_TITLE_LEAD_SIM = 0.55
-_DYM_TITLE_MIN_SIM = 0.40
-
-
-def _did_you_mean_titles(db, q: str) -> list[tuple[Suggestion, float]]:
-    """Well-read works whose title is close to what the reader typed.
-
-    Against `title_facets` (titles of works with 500+ kudos), because the same
-    fuzzy match over all 20M titles timed out at 20s. Ranked by similarity times
-    log kudos, so between two equally close titles the one people read wins —
-    the misspelling of a famous title is far commoner than of an obscure one.
-    The suggestion's query is the title itself, which the exact-title bonus
-    puts first. Missing table = feature off, as for author_facets.
-    """
-    value = (q or "").strip()
-    if len(value) < 6:
-        return []
-    try:
-        with db.begin_nested():
-            rows = db.execute(sql_text("""
-                SELECT value, count, similarity(value, :q) AS sim
-                  FROM title_facets
-                 WHERE value % :q
-                   AND similarity(value, :q) >= :minsim
-                 ORDER BY similarity(value, :q) * ln(count + 1) DESC
-                 LIMIT :lim
-            """), {"q": value, "minsim": _DYM_TITLE_MIN_SIM, "lim": _DYM_LIMIT}).fetchall()
-    except Exception:
-        log.debug("title did-you-mean lookup failed", exc_info=True)
-        return []
-    # (suggestion, similarity), best similarity first: the caller decides from
-    # the similarity whether a title leads, and a Pydantic model is no place
-    # to carry it.
-    out = [(Suggestion(kind="title", value=v, count=int(c or 0), query=v, reason="spelling"),
-            float(sim)) for v, c, sim in rows]
-    out.sort(key=lambda p: -p[1])
-    return out
 
 
 def _did_you_mean_authors(db, q: str) -> list[Suggestion]:
@@ -5289,7 +5271,7 @@ def search(          # NOT async — see below
             and (total == 0 and _words >= _NL_MIN_WORDS
                  or 0 < total <= _NL_MAX_RESULTS and _words >= _NL_SENTENCE_WORDS)):
         try:
-            _ex = extract(text=_typed, db=db)
+            _ex = _extract_once(_typed, db)
             # Only when it found something to search FOR. An extraction that
             # returns the words back, or nothing, is not an interpretation —
             # it is the same failed search with more steps.
