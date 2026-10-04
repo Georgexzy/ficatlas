@@ -3,7 +3,9 @@ import { adminTabFor } from "./adminTabs"
 
 describe("adminTabFor", () => {
   it("resolves the names the tabs have now", () => {
-    expect(adminTabFor("index")).toBe("index")
+    expect(adminTabFor("overview")).toBe("overview")
+    expect(adminTabFor("tools")).toBe("tools")
+    expect(adminTabFor("coverage")).toBe("coverage")
     expect(adminTabFor("audience")).toBe("audience")
     expect(adminTabFor("outreach")).toBe("outreach")
     expect(adminTabFor("moderation")).toBe("moderation")
@@ -16,7 +18,9 @@ describe("adminTabFor", () => {
     // is a rename that gets reverted.
     expect(adminTabFor("takedowns")).toBe("moderation")
     expect(adminTabFor("traffic")).toBe("audience")
-    expect(adminTabFor("health")).toBe("index")
+    expect(adminTabFor("health")).toBe("overview")
+    // The single "index" page became the overview plus three views.
+    expect(adminTabFor("index")).toBe("overview")
     expect(adminTabFor("queue")).toBe("outreach")
   })
 

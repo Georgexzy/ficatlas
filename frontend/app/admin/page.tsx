@@ -4,10 +4,13 @@ import Link from "next/link"
 import TakedownQueue from "./TakedownQueue"
 import TrafficPanel from "./TrafficPanel"
 import OutreachTab from "./OutreachTab"
-import { adminTabFor, type AdminTab } from "@/lib/adminTabs"
+import ToolsView, { DbActivity } from "./ToolsView"
+import PassesView from "./PassesView"
+import "./admin.css"
+import { ADMIN_GROUPS, adminTabFor, type AdminTab } from "@/lib/adminTabs"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 import BackLink from "../BackLink"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 
@@ -150,10 +153,6 @@ function agoStamp(iso: string | null): string {
   return days === 1 ? "yesterday" : `${days} days ago`
 }
 
-function pct(missing: number, total: number): number {
-  return total > 0 ? Math.round((missing / total) * 100) : 0
-}
-
 /** Coverage — the share that HAS the field. The bars show this, not the gap. */
 function have(missing: number, sampled: number): number {
   return sampled > 0 ? Math.round(((sampled - missing) / sampled) * 100) : 0
@@ -187,226 +186,6 @@ const CAUSE: Record<string, string> = {
     "FanFiction.net has no kudos of its own; its favourites are stored in this column as the nearest equivalent. The 6.6M-row bulk dump carries no engagement figures at all, so only the works the crawler has since enriched have one.",
 }
 
-// A section of this page that a phone should not have to scroll past.
-//
-// The admin page is 5,924px tall on a 390x664 screen — nine screens — and the
-// bulk of it is field-coverage bars, three sites by seven fields, each one a
-// label, a bar, a percentage and a caption. On a desktop that is a scannable
-// wall; on a phone it is nine screens of numbers you cannot act on, with the
-// things you CAN act on (jobs, queues, run buttons) buried underneath them.
-//
-// So on a narrow screen these open on their heading and nothing else. Desktop
-// is unchanged — the width is there, the density is the point, and collapsing
-// it would be solving a problem that only exists on the phone.
-//
-// `open` starts TRUE and is narrowed on mount rather than the other way round:
-// the first paint should never hide content, in case the effect is slow or
-// JavaScript never arrives. And <details> rather than a hand-rolled toggle,
-// because the browser gives keyboard operation, the disclosure triangle and
-// find-in-page-opens-the-section for free.
-function Group({ title, alwaysOpen = false, children }: {
-  title: string; alwaysOpen?: boolean; children: React.ReactNode
-}) {
-  const [open, setOpen] = useState(true)
-  useEffect(() => {
-    if (alwaysOpen) return
-    try { setOpen(window.matchMedia("(min-width: 700px)").matches) } catch {}
-  }, [alwaysOpen])
-  return (
-    <details className="settings-group admin-group" open={open}
-      onToggle={e => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
-      <summary className="settings-group__title admin-group__summary">{title}</summary>
-      {children}
-    </details>
-  )
-}
-
-// ── the maintenance console ─────────────────────────────────────────────────
-//
-// Driven by GET /api/admin/jobs rather than by a list written here, because the
-// previous two buttons were hardcoded in this file while the passes lived in
-// `api/admin.py`. The two could disagree and nothing would say so — which is how
-// the panel came to show twenty-eight loops and offer two.
-//
-// PREVIEW IS THE DEFAULT, and that is the whole design. Every one of these
-// passes already implements `dry_run`, so the first click answers "what would
-// this do?" without touching a row, and only an explicit second click commits.
-// A bulk rewrite of a 20.9M-row table is the sort of thing an operator clicks
-// to see whether it worked and then has to go and undo.
-//
-// The preview is not free, and the row says so where it matters: the heavy
-// repairs take minutes to hours, and `content_gates`' own dry run measured 76s
-// for a single count. What a preview buys is the ANSWER, not the time.
-//
-// Two things a single `note` string could not carry, and which is why each pass
-// keeps its own state: a four-hour rebuild and a nine-second one can be running
-// at the same time, and "Started." for both tells you nothing about either.
-interface AdminJob {
-  key: string; label: string; blurb: string; networked: boolean; minutes: number
-}
-type JobState =
-  | { phase: "idle" }
-  | { phase: "previewing" }
-  | { phase: "starting" }
-  | { phase: "running"; dry: boolean }
-  | { phase: "done"; report: string; dry: boolean }
-  | { phase: "failed"; error: string }
-
-function PassRunner() {
-  const [jobs, setJobs] = useState<AdminJob[] | null>(null)
-  const [listError, setListError] = useState<string | null>(null)
-  const [state, setState] = useState<Record<string, JobState>>({})
-  const [limit, setLimit] = useState("200")
-  // Set per key while a poll is in flight, and read by the cleanup below, so a
-  // pass that is unmounted mid-poll stops asking rather than setting state on a
-  // component that is gone.
-  const pollRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
-
-  useEffect(() => {
-    let live = true
-    ;(async () => {
-      try {
-        const r = await fetchWithTimeout("/api/admin/jobs",
-          { credentials: "include" }, USER_TIMEOUT_MS)
-        if (!live) return
-        if (!r.ok) throw new Error(`Could not load the pass list (${r.status})`)
-        const d = await r.json()
-        setJobs(d.jobs)
-      } catch (e: any) {
-        if (live) setListError(e?.message ?? "Could not load the pass list.")
-      }
-    })()
-    const timers = pollRef.current
-    return () => {
-      live = false
-      for (const t of Object.values(timers)) clearTimeout(t)
-    }
-  }, [])
-
-  const poll = (key: string, dry: boolean) => {
-    pollRef.current[key] = setTimeout(async () => {
-      try {
-        const r = await fetchWithTimeout(`/api/admin/run/${key}`,
-          { credentials: "include" }, USER_TIMEOUT_MS)
-        const d = await r.json().catch(() => null)
-        if (d?.state === "running") { poll(key, dry); return }
-        if (d?.state === "done") {
-          setState(s => ({ ...s, [key]: { phase: "done", report: d.report ?? "finished", dry: d.dry_run } }))
-        } else if (d?.state === "failed") {
-          setState(s => ({ ...s, [key]: { phase: "failed", error: d.error ?? "it failed" } }))
-        } else {
-          // never-run while we are polling means the process that started it
-          // restarted. Say so rather than spinning forever.
-          setState(s => ({ ...s, [key]: { phase: "failed", error: "lost track of it — the worker restarted" } }))
-        }
-      } catch {
-        // A failed poll is not a failed pass. Keep asking: the pass is in
-        // another process and this is only the window onto it.
-        poll(key, dry)
-      }
-    }, 3000)
-  }
-
-  const start = async (key: string, dry: boolean) => {
-    setState(s => ({ ...s, [key]: { phase: dry ? "previewing" : "starting" } }))
-    try {
-      const fd = new FormData()
-      fd.append("limit", String(Math.min(Math.max(Number(limit) || 200, 1), 2000)))
-      fd.append("dry_run", dry ? "true" : "false")
-      const r = await fetchWithTimeout(`/api/admin/run/${key}`,
-        { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
-      const d = await r.json().catch(() => null)
-      if (!r.ok) throw new Error(d?.detail ?? `Could not start (${r.status})`)
-      if (d?.state === "failed") throw new Error(d.error ?? "it could not start")
-      setState(s => ({ ...s, [key]: { phase: "running", dry } }))
-      poll(key, dry)
-    } catch (e: any) {
-      setState(s => ({ ...s, [key]: { phase: "failed", error: e?.message ?? "could not start" } }))
-    }
-  }
-
-  if (listError) return <p className="admin-note admin-note--warn">{listError}</p>
-  if (!jobs) return <p className="admin-note">Loading the passes…</p>
-
-  return (
-    <>
-      {/* One limit for all of them, and it is a LIMIT on the work rather than a
-          budget: these passes pick their own targets, so `limit` is how many
-          they may consider. 200 is the historical default and the reason a
-          click "does not seem to do anything" on a 20.9M-row table — worth
-          being able to raise it without leaving the page. */}
-      <div className="admin-actions">
-        <label className="admin-pass__limitlabel" htmlFor="pass-limit">Max rows per run</label>
-        <input id="pass-limit" className="queue__search" type="number"
-          min={1} max={2000} value={limit}
-          onChange={e => setLimit(e.target.value)} />
-      </div>
-
-      <div className="admin-passes">
-        {jobs.map(j => {
-          const s = state[j.key] ?? { phase: "idle" as const }
-          const busy = s.phase === "previewing" || s.phase === "starting" || s.phase === "running"
-          return (
-            <div key={j.key} className={`admin-pass admin-pass--${s.phase}`}>
-              <div className="admin-pass__head">
-                <span className="admin-pass__name">{j.label}</span>
-                <span className="admin-pass__cost">
-                  {j.minutes > 0
-                    ? <span className="admin-pass__long">~{j.minutes >= 60
-                        ? `${Math.round(j.minutes / 60)}h` : `${j.minutes}m`}</span>
-                    : <span>quick</span>}
-                  {j.networked && <span className="admin-pass__net" title="Makes outbound requests, so it shares a rate limiter with the crawler">networked</span>}
-                </span>
-              </div>
-              <p className="admin-pass__blurb">{j.blurb}</p>
-
-              <div className="admin-pass__actions">
-                <button className="btn btn--ghost" disabled={busy}
-                  onClick={() => start(j.key, true)}>
-                  {s.phase === "previewing" ? "Previewing…" : "Preview"}
-                </button>
-                {/* Committing is behind the preview on purpose, but not behind a
-                    modal: this is the operator's own page and the button says
-                    what it does. A pass that has just been previewed shows what
-                    the preview found, which is the information that makes the
-                    second click informed rather than hopeful. */}
-                <button className="btn btn--ghost btn--warn" disabled={busy}
-                  onClick={() => start(j.key, false)}>
-                  {s.phase === "starting" ? "Starting…" : s.phase === "running" && !s.dry
-                    ? "Running…" : "Run for real"}
-                </button>
-              </div>
-
-              {s.phase === "running" && (
-                <p className="admin-pass__state">
-                  {s.dry ? "Previewing" : "Running"} — this page polls every 3s.
-                  The pass keeps going whatever this tab does.
-                </p>
-              )}
-              {s.phase === "done" && (
-                <p className={`admin-pass__state ${s.dry ? "admin-pass__state--preview" : "admin-pass__state--done"}`}>
-                  <strong>{s.dry ? "Would do" : "Did"}</strong> {s.report}
-                </p>
-              )}
-              {s.phase === "failed" && (
-                <p className="admin-pass__state admin-pass__state--bad">{s.error}</p>
-              )}
-            </div>
-          )
-        })}
-      </div>
-
-      <p className="admin-pass__foot">
-        A preview writes nothing and is always the first button. A pass that
-        takes longer than a minute keeps running after you close this tab — the
-        buttons are fire-and-forget, and what you see above is the only report
-        there is, so check the row rather than the worker log.
-        {" "}<code>dry_run</code> is the endpoint's default for the same reason.
-      </p>
-    </>
-  )
-}
-
 // Who has an account, and — the column that actually matters — whether they
 // could ever get back into it. See /api/admin/users.
 interface Person {
@@ -422,44 +201,123 @@ interface ResetRequest {
   created_at: string; expires_at: string; emailed: boolean
 }
 
-export default function AdminPage() {
-  const [tab, setTab] = useState<AdminTab>("index")
-  // The Audience tab's zero-result queries, handed to the Outreach tab.
-  //
-  // Held here rather than in either panel because it crosses a tab boundary:
-  // the two panels know about each other's SUBJECT and neither can reach the
-  // other, so the one place that sees both tabs is the place that carries it.
-  // Kept as text on purpose — a blank box for the operator to look at before
-  // acting, not a report that silently changed shape.
-  const [outreachPrefill, setOutreachPrefill] = useState<string | undefined>(undefined)
+// ── the control centre ──────────────────────────────────────────────────────
+//
+// This page was one 720px column, 7,022px tall on a desktop and 12,462px on the
+// Audience tab — a report to scroll, not a place to run a site from. The width
+// is now the screen's (capped at 1440px), the views sit on a rail grouped by the
+// job they are for, and the first thing on screen is a strip of six answers:
+// is the public site up, are the jobs alive, is the database busy, is the index
+// growing, is anything waiting on moderation, can every account recover.
+//
+// Everything the old page said is still here — the explanations moved behind
+// an "i" on each view rather than into the flow, because they are read once and
+// then cost a screen every visit after.
+
+function Explain({ children }: { children: React.ReactNode }) {
+  return (
+    <details className="cc-explain">
+      <summary aria-label="What this shows">i</summary>
+      <div className="cc-explain__body">{children}</div>
+    </details>
+  )
+}
+
+function ViewHead({ title, sub, children, explain }: {
+  title: string; sub?: React.ReactNode; children?: React.ReactNode; explain?: React.ReactNode
+}) {
+  return (
+    <header className="cc-viewhead">
+      <div>
+        <h1>{title}{explain && <Explain>{explain}</Explain>}</h1>
+        {sub && <p>{sub}</p>}
+      </div>
+      {children && <div className="cc-viewhead__actions">{children}</div>}
+    </header>
+  )
+}
+
+type Tone = "ok" | "mid" | "bad" | "none"
+
+function Stat({ label, value, sub, tone = "none", onClick }: {
+  label: string; value: React.ReactNode; sub?: React.ReactNode; tone?: Tone; onClick?: () => void
+}) {
+  const body = (
+    <>
+      <span className="cc-stat__label"><span className={`cc-dot cc-dot--${tone}`} />{label}</span>
+      <span className="cc-stat__value">{value}</span>
+      {sub && <span className="cc-stat__sub">{sub}</span>}
+    </>
+  )
+  return onClick
+    ? <button type="button" className={`cc-stat cc-stat--${tone} cc-stat--link`} onClick={onClick}>{body}</button>
+    : <div className={`cc-stat cc-stat--${tone}`}>{body}</div>
+}
+
+/** The public site, as a reader's browser sees it. */
+function useSitePulse() {
+  const [p, setP] = useState<{ ms: number; ok: boolean } | null>(null)
   useEffect(() => {
-    // The old names still work — see lib/adminTabs, which is where the mapping
-    // lives so it can be tested rather than trusted.
-    const to = adminTabFor(new URLSearchParams(window.location.search).get("tab"))
-    if (to) setTab(to)
+    let live = true
+    const t0 = performance.now()
+    fetchWithTimeout("/api/stats/totals", { cache: "no-store" }, 15000)
+      .then(r => { if (live) setP({ ms: performance.now() - t0, ok: r.ok }) })
+      .catch(() => { if (live) setP({ ms: performance.now() - t0, ok: false }) })
+    return () => { live = false }
   }, [])
+  return p
+}
+
+function useActivitySummary() {
+  const [a, setA] = useState<{ total: number; max: number; locks: number; longest: number } | null>(null)
+  useEffect(() => {
+    fetchWithTimeout("/api/admin/activity", { credentials: "include" }, USER_TIMEOUT_MS)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && setA({ total: d.connections.total, max: d.connections.max,
+                             locks: d.waiting_on_locks, longest: d.longest_s }))
+      .catch(() => {})
+  }, [])
+  return a
+}
+
+export default function AdminPage() {
+  const [tab, setTabState] = useState<AdminTab>("overview")
+  // The Audience tab's zero-result queries, handed to the Outreach tab. Held
+  // here because it crosses a tab boundary — see TrafficPanel.onGoToOutreach.
+  const [outreachPrefill, setOutreachPrefill] = useState<string | undefined>(undefined)
+  const [activePasses, setActivePasses] = useState(0)
+  useEffect(() => {
+    const to = adminTabFor(new URLSearchParams(window.location.search).get("tab"))
+    if (to) setTabState(to)
+  }, [])
+  // The view is in the address, so a reload or a shared bookmark lands on it.
+  // replaceState, not push: switching views is not navigation the back button
+  // should have to walk through.
+  const setTab = (t: AdminTab) => {
+    setTabState(t)
+    try {
+      const u = new URL(window.location.href)
+      u.searchParams.set("tab", t)
+      window.history.replaceState(null, "", u.toString())
+    } catch {}
+    try { window.scrollTo({ top: 0 }) } catch {}
+  }
+
   const { user, loading: authLoading } = useAuth()
   const isAdmin = !!user?.can_manage
   const [data, setData] = useState<Overview | null>(null)
   const [people, setPeople] = useState<Person[] | null>(null)
   const [resets, setResets] = useState<ResetRequest[] | null>(null)
-  // The one-time code, held only in this tab and only until it is handed over.
   const [issued, setIssued] = useState<{ username: string; code: string } | null>(null)
   const [issuing, setIssuing] = useState("")
   const [error, setError] = useState<string | null>(null)
-  // `note` belongs to ACCOUNT RECOVERY, not to the pass runner. They were one
-  // shared string before PassRunner, which is fine for a single form and wrong
-  // for a page that can have ten passes in flight at once — so the job half
-  // took its own state and this kept what it was already doing.
   const [note, setNote] = useState<string | null>(null)
+  const [loadingFresh, setLoadingFresh] = useState(false)
 
   const load = useCallback(async (fresh = false) => {
     setError(null)
+    if (fresh) setLoadingFresh(true)
     try {
-      // Alongside the overview rather than inside it: this is a handful of rows
-      // from tables with tens of entries, and folding it into the cached
-      // overview would tie a cheap, always-current answer to a 180-second cache
-      // built for queries that scan millions of rows.
       fetchWithTimeout("/api/auth/reset-requests", { credentials: "include" })
         .then(r => (r.ok ? r.json() : []))
         .then(setResets)
@@ -473,27 +331,20 @@ export default function AdminPage() {
       if (!r.ok) throw new Error(`Could not load (${r.status}).`)
       setData(await r.json())
     } catch (e: any) { setError(e.message) }
+    finally { setLoadingFresh(false) }
   }, [])
 
   useEffect(() => { if (isAdmin) load() }, [isAdmin, load])
-
-  // `runJob` used to live here and set one shared `busy`/`note` pair for the
-  // whole page. Both are gone: PassRunner owns its own per-pass state, because a
-  // shared note could not say WHICH pass it was about — so two passes could not
-  // be in flight at once without one silently overwriting the other's result.
+  const pulse = useSitePulse()
+  const act = useActivitySummary()
 
   if (authLoading) return (
     <main id="main" className="settings-shell"><SiteHeader />
       <BackLink fallback="/settings" fallbackLabel="Settings" /><p className="loading">Loading…</p></main>
   )
-  // TWO DIFFERENT FAILURES, told apart.
-  //
-  // This said "Not found" for both "you are signed out" and "your account is
-  // not an owner", which is the least useful thing it could say to either. It
-  // cost a real diagnosis: an owner whose browser was serving a stale bundle
-  // reported losing admin access, and the page gave no way to tell that from
-  // an actual demotion — the account, its role, its sessions and every
-  // endpoint were verified fine end to end while the screen said "Not found".
+  // TWO DIFFERENT FAILURES, told apart: signed out, and signed in without the
+  // owner role. "Not found" for both once cost a real diagnosis — a stale bundle
+  // looked exactly like a demotion.
   if (!user) return (
     <main id="main" className="page-prose">
       <SiteHeader />
@@ -509,12 +360,11 @@ export default function AdminPage() {
         <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>) and try again.
       </p>
       <p>
-        <Link href="/login" className="card-btn card-btn--primary">Sign in</Link>{" "}
+        <Link href="/login?next=/admin" className="card-btn card-btn--primary">Sign in</Link>{" "}
         <Link href="/" className="card-btn">Back to search</Link>
       </p>
-</main>
+    </main>
   )
-
   if (!isAdmin) return (
     <main id="main" className="page-prose">
       <SiteHeader />
@@ -524,561 +374,399 @@ export default function AdminPage() {
         read and keep a library — this page needs the owner role.
       </p>
       <p><Link href="/" className="card-btn card-btn--primary">Back to search</Link></p>
-</main>
+    </main>
   )
 
+  const jobs = data?.jobs?.evidence ?? []
+  const stale = jobs.filter(j => j.state !== "ok")
+  const attention = data?.attention ?? []
+  const noEmail = people?.filter(u => !u.recoverable).length ?? 0
+  const badge: Partial<Record<AdminTab, { n: number; tone: Tone }>> = {
+    overview: attention.length ? { n: attention.length, tone: attention.some(a => a.band === "high") ? "bad" : "mid" } : undefined,
+    passes: activePasses ? { n: activePasses, tone: "mid" } : undefined,
+    moderation: data?.takedowns_pending ? { n: data.takedowns_pending, tone: "bad" } : undefined,
+    people: noEmail ? { n: noEmail, tone: "mid" } : undefined,
+    crawler: data?.crawl && (data.crawl.disabled.ao3 || data.crawl.disabled.ffnet) ? { n: 1, tone: "bad" } : undefined,
+  }
+
   return (
-    <main id="main" className="settings-shell">
+    <main id="main" className="settings-shell cc">
       <SiteHeader />
-      <BackLink fallback="/settings" fallbackLabel="Settings" />
-
-      {/* Two owner-only surfaces, one page.
-          Index health and the takedown queue were separate routes reached only
-          from Settings, each re-implementing the same shell, the same back link
-          and — more importantly — the same "not an operator" gate. Two copies of
-          an access check is one too many: they can drift, and the one that
-          drifts laxer is the bug. /takedowns is kept as a redirect. */}
-      {/* FOUR AREAS, NOT FIVE PANELS.
-          The tabs had grown one at a time and listed what had been BUILT —
-          Index health, Takedown requests, Traffic, Posts to answer, Fic
-          finder — rather than what you come here to do. Two of those five were
-          one workflow cut in half.
-
-          Named for the job: the index itself, who is arriving, getting more of
-          them, and what has to be taken down. A fifth tab is now a decision
-          about whether there is a fifth kind of work, which is the right
-          question to have to answer. */}
-      <div className="admin-tabs">
-        <button className={`library-tab ${tab === "index" ? "library-tab--on" : ""}`}
-          onClick={() => setTab("index")}>Index</button>
-        <button className={`library-tab ${tab === "audience" ? "library-tab--on" : ""}`}
-          onClick={() => setTab("audience")}>Audience</button>
-        {/* The Audience tab says nobody is coming; this is the one that does
-            something about it. Answering fic-finder threads is the only
-            outreach channel where the reply is useful on its own terms and the
-            link is the demonstration — see OutreachTab. */}
-        <button className={`library-tab ${tab === "outreach" ? "library-tab--on" : ""}`}
-          onClick={() => setTab("outreach")}>Outreach</button>
-        <button className={`library-tab ${tab === "moderation" ? "library-tab--on" : ""}`}
-          onClick={() => setTab("moderation")}>Moderation</button>
-      </div>
-
-      {tab === "outreach" ? <OutreachTab prefill={outreachPrefill} /> :
-       tab === "audience" ? <TrafficPanel
-         onGoToOutreach={q => { setOutreachPrefill(q); setTab("outreach") }} /> :
-       tab === "moderation" ? <TakedownQueue /> : (
-      <>
-      <h1 className="settings-title">Index health</h1>
-
-      {error && <p className="settings-save-error" role="alert">{error}</p>}
-      {!data && !error && <p className="loading">Reading the index…</p>}
-
-      {data && (
-        <>
-          {/* WHAT IS ACTUALLY WRONG, worst first.
-
-              Every figure here was already on this page and none of it was
-              ordered by how much it mattered: jobs listed in the order they
-              were declared with `stale` as a flag somewhere down the list, and
-              coverage as a grid of percentages per site. The cost was exact —
-              the cross-archive popularity pass sat broken for THIRTEEN DAYS
-              with the evidence on screen the whole time, and "98% of 6.5M
-              FanFiction.net works have no characters" read as one cell among
-              twenty-one.
-
-              Absent when there is nothing to say, rather than rendering an
-              empty box that trains you to skip the area it lives in. */}
-          {!!data.attention?.length && (
-            <section className="attention">
-              <h2 className="attention__head">
-                Needs attention
-                <span className="attention__count">
-                  {data.attention.length} thing{data.attention.length === 1 ? "" : "s"}
-                </span>
-              </h2>
-              <ul className="attention__list">
-                {data.attention.map(a => (
-                  <li key={a.key}
-                    className={`attention__item attention__item--${a.band ?? "low"}`}>
-                    <div className="attention__row">
-                      <span className="attention__label">{a.label}</span>
-                      <span className="attention__kind">
-                        {a.kind === "job" ? "job" : "coverage"}
-                      </span>
-                    </div>
-                    <p className="attention__detail">{a.detail}</p>
-                  </li>
-                ))}
-              </ul>
-              <p className="attention__foot">
-                Ranked by what each one costs a reader: how many works, what
-                share of that archive, and what the field is for — a work with
-                no characters cannot be found by the filter people use most,
-                one with no kudos merely sorts late. Share matters on its own:
-                at 98% a filter is not degraded for an archive, it is absent.
-                Jobs sit on the same scale, climbing as they rot.{" "}
-                <b>The crawler works this list from the top</b> — the queue
-                that decides which row gets the next request is ranked by the
-                same weighting, so effort lands where this says it should.
-              </p>
-            </section>
-          )}
-          <div className="admin-tiles">
-            <Tile label="Works indexed" value={data.tables.stories} approx
-                  sub={data.growth?.per_day != null
-                    ? `${data.growth.per_day >= 0 ? "+" : ""}${data.growth.per_day.toLocaleString()}/day`
-                    : `sampling · ${data.growth?.samples ?? 0} so far`} />
-            <Tile label="Readable here" value={data.hosted_public} />
-            <Tile label="Delisted" value={data.delisted} />
-            <Tile label="Takedowns waiting" value={data.takedowns_pending}
-                  onClick={data.takedowns_pending > 0 ? () => setTab("moderation") : undefined} />
-            {/* Accounts, in the row you actually look at.
-                This existed only as a collapsed section further down, which on a
-                phone is the same as not existing: you have to already know it is
-                there to go and open it. The sub-line is the part worth seeing
-                without opening anything — an account with no email address
-                cannot be recovered at all. */}
-            {people && (
-              <Tile label={people.length === 1 ? "Account" : "Accounts"}
-                    value={people.length}
-                    sub={people.some(u => !u.recoverable)
-                      ? `${people.filter(u => !u.recoverable).length} with no email`
-                      : "all recoverable"} />
-            )}
+      <div className="cc-layout">
+        <nav className="cc-rail" aria-label="Control centre">
+          <div className="cc-rail__brand">
+            <span className="cc-rail__eyebrow">FicAtlas</span>
+            <span className="cc-rail__title">Control centre</span>
           </div>
-
-          {/* GETTING SOMEBODY BACK INTO THEIR ACCOUNT.
-              Every piece of this existed in the API and none of it had a
-              screen, so the only way to help a locked-out reader was curl —
-              which is the same as it not working. It matters more here than on
-              most sites because this instance cannot send email at all: with
-              no SMTP credential, /forgot mints a code and then has nowhere to
-              put it.
-
-              The list deliberately does NOT show codes. An admin endpoint that
-              handed out working reset tokens would turn one compromised admin
-              session into every account on the site — so seeing that somebody
-              is locked out and CHOOSING to vouch for them are two separate
-              actions, and only the second produces a code. */}
-          <h2 className="admin-site__name">Account recovery</h2>
-          {resets && resets.length > 0 ? (
-            <table className="traffic-table">
-              <thead><tr><th>Waiting</th><th>Email</th><th>Asked</th><th>Expires</th></tr></thead>
-              <tbody>
-                {resets.map(r => (
-                  <tr key={r.username + r.created_at}>
-                    <td>{r.username}</td>
-                    <td>{r.email ?? <em>none on file</em>}</td>
-                    <td>{agoStamp(r.created_at)}</td>
-                    <td>{new Date(r.expires_at).toLocaleTimeString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <p className="admin-note">
-              Nobody is waiting on a password reset.
-            </p>
-          )}
-
-          <div className="admin-actions">
-            <input className="queue__search" value={issuing} placeholder="username"
-              onChange={e => setIssuing(e.target.value)} />
-            <button className="btn" disabled={!issuing.trim()}
-              onClick={async () => {
-                setNote(null); setIssued(null)
-                try {
-                  const fd = new FormData()
-                  fd.append("username", issuing.trim())
-                  const r = await fetchWithTimeout("/api/auth/admin/issue-reset",
-                    { method: "POST", credentials: "include", body: fd }, USER_TIMEOUT_MS)
-                  const d = await r.json()
-                  if (!r.ok) throw new Error(d?.detail ?? `Failed (${r.status})`)
-                  setIssued({ username: d.username, code: d.code })
-                  setIssuing("")
-                } catch (e: any) { setNote(e.message) }
-              }}>
-              Issue a reset code
-            </button>
-          </div>
-          {issued && (
-            <div className="admin-note admin-code">
-              <p>
-                One-time code for <strong>{issued.username}</strong>. It works
-                once, expires shortly, and is not stored anywhere readable —
-                so this is the only time it can be shown. Pass it on however
-                you already talk to them.
-              </p>
-              <code>{issued.code}</code>
-              <p>
-                They enter it at <code>/reset</code>. Issuing a code retires any
-                other one outstanding for that account.
-              </p>
+          {ADMIN_GROUPS.map(g => (
+            <div key={g.title} className="cc-rail__group">
+              <span className="cc-rail__head">{g.title}</span>
+              {g.tabs.map(t => (
+                <button key={t.key} type="button"
+                  className={`cc-rail__item ${tab === t.key ? "is-on" : ""}`}
+                  aria-current={tab === t.key ? "page" : undefined}
+                  onClick={() => setTab(t.key)}>
+                  <span>{t.label}</span>
+                  {badge[t.key] && <span className={`cc-pill cc-pill--${badge[t.key]!.tone}`}>{badge[t.key]!.n}</span>}
+                </button>
+              ))}
             </div>
-          )}
-          {note && <p className="settings-save-error" role="alert">{note}</p>}
+          ))}
+          <div className="cc-rail__foot">
+            <Link href="/settings">Site settings</Link>
+            <Link href="/" target="_blank">Open the site ↗</Link>
+          </div>
+        </nav>
 
-          {data.cached && (data.age_s ?? 0) > 0 && (
-            <p className="admin-note">
-              Figures are {data.age_s}s old. They are cached for three minutes —
-              the underlying queries scan a 19.7M-row table and are slowest
-              exactly when the box is busy, which is when you would be reading
-              this. <button className="linklike" onClick={() => load(true)}>Recalculate now</button>.
-            </p>
+        <div className="cc-main">
+          {error && <p className="cc-msg cc-msg--bad" role="alert">{error}</p>}
+
+          {tab === "audience" && <TrafficPanel
+            onGoToOutreach={q => { setOutreachPrefill(q); setTab("outreach") }} />}
+          {tab === "outreach" && <OutreachTab prefill={outreachPrefill} />}
+          {tab === "moderation" && <TakedownQueue />}
+          {tab === "tools" && (
+            <>
+              <ViewHead title="Tools" sub="Look things up and measure them, without a terminal. Nothing here writes."
+                explain={<p>Each tool answers a question that used to need psql or curl: what the
+                  database is running, what the index believes about one work, whether
+                  search is answering in time, and whether the public pages respond
+                  through the same proxy a reader uses.</p>} />
+              <ToolsView />
+            </>
+          )}
+          {tab === "passes" && (
+            <>
+              <ViewHead title="Passes" sub="Start a maintenance pass now instead of waiting for its timer. Preview first; it writes nothing." />
+              <PassesView onCounts={setActivePasses} />
+            </>
           )}
 
-          <Group title="Field coverage">
-            <p className="settings-group__hint">
-              How much of each archive actually carries each field.{" "}
-              <strong>A longer bar is better</strong> — it is the share of works
-              that HAVE the field, not the share missing it. Sites under 400,000
-              works are counted exactly; larger ones are estimated from a sample
-              of {data.coverage_sample.toLocaleString()}, which at that size is
-              accurate to well under a percent.
-              {" "}A short bar is not automatically a bug: some of these fields do
-              not exist at the source, and the ones with a known cause say so
-              underneath. It becomes a bug when a filter looks like it works and
-              matches almost nothing.
-            </p>
-            {data.coverage.map(c => (
-              <div key={c.site} className="admin-site">
-                <h3 className="admin-site__name">
-                  {SITE_LABEL[c.site] ?? c.site}
-                  <span className="admin-site__n">
-                    {c.total.toLocaleString()} works ·{" "}
-                    {c.exact
-                      ? "every row counted"
-                      : `estimated from ${c.sampled.toLocaleString()}`}
-                  </span>
-                </h3>
-                <div className="admin-bars">
-                  {FIELDS.map(f => {
-                    // A field the site does not have is not a gap to fix. AO3
-                    // has literally zero rows with a genre, because genres are
-                    // FF.net's vocabulary — showing that as a full red bar said
-                    // "fix this" about something that cannot be fixed, and
-                    // devalued the bars that do mean something.
-                    const na = c.na.includes(f.key as string)
-                    const p = pct(c[f.key] as number, c.sampled)
-                    if (na) return (
-                      <div key={f.key} className="admin-bar-row">
-                        <div className="admin-bar admin-bar--na">
-                          <span className="admin-bar__label">{f.label}</span>
-                          <span className="admin-bar__track" />
-                          <span className="admin-bar__pct">n/a</span>
-                        </div>
-                        {/* Spelled out rather than left as a dash. "n/a" next to
-                            a row of percentages invites the reading "we failed
-                            to measure it"; the truth is there is nothing to
-                            measure, and that is not a gap anyone should chase. */}
-                        <p className="admin-bar__detail">
-                          {SITE_LABEL[c.site] ?? c.site} does not publish this field
-                        </p>
-                      </div>
-                    )
-                    // The bar shows COVERAGE, not the gap. It used to fill to
-                    // the missing share, so AO3 kudos and summary painted two
-                    // nearly-full red bars for a page titled "Index health" —
-                    // the exact opposite of how a filled bar reads. Now a full
-                    // green bar means the field is there.
-                    const h = have(c[f.key] as number, c.sampled)
-                    const cause = CAUSE[`${c.site}:${String(f.key)}`]
-                    const hasN = Math.round(c.total * (h / 100))
-                    return (
-                      <div key={f.key} className="admin-bar-row">
-                        <div className="admin-bar" title={f.why}>
-                          <span className="admin-bar__label">{f.label}</span>
-                          <span className="admin-bar__track">
-                            <span className={`admin-bar__fill ${h <= 10 ? "is-bad" : h <= 50 ? "is-mid" : "is-ok"}`}
-                                  style={{ width: `${h}%` }} />
+          {!data && !error && ["overview", "coverage", "crawler", "storage", "people"].includes(tab) &&
+            <p className="cc-dim cc-loading">Reading the index…</p>}
+
+          {data && tab === "overview" && (
+            <>
+              <ViewHead title="Overview"
+                sub={data.cached && (data.age_s ?? 0) > 0
+                  ? <>Index figures are {data.age_s}s old — cached for three minutes because they scan a 20M-row table.</>
+                  : <>Index figures computed just now.</>}
+                explain={<p>Every row under <em>Background jobs</em> is evidence a job left behind — a
+                  build timestamp, a watermark, a queue draining — not a heartbeat it
+                  reported. A heartbeat says “I ran”; evidence says “I achieved
+                  something”, which is what catches a loop running happily over a
+                  broken query. <code>popularity_rank</code> once sat frozen for
+                  months with no row here at all.</p>}>
+                <button className="cc-btn" disabled={loadingFresh} onClick={() => load(true)}>
+                  {loadingFresh ? "Recalculating…" : "Recalculate"}
+                </button>
+              </ViewHead>
+
+              <div className="cc-stats">
+                <Stat label="Public site"
+                  tone={!pulse ? "none" : !pulse.ok ? "bad" : pulse.ms > 2000 ? "mid" : "ok"}
+                  value={!pulse ? "…" : pulse.ok ? "Up" : "Down"}
+                  sub={pulse ? `API answered in ${Math.round(pulse.ms)}ms` : "checking"}
+                  onClick={() => setTab("tools")} />
+                <Stat label="Background jobs"
+                  tone={!jobs.length ? "none" : stale.length ? (stale.length > 2 ? "bad" : "mid") : "ok"}
+                  value={jobs.length ? `${jobs.length - stale.length}/${jobs.length}` : "—"}
+                  sub={stale.length ? `${stale.length} stale: ${stale.slice(0, 2).map(s => s.label).join(", ")}${stale.length > 2 ? "…" : ""}` : "all showing recent evidence"} />
+                <Stat label="Database"
+                  tone={!act ? "none" : act.locks ? "bad" : act.total / act.max > 0.8 ? "mid" : "ok"}
+                  value={data.storage ? bytes(data.storage.db_bytes) : "—"}
+                  sub={act ? `${act.total}/${act.max} connections${act.locks ? ` · ${act.locks} waiting on a lock` : ""}${act.longest > 30 ? ` · longest ${act.longest}s` : ""}` : "…"}
+                  onClick={() => setTab("tools")} />
+                <Stat label="Works indexed" tone="none"
+                  value={data.tables.stories != null ? compact(data.tables.stories) : "—"}
+                  sub={data.growth?.per_day != null
+                    ? `${data.growth.per_day >= 0 ? "+" : ""}${data.growth.per_day.toLocaleString()} a day`
+                    : `measuring growth · ${data.growth?.samples ?? 0} samples`} />
+                <Stat label="Takedowns waiting"
+                  tone={data.takedowns_pending ? "bad" : "ok"}
+                  value={data.takedowns_pending}
+                  sub={`${data.delisted?.toLocaleString() ?? "—"} delisted · ${data.hosted_public?.toLocaleString() ?? "—"} readable here`}
+                  onClick={() => setTab("moderation")} />
+                <Stat label="Accounts"
+                  tone={!people ? "none" : noEmail ? "mid" : "ok"}
+                  value={people?.length ?? "—"}
+                  sub={!people ? "…" : noEmail ? `${noEmail} cannot recover a password` : "all recoverable"}
+                  onClick={() => setTab("people")} />
+              </div>
+
+              <div className="cc-cols cc-cols--overview">
+                <section className="cc-card">
+                  <header className="cc-card__head">
+                    <h3>Needs attention <span className="cc-count">{attention.length}</span></h3>
+                    <p>Ranked by what each costs a reader. The crawler works this list from the top.</p>
+                  </header>
+                  {attention.length === 0
+                    ? <p className="cc-empty">Nothing. Every job has fresh evidence and no field gap is large enough to rank.</p>
+                    : (
+                      <ol className="cc-attn">
+                        {attention.map(a => (
+                          <li key={a.key} className={`cc-attn__item cc-attn__item--${a.band ?? "low"}`}>
+                            <div className="cc-attn__row">
+                              <span className="cc-attn__label">{a.label}</span>
+                              <span className="cc-tag">{a.kind === "job" ? "job" : "coverage"}</span>
+                            </div>
+                            <p className="cc-attn__detail">{a.detail}</p>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                </section>
+
+                <section className="cc-card">
+                  <header className="cc-card__head">
+                    <h3>Background jobs</h3>
+                    <p>How long since each left evidence, against the age at which it is flagged.</p>
+                  </header>
+                  <ul className="cc-jobs">
+                    {[...jobs].sort((a, b) => (a.state === "ok" ? 1 : 0) - (b.state === "ok" ? 1 : 0)).map(j => {
+                      const used = j.age_h == null ? 1 : Math.min(1, j.age_h / Math.max(j.stale_after_h, 0.01))
+                      const tone: Tone = j.state === "ok" ? (used > 0.75 ? "mid" : "ok") : "bad"
+                      return (
+                        <li key={j.key} className="cc-job" title={j.why}>
+                          <span className={`cc-dot cc-dot--${tone}`} />
+                          <span className="cc-job__name">{j.label}</span>
+                          <span className="cc-job__age">{ago(j.age_h)}</span>
+                          <span className="cc-job__bar" aria-hidden>
+                            <span className={`is-${tone}`} style={{ width: `${Math.max(3, used * 100)}%` }} />
                           </span>
-                          {/* Percentage AND count. A share of a 33,485-row
-                              sample means nothing next to a heading that says
-                              13,506,241 works; "1.2M of 13.5M" is the number a
-                              person can act on. */}
-                          <span className="admin-bar__pct">{h}%</span>
+                          <span className="cc-job__budget">{j.stale_after_h}h</span>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  {!!data.jobs?.queues.length && (
+                    <div className="cc-queues">
+                      {data.jobs.queues.map(qq => (
+                        <div key={qq.key} className="cc-queue">
+                          <span className="cc-queue__n">{compact(qq.depth)}</span>
+                          <span className="cc-queue__label">{qq.label}</span>
                         </div>
-                        <p className="admin-bar__detail">
-                          {compact(hasN)} of {compact(c.total)} works have this
-                          {cause && <> · <span className="admin-bar__cause">{cause}</span></>}
-                        </p>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </div>
+
+              <DbActivity compact />
+            </>
+          )}
+
+          {data && tab === "coverage" && (
+            <>
+              <ViewHead title="Field coverage"
+                sub={<>The share of each archive that <strong>has</strong> each field. Sites under 400,000 works are counted exactly; larger ones are estimated from a sample of {data.coverage_sample.toLocaleString()}.</>}
+                explain={<p>A pale cell is not automatically a bug: some fields do not exist at
+                  the source, and the ones with a known cause say so below. It becomes
+                  a bug when a filter looks like it works and matches almost nothing.
+                  Hover a cell for the count.</p>} />
+              <section className="cc-card">
+                <div className="cc-matrix" style={{ gridTemplateColumns: `minmax(110px, 160px) repeat(${data.coverage.length}, minmax(0, 1fr))` }}>
+                  <span />
+                  {data.coverage.map(c => (
+                    <span key={c.site} className="cc-matrix__col">
+                      <strong>{SITE_LABEL[c.site] ?? c.site}</strong>
+                      <small>{compact(c.total)} works · {c.exact ? "exact" : "sampled"}</small>
+                    </span>
+                  ))}
+                  {FIELDS.map(f => (
+                    <div key={String(f.key)} className="cc-matrix__row">
+                      <span className="cc-matrix__field" title={f.why}>{f.label}</span>
+                      {data.coverage.map(c => {
+                        if (c.na.includes(f.key as string)) return (
+                          <span key={c.site} className="cc-matrix__cell is-na" title={`${SITE_LABEL[c.site] ?? c.site} does not publish this field`}>n/a</span>
+                        )
+                        const h = have(c[f.key] as number, c.sampled)
+                        const hasN = Math.round(c.total * (h / 100))
+                        return (
+                          <span key={c.site}
+                            className={`cc-matrix__cell ${h <= 10 ? "is-bad" : h <= 50 ? "is-mid" : "is-ok"}`}
+                            style={{ ["--h" as any]: `${h}%` }}
+                            title={`${compact(hasN)} of ${compact(c.total)} works have ${f.label.toLowerCase()}. ${f.why}.`}>
+                            <span className="cc-matrix__pct">{h}%</span>
+                            <span className="cc-matrix__n">{compact(hasN)}</span>
+                          </span>
+                        )
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </section>
+              <section className="cc-card">
+                <header className="cc-card__head"><h3>Known causes</h3></header>
+                <ul className="cc-notes">
+                  {Object.entries(CAUSE).map(([k, v]) => {
+                    const [site, field] = k.split(":")
+                    return <li key={k}><strong>{SITE_LABEL[site] ?? site} · {FIELDS.find(f => f.key === field)?.label ?? field}</strong> — {v}</li>
+                  })}
+                  {data.coverage.filter(c => (c.unreachable_by_listing ?? 0) > 0).map(c => (
+                    <li key={c.site + "-unreach"}>
+                      <strong>{SITE_LABEL[c.site] ?? c.site} · no fandom</strong> — {c.unreachable_by_listing!.toLocaleString()} rows
+                      have no fandom, so the listing harvest (twenty works per request) cannot see
+                      them. The stub pass under <button className="linklike" onClick={() => setTab("passes")}>Passes</button> fetches
+                      those one at a time, worst gaps first.
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </>
+          )}
+
+          {data && tab === "crawler" && (
+            <>
+              <ViewHead title="Crawler" sub="What it fetches next, and how hard each archive is letting it."
+                ><Link href="/settings" className="cc-btn">Change in Settings</Link></ViewHead>
+              <div className="cc-cols">
+                <section className="cc-card">
+                  <header className="cc-card__head"><h3>Next up</h3></header>
+                  <dl className="cc-kv cc-kv--wide">
+                    <dt>Mode</dt>
+                    <dd><strong>{data.crawl.mode}</strong>
+                      {data.crawl.mode === "pinned" && <span className="cc-warn"> — only your own fandoms gain new works</span>}</dd>
+                    <dt>Rotation</dt>
+                    <dd>{data.crawl.rotate_count} of {data.crawl.pool} fandoms per pass
+                      {data.crawl.cycle_hours != null && <> · full sweep ≈ <strong>{data.crawl.cycle_hours}h</strong></>}</dd>
+                    <dt>Direct crawling</dt>
+                    <dd>{data.crawl.direct_crawl ? "on" : "off"}
+                      {data.crawl.disabled.ao3 && <span className="cc-bad"> · AO3 auto-disabled</span>}
+                      {data.crawl.disabled.ffnet && <span className="cc-bad"> · FF.net auto-disabled</span>}</dd>
+                    <dt>Queue</dt>
+                    <dd className="cc-chips">{data.crawl.upcoming.length
+                      ? data.crawl.upcoming.map(f => <span key={f} className="cc-chip">{f}</span>)
+                      : <em>nothing configured</em>}</dd>
+                  </dl>
+                </section>
+                <section className="cc-card">
+                  <header className="cc-card__head">
+                    <h3>Rate limits</h3>
+                    <p>Shared across every process, so a maintenance script and the worker queue behind each other.</p>
+                  </header>
+                  {data.budget.length === 0 ? <p className="cc-empty">No limiter state recorded.</p> : (
+                    <ul className="cc-limits">
+                      {data.budget.map(b => (
+                        <li key={b.host}>
+                          <span className={`cc-dot cc-dot--${b.interval_s > 10 ? "bad" : "ok"}`} />
+                          <span className="cc-limits__host">{b.host}</span>
+                          <span className="cc-limits__rate">one per {b.interval_s}s</span>
+                          <span className="cc-limits__q">{b.queued_s > 0 ? `${b.queued_s}s queued` : "idle"}</span>
+                          {b.interval_s > 10 && <p className="cc-limits__why">Backed off — the archive has been refusing or throttling us, so this is slow on purpose.</p>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              </div>
+            </>
+          )}
+
+          {data && tab === "storage" && data.storage && (
+            <>
+              <ViewHead title="Storage"
+                sub={<>The database is <strong>{bytes(data.storage.db_bytes)}</strong> on a home box.</>}
+                explain={<p>Bars compare each object with the largest, not with the database
+                  total: <code>stories</code> is most of it, and against the total every
+                  other bar is a stub. Dropping two unused trigram indexes once took the
+                  database from 40GB to 36GB — but check CLAUDE.md before dropping
+                  anything with zero scans; two of those are load-bearing.</p>} />
+              <section className="cc-card">
+                <div className="cc-storage">
+                  {data.storage.objects.map(o => {
+                    const biggest = Math.max(...data.storage!.objects.map(x => x.bytes), 1)
+                    return (
+                      <div key={o.name} className="cc-storage__row">
+                        <span className="cc-storage__name">{o.name}</span>
+                        <span className="cc-storage__track"><span style={{ width: `${(o.bytes / biggest) * 100}%` }} /></span>
+                        <span className="cc-storage__size">{bytes(o.bytes)}</span>
+                        <span className="cc-storage__rows">{o.rows > 0 ? `${compact(o.rows)} rows` : ""}</span>
                       </div>
                     )
                   })}
                 </div>
-                {c.unreachable_by_listing != null && c.unreachable_by_listing > 0 && (
-                  <p className="admin-site__note">
-                    Most of this closes on its own: the listing harvest gets these
-                    same fields <strong>twenty works per request</strong> by walking
-                    fandom tag pages, and it is running now.{" "}
-                    <strong>{c.unreachable_by_listing.toLocaleString()}</strong> of
-                    these rows have no fandom at all, so a tag-page walk cannot see
-                    them by construction — those are the ones the stub pass below
-                    fetches one at a time, worst gaps first. Filling one also gives
-                    it a fandom, after which the cheap route can maintain it.
-                  </p>
-                )}
-              </div>
-            ))}
-          </Group>
-
-            {/* People, above the machinery. The panel could tell you the
-                exact share of FanFiction.net rows carrying a genre and could
-                not tell you how many accounts existed, who they were, or
-                whether any of them could recover a password — which is the one
-                question with a person on the other end of it. */}
-            <Group title="People" alwaysOpen>
-              <p className="settings-group__hint">
-                Every account on this instance. <strong>Recovery</strong> is the
-                column to read: an account with no email address cannot be
-                recovered at all — there is nothing to send a reset to and
-                nothing to check a claim against — and signup did not ask for
-                one until 2026-09-08. Existing accounts are prompted and never
-                forced, so this list is how you know who is still exposed.
-              </p>
-              {people === null ? (
-                <p className="admin-note">Loading…</p>
-              ) : people.length === 0 ? (
-                <p className="admin-note">No accounts yet.</p>
-              ) : (
-                <table className="traffic-table admin-people">
-                  <thead><tr>
-                    <th>Account</th><th>Recovery</th><th>Last seen</th><th>Has</th>
-                  </tr></thead>
-                  <tbody>
-                    {people.map(u => (
-                      <tr key={u.username}>
-                        <td className="traffic-table__q" data-label="Account">
-                          {u.username}
-                          <span className="traffic-table__ago">
-                            {u.role}
-                            {u.created_at && <> · joined {u.created_at.slice(0, 10)}</>}
-                          </span>
-                        </td>
-                        <td data-label="Recovery">
-                          {u.recoverable
-                            ? <span className="admin-people__ok">{u.email}</span>
-                            : <span className="admin-people__risk">no email</span>}
-                        </td>
-                        <td data-label="Last seen">
-                          {/* last_seen, not last_login. The login column is only
-                              written when somebody types a password, and a
-                              remembered session then rolls forward for ninety
-                              days without touching it — so it read as "last
-                              seen" and was not: the owner showed 24 days idle
-                              while using the site that minute. */}
-                          {agoStamp(u.last_seen)}
-                          <span className="traffic-table__ago">
-                            {u.sessions} session{u.sessions === 1 ? "" : "s"}
-                            {u.last_login && <> · logged in {u.last_login.slice(0, 10)}</>}
-                          </span>
-                        </td>
-                        <td data-label="Has">
-                          {/* Only what they have, because a row of four zeroes
-                              says nothing and takes as much room as this. */}
-                          {[u.saved && `${u.saved} saved`,
-                            u.follows && `${u.follows} followed`,
-                            u.imported && `${u.imported} imported`]
-                            .filter(Boolean).join(" · ") || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </Group>
-
-          {data.jobs && (
-            <Group title="Background jobs" alwaysOpen>
-              <p className="settings-group__hint">
-                A loop that dies is silent — it stops doing its work and nothing
-                anywhere says so. <code>popularity_rank</code> once had no loop
-                at all and sat frozen for months on exactly that basis. So every
-                row below is <strong>evidence the job left behind</strong> — a
-                build timestamp, a watermark, a queue draining — rather than a
-                heartbeat it reported about itself. A heartbeat says &ldquo;I
-                ran&rdquo;; this says &ldquo;I achieved something&rdquo;, which
-                is the one that catches a job running happily over a broken
-                query.
-              </p>
-              <div className="admin-jobs">
-                {data.jobs.evidence.map(j => (
-                  <div key={j.key} className={`admin-job admin-job--${j.state}`}>
-                    <div className="admin-job__head">
-                      <span className="admin-job__name">{j.label}</span>
-                      <span className={`admin-job__state admin-job__state--${j.state}`}>
-                        {j.state === "ok" ? "running" : j.state === "stale" ? "stale" : "no evidence"}
-                      </span>
-                    </div>
-                    <div className="admin-job__when">
-                      <strong>{ago(j.age_h)}</strong>
-                      <span className="admin-job__budget">
-                        flagged past {j.stale_after_h}h
-                      </span>
-                    </div>
-                    <p className="admin-job__why">{j.why}</p>
-                  </div>
-                ))}
-              </div>
-              {data.jobs.queues.length > 0 && (
-                <>
-                  <h3 className="admin-subhead">Queues</h3>
-                  <p className="settings-group__hint">
-                    A queue answers the opposite question to a timestamp: not
-                    whether the job ran, but whether it is keeping up. One that
-                    only grows is a job that is running and losing.
-                  </p>
-                  <div className="admin-queues">
-                    {data.jobs.queues.map(qq => (
-                      <div key={qq.key} className="admin-queue">
-                        <span className="admin-queue__n">{qq.depth.toLocaleString()}</span>
-                        <span className="admin-queue__label">{qq.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </Group>
+              </section>
+            </>
           )}
 
-          {data.storage && (
-            <Group title="Storage">
-              <p className="settings-group__hint">
-                The database is <strong>{bytes(data.storage.db_bytes)}</strong> on
-                a home box. Which object is biggest is the question worth being
-                able to answer without psql — dropping two unused trigram indexes
-                once took it from 40GB to 36GB. Bars compare each object with
-                the largest, not with the database total: <code>stories</code> is
-                most of it, and against the total every other bar is a stub.
-              </p>
-              <div className="admin-storage">
-                {/* Bars are scaled to the BIGGEST object, not to the database
-                    total. `stories` is 92% of it, so against the total every
-                    other bar collapses to a stub and six of eight rows say
-                    nothing at all. Scaled to the largest, the bar answers the
-                    question actually being asked — how these compare with each
-                    other — and the absolute size is right there in the row. */}
-                {data.storage.objects.map(o => {
-                  const biggest = Math.max(...data.storage!.objects.map(x => x.bytes), 1)
-                  const share = (o.bytes / biggest) * 100
-                  return (
-                    <div key={o.name} className="admin-storage__row">
-                      <span className="admin-storage__name">{o.name}</span>
-                      <span className="admin-storage__track">
-                        <span className="admin-storage__fill" style={{ width: `${share}%` }} />
-                      </span>
-                      <span className="admin-storage__size">{bytes(o.bytes)}</span>
-                      <span className="admin-storage__rows">
-                        {o.rows > 0 ? `${compact(o.rows)} rows` : ""}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            </Group>
-          )}
-
-          <Group title="What the crawler does next">
-            <dl className="admin-facts">
-              <dt>Mode</dt>
-              <dd>
-                <strong>{data.crawl.mode}</strong>
-                {data.crawl.mode === "pinned" && (
-                  <span className="admin-warn">
-                    {" "}— only your own fandoms gain new works. Everything else is
-                    frozen at whatever the bulk import left.
-                  </span>
+          {tab === "people" && (
+            <>
+              <ViewHead title="Accounts"
+                sub="Every account, and the column that matters: whether it could recover a password."
+                explain={<p>An account with no email address cannot be recovered at all — there
+                  is nothing to send a reset to and nothing to check a claim against.
+                  Signup did not ask for one until 2026-09-08. This instance cannot send
+                  email, so a reset is a code you issue below and pass on yourself.
+                  The list never shows codes: seeing that somebody is locked out and
+                  choosing to vouch for them are separate actions.</p>} />
+              <section className="cc-card">
+                {people === null ? <p className="cc-dim">Loading…</p> : people.length === 0 ? <p className="cc-empty">No accounts yet.</p> : (
+                  <table className="cc-table">
+                    <thead><tr><th>Account</th><th>Recovery</th><th>Last seen</th><th>Has</th></tr></thead>
+                    <tbody>
+                      {people.map(u => (
+                        <tr key={u.username}>
+                          <td><strong>{u.username}</strong>
+                            <span className="cc-sub">{u.role}{u.created_at && <> · joined {u.created_at.slice(0, 10)}</>}</span></td>
+                          <td>{u.recoverable ? <span className="cc-ok">{u.email}</span> : <span className="cc-bad">no email</span>}</td>
+                          <td>{agoStamp(u.last_seen)}
+                            <span className="cc-sub">{u.sessions} session{u.sessions === 1 ? "" : "s"}{u.last_login && <> · logged in {u.last_login.slice(0, 10)}</>}</span></td>
+                          <td>{[u.saved && `${u.saved} saved`, u.follows && `${u.follows} followed`, u.imported && `${u.imported} imported`]
+                            .filter(Boolean).join(" · ") || <span className="cc-dim">—</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 )}
-              </dd>
-              <dt>Up next</dt>
-              <dd>{data.crawl.upcoming.length
-                ? data.crawl.upcoming.map(f => <span key={f} className="admin-chip">{f}</span>)
-                : <em>nothing configured</em>}</dd>
-              <dt>Rotation</dt>
-              <dd>
-                {data.crawl.rotate_count} of {data.crawl.pool} fandoms per pass
-                {data.crawl.cycle_hours != null && (
-                  <> · a full sweep takes about <strong>{data.crawl.cycle_hours}h</strong></>
-                )}
-              </dd>
-              <dt>Direct crawling</dt>
-              <dd>
-                {data.crawl.direct_crawl ? "on" : "off"}
-                {data.crawl.disabled.ao3 && <span className="admin-warn"> · AO3 auto-disabled</span>}
-                {data.crawl.disabled.ffnet && <span className="admin-warn"> · FF.net auto-disabled</span>}
-              </dd>
-            </dl>
-            <p className="settings-group__hint">
-              Change any of this in <Link href="/settings">Settings</Link>.
-            </p>
-          </Group>
-
-          {data.budget.length > 0 && (
-            <Group title="Rate limits">
-              <p className="settings-group__hint">
-                Shared across every process, so a maintenance script and the
-                background worker queue behind each other rather than each
-                politely limiting itself while the site sees double.
-              </p>
-              {data.budget.map(b => (
-                <div key={b.host} className="setting-row">
-                  <div className="setting-row__label">
-                    <span className="setting-row__name">{b.host}</span>
-                    <span className="setting-row__hint">
-                      {b.interval_s > 10
-                        ? `Backed off to one request every ${b.interval_s}s — the site has been refusing or throttling us, so crawling is slow on purpose.`
-                        : `One request every ${b.interval_s}s.`}
-                    </span>
+              </section>
+              <section className="cc-card">
+                <header className="cc-card__head"><h3>Password resets</h3></header>
+                {resets && resets.length > 0 ? (
+                  <table className="cc-table cc-table--compact">
+                    <thead><tr><th>Waiting</th><th>Email</th><th>Asked</th><th>Expires</th></tr></thead>
+                    <tbody>
+                      {resets.map(r => (
+                        <tr key={r.username + r.created_at}>
+                          <td>{r.username}</td><td>{r.email ?? <em>none on file</em>}</td>
+                          <td>{agoStamp(r.created_at)}</td><td>{new Date(r.expires_at).toLocaleTimeString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : <p className="cc-empty">Nobody is waiting on a password reset.</p>}
+                <form className="cc-inline-form" onSubmit={async e => {
+                  e.preventDefault()
+                  setNote(null); setIssued(null)
+                  try {
+                    const fd = new FormData()
+                    fd.append("username", issuing.trim())
+                    const r = await fetchWithTimeout("/api/auth/admin/issue-reset",
+                      { method: "POST", credentials: "include", body: fd }, USER_TIMEOUT_MS)
+                    const d = await r.json()
+                    if (!r.ok) throw new Error(d?.detail ?? `Failed (${r.status})`)
+                    setIssued({ username: d.username, code: d.code })
+                    setIssuing("")
+                  } catch (e: any) { setNote(e.message) }
+                }}>
+                  <input className="cc-input" value={issuing} placeholder="username" aria-label="Username to issue a reset code for"
+                    onChange={e => setIssuing(e.target.value)} />
+                  <button className="cc-btn cc-btn--primary" disabled={!issuing.trim()}>Issue a reset code</button>
+                </form>
+                {issued && (
+                  <div className="cc-code">
+                    <p>One-time code for <strong>{issued.username}</strong>. It works once, expires
+                      shortly and is stored nowhere readable — this is the only time it can be shown.
+                      They enter it at <code>/reset</code>; issuing retires any other outstanding code.</p>
+                    <code>{issued.code}</code>
                   </div>
-                  <span className={`badge ${b.interval_s > 10 ? "badge--delisted" : ""}`}>
-                    {b.queued_s > 0 ? `${b.queued_s}s queued` : "idle"}
-                  </span>
-                </div>
-              ))}
-            </Group>
+                )}
+                {note && <p className="cc-msg cc-msg--bad" role="alert">{note}</p>}
+              </section>
+            </>
           )}
-
-          <Group title="Run a pass now">
-            <p className="settings-group__hint">
-              Each of these is already on a timer. These buttons are for when you
-              have just fixed whatever was blocking one and do not want to wait
-              half an hour to find out whether it worked.
-            </p>
-            <PassRunner />
-          </Group>
-
-          <div className="settings-actions">
-            <button className="btn btn--ghost" onClick={() => load(true)}>Refresh</button>
-          </div>
-        </>
-      )}
-      </>
-      )}
-</main>
+        </div>
+      </div>
+    </main>
   )
-}
-
-function Tile({ label, value, approx, href, onClick, sub }: {
-  label: string; value: number | null; approx?: boolean; href?: string
-  onClick?: () => void; sub?: string
-}) {
-  const body = (
-    <>
-      <span className="admin-tile__value">
-        {value == null ? "—"
-          : `${approx && value > 1000 ? "~" : ""}${value.toLocaleString()}`}
-      </span>
-      <span className="admin-tile__label">{label}</span>
-      {sub && <span className="admin-tile__sub">{sub}</span>}
-    </>
-  )
-  // onClick before href: the takedown tile now switches to a tab on this very
-  // page, so routing away to /takedowns and being redirected back would be a
-  // round trip to arrive where we already are.
-  if (onClick) {
-    return <button type="button" onClick={onClick} className="admin-tile admin-tile--link">{body}</button>
-  }
-  return href
-    ? <Link href={href} className="admin-tile admin-tile--link">{body}</Link>
-    : <div className="admin-tile">{body}</div>
 }
