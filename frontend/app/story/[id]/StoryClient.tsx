@@ -765,10 +765,11 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
             like a request that has to be argued for. */}
         <p className="story-detail__claim">
           Is this your work?{" "}
-          <Link href={`/takedown?url=${encodeURIComponent(
-            typeof window !== "undefined"
-              ? window.location.href
-              : `/story/${story.id}`)}`}>
+          {/* The PATH, never window.location.href: the server rendered the
+              path and the client rendered the absolute URL, so every story
+              page hydrated with a mismatched href (React logged it, and does
+              not patch it up). The takedown form expands it to a full URL. */}
+          <Link href={`/takedown?url=${encodeURIComponent(`/story/${story.id}`)}`}>
 {story.is_hosted
             ? "Request removal"
             : "Request removal of this listing"}

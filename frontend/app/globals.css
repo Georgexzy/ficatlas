@@ -138,6 +138,11 @@ input, select { font-family: inherit; }
    page ran edge to edge. Nothing was broken; it just did not match, which on a
    phone reads as the header having come loose. */
 .library-shell > .header,
+/* The story page was the shell left out this time, and it is the page with the
+   most URLs on the site (~750k, most of them arrived at from a search engine).
+   At 760px the header wrapped exactly as described above: the wordmark alone on
+   one row and the nav on a second, a 128px block. */
+.reader-shell > .header,
 .settings-shell > .header {
   width: auto;
   margin-left: calc(50% - 50vw + var(--sbw, 0px) / 2);
@@ -5414,8 +5419,13 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 /* One rule for the link, and it fills the tile: the tile is the hover target and
    the hit area, so the whole chip is clickable rather than just the words. */
+.browse__list li { display: flex; }
 .browse__list a {
-  display: block; color: var(--accent); text-decoration: none;
+  /* Centred in the two lines it reserves (see min-height below). Top-aligned,
+     every one-line name floated at the top of a box sized for two, so a row of
+     tiles read as a row of half-empty boxes. */
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  flex: 1; color: var(--accent); text-decoration: none;
   /* Two lines rather than one. A pairing name like "Castiel/Dean Winchester" is
      22 characters and a fandom name runs longer; truncating to one line with an
      ellipsis turns the two most distinctive things about a hub into "...", and
@@ -5775,8 +5785,20 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   font-family: var(--font-serif); font-size: 28px; font-weight: 600;
   color: var(--text); margin: 0 0 14px; line-height: 1.25;
 }
+/* Room between the header and the first line of the page. The header is
+   inside the shell, so the shell's top padding sits ABOVE it and the breadcrumb
+   or heading landed directly against its bottom edge — "All pairings" was 10px
+   under the header on every hub page. The padding moves to below the header. */
+.hub-page:has(> .header),
+.page-prose:has(> .header),
+.reader-shell:has(> .header) { padding-top: 0; }
+.hub-page > .header,
+.page-prose > .header,
+.reader-shell > .header { margin-bottom: 28px; }
 @media (max-width: 640px) {
   .hub-page { padding: 16px 16px 90px; }
+  .hub-page:has(> .header) { padding-top: 0; }
+  .hub-page > .header, .page-prose > .header, .reader-shell > .header { margin-bottom: 18px; }
   .hub-page h1 { font-size: 23px; }
 }
 
@@ -5873,13 +5895,18 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .hub__list { list-style: none; padding: 0; margin: 0; }
 .hub__item { padding: 16px 0; border-bottom: 1px solid var(--border); }
 .hub__item:last-child { border-bottom: none; }
-.hub__title { font-size: 17px; font-weight: 600; color: var(--text); line-height: 1.35; }
+/* The site's serif, as on a search result card: a hub is a list of works, and
+   a work title set in the UI sans read as a link list rather than a shelf. */
+.hub__title { font-family: var(--font-serif); font-size: 19px; font-weight: 600; color: var(--text); line-height: 1.3; }
 .hub__title:hover { color: var(--accent); }
 .hub__meta {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
   margin: 6px 0 0; font-size: 13px; color: var(--text-faint);
 }
 .hub__summary {
+  /* A measure, not the page: at 1100px a summary ran to ~170 characters a
+     line, well past the point where the eye loses the start of the next one. */
+  max-width: 82ch;
   margin: 8px 0 0; font-size: 14px; line-height: 1.55; color: var(--text-dim);
   /* Two lines is enough to judge a work by; the story page has the rest. */
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;

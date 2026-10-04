@@ -30,7 +30,9 @@ export default function TakedownClient() {
   const [storyUrl, setStoryUrl] = useState("")
   useEffect(() => {
     const u = new URLSearchParams(window.location.search).get("url")
-    if (u) setStoryUrl(u)
+    // Story pages pass their PATH (see StoryClient); an author reads and may
+    // copy this field, so show them the whole address.
+    if (u) setStoryUrl(u.startsWith("/") ? window.location.origin + u : u)
   }, [])
   const [delist, setDelist] = useState(false)
 
