@@ -309,9 +309,10 @@ _JOB_EVIDENCE = [
     # off forever reads as stale, which is what it is.
     ("rec_threads", "Recommendation threads",
      "Recent recommendation threads, which is how the index knows what a "
-     "fandom is pressing on people NOW rather than all-time. Stale here means "
-     "Reddit is refusing us; unauthenticated access is no longer enough and "
-     "the fix is to register an app, not to wait.", 72,
+     "fandom is pressing on people NOW rather than all-time. Read from the "
+     "public Reddit archives (Arctic Shift, PullPush) since Reddit itself "
+     "stopped answering this server; stale here means the archives are down "
+     "too — reddit_archive.py.", 72,
      "SELECT max(read_at) FROM rec_threads"),
     ("crawler", "Crawler fetching",
      "Thirteen loops fetch works: AO3 stubs and recent works, the archive walks, "
@@ -841,8 +842,8 @@ _JOBS: dict[str, _Job] = {
     "reddit_recs": _Job(
         "Import reader recommendations",
         "Community rec lists, written as the `community_recs` marker the recs "
-        "filter reads. Reddit refuses unauthenticated traffic from this host, "
-        "so this will usually report a backoff.",
+        "filter reads. Reads r/HPFanfiction's most-linked list from its public "
+        "spreadsheet, so it does not depend on Reddit answering.",
         lambda limit, dry: _describe(_reddit_recs(dry)), networked=True,
     ),
     "tropedia_recs": _Job(

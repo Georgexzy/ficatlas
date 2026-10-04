@@ -239,6 +239,19 @@ def get(url: str) -> str:
     picks up where this one left off. Every consumer of this module is a
     resumable worklist for exactly that reason.
     """
+    # The archives first (reddit_archive.py): Reddit answers this server about
+    # one request in six and no API app can be registered, so going to Reddit
+    # is now the FALLBACK, taken only when an archive cannot serve the URL or
+    # is down. It does not touch the Reddit budget, so a week-long Reddit
+    # backoff no longer stops these jobs.
+    try:
+        import reddit_archive
+        body = reddit_archive.atom_for(url)
+        if body is not None:
+            return body
+    except Exception as e:  # noqa: BLE001 — an archive outage falls through
+        log.info("reddit archive failed for %s: %s; trying Reddit", url, type(e).__name__)
+
     wait = _claim_slot()
     if wait > 0:
         log.info("reddit: waiting %.0fs for the shared budget", wait)
