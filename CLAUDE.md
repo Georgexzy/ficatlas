@@ -507,6 +507,24 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **Reddit is read from the public archives, not from Reddit.** Reddit answers
+  this server about one request in six and no API app can be registered.
+  `reddit_archive.atom_for()` answers the exact Reddit feed URLs the consumers
+  request — Arctic Shift for flair, new posts and thread comments (minutes
+  fresh), PullPush for free-text search (Arctic Shift 422s on it; PullPush lags
+  months, fine for 120-day lookbacks) — rendered in Reddit's Atom layout so
+  `reddit_queue`, `reddit_answers` and `rec_threads` are unchanged.
+  `tests/test_reddit_archive.py` pins that shape with the consumers' own
+  parsers. Reddit itself is only the fallback.
+- **The FF.net harvester discovers its sections.** Weekly, from FF.net's nine
+  category pages: 2,668 fandoms, 8,042,844 stories (vs ~6.58M FF.net works in
+  the index). 25 sections per pass in rotation, each walked to its end. Rows
+  for works we lack are ADDED (`ffnet_listing.apply_batch`,
+  `FFNET_LISTING_ADD_NEW`). FF.net still refuses some sessions with 403 —
+  the cursor is held and the page retried, which is normal.
+- **FF.net K+ is stored as teen**, following the bulk importer that wrote ~6.5M
+  FF.net rows; the live crawler and FicHub say general. One convention, chosen
+  for consistency, flagged rather than migrated.
 - **FF.net metadata comes from LISTING pages now, not one archived page at a
   time.** FanFiction.net refuses this server's story fetches, so characters were
   filled from archive.org at ~500 works a day against 6.47M missing — while

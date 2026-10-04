@@ -285,12 +285,21 @@ _JOB_EVIDENCE = [
     # answered. A loop turning happily against a site that refuses every
     # request is exactly what a heartbeat would call healthy.
     ("ffnet_listing", "FanFiction.net live harvest",
-     "The separate harvester container that walks FF.net listings for updated "
-     "engagement figures. FF.net blocks this server at present, so a stale row "
-     "here is expected and is the honest statement of it — the Wayback passes "
-     "are what keep FF.net moving meanwhile.", 24,
+     "The browser harvester walking every FF.net fandom's listing pages, 25 "
+     "works a page — now the main source of FF.net characters, pairings and "
+     "genres, and of FF.net works the index lacked. Stale means FF.net has "
+     "refused every session; the Wayback passes are the slow fallback.", 24,
      "SELECT to_timestamp(NULLIF(value,'')::bigint) FROM app_settings "
      " WHERE key = 'ffnet_listing_ok_at'"),
+    # The other half of the same route. The harvester only STAGES; this row
+    # moves when the worker actually WROTE staged rows into the index, so a
+    # harvester answering happily while the apply loop has died reads stale.
+    ("ffnet_listing_apply", "FF.net listing → index",
+     "Writes what the harvester staged: fills characters, pairings, genres and "
+     "ratings on works we hold, and adds the ones we did not. See "
+     "ffnet_listing.py.", 6,
+     "SELECT to_timestamp(NULLIF(value,'')::bigint) FROM app_settings "
+     " WHERE key = 'ffnet_listing_applied_at'"),
     # What a fandom is recommending LATELY, which is the one recommendation
     # question no archive can answer — and which has produced nothing at all.
     #
