@@ -132,7 +132,13 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // suppressHydrationWarning: the inline theme script in <head> sets
+    // data-theme on <html> before React hydrates — on purpose, so a reader's
+    // chosen theme paints on the first frame instead of flashing. React then
+    // sees an attribute the server did not render and reports a mismatch on
+    // every page. This silences that ONE element's attributes only; children
+    // are still checked.
+    <html lang="en" suppressHydrationWarning>
       <head>
         {/* Runs before first paint. Setting the theme from React instead would
             render one frame in the wrong palette, and on a dark-by-default site
