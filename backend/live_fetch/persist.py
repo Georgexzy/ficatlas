@@ -17,6 +17,16 @@ _RATING_MAP = {
     "M":  RatingEnum.mature,
     "E":  RatingEnum.explicit,
     "NR": RatingEnum.not_rated,
+    # FanFiction.net's own ratings. These were missing, so every K and K+ work
+    # the Wayback route added was saved as not_rated — 3,897 of them by
+    # 2026-10-04, against 0.06% not_rated across the rest of FF.net. K+ maps
+    # to teen because that is how the bulk importer stored ~6.5M FF.net rows
+    # (huggingface_meta_importer._RATING_MAP); a General filter that admitted
+    # some K+ works and not others would be worse than either convention.
+    "K":  RatingEnum.general,
+    "K+": RatingEnum.teen,
+    "T":  RatingEnum.teen,
+    "MA": RatingEnum.mature,
 }
 
 _STATUS_MAP = {
@@ -408,6 +418,13 @@ def _enrich_existing(db: Session, url: str, d: dict) -> bool:
             added = [t for t in incoming_prov if t not in have]
             if added:
                 story.tags = have + added
+                changed = True
+
+        # A rating stated by the source replaces not_rated, never another rating.
+        if story.rating in (None, RatingEnum.not_rated):
+            incoming = _RATING_MAP.get((d.get("rating") or "").strip())
+            if incoming and incoming != RatingEnum.not_rated:
+                story.rating = incoming
                 changed = True
 
         # A publication date never changes, so it only ever fills a gap.

@@ -81,14 +81,14 @@ def test_a_no_year_date_takes_the_capture_year_not_this_one():
 def test_a_staged_listing_row_fills_the_work_it_names(db):
     """End to end on the test database: stage, apply, read back."""
     from sqlalchemy import text
-    from models.story import Story, SiteEnum, StatusEnum
+    from models.story import Story, SiteEnum, StatusEnum, RatingEnum
     import ffnet_listing
 
     db.execute(text("DELETE FROM ffnet_listing_meta"))
     s = Story(site=SiteEnum.ffnet, site_id="9431234", url="https://www.fanfiction.net/s/9431234/1/",
               title="Consequences of an Ingenious Mind", author="White Angel of Auralon",
               word_count=0, chapter_count=1, characters=[], relationships=[], genres=[],
-              status=StatusEnum.unknown, is_crossover=False)
+              status=StatusEnum.unknown, rating=RatingEnum.not_rated, is_crossover=False)
     db.add(s)
     db.commit()
     db.execute(text("INSERT INTO ffnet_listing_meta (site_id, line) VALUES (9431234, :a), (777, :b)"),
@@ -107,5 +107,16 @@ def test_a_staged_listing_row_fills_the_work_it_names(db):
     assert got.word_count == 14977
     assert got.status == StatusEnum.complete
     assert got.kudos == 4365
+    # A K+ row repairs a work saved unrated (the Wayback route's old mapping).
+    assert got.rating == RatingEnum.teen
     # Claimed rows are gone: each staged line is applied at most once.
     assert db.execute(text("SELECT count(*) FROM ffnet_listing_meta")).scalar() == 0
+
+
+def test_every_ffnet_rating_maps_to_a_real_rating():
+    from live_fetch.persist import _RATING_MAP
+    from models.story import RatingEnum
+    assert _RATING_MAP["K"] == RatingEnum.general
+    assert _RATING_MAP["K+"] == RatingEnum.teen     # the bulk importer's convention
+    assert _RATING_MAP["T"] == RatingEnum.teen
+    assert _RATING_MAP["M"] == RatingEnum.mature

@@ -44,7 +44,7 @@ import httpx
 from sqlalchemy import text as sql_text
 
 from db.session import db_session
-from models.story import StatusEnum, Story
+from models.story import RatingEnum, StatusEnum, Story
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
@@ -685,6 +685,13 @@ def _write_batch(items: list[tuple]) -> int:
                     if g not in existing:
                         existing.append(g)
                 story.tags = existing
+            # Rating only over not_rated: the K/K+ works the Wayback route
+            # once saved unrated are repaired by whichever route sees them next.
+            if meta.get("rating") and story.rating in (None, RatingEnum.not_rated):
+                from live_fetch.persist import _RATING_MAP
+                r = _RATING_MAP.get(meta["rating"].strip())
+                if r and r != RatingEnum.not_rated:
+                    story.rating = r
             if meta.get("characters"):
                 story.characters = meta["characters"]
             if meta.get("relationships"):
