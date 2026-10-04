@@ -2203,6 +2203,14 @@ def _spelling_rescues(db, q: str, min_sim: float | None = None) -> list[Suggesti
     exercised path.
     """
     for kind, value in _rescue_targets(q):
+        # A plain query that is close to a well-read TITLE is most likely that
+        # work, misspelt — "the arithmancr", the most repeated empty search in
+        # the traffic log, was offered three author names. A close title goes
+        # first; a weaker one only fills in after the other rescues.
+        scored = _did_you_mean_titles(db, value) if kind is None else []
+        titles = [sg for sg, _ in scored]
+        if scored and scored[0][1] >= _DYM_TITLE_LEAD_SIM:
+            return titles
         if kind == "author":
             out = (_did_you_mean_authors(db, value)
                    or _typed_rescues(db, value)
@@ -2210,10 +2218,51 @@ def _spelling_rescues(db, q: str, min_sim: float | None = None) -> list[Suggesti
         else:
             out = (_typed_rescues(db, value)
                    or _did_you_mean(db, value, min_sim=min_sim)
+                   or titles
                    or (_did_you_mean_authors(db, value) if kind is None else []))
         if out:
             return out
     return []
+
+
+# A title at least this alike is offered AHEAD of tags and authors.
+_DYM_TITLE_LEAD_SIM = 0.55
+_DYM_TITLE_MIN_SIM = 0.40
+
+
+def _did_you_mean_titles(db, q: str) -> list[tuple[Suggestion, float]]:
+    """Well-read works whose title is close to what the reader typed.
+
+    Against `title_facets` (titles of works with 500+ kudos), because the same
+    fuzzy match over all 20M titles timed out at 20s. Ranked by similarity times
+    log kudos, so between two equally close titles the one people read wins —
+    the misspelling of a famous title is far commoner than of an obscure one.
+    The suggestion's query is the title itself, which the exact-title bonus
+    puts first. Missing table = feature off, as for author_facets.
+    """
+    value = (q or "").strip()
+    if len(value) < 6:
+        return []
+    try:
+        with db.begin_nested():
+            rows = db.execute(sql_text("""
+                SELECT value, count, similarity(value, :q) AS sim
+                  FROM title_facets
+                 WHERE value % :q
+                   AND similarity(value, :q) >= :minsim
+                 ORDER BY similarity(value, :q) * ln(count + 1) DESC
+                 LIMIT :lim
+            """), {"q": value, "minsim": _DYM_TITLE_MIN_SIM, "lim": _DYM_LIMIT}).fetchall()
+    except Exception:
+        log.debug("title did-you-mean lookup failed", exc_info=True)
+        return []
+    # (suggestion, similarity), best similarity first: the caller decides from
+    # the similarity whether a title leads, and a Pydantic model is no place
+    # to carry it.
+    out = [(Suggestion(kind="title", value=v, count=int(c or 0), query=v, reason="spelling"),
+            float(sim)) for v, c, sim in rows]
+    out.sort(key=lambda p: -p[1])
+    return out
 
 
 def _did_you_mean_authors(db, q: str) -> list[Suggestion]:
@@ -2674,6 +2723,19 @@ def _note_total(request, payload) -> None:
         pass
 
 
+def _pasted_work(text: str):
+    """(SiteEnum, site_id) when `text` is just a link to one archive work."""
+    t = (text or "").strip()
+    if not t or " " in t or not re.match(r"^(?:https?://)?(?:www\.|m\.)?[a-z0-9.-]+\.(?:org|net)/", t, re.I):
+        return None
+    from live_fetch.persist import _SITE_PATTERNS
+    for site, rx in _SITE_PATTERNS:
+        m = rx.search(t)
+        if m:
+            return site, m.group(1)
+    return None
+
+
 @router.get("", response_model=SearchResponse)
 def search(          # NOT async — see below
     q:                     Optional[str] = Query(None),
@@ -2820,6 +2882,18 @@ def search(          # NOT async — see below
     # spelling rescues run against THIS. Set before the branch so it is defined
     # whether or not there is a `q` to parse.
     raw_query = (q or "").strip()
+
+    # A pasted LINK is a request for that one work. It used to be searched as
+    # text — "https://archiveofourown.org/works/10057010" matched nothing, not
+    # even All the Young Dudes, the most-read work in the index — and readers do
+    # paste links: the traffic log has work ids and URLs among its zero-result
+    # queries. Recognised with the same patterns the importers key rows on
+    # (persist._SITE_PATTERNS), and applied as a FILTER, so the content gates and
+    # every other rule still decide whether it is shown.
+    url_work = _pasted_work(raw_query)
+    if url_work:
+        q = None
+        raw_query = ""
     if q:
         pq = parse_query(q)
         parsed_tokens = pq.tokens
@@ -3470,6 +3544,10 @@ def search(          # NOT async — see below
         # either site shows only the works they posted there, while this spans
         # every archive in the index.
         filters.append(func.lower(Story.author) == author.strip().lower())
+
+    if url_work:
+        filters.append(Story.site == url_work[0])
+        filters.append(Story.site_id == url_work[1])
 
     if search_within:
         filters.append(or_(

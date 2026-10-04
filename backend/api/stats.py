@@ -926,6 +926,12 @@ def rebuild_facets(db: Session, min_count: int = 1) -> dict:
         built["author_facets"] = db.execute(
             text("SELECT count(*) FROM author_facets")).scalar()
 
+        # Titles of well-read works, for the title spelling rescue. See the
+        # title_facets DDL in init_db.py for why only 500+ kudos.
+        rebuild_title_facets(db)
+        built["title_facets"] = db.execute(
+            text("SELECT count(*) FROM title_facets")).scalar()
+
         # Carry over kinds that are NOT derived from stories. The rebuild below
         # swaps a freshly-built table in and drops the old one, so anything this
         # loop did not produce would be silently destroyed — and the AO3
@@ -982,6 +988,19 @@ def rebuild_facets(db: Session, min_count: int = 1) -> dict:
         db.commit()
         raise
     return {"ok": True, "facets": built}
+
+
+TITLE_FACET_MIN_KUDOS = 500
+
+
+def rebuild_title_facets(db) -> None:
+    db.execute(text("DELETE FROM title_facets"))
+    db.execute(text(
+        "INSERT INTO title_facets (value, count) "
+        "SELECT title, max(kudos) FROM stories "
+        "WHERE kudos >= :k AND title IS NOT NULL AND btrim(title) <> '' "
+        "  AND delisted_at IS NULL "
+        "GROUP BY title"), {"k": TITLE_FACET_MIN_KUDOS})
 
 
 @router.post("/refresh-facets")

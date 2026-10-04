@@ -1293,6 +1293,9 @@ const DYM_KIND_LABEL: Record<string, string> = {
   // rather than being a fifth `facets` kind — so it needs its own label, or the
   // chip would render the raw word "author" for a pen name.
   author: "author",
+  // A misspelt TITLE (title_facets): the count beside it is the work's kudos,
+  // not a number of works, so the chip says so.
+  title: "work",
 }
 
 // Where to go when you have no search in mind.
@@ -3887,7 +3890,7 @@ function SearchPageInner() {
                                       onClick={() => { setQuery(sg.query); doSearch(true, undefined, sg.query) }}>
                                       <span className="dym__value">{sg.value}</span>
                                       <span className="dym__kind">{DYM_KIND_LABEL[sg.kind] ?? sg.kind}</span>
-                                      <span className="dym__count">{fmtCount(sg.count)}</span>
+                                      <span className="dym__count">{sg.kind === "title" ? `${fmtCount(sg.count)} kudos` : fmtCount(sg.count)}</span>
                                     </button>
                                   </li>
                                 ))}
