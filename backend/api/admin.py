@@ -1100,7 +1100,8 @@ def db_activity(db: Session = Depends(get_db), _admin: User = Depends(require_ad
                EXTRACT(EPOCH FROM (now() - a.query_start))  AS running_s,
                EXTRACT(EPOCH FROM (now() - a.xact_start))   AS xact_s,
                left(regexp_replace(a.query, '\\s+', ' ', 'g'), 400) AS query,
-               cardinality(pg_blocking_pids(a.pid))          AS blocked_by
+               cardinality(pg_blocking_pids(a.pid))          AS blocked_by,
+               a.backend_xmin IS NOT NULL                    AS holds_snapshot
           FROM pg_stat_activity a
          WHERE a.datname = current_database()
            AND a.pid <> pg_backend_pid()
@@ -1112,8 +1113,14 @@ def db_activity(db: Session = Depends(get_db), _admin: User = Depends(require_ad
                current_setting('max_connections')::int                AS max
           FROM pg_stat_activity
     """)).mappings().first()
+    # Running queries, plus idle-in-transaction sessions ONLY when they hold a
+    # snapshot (backend_xmin) — the kind that stops VACUUM cleaning the whole
+    # database. An idle transaction holding nothing (a lock-only connection)
+    # is not work and was being reported as an 8,547s "longest query".
     busy = [dict(r) for r in rows
-            if r["state"] not in (None, "idle") and r["backend_type"] == "client backend"]
+            if r["backend_type"] == "client backend"
+            and (r["state"] == "active"
+                 or (r["state"] or "").startswith("idle in transaction") and r["holds_snapshot"])]
     busy.sort(key=lambda r: -(r["running_s"] or 0))
     for r in busy:
         r["running_s"] = round(float(r["running_s"] or 0), 1)
@@ -1122,7 +1129,7 @@ def db_activity(db: Session = Depends(get_db), _admin: User = Depends(require_ad
         "connections": dict(conns),
         "running": busy[:40],
         "waiting_on_locks": sum(1 for r in busy if r["blocked_by"]),
-        "longest_s": busy[0]["running_s"] if busy else 0,
+        "longest_s": max((r["running_s"] for r in busy if r["state"] == "active"), default=0),
     }
 
 

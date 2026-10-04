@@ -98,6 +98,13 @@ def heavy_pass(name: str) -> Iterator[None]:
     try:
         held = bool(conn.execute(
             text("SELECT pg_try_advisory_lock(:k)"), {"k": HEAVY_KEY}).scalar())
+        # End the transaction the SELECT opened. A SESSION advisory lock
+        # survives a commit, and without one this connection sat "idle in
+        # transaction" for the whole pass — 2h24m into a popularity rebuild it
+        # was the admin panel's "longest query: 8547s", and a long-open
+        # transaction is exactly what anyone checking for vacuum blockers
+        # learns to hunt. It held no snapshot, but it looked like it might.
+        conn.commit()
         if not held:
             log.warning("%s: deferred, another heavy pass holds the lock", name)
             raise MaintenanceDeferred(name)
