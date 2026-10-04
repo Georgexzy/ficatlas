@@ -33,7 +33,7 @@ def test_characters_after_the_dates_are_read_on_a_listing_row():
 
 
 def test_no_genre_and_still_going():
-    m = parse_ffn_meta(ROWS[1], listing=True)
+    m = parse_ffn_meta(ROWS[1], listing=True, ref=datetime.now(timezone.utc))
     assert m["characters"] == ["Harry P.", "Hermione G.", "Fleur D.", "Daphne G."]
     assert m["genres"] == []
     assert m["complete"] is False          # FF.net prints nothing for a WIP
@@ -61,9 +61,19 @@ def test_pairings_in_brackets_on_a_listing_row():
 
 def test_month_name_dates_and_the_missing_year():
     assert _ffn_date("Sep 22, 2013") == datetime(2013, 9, 22, tzinfo=timezone.utc)
-    d = _ffn_date("Aug 22")
     now = datetime.now(timezone.utc)
+    d = _ffn_date("Aug 22", now)
     assert d is not None and d <= now and (now - d).days < 366
+
+
+def test_a_no_year_date_takes_the_capture_year_not_this_one():
+    # An archived page from 2019 reading "10/8" is 8 Oct 2019.
+    cap = datetime(2019, 11, 2, tzinfo=timezone.utc)
+    assert _ffn_date("10/8", cap) == datetime(2019, 10, 8, tzinfo=timezone.utc)
+    # Seen in January, "Dec 30" is last year's.
+    assert _ffn_date("Dec 30", datetime(2020, 1, 3, tzinfo=timezone.utc)).year == 2019
+    # And with no reference there is no guess at all.
+    assert _ffn_date("10/8") is None
     # The numeric forms still work.
     assert _ffn_date("11/26/2012") == datetime(2012, 11, 26, tzinfo=timezone.utc)
 

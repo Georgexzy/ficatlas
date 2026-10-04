@@ -18,6 +18,7 @@ listing and an archived page can never disagree about what a field means.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import text
 
@@ -54,7 +55,8 @@ def apply_batch(limit: int = 2000) -> dict:
 
     items, parsed, with_chars = [], 0, 0
     for site_id, line in rows:
-        meta = parse_ffn_meta(line, listing=True)
+        # A live listing page: a no-year date means this year.
+        meta = parse_ffn_meta(line, listing=True, ref=datetime.now(timezone.utc))
         if not meta:
             continue
         parsed += 1

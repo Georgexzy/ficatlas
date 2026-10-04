@@ -73,7 +73,7 @@ _LABELLED = re.compile(
     r"^(Chapters|Words|Reviews|Favs|Follows|Published|Updated|Status|Rated|id)\s*:", re.I)
 
 
-def _ffn_date(value: str):
+def _ffn_date(value: str, ref: datetime | None = None):
     """FF.net writes dates two ways, both seen in the wild:
 
         "Updated: 11/26/2012"   M/D/YYYY
@@ -95,16 +95,22 @@ def _ffn_date(value: str):
             return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
-    for fmt in ("%b %d", "%B %d"):
+    # A date with no year means "the year the page was shown" — which for an
+    # ARCHIVED page is the year it was captured, not this one. A 2019 capture
+    # reading "10/8" is 8 Oct 2019; resolving it against today would write a
+    # confidently wrong date. So no reference, no date.
+    if ref is None:
+        return None
+    for fmt in ("%b %d", "%B %d", "%m/%d", "%m-%d"):
         try:
             md = datetime.strptime(value, fmt)
         except ValueError:
             continue
-        # No year means "this year" — unless that lands in the future, which
+        # No year means "this year" ("Published: 10/8" on a story page, "Aug
+        # 22" on a listing) — unless that lands in the future, which
         # can only be last year's date seen across a new year.
-        now = datetime.now(timezone.utc)
-        dt = md.replace(year=now.year, tzinfo=timezone.utc)
-        return dt.replace(year=now.year - 1) if dt > now else dt
+        dt = md.replace(year=ref.year, tzinfo=timezone.utc)
+        return dt.replace(year=ref.year - 1) if dt > ref else dt
     return None
 
 
@@ -185,7 +191,19 @@ def _fichub_fallback(site_id: str) -> dict | None:
     }
 
 
-def parse_ffn_meta(page_text: str, listing: bool = False) -> dict | None:
+def capture_time(url: str) -> datetime | None:
+    """When archive.org captured a page, from the 14-digit stamp in its URL."""
+    m = re.search(r"/web/(\d{14})", url or "")
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def parse_ffn_meta(page_text: str, listing: bool = False,
+                   ref: datetime | None = None) -> dict | None:
     """Pull the metadata line out of an archived FF.net story page.
 
     The line is a " - " separated list in which almost everything is optional —
@@ -234,7 +252,7 @@ def parse_ffn_meta(page_text: str, listing: bool = False) -> dict | None:
                 except ValueError:
                     pass
             elif key in ("published", "updated"):
-                dt = _ffn_date(val)
+                dt = _ffn_date(val, ref)
                 if dt:
                     out[f"{key}_at"] = dt
             elif key == "status":
@@ -381,7 +399,7 @@ def fetch_meta(client: httpx.Client, site_id: str,
         raise Transient(f"HTTP {page.status_code}")
     if page.status_code != 200:
         return None
-    return parse_ffn_meta(page.text)
+    return parse_ffn_meta(page.text, ref=capture_time(str(page.url)))
 
 
 def _pick_targets(limit: int | None) -> list:

@@ -283,7 +283,10 @@ def persist_live_results(db: Session, live_results: list[dict],
                 genres=d.get("genres") or [],
                 is_crossover=fic_is_crossover(d.get("fandoms", [])),
                 is_hosted=False,
-                published_at=None,
+                # Was hard-coded None, so a source that read the publication
+                # date (the FF.net Wayback parser does) had it thrown away on
+                # every insert, and nothing filled it afterwards.
+                published_at=_as_datetime(d.get("published_at")),
                 updated_at=updated_at,
             )
             db.add(story)
@@ -405,6 +408,13 @@ def _enrich_existing(db: Session, url: str, d: dict) -> bool:
             added = [t for t in incoming_prov if t not in have]
             if added:
                 story.tags = have + added
+                changed = True
+
+        # A publication date never changes, so it only ever fills a gap.
+        if story.published_at is None:
+            pub = _as_datetime(d.get("published_at"))
+            if pub:
+                story.published_at = pub
                 changed = True
 
         if not (story.summary or "").strip() and (d.get("summary") or "").strip():

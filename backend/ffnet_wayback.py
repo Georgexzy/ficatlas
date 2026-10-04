@@ -116,7 +116,32 @@ def _date(value: str | None):
     return None
 
 
-def parse_story_snapshot(html_text: str, story_id: int) -> dict | None:
+_CRUMB = re.compile(r"id=['\"]?pre_story_links['\"]?[^>]*>(?P<body>.{0,1500}?)</div>", re.S)
+_CRUMB_LINK = re.compile(r"<a[^>]*href=['\"]/[^'\"]+/['\"][^>]*>(?P<text>[^<]{1,120})</a>")
+
+
+def _breadcrumb_fandoms(html_text: str) -> list[str]:
+    """The fandom(s) from a story page's breadcrumb.
+
+    "Books > Hobbit" names the fandom in its LAST link. A crossover reads
+    "Crossover > Harry Potter + Naruto Crossover", which is two fandoms.
+    """
+    m = _CRUMB.search(html_text or "")
+    if not m:
+        return []
+    links = [_strip(x.group("text")) or "" for x in _CRUMB_LINK.finditer(m.group("body"))]
+    links = [l for l in links if l]
+    if not links:
+        return []
+    last = links[-1]
+    if last.endswith(" Crossover") and " + " in last:
+        return [p.strip() for p in last[: -len(" Crossover")].split(" + ") if p.strip()]
+    # The first link is the top-level section ("Books", "Anime/Manga"), never a
+    # fandom; a breadcrumb with only that link names none.
+    return [last] if len(links) > 1 else []
+
+
+def parse_story_snapshot(html_text: str, story_id: int, captured=None) -> dict | None:
     """Pull metadata out of an archived FF.net story page.
 
     Returns None when the page is not a story — Wayback holds error pages,
@@ -174,9 +199,21 @@ def parse_story_snapshot(html_text: str, story_id: int) -> dict | None:
         m = re.search(pattern, stats, re.IGNORECASE)
         return m.group(1).strip() if m else None
 
+    # The fields this parser used to leave behind. The breadcrumb names the
+    # fandom, and the metadata line carries characters, bracketed pairings and
+    # genres — read with the one FF.net parser (ffnet_enrich.parse_ffn_meta) so
+    # this and the listing route cannot disagree. Without them every FF.net work
+    # this route ADDED to the index (2,991 since 2026-09-22) went in with no
+    # fandom at all, invisible to every fandom filter and hub.
+    fandoms = _breadcrumb_fandoms(html_text)
+    from ffnet_enrich import parse_ffn_meta
+    meta = parse_ffn_meta(html_text, ref=captured) or {}
+
     chapters = _int(field(r"Chapters:\s*([\d,]+)"))
-    published = _date(field(r"Published:\s*([\d/-]+)"))
-    updated = _date(field(r"Updated:\s*([\d/-]+)"))
+    # This module's _date wants a year; a story page drops it for the current
+    # one ("Published: 10/8"), and the shared parser reads that form.
+    published = _date(field(r"Published:\s*([\d/-]+)")) or meta.get("published_at")
+    updated = _date(field(r"Updated:\s*([\d/-]+)")) or meta.get("updated_at")
 
     return {
         # Same shape live_fetch produces, because persist_live_results is what
@@ -204,6 +241,13 @@ def parse_story_snapshot(html_text: str, story_id: int) -> dict | None:
         # "- Complete" on modern pages, "Status: Complete" on older ones.
         "status": "complete" if re.search(r"(?:Status:\s*)?\bComplete\b", stats,
                                           re.IGNORECASE) else "unknown",
+        "fandoms": fandoms,
+        "characters": meta.get("characters") or [],
+        "relationships": meta.get("relationships") or [],
+        "genres": meta.get("genres") or [],
+        # FF.net genres ARE its content tags, as ffnet_enrich._write_batch has
+        # always treated them.
+        "tags": list(meta.get("genres") or []),
     }
 
 
@@ -316,7 +360,9 @@ def fetch_story(story_id: int, ts: str, timeout: float = 90.0) -> dict | None:
         raise Transient(f"HTTP {r.status_code}")
     if r.status_code != 200:
         return None
-    return parse_story_snapshot(r.text, story_id)
+    from ffnet_enrich import capture_time
+    return parse_story_snapshot(r.text, story_id,
+                                captured=capture_time(str(r.url)) or capture_time(f"/web/{ts}"))
 
 
 def cdx_page(resume: str | None = None, since: str = "20260101",
