@@ -39,7 +39,7 @@ def test_the_loop_defers_rather_than_contending_for_the_heavy_slot():
     at 5-10s against 1.5-3.5s on a quiet box, so this takes the shared lock and
     defers rather than waits."""
     src = inspect.getsource(_facets_loop)
-    assert "heavy_pass()" in src
+    assert 'heavy_pass("facets")' in src
     assert "MaintenanceDeferred" in src
 
 
