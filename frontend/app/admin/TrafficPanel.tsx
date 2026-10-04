@@ -74,7 +74,10 @@ function useTable<T extends Record<string, any>>(
   // the count above says how many that is.
   const [cap, setCap] = useState<number | null>(null)
   useEffect(() => {
-    try { setCap(window.matchMedia("(min-width: 700px)").matches ? null : 8) } catch {}
+    // Fifteen on a desktop, not all of them: uncapped, the searches table alone
+    // ran to hundreds of rows and the tab measured 12,462px at 1440 wide. The
+    // filter box searches every row, and "show all" is one click.
+    try { setCap(window.matchMedia("(min-width: 700px)").matches ? 15 : 8) } catch {}
   }, [])
   const view = useMemo(() => {
     const all = rows ?? []
@@ -662,8 +665,12 @@ export default function TrafficPanel(
   const SECTIONS: SectionDef[] = [
     { id: "overview",   label: "Overview" },
     { id: "funnel",     label: "Did it work?" },
-    { id: "sources",    label: "Where visits start" },
     { id: "returning",  label: "Returning" },
+    // "entry" was rendered and not listed, while "Where visits start" pointed
+    // at #sources — a different section with a different title. Each label now
+    // names the section it scrolls to, in the order they appear.
+    { id: "entry",      label: "Where visits start" },
+    { id: "sources",    label: "Routes to a story" },
     { id: "searches",   label: "Searches" },
     { id: "empty",      label: "Found nothing" },
     { id: "pages",      label: "Pages" },
@@ -808,108 +815,6 @@ export default function TrafficPanel(
         </details>
       )}
 
-      {entry && entry.entries.length > 0 && (
-        <Section id="entry" title="Where visits start" onActive={onActive}
-          note="Hub pages are the front door — most of what search engines send lands on one — and the share of those visitors who go on to run a search is the number this panel exists to move.">
-          <table className="traffic-table entry-table">
-              <thead>
-                <tr>
-                  <th>Landed on</th>
-                  <th className="num">Sessions</th>
-                  <th className="num">Referred</th>
-                  <th className="num">Searched</th>
-                  <th className="num">Went to archive</th>
-                  <th className="num">Left at once</th>
-                  <th className="num">Pages</th>
-                </tr>
-              </thead>
-              <tbody>
-                {entry.entries.map(e => (
-                  <tr key={e.entry}>
-                    <td>{e.entry}</td>
-                    {/* The bar sits behind the sessions figure, scaled to the
-                        busiest row — so the volume of each door is a shape
-                        rather than four digits to compare in your head, while
-                        the digits themselves are still right there. */}
-                    <td className="num num--barred">
-                      <ShareBar value={e.sessions} max={Math.max(...entry.entries.map(x => x.sessions))} />
-                      <span className="num__v">{e.sessions.toLocaleString()}</span>
-                    </td>
-                    <td className="num">{e.referred.toLocaleString()}</td>
-                    {/* The percentage leads and the count follows it, because
-                        the rate is the comparable thing across rows of very
-                        different size — and the count is what stops a 100%
-                        built out of one session reading as a triumph. */}
-                    <td className="num">
-                      <b>{e.searched_pct}%</b>{" "}
-                      <span className="entry-table__n">{e.searched}</span>
-                    </td>
-                    <td className="num">
-                      <b>{e.went_out_pct}%</b>{" "}
-                      <span className="entry-table__n">{e.went_out}</span>
-                    </td>
-                    <td className="num">{e.bounced_pct}%</td>
-                    <td className="num">{e.avg_pages}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          {entry.hubs.length > 0 && (
-            <details className="entry-hubs">
-              <summary className="scraper-detail__summary">
-                Which hub pages brought people in
-                <span className="scraper-detail__count">
-                  top {entry.hubs.length} by sessions
-                </span>
-              </summary>
-              <table className="traffic-table">
-                  <thead>
-                    <tr><th>Hub</th><th className="num">Sessions</th>
-                        <th className="num">Searched</th>
-                        <th className="num">Went to archive</th></tr>
-                  </thead>
-                  <tbody>
-                    {entry.hubs.map(h => (
-                      <tr key={h.path}>
-                        <td><a href={h.path} target="_blank" rel="noopener noreferrer">{h.label}</a></td>
-                        <td className="num">{h.sessions}</td>
-                        <td className="num">{h.searched}</td>
-                        <td className="num">{h.went_out}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-            </details>
-          )}
-        </Section>
-      )}
-
-      {/* DID ANYBODY COME BACK — the stage that decides whether any of the
-          rest compounds, and the one this site had decided it could never
-          measure. The visitor hash is salted with the date so nothing links
-          across a midnight; the browser compares its own last-seen date and
-          sends one of three words. Nothing here identifies a returning reader,
-          it only counts them. */}
-      {entry && Object.keys(entry.returning ?? {}).length > 0 && (
-        <Section id="returning" title="Did they come back" onActive={onActive}>
-          <div className="admin-tiles">
-            {["first", "week", "return", "unknown"]
-              .filter(k => entry.returning[k])
-              .map(k => (
-                <Tile key={k} label={SEEN_LABEL[k] ?? k}
-                      value={entry.returning[k]} />
-              ))}
-          </div>
-          <p className="admin-note">
-            Counted from {longDate(entry.returning_since)}, when browsers
-            started answering. Before that every visit reads as “did not say”,
-            which is missing data rather than a first visit. A browser that
-            blocks site data, or sends Do Not Track, never reports as
-            returning — so this understates rather than flatters.
-          </p>
-        </Section>
-      )}
-
       {/* ═══ OVERVIEW ═══
           The four numbers, the shape behind them, and the shape behind the
           window before. In that order, because the numbers are the answer and
@@ -975,6 +880,7 @@ export default function TrafficPanel(
       )}
       </Section>
 
+      <div className="cc-cols traffic-pair">
       {/* THE ONLY QUESTION WORTH ASKING OF A SEARCH ENGINE: did anybody use
           the thing this index was built to offer?
 
@@ -1099,6 +1005,108 @@ export default function TrafficPanel(
           </>
         )
       })()}
+      {/* DID ANYBODY COME BACK — the stage that decides whether any of the
+          rest compounds, and the one this site had decided it could never
+          measure. The visitor hash is salted with the date so nothing links
+          across a midnight; the browser compares its own last-seen date and
+          sends one of three words. Nothing here identifies a returning reader,
+          it only counts them. */}
+      {entry && Object.keys(entry.returning ?? {}).length > 0 && (
+        <Section id="returning" title="Did they come back" onActive={onActive}>
+          <div className="admin-tiles">
+            {["first", "week", "return", "unknown"]
+              .filter(k => entry.returning[k])
+              .map(k => (
+                <Tile key={k} label={SEEN_LABEL[k] ?? k}
+                      value={entry.returning[k]} />
+              ))}
+          </div>
+          <p className="admin-note">
+            Counted from {longDate(entry.returning_since)}, when browsers
+            started answering. Before that every visit reads as “did not say”,
+            which is missing data rather than a first visit. A browser that
+            blocks site data, or sends Do Not Track, never reports as
+            returning — so this understates rather than flatters.
+          </p>
+        </Section>
+      )}
+      </div>
+
+      {entry && entry.entries.length > 0 && (
+        <Section id="entry" title="Where visits start" onActive={onActive}
+          note="Hub pages are the front door — most of what search engines send lands on one — and the share of those visitors who go on to run a search is the number this panel exists to move.">
+          <table className="traffic-table entry-table">
+              <thead>
+                <tr>
+                  <th>Landed on</th>
+                  <th className="num">Sessions</th>
+                  <th className="num">Referred</th>
+                  <th className="num">Searched</th>
+                  <th className="num">Went to archive</th>
+                  <th className="num">Left at once</th>
+                  <th className="num">Pages</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entry.entries.map(e => (
+                  <tr key={e.entry}>
+                    <td>{e.entry}</td>
+                    {/* The bar sits behind the sessions figure, scaled to the
+                        busiest row — so the volume of each door is a shape
+                        rather than four digits to compare in your head, while
+                        the digits themselves are still right there. */}
+                    <td className="num num--barred">
+                      <ShareBar value={e.sessions} max={Math.max(...entry.entries.map(x => x.sessions))} />
+                      <span className="num__v">{e.sessions.toLocaleString()}</span>
+                    </td>
+                    <td className="num">{e.referred.toLocaleString()}</td>
+                    {/* The percentage leads and the count follows it, because
+                        the rate is the comparable thing across rows of very
+                        different size — and the count is what stops a 100%
+                        built out of one session reading as a triumph. */}
+                    <td className="num">
+                      <b>{e.searched_pct}%</b>{" "}
+                      <span className="entry-table__n">{e.searched}</span>
+                    </td>
+                    <td className="num">
+                      <b>{e.went_out_pct}%</b>{" "}
+                      <span className="entry-table__n">{e.went_out}</span>
+                    </td>
+                    <td className="num">{e.bounced_pct}%</td>
+                    <td className="num">{e.avg_pages}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          {entry.hubs.length > 0 && (
+            <details className="entry-hubs">
+              <summary className="scraper-detail__summary">
+                Which hub pages brought people in
+                <span className="scraper-detail__count">
+                  top {entry.hubs.length} by sessions
+                </span>
+              </summary>
+              <table className="traffic-table">
+                  <thead>
+                    <tr><th>Hub</th><th className="num">Sessions</th>
+                        <th className="num">Searched</th>
+                        <th className="num">Went to archive</th></tr>
+                  </thead>
+                  <tbody>
+                    {entry.hubs.map(h => (
+                      <tr key={h.path}>
+                        <td><a href={h.path} target="_blank" rel="noopener noreferrer">{h.label}</a></td>
+                        <td className="num">{h.sessions}</td>
+                        <td className="num">{h.searched}</td>
+                        <td className="num">{h.went_out}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+            </details>
+          )}
+        </Section>
+      )}
 
       {/* Which front door is working.
           The site has two and they serve different people: the search box is
@@ -1180,6 +1188,7 @@ export default function TrafficPanel(
         </Section>
       )}
 
+      <div className="cc-cols traffic-pair">
       {searches?.top?.length ? (
         <Section id="searches" title="Searches people ran" onActive={onActive}
           note={`"Searches" means BOTH kinds. Until 2026-09-07 this counted only searches carrying typed text, so any figure from before that date is TYPED searches only.`}>
@@ -1254,7 +1263,6 @@ export default function TrafficPanel(
           <p className="admin-note">No searches recorded in this window.</p>
         </Section>
       )}
-
       {!!searches?.empty?.length && (
         <Section id="empty" title="Searches that found nothing" onActive={onActive}
           note="The most direct answer there is to “what should be crawled next”: each of these is a reader who left with nothing, and it names the gap exactly. The date says whether it is still being asked.">
@@ -1322,7 +1330,9 @@ export default function TrafficPanel(
           </table>
         </Section>
       )}
+      </div>
 
+      <div className="cc-cols traffic-pair">
       {pages?.length ? (
         <Section id="pages" title="Most-viewed pages" onActive={onActive}>
         <TableTools table={tPages} rows={tPages.view}
@@ -1369,7 +1379,6 @@ export default function TrafficPanel(
           <p className="admin-note">No pageviews recorded in this window.</p>
         </Section>
       )}
-
       {refs?.length ? (
         <Section id="referrers" title="Where readers came from" onActive={onActive}>
         <TableTools table={tRefs} rows={tRefs.view}
@@ -1419,6 +1428,7 @@ export default function TrafficPanel(
           </p>
         </Section>
       )}
+      </div>
 
       {/* The half of the traffic this page otherwise cannot see.
 
