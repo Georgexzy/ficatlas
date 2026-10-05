@@ -304,6 +304,15 @@ _JOB_EVIDENCE = [
     # with nothing new for anyone who opted in is healthy and sends nothing,
     # so "last sent" would cry wolf. A pass that cannot reach the database or
     # has died stops this moving.
+    # Pass stamp, for the same reason as the mail row below: a pass with
+    # nothing due is healthy and refreshes nothing.
+    ("follow_refresh", "Followed works refresh",
+     "Re-reads followed AO3 works every few hours and points the FF.net "
+     "harvester at the fandoms holding followed works, so the Following tab "
+     "and update emails do not wait for the general crawl. See "
+     "follow_refresh.py.", 2,
+     "SELECT to_timestamp(NULLIF(value,'')::bigint) FROM app_settings "
+     " WHERE key = 'follow_refresh_ran_at'"),
     ("follow_email", "Follow update emails",
      "Mails readers who opted in when a work they follow gains chapters — one "
      "digest, hourly or daily by their choice. Needs SMTP on the worker; see "

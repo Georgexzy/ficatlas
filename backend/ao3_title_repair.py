@@ -445,11 +445,20 @@ def apply_work(story: Story, data: dict) -> list[str]:
         story.updated_at = upd
         changed.append("updated_at")
 
-    if data.get("word_count") and not (story.word_count or 0):
+    # The length is gap-filled, EXCEPT when the work has visibly grown: a new
+    # chapter brings new words, and keeping the dump's figure beside a fresh
+    # chapter count leaves a 40-chapter work described at its 12-chapter
+    # length. Both refresh loops re-read WIPs precisely to catch that, and
+    # were catching the chapter while dropping the words.
+    grew = bool(data.get("chapter_count")
+                and (story.chapter_count or 0) < data["chapter_count"])
+    if data.get("word_count") and (
+            not (story.word_count or 0)
+            or (grew and data["word_count"] > story.word_count)):
         story.word_count = data["word_count"]
         changed.append("word_count")
 
-    if data.get("chapter_count") and (story.chapter_count or 0) < data["chapter_count"]:
+    if grew:
         story.chapter_count = data["chapter_count"]
         changed.append("chapter_count")
 

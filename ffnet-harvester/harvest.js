@@ -213,23 +213,31 @@ async function loadListing(browser, url) {
   }
 }
 
-async function harvestSection(browser, db, section) {
+// A FRESH visit reads a section's newest updates (srt=1, update date) from
+// page 1 and leaves the walking cursor alone. It is how a followed work's new
+// chapter is seen within a pass instead of when the rotation next comes round:
+// the backend publishes the sections holding followed works to
+// `ffnet_followed_sections` (backend/follow_refresh.py).
+const FRESH_PAGES = Number(process.env.FFNET_FRESH_PAGES || 2)
+
+async function harvestSection(browser, db, section, fresh = false) {
   const key = "ffnet_listing_page:" + section
-  let start = await cursorGet(db, key)
+  let start = fresh ? 1 : await cursorGet(db, key)
   if (start > MAX_PAGE) start = 1          // walked to the end; go round again
   let updated = 0, seen = 0, pagesOk = 0, staged = 0
 
-  for (let i = 0; i < PAGES_PER_VISIT; i++) {
+  for (let i = 0; i < (fresh ? FRESH_PAGES : PAGES_PER_VISIT); i++) {
     const p = start + i
     // r=10 includes every rating, so nothing is silently skipped by the
     // site's default filter.
-    const url = `https://www.fanfiction.net${section}?&srt=${SORT}&r=10&p=${p}`
+    const url = `https://www.fanfiction.net${section}?&srt=${fresh ? 1 : SORT}&r=10&p=${p}`
     const res = await loadListing(browser, url)
     if (res.status !== 200 || !res.rows) {
       // Cursor is not advanced past this page, so the next pass retries it.
       console.log(`  ${section} p${p}: ${res.error || "HTTP " + res.status} — cursor held`)
       break
     }
+    if (!res.rows.length && fresh) break
     if (!res.rows.length) {
       // Past the end of the section. The cursor used to stay HERE, so every
       // later visit asked for the same empty page and the section never
@@ -273,8 +281,8 @@ async function harvestSection(browser, db, section) {
   }
   // Advance only over pages that actually answered, so a failure mid-visit is
   // retried next time instead of being skipped silently.
-  await cursorSet(db, key, start + Math.max(pagesOk, 0))
-  console.log(`listing[ffnet] ${section} pages ${start}-${start + pagesOk - 1}: `
+  if (!fresh) await cursorSet(db, key, start + Math.max(pagesOk, 0))
+  console.log(`listing[ffnet]${fresh ? " fresh" : ""} ${section} pages ${start}-${start + pagesOk - 1}: `
             + `${seen} works, ${updated} updated, ${staged} staged`)
   // pagesOk is what the caller needs to tell "the site answered and there was
   // nothing new" from "the site refused us" — 0 works updated means both.
@@ -397,6 +405,17 @@ async function main() {
     const take = Array.from({ length: Math.min(SECTIONS_PER_PASS, all.length) },
                             (_, i) => all[(rot + i) % all.length])
     await cursorSet(db, "ffnet_section_rot", ((rot + take.length) % all.length) + 1)
+    // Followed works' sections first, newest updates only.
+    let followed = []
+    try {
+      const q = await db.query(
+        "SELECT value FROM app_settings WHERE key='ffnet_followed_sections'")
+      followed = q.rows.length ? JSON.parse(q.rows[0].value) : []
+    } catch { followed = [] }
+    for (const s of followed) {
+      const r = await harvestSection(browser, db, s, true)
+      seen += r.seen; updated += r.updated; pages += r.pagesOk
+    }
     for (const s of take) {
       const r = await harvestSection(browser, db, s)
       seen += r.seen; updated += r.updated; pages += r.pagesOk

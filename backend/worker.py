@@ -2235,6 +2235,40 @@ async def _admin_jobs_loop() -> None:
         await asyncio.sleep(admin_jobs.POLL_S)
 
 
+async def _follow_refresh_loop() -> None:
+    """Keep followed works current. See follow_refresh.py.
+
+    Every 20 minutes: re-read followed AO3 works not checked for three hours,
+    and republish which FF.net sections hold followed works so the harvester
+    reads their newest updates first.
+    """
+    import follow_refresh
+    from db.session import db_session
+
+    interval = _num("FOLLOW_REFRESH_SEC", 1200)
+    follow_refresh.FOLLOW_REFRESH_HOURS = _num("FOLLOW_REFRESH_HOURS", 3)
+    await asyncio.sleep(_num("FOLLOW_REFRESH_DELAY_SEC", 120))
+    while True:
+        try:
+            def _plan():
+                with db_session() as db:
+                    return (follow_refresh.due_ao3(db, follow_refresh.FOLLOW_REFRESH_HOURS),
+                            follow_refresh.publish_ffnet(db))
+            rows, sections = await asyncio.to_thread(_plan)
+            stats = {"due": len(rows), "ffnet_sections": sections}
+            if rows:
+                stats.update(await asyncio.to_thread(follow_refresh.refresh_ao3, rows))
+                log.info(f"follow refresh: {stats}")
+
+            def _rec():
+                with db_session() as db:
+                    follow_refresh.record(db, stats)
+            await asyncio.to_thread(_rec)
+        except Exception as e:
+            log.warning(f"follow refresh failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _follow_email_loop() -> None:
     """Opt-in digest mail for followed works that gained chapters.
 
@@ -2491,6 +2525,10 @@ async def main() -> None:
 
     # The listing harvest's metadata lines. Runs whether or not the harvester
     # is up: with nothing staged it is one empty DELETE every 30 seconds.
+    if _flag("FOLLOW_REFRESH", "true"):
+        tasks.append(asyncio.create_task(_supervised("follow_refresh_loop", _follow_refresh_loop)))
+        log.info("followed works refreshed every few hours")
+
     if _flag("FOLLOW_EMAIL", "true"):
         tasks.append(asyncio.create_task(_supervised("follow_email_loop", _follow_email_loop)))
         log.info("follow update mail enabled (opt-in readers only)")
