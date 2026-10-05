@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react"
 import QueuePanel, { type Post } from "./QueuePanel"
 import OutreachPanel from "./OutreachPanel"
+import ChannelsPanel from "./ChannelsPanel"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 /**
@@ -59,9 +60,11 @@ export default function OutreachTab({
         )}
       </h1>
       <p className="admin-note">
-        Posts from the Lost Fic and Fic Search flairs, read through the same
+        Fic requests from Reddit, Bluesky and Tumblr, read through the same
         extractor as the box on the right. Nothing is posted anywhere — pick a
-        post, refine the search, copy the reply, and send it yourself.
+        post, refine the search, copy the reply, and send it yourself. Below
+        the worklist: the other channels worth working, and this week&rsquo;s
+        most-recommended works drafted as a post.
       </p>
 
       <div className="outreach-split">
@@ -79,6 +82,8 @@ export default function OutreachTab({
                          onAnswered={onAnswered} />
         </section>
       </div>
+
+      <ChannelsPanel />
     </>
   )
 }

@@ -198,6 +198,9 @@ def harvest(db, limit: int = 20, sleep=time.sleep) -> dict:
     rows = db.execute(sql_text("""
         SELECT id, subreddit, url FROM reddit_posts
          WHERE answers_checked_at IS NULL
+           -- Reddit threads only: this reads replies through the Reddit feed
+           -- shape, and Bluesky/Tumblr posts have no such thread to read.
+           AND COALESCE(source, 'reddit') = 'reddit'
          ORDER BY posted_at ASC NULLS LAST
          LIMIT :lim
     """), {"lim": limit}).fetchall()

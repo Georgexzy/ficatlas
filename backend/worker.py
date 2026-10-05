@@ -1433,6 +1433,26 @@ async def _reddit_queue_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _outreach_sources_loop() -> None:
+    """Fic requests from Bluesky and Tumblr into the outreach worklist.
+
+    See outreach_sources.py. Two-hourly: both sources are read one page per
+    query, and an ask is worth answering within the day, not the minute.
+    """
+    import outreach_sources
+
+    interval = _num("OUTREACH_SOURCES_INTERVAL_MIN", 120) * 60
+    await asyncio.sleep(_num("OUTREACH_SOURCES_DELAY_SEC", 600))
+    while True:
+        try:
+            stats = await asyncio.to_thread(outreach_sources.run)
+            if stats.get("new"):
+                log.info(f"outreach sources: {stats}")
+        except Exception as e:
+            log.warning(f"outreach sources failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _rec_threads_loop() -> None:
     """Keep mining what each fandom is recommending, fortnight after fortnight.
 
@@ -2494,6 +2514,7 @@ async def main() -> None:
     # empty worklist reads as a broken feature rather than as an unset flag.
     if _flag("RUN_REDDIT_QUEUE", "true"):
         tasks.append(asyncio.create_task(_supervised("reddit_queue_loop", _reddit_queue_loop)))
+        tasks.append(asyncio.create_task(_supervised("outreach_sources_loop", _outreach_sources_loop)))
         tasks.append(asyncio.create_task(_supervised("reddit_answers_loop", _reddit_answers_loop)))
         tasks.append(asyncio.create_task(_supervised("rec_threads_loop", _rec_threads_loop)))
         log.info("reddit fic-finder queue enabled (hourly, one feed at a time)")

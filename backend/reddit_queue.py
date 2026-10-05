@@ -181,6 +181,13 @@ CREATE TABLE IF NOT EXISTS reddit_posts (
 )
 """
 
+# Where the post lives. The worklist outgrew Reddit (outreach_sources.py adds
+# Bluesky and Tumblr), and the table keeps its name because a rename touches
+# every reader of it for no change in meaning. `subreddit` holds the
+# community within the source: a subreddit, a Tumblr tag, a Bluesky search.
+DDL_SOURCE = ("ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS "
+              "source text NOT NULL DEFAULT 'reddit'")
+
 _ENTRY = re.compile(r"<entry>(.*?)</entry>", re.S)
 _TAG = re.compile(r"<[^>]+>")
 
@@ -318,6 +325,7 @@ def run(dry_run: bool = False, limit_feeds: int | None = None,
     with db_session() as db:
         if not dry_run:
             db.execute(text(DDL))
+            db.execute(text(DDL_SOURCE))
             db.commit()
         known = set()
         if not dry_run:

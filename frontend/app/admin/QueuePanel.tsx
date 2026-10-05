@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
+import { SOURCE_LABEL, sourceOf, where, type Source } from "@/lib/outreachSources"
 
 /**
  * The fic-finder posts waiting for an answer — the left half of Outreach.
@@ -26,6 +27,9 @@ export interface Post {
   works?: number | null
   link_unsafe: boolean
   state: string
+  flair?: string | null
+  /** reddit | bluesky | tumblr — see backend/outreach_sources.py. */
+  source?: string | null
 }
 
 const AGO = (iso?: string | null) => {
@@ -51,6 +55,8 @@ export default function QueuePanel(
   const [state, setState] = useState<"new" | "answered" | "skipped">("new")
   const [order, setOrder] = useState<"answerable" | "newest">("answerable")
   const [sub, setSub] = useState("")
+  const [src, setSrc] = useState("")
+  const [srcs, setSrcs] = useState<{ source: string; waiting: number }[]>([])
   const [search, setSearch] = useState("")
   const [subs, setSubs] = useState<{ subreddit: string; waiting: number }[]>([])
   // How many are in each state, so the tabs carry a number — a worklist whose
@@ -62,7 +68,7 @@ export default function QueuePanel(
   const load = useCallback(async () => {
     setError(null)
     try {
-      const qs = new URLSearchParams({ state, order, subreddit: sub, search })
+      const qs = new URLSearchParams({ state, order, subreddit: src === "reddit" ? sub : "", source: src, search })
       const r = await fetchWithTimeout(`/api/queue?${qs}`,
         { credentials: "include" }, USER_TIMEOUT_MS)
       if (!r.ok) throw new Error(`Could not load the queue (${r.status}).`)
@@ -71,7 +77,7 @@ export default function QueuePanel(
       onList?.(data)
       if (state === "new") onCount?.(data.length)
     } catch (e: any) { setError(e.message) }
-  }, [state, order, sub, search, onCount])
+  }, [state, order, sub, src, search, onCount])
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
@@ -81,7 +87,7 @@ export default function QueuePanel(
     // exactly the kind `lib/net.ts` was written about.
     fetchWithTimeout("/api/queue/counts", { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) { setSubs(d.subreddits ?? []); setStates(d.states ?? {}) } })
+      .then(d => { if (d) { setSubs(d.subreddits ?? []); setSrcs(d.sources ?? []); setStates(d.states ?? {}) } })
       .catch(() => {})
   }, [posts])
 
@@ -140,14 +146,25 @@ export default function QueuePanel(
         <input className="queue__search" type="search" value={search}
           placeholder="Filter by words in the post"
           onChange={e => setSearch(e.target.value)} />
-        <select value={sub} onChange={e => setSub(e.target.value)}>
-          <option value="">All subreddits</option>
-          {subs.map(s => (
-            <option key={s.subreddit} value={s.subreddit}>
-              r/{s.subreddit} ({s.waiting})
+        <select value={src} onChange={e => { setSrc(e.target.value); setSub("") }}
+          aria-label="Where the post is">
+          <option value="">Everywhere</option>
+          {srcs.map(x => (
+            <option key={x.source} value={x.source}>
+              {SOURCE_LABEL[x.source as Source] ?? x.source} ({x.waiting})
             </option>
           ))}
         </select>
+        {src === "reddit" && (
+          <select value={sub} onChange={e => setSub(e.target.value)} aria-label="Subreddit">
+            <option value="">All subreddits</option>
+            {subs.filter(s => !["bluesky", "tumblr"].includes(s.subreddit)).map(s => (
+              <option key={s.subreddit} value={s.subreddit}>
+                r/{s.subreddit} ({s.waiting})
+              </option>
+            ))}
+          </select>
+        )}
         <select value={order} onChange={e => setOrder(e.target.value as any)}>
           <option value="answerable">Most answerable</option>
           <option value="newest">Newest first</option>
@@ -158,9 +175,9 @@ export default function QueuePanel(
       {!posts && !error && <p className="loading">Reading the queue…</p>}
       {posts && posts.length === 0 && (
         <p className="queue__note">
-          Nothing here. The fetcher runs hourly and is deliberately slow —
-          Reddit rate-limits an unauthenticated feed after one request, so a run
-          covers one subreddit at a time.
+          Nothing here. Reddit is read hourly and Bluesky and Tumblr every two
+          hours; all three are read slowly on purpose, as a guest on someone
+          else's service.
         </p>
       )}
 
@@ -180,7 +197,8 @@ export default function QueuePanel(
                 </span>
               </span>
               <span className="queue-item__meta">
-                r/{p.subreddit} · {AGO(p.posted_at)}
+                <span className={`queue-item__src queue-item__src--${sourceOf(p)}`}>{where(p)}</span>
+                {" · "}{AGO(p.posted_at)}
                 {/* TITLE ONLY, said rather than left to be discovered.
                     About a tenth of posts arrive with no body — the request is
                     entirely in the title, or it is a crosspost whose body is a
@@ -198,7 +216,7 @@ export default function QueuePanel(
               </span>
             </button>
             <div className="queue-item__acts">
-              <a href={p.url} target="_blank" rel="noopener noreferrer">Open on Reddit</a>
+              <a href={p.url} target="_blank" rel="noopener noreferrer">Open on {SOURCE_LABEL[sourceOf(p)]}</a>
               {state === "new" && (
                 <>
                   <button onClick={() => mark(p.id, "answered")}>Answered</button>

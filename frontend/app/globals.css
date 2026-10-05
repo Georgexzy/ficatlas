@@ -3098,11 +3098,23 @@ body:has(.reader-shell[data-theme="default"]) {
 .similar-card__author { color: var(--text-dim); font-size: 12px; }
 .similar-card__meta { color: var(--text-faint); font-size: 12px; margin-top: 2px; }
 
-/* ── Cross-post badge ────────────────────────────────────────────────────── */
-.badge--crosspost {
-  background: var(--surface3); color: var(--text-dim);
-  border: 1px solid var(--border2); cursor: help;
+/* ── Other copies of a work ──────────────────────────────────────────────── */
+/* The primary archive is a filled badge; each other copy is the same colour
+   OUTLINED, with a leading "+", so "listed under AO3, also on FF.net" reads at
+   a glance without a legend. They are links, so they say so on hover and focus,
+   and min-width: 0 lets a long mirror host shrink instead of pushing the row
+   past a phone's edge (see the .badge note in CLAUDE.md). */
+.badge--also {
+  display: inline-flex; align-items: center; gap: 3px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis;
+  background: transparent; color: var(--text-dim);
+  border: 1px dashed var(--border2); text-decoration: none;
 }
+.badge--also.badge--site-ao3   { background: transparent; border-style: dashed; }
+.badge--also.badge--site-ffnet { background: transparent; border-style: dashed; }
+.badge--also.badge--site-fictionalley { background: transparent; border-style: dashed; }
+.badge--also:hover, .badge--also:focus-visible { text-decoration: underline; border-style: solid; }
+.badge--also .site-icon { margin-right: 1px; }
 
 /* ── No-results active fetch ─────────────────────────────────────────────── */
 .no-results__fetch { margin: 16px auto 8px; display: inline-flex; }
@@ -7441,3 +7453,29 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   /* "Page 1 of 250" is said again by the page controls under the results. */
   .results-bar__page { display: none; }
 }
+
+/* ── Outreach: channels playbook and digest (ChannelsPanel) ─────────────── */
+.channels { margin-top: 40px; border-top: 1px solid var(--border); padding-top: 24px; }
+.channels .admin-section__title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  font-family: var(--font-serif); font-size: 20px; margin: 0 0 12px; }
+.channels__progress { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.channels__list { list-style: none; padding: 0; margin: 0;
+  display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.channel { border: 1px solid var(--border2); border-radius: 8px; padding: 12px 14px;
+  background: var(--surface); min-width: 0; }
+.channel--done, .channel--skip { opacity: 0.6; }
+.channel--doing { border-color: var(--accent-dim); }
+.channel__head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.channel__name { font-weight: 600; color: var(--text); text-decoration: none; }
+.channel__name:hover { color: var(--accent); }
+.channel__head select { font: inherit; font-size: 12px; padding: 2px 6px; border-radius: 6px; }
+.channel__why { margin: 8px 0 6px; font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+.channel details { font-size: 13px; color: var(--text-dim); }
+.channel summary { cursor: pointer; color: var(--text-faint); font-size: 12px; }
+.channels__sub { display: flex; gap: 10px; align-items: center; margin: 28px 0 4px;
+  font-size: 15px; }
+.channels__sub select { font: inherit; font-size: 13px; padding: 2px 6px; border-radius: 6px; }
+.channels__works { margin: 8px 0 12px; padding-left: 22px; line-height: 1.7; }
+.channels__fandom, .channels__people { color: var(--text-faint); font-size: 13px; }
+.queue-item__src--bluesky { color: #6fa8e8; }
+.queue-item__src--tumblr  { color: #8fa3bf; }

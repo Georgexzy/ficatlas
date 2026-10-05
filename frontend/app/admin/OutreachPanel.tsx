@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react"
 import { SITE_LABELS, formatNumber } from "@/lib/api"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
+import { fitReply, sourceOf, SOURCE_LABEL, REPLY_LIMIT } from "@/lib/outreachSources"
 
 /**
  * Turning a fic-finder post into a search, and a search into a reply.
@@ -197,6 +198,8 @@ export interface HandedOver {
   title: string
   body?: string | null
   url: string
+  /** reddit | bluesky | tumblr — decides the reply's shape. */
+  source?: string | null
 }
 
 export default function OutreachPanel(
@@ -288,9 +291,19 @@ export default function OutreachPanel(
   // link safer, only the operator better informed.
   const unsafeQuery = asksForUnsafe(q) || !!ext?.link_unsafe
                       || (ext?.gated_terms?.length ?? 0) > 0
-  const reply = (!foundSomething || unsafeQuery) ? null : found.trim()
-    ? `I think this is ${found.trim()}.\n\nFound it here if you want to check: ${publicLink(q, ext?.sort)}\n(searches AO3, FanFiction.net and FictionAlley together)`
-    : `Try this: ${publicLink(q, ext?.sort)}\n\nIt searches AO3, FanFiction.net and FictionAlley at once — worth a look if it might not be on AO3.`
+  // The platform decides the SHAPE. Reddit and Tumblr take the full reply;
+  // Bluesky caps a post at 300 characters, so it gets one line and the link,
+  // and fitReply cuts the line rather than the link if even that is over.
+  const platform = sourceOf(post ?? {})
+  const link = publicLink(q, ext?.sort)
+  const fullReply = found.trim()
+    ? `I think this is ${found.trim()}.\n\nFound it here if you want to check: ${link}\n(searches AO3, FanFiction.net and FictionAlley together)`
+    : `Try this: ${link}\n\nIt searches AO3, FanFiction.net and FictionAlley at once — worth a look if it might not be on AO3.`
+  const shortReply = found.trim()
+    ? `I think it's ${found.trim()} — found via a search across AO3, FF.net & FictionAlley:`
+    : `This search across AO3, FF.net & FictionAlley might have it:`
+  const reply = (!foundSomething || unsafeQuery) ? null
+    : fitReply(platform, fullReply, shortReply, link)
 
   const copy = async (text: string | null, what: string) => {
     if (!text) return
@@ -617,6 +630,11 @@ export default function OutreachPanel(
       {reply ? (
         <>
           <pre className="outreach__reply">{reply}</pre>
+          {REPLY_LIMIT[platform] != null && (
+            <p className="outreach__hint">
+              Fitted for {SOURCE_LABEL[platform]}: {[...reply].length} of {REPLY_LIMIT[platform]} characters.
+            </p>
+          )}
           <div className="outreach__row">
             <button className="btn btn--primary" onClick={() => copy(reply, "reply")}>
               Copy reply
@@ -665,6 +683,10 @@ export default function OutreachPanel(
           <li><strong>Not every thread.</strong> A new account answering twenty posts with one domain reads as spam whatever the intent.</li>
           <li><strong>Say yes if asked whether you built it.</strong> Most subs are fine with a useful maker; none forgive one who pretended not to be.</li>
           <li><strong>Read each sub&rsquo;s self-promotion rule first.</strong> r/FanFiction and r/AO3 differ and both change.</li>
+          {/* Per platform, because the norms differ more than the words do. */}
+          <li><strong>Tumblr:</strong> most asks went to a fic-library blog and that blog answers them. Reply to the ASKER (reply or reblog with the answer), never in a way that reads as correcting the blog, and never tag a post you are not answering.</li>
+          <li><strong>Bluesky:</strong> reply in-thread, never quote-post a stranger&rsquo;s ask, and leave a public &ldquo;looking for fic&rdquo; post alone once someone else has answered it.</li>
+          <li><strong>Everywhere:</strong> a reply from the same account linking the same domain several times a day is what every platform&rsquo;s spam detection looks for. A few good answers a day beats twenty.</li>
         </ul>
       </details>
     </div>

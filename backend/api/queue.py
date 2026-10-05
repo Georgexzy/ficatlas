@@ -47,6 +47,8 @@ class QueuedPost(BaseModel):
     # Which feed it came from. See the ordering below: this is the difference
     # between a post this index can answer and one it cannot.
     flair: str | None = None
+    # reddit | bluesky | tumblr. See outreach_sources.py.
+    source: str = "reddit"
 
 
 # One fetch at a time, and a floor between them. The feed is unauthenticated
@@ -84,6 +86,12 @@ def refresh(background: BackgroundTasks, _admin=Depends(require_admin)):
             reddit_queue.run()
         except Exception:
             log.warning("manual reddit fetch failed", exc_info=True)
+        try:
+            # Bluesky and Tumblr: separate services, separate failures.
+            import outreach_sources
+            outreach_sources.run()
+        except Exception:
+            log.warning("manual outreach-sources fetch failed", exc_info=True)
         finally:
             _refreshing = False
 
@@ -105,15 +113,19 @@ def counts(db: Session = Depends(get_db), _admin=Depends(require_admin)):
         subs = [{"subreddit": r[0], "waiting": r[1]} for r in db.execute(text(
             "SELECT subreddit, count(*) FROM reddit_posts WHERE state='new' "
             "GROUP BY 1 ORDER BY 2 DESC")).fetchall()]
+        sources = [{"source": r[0], "waiting": r[1]} for r in db.execute(text(
+            "SELECT COALESCE(source,'reddit'), count(*) FROM reddit_posts "
+            "WHERE state='new' GROUP BY 1 ORDER BY 2 DESC")).fetchall()]
     except Exception:
         log.debug("reddit_posts unavailable", exc_info=True)
-        return {"states": {}, "subreddits": []}
-    return {"states": by_state, "subreddits": subs}
+        return {"states": {}, "subreddits": [], "sources": []}
+    return {"states": by_state, "subreddits": subs, "sources": sources}
 
 
 @router.get("", response_model=list[QueuedPost])
 def list_queue(state: str = Query("new"),
                subreddit: str = Query(""),
+               source: str = Query(""),
                flair: str = Query(""),
                order: str = Query("answerable"),
                search: str = Query(""),
@@ -169,16 +181,18 @@ def list_queue(state: str = Query("new"),
     try:
         rows = db.execute(text(f"""
             SELECT id, subreddit, title, body, url, posted_at,
-                   query, works, link_unsafe, state, flair
+                   query, works, link_unsafe, state, flair,
+                   COALESCE(source, 'reddit')
               FROM reddit_posts
              WHERE state = :s
                AND (:sub = '' OR subreddit = :sub)
+               AND (:src = '' OR COALESCE(source, 'reddit') = :src)
                AND (:flair = '' OR COALESCE(flair,'') ILIKE '%' || :flair || '%')
                AND (:q = '' OR title ILIKE '%%' || :q || '%%'
                             OR body  ILIKE '%%' || :q || '%%')
              ORDER BY {order_sql}
              LIMIT :lim
-        """), {"s": state, "sub": subreddit, "q": search.strip(),
+        """), {"s": state, "sub": subreddit, "src": source, "q": search.strip(),
                "flair": flair.strip(), "lim": limit}).fetchall()
     except Exception:
         # The table is built offline and does not exist until the first run.
@@ -189,7 +203,7 @@ def list_queue(state: str = Query("new"),
         id=r[0], subreddit=r[1], title=r[2], body=r[3], url=r[4],
         posted_at=r[5].isoformat() if r[5] else None,
         query=r[6], works=r[7], link_unsafe=bool(r[8]), state=r[9],
-        flair=r[10])
+        flair=r[10], source=r[11])
         for r in rows]
 
 

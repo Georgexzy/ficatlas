@@ -251,6 +251,9 @@ app.include_router(follows.router, prefix="/api/follows", tags=["follows"])
 # See api/traffic.py for why the reports sit at owner rather than admin.
 app.include_router(traffic.router, prefix="/api/traffic", tags=["traffic"])
 app.include_router(queue.router, prefix="/api/queue", tags=["queue"])
+# Channels playbook and weekly digest beside the worklist. See api/outreach.py.
+from api import outreach  # noqa: E402
+app.include_router(outreach.router, prefix="/api/outreach", tags=["outreach"])
 
 # ── Degrade honestly when the database is saturated ─────────────────────────
 #
