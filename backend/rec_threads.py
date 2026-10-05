@@ -53,6 +53,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, "/app")
@@ -79,14 +80,57 @@ log = logging.getLogger("rec_threads")
 # filed under comes from the WORK's own fandoms in the index, never from the
 # subreddit it was mentioned in -- a crossover recommended on r/HPFanfiction
 # belongs to both its fandoms, and the subreddit cannot say which.
+#
+# `kind` says what the replies ARE:
+#   thread   a recurring "what are you reading" post: every link is a rec.
+#   request  someone asks for fics and the replies answer with links. The
+#            REQUESTER's own links are not recommendations -- they are what
+#            they have already read, or the fic they want more like -- so a
+#            request thread counts replies by other people only.
+#   recs     a post whose author is recommending: every link counts.
+#
+# Flair queries, not free text, wherever a community flairs its posts.
+# reddit_archive answers flair from Arctic Shift, which is minutes fresh;
+# free text can only go to PullPush, which lags by MONTHS -- so a text query
+# here finds last spring's threads and none of this fortnight's. Every flair
+# below was read off the community's own recent posts (2026-10-05), and the
+# ones that are about IDENTIFYING a fic ("Find That Fic", "Lost Fic") are left
+# out on purpose: an answer there is "this is the one you mean", not "read it".
 COMMUNITIES: list[dict] = [
-    {"sub": "HPFanfiction", "fandom": "Harry Potter",
+    {"sub": "HPFanfiction", "fandom": "Harry Potter", "kind": "thread",
      "query": '"what are you reading"'},
-    {"sub": "FanFiction", "fandom": None,
+    {"sub": "HPFanfiction", "fandom": "Harry Potter", "kind": "request",
+     "query": 'flair:"Request"'},
+    {"sub": "HPFanfiction", "fandom": "Harry Potter", "kind": "recs",
      "query": 'flair:"Recommendation"'},
-    {"sub": "AO3", "fandom": None,
+    {"sub": "FanFiction", "fandom": None, "kind": "recs",
+     "query": 'flair:"Recommendation"'},
+    {"sub": "FanFiction", "fandom": None, "kind": "request",
+     "query": 'flair:"Recs Wanted"'},
+    {"sub": "AO3", "fandom": None, "kind": "thread",
      "query": '"what are you reading"'},
+    {"sub": "TheCitadel", "fandom": "A Song of Ice and Fire", "kind": "request",
+     "query": 'flair:"Wanted: Fanfic Recommendations - NOT DISCUSSION"'},
+    {"sub": "NarutoFanfiction", "fandom": "Naruto", "kind": "request",
+     "query": 'flair:"Fic Request"'},
+    {"sub": "MarvelFanfiction", "fandom": "Marvel", "kind": "request",
+     "query": 'flair:"Looking For Recs"'},
+    {"sub": "PercyJacksonFanfic", "fandom": "Percy Jackson", "kind": "recs",
+     "query": 'flair:"Recommendation🥇"'},
+    {"sub": "Dramione", "fandom": "Harry Potter", "kind": "request",
+     "query": 'flair:":recs: Recs Wanted!"'},
+    {"sub": "Drarry", "fandom": "Harry Potter", "kind": "request",
+     "query": 'flair:"Give me fic recommendations"'},
+    {"sub": "Drarry", "fandom": "Harry Potter", "kind": "recs",
+     "query": 'flair:"Fics I recommend"'},
+    {"sub": "WormFanfic", "fandom": "Worm", "kind": "request",
+     "query": 'flair:"Fic Search - General"'},
 ]
+
+# Replies to a request arrive over days, and a thread is read ONCE. Reading it
+# the hour it is posted records the question and almost none of the answers.
+READ_AFTER_DAYS = float(os.getenv("REC_READ_AFTER_DAYS", "3"))
+READ_PER_PASS = int(os.getenv("REC_READ_PER_PASS", "120"))
 
 SEARCH = ("https://www.reddit.com/r/{sub}/search.rss"
           "?q={q}&restrict_sr=1&sort=new&limit=25")
@@ -139,17 +183,30 @@ def find_threads(sub: str, query: str) -> list[dict]:
     return out
 
 
-def mentions_in(xml: str) -> list[dict]:
+def mentions_in(xml: str, skip_op: bool = False) -> list[dict]:
     """Every archive link in a thread, with who said it and when.
 
     AutoModerator is skipped: its template post contains the word "Link" and no
     links, but a community that puts example URLs in its template would
     otherwise have them counted as recommendations every fortnight.
+
+    `skip_op` drops everything the thread's own author wrote -- the post and
+    their replies -- for request threads, where those links are what the
+    requester has already read, not what anyone is recommending.
     """
+    entries = _ENTRY.findall(xml)
+    op = None
+    if skip_op:
+        for e in entries:
+            if (_field(e, "id") or "").strip().startswith("t3_"):
+                op = (_field(e, "name") or "").strip().lower()
+                break
     out = []
-    for e in _ENTRY.findall(xml):
+    for e in entries:
         who = (_field(e, "name") or "").strip()
         if who.lower() in ("/u/automoderator", "automoderator"):
+            continue
+        if op and who.lower() == op and op not in ("/u/[deleted]", ""):
             continue
         body = _field(e, "content") or ""
         body = html.unescape(html.unescape(body))
@@ -168,13 +225,63 @@ def mentions_in(xml: str) -> list[dict]:
     return out
 
 
+def _copy_urls(site: str, sid: str) -> list[str]:
+    """The spellings a copy's URL is stored under in `cross_post_urls`."""
+    if site == "ffnet":
+        return [f"{scheme}://{host}.fanfiction.net/s/{sid}{tail}"
+                for scheme in ("https", "http") for host in ("www", "m")
+                for tail in ("/1/", "/", "")]
+    return [f"{scheme}://archiveofourown.org/works/{sid}{tail}"
+            for scheme in ("https", "http") for tail in ("", "/")]
+
+
+def resolve(db, site: str, sid: str):
+    """The indexed work a link names, or None.
+
+    The row itself first. Failing that, the work it was MERGED into: the
+    cross-post dedup keeps one row per story and deletes the others, recording
+    their URLs on the survivor -- so a recommendation linking the FF.net copy
+    of a story we hold as its AO3 row found nothing, and the two copies' recs
+    could never be counted together.
+    """
+    row = db.execute(text("SELECT id FROM stories WHERE site=:s AND site_id=:i"),
+                     {"s": site, "i": sid}).first()
+    if row:
+        return row[0]
+    row = db.execute(text(
+        "SELECT id FROM stories WHERE cross_post_urls && CAST(:u AS text[]) LIMIT 1"),
+        {"u": _copy_urls(site, sid)}).first()
+    return row[0] if row else None
+
+
+def reresolve(db, limit: int = 2000) -> int:
+    """Attach mentions whose work was not indexed when they were read.
+
+    The FF.net listing harvest and the recent-works crawler add works every
+    day, so "not indexed" is a state that ends; nothing used to look again.
+    """
+    rows = db.execute(text("""
+        SELECT DISTINCT site, site_id FROM rec_mentions
+         WHERE story_id IS NULL AND site IS NOT NULL LIMIT :n
+    """), {"n": limit}).fetchall()
+    fixed = 0
+    for site, sid in rows:
+        story = resolve(db, site, sid)
+        if story:
+            fixed += db.execute(text("""
+                UPDATE rec_mentions SET story_id = :st
+                 WHERE story_id IS NULL AND site = :s AND site_id = :i
+            """), {"st": story, "s": site, "i": sid}).rowcount or 0
+    db.commit()
+    return fixed
+
+
 def _store(db, community: str, thread_id: str, ms: list[dict]) -> int:
     """Write mentions, resolving each link to an indexed work where possible."""
     written = 0
     for m in ms:
-        row = db.execute(
-            text("SELECT id FROM stories WHERE site=:s AND site_id=:i"),
-            {"s": m["site"], "i": m["site_id"]}).first()
+        found = resolve(db, m["site"], m["site_id"])
+        row = (found,) if found else None
         res = db.execute(text("""
             INSERT INTO rec_mentions
                 (source, community, thread_id, comment_id, recommender,
@@ -189,7 +296,8 @@ def _store(db, community: str, thread_id: str, ms: list[dict]) -> int:
     return written
 
 
-def run(dry_run: bool = False, discover_only: bool = False) -> dict:
+def run(dry_run: bool = False, discover_only: bool = False,
+        read_limit: int | None = None) -> dict:
     """One pass. Resumable: a refusal stops it where it stands.
 
     Every consumer of `reddit_fetch` is a resumable worklist, because the only
@@ -212,29 +320,36 @@ def run(dry_run: bool = False, discover_only: bool = False) -> dict:
                 continue
             for t in threads:
                 db.execute(text("""
-                    INSERT INTO rec_threads (id, community, title, posted_at)
-                    VALUES (:i, :c, :ti, :p) ON CONFLICT (id) DO NOTHING
+                    INSERT INTO rec_threads (id, community, title, posted_at, kind)
+                    VALUES (:i, :c, :ti, :p, :k) ON CONFLICT (id) DO NOTHING
                 """), {"i": t["id"], "c": c["sub"].lower(),
-                       "ti": t["title"], "p": t["posted_at"]})
+                       "ti": t["title"], "p": t["posted_at"], "k": c["kind"]})
             db.commit()
 
         if dry_run or discover_only:
             return {"threads_found": found, "threads_read": 0, "mentions": 0}
 
+        attached = reresolve(db)
+        if attached:
+            log.info("rec_threads: %d earlier mentions now match an indexed work", attached)
+
         # 2. Read the unread ones, newest first. Newest first because this
         #    table exists to answer "lately" — a backlog of old threads must
         #    never delay the current fortnight's.
         rows = db.execute(text("""
-            SELECT id, community FROM rec_threads
-             WHERE read_at IS NULL ORDER BY posted_at DESC NULLS LAST LIMIT 40
-        """)).fetchall()
-        for tid, community in rows:
+            SELECT id, community, kind FROM rec_threads
+             WHERE read_at IS NULL
+               AND posted_at < now() - make_interval(secs => :wait)
+             ORDER BY posted_at DESC NULLS LAST LIMIT :n
+        """), {"wait": READ_AFTER_DAYS * 86400,
+               "n": read_limit or READ_PER_PASS}).fetchall()
+        for tid, community, kind in rows:
             try:
                 xml = reddit_fetch.get(THREAD.format(sub=community, pid=tid))
             except Refused as e:
                 log.info("rec_threads: %s — stopping, %d threads read", e, read)
                 break
-            ms = mentions_in(xml)
+            ms = mentions_in(xml, skip_op=(kind == "request"))
             n = _store(db, community, tid, ms)
             db.execute(text("""
                 UPDATE rec_threads SET read_at = now(), mentions = :n, raw = :raw
@@ -247,14 +362,82 @@ def run(dry_run: bool = False, discover_only: bool = False) -> dict:
     return {"threads_found": found, "threads_read": read, "mentions": stored}
 
 
+def backfill(days: int = 90) -> dict:
+    """Record every flaired thread of the last `days`, paging the archive.
+
+    The routine search sees the newest 25 per community, which is right for
+    keeping up and useless for starting: the hub block needs several people
+    agreeing over 30 or 90 days, and a table that starts empty takes a season
+    to get there. One-off; afterwards the regular pass keeps up. Text-query
+    communities are skipped -- PullPush cannot page by date usefully, and the
+    thread kind they find is fortnightly anyway.
+    """
+    import json as _json
+    import urllib.parse
+    import reddit_archive as ra
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    found = 0
+    with db_session() as db:
+        for c in COMMUNITIES:
+            m = re.match(r'^flair:"(.+)"$', c["query"])
+            if not m:
+                continue
+            before = None
+            while True:
+                params = {"subreddit": c["sub"], "link_flair_text": m.group(1),
+                          "limit": 100, "sort": "desc",
+                          "after": since.strftime("%Y-%m-%d")}
+                if before:
+                    params["before"] = before
+                page = None
+                # The archive is a volunteer service and says so when a query
+                # is heavy ("Timeout. Maybe slow down a bit", as a 422): wait
+                # and ask again, and give up on this community, not the run.
+                for wait in (15, 60, 180, None):
+                    try:
+                        page = ra._get_json(f"{ra.ARCTIC}/posts/search?"
+                                            + urllib.parse.urlencode(params)).get("data") or []
+                        break
+                    except Exception as e:
+                        log.info("rec_threads backfill: %s refused (%s)%s", c["sub"], e,
+                                 f", retrying in {wait}s" if wait else ", skipping")
+                        if wait is None:
+                            break
+                        time.sleep(wait)
+                if page is None:
+                    break
+                for p in page:
+                    db.execute(text("""
+                        INSERT INTO rec_threads (id, community, title, posted_at, kind)
+                        VALUES (:i, :c, :t, to_timestamp(:p), :k)
+                        ON CONFLICT (id) DO NOTHING
+                    """), {"i": p["id"], "c": c["sub"].lower(), "t": p.get("title"),
+                           "p": p["created_utc"], "k": c["kind"]})
+                db.commit()
+                found += len(page)
+                if len(page) < 100:
+                    break
+                before = int(page[-1]["created_utc"])
+            log.info("rec_threads backfill: %s %s — %d so far", c["sub"], m.group(1), found)
+    return {"threads": found}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true",
                     help="find threads and report, write nothing")
     ap.add_argument("--discover", action="store_true",
                     help="record the threads but do not read them")
+    ap.add_argument("--backfill", type=int, metavar="DAYS",
+                    help="record every flaired thread of the last DAYS, then read them all")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if a.backfill:
+        print(backfill(a.backfill))
+        out = run(read_limit=100000)
+        print(out)
+        return 0
     out = run(dry_run=a.dry_run, discover_only=a.discover)
     print(f"threads found {out['threads_found']}, read {out['threads_read']}, "
           f"new mentions {out['mentions']}")

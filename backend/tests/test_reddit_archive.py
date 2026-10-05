@@ -51,3 +51,23 @@ def test_unknown_urls_fall_back_to_reddit(monkeypatch):
     _fake(monkeypatch)
     assert reddit_archive.atom_for("https://www.reddit.com/user/someone.rss") is None
     assert reddit_archive.atom_for("https://example.com/r/x/new.rss") is None
+
+
+def test_a_requesters_own_links_are_not_recommendations(monkeypatch):
+    # The post links work 111 as "something like this"; only the helper's
+    # reply is a recommendation.
+    _fake(monkeypatch)
+    xml = reddit_archive.atom_for(rec_threads.THREAD.format(sub="HPfanfiction", pid="abc123"))
+    every = {(m["site"], m["site_id"]) for m in rec_threads.mentions_in(xml)}
+    replies = {(m["site"], m["site_id"]) for m in rec_threads.mentions_in(xml, skip_op=True)}
+    assert ("ao3", "111") in every and ("ao3", "111") not in replies
+    assert replies == {("ao3", "222"), ("ffnet", "333")}
+
+
+def test_every_community_query_is_one_the_archive_reader_understands():
+    # A free-text query goes to the months-stale archive; a flair query must be
+    # exactly the shape reddit_archive parses, or it silently becomes text.
+    for c in rec_threads.COMMUNITIES:
+        assert c["kind"] in ("thread", "request", "recs")
+        if c["query"].startswith("flair:"):
+            assert reddit_archive._FLAIR.match(c["query"]), c

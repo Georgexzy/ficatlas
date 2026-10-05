@@ -1142,6 +1142,10 @@ CREATE TABLE IF NOT EXISTS rec_threads (
     -- is in here already.
     raw         TEXT
 );
+-- What the replies in a thread are: 'thread' (a what-are-you-reading post),
+-- 'request' (someone asking, whose OWN links are not recommendations) or
+-- 'recs' (a post recommending). See rec_threads.COMMUNITIES.
+ALTER TABLE rec_threads ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'thread';
 CREATE INDEX IF NOT EXISTS ix_rec_threads_unread
     ON rec_threads (community, posted_at DESC) WHERE read_at IS NULL;
 
