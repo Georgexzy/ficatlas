@@ -9,7 +9,7 @@ import { fetchWithTimeout, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/
 import { useAuth } from "@/lib/auth"
 import { describeError, type Failure } from "@/lib/errors"
 import OfflineLink from "@/app/OfflineLink"
-import { storyLink, isSeedUrl } from "@/lib/storyLinks"
+import { storyLink, isSeedUrl, otherCopies } from "@/lib/storyLinks"
 import ArchiveLink from "./ArchiveLink"
 import SiteHeader from "@/app/SiteHeader"
 
@@ -598,20 +598,16 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
               View on Wayback ↗
             </a>
           )}
-          {story.cross_post_urls?.map(url => {
-            const kind = url.includes("archiveofourown.org") ? "AO3"
-                       : url.includes("squidgeworld.org") ? "SquidgeWorld"
-                       : url.includes("fanfiction.net") ? "FF.net"
-                       : url.includes("fictionalley") ? "FictionAlley"
-                       : url.startsWith("seed://") ? null
-                       : "Mirror"
-            if (!kind) return null
-            return (
-              <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="btn btn--ghost">
-                Also on {kind} ↗
-              </a>
-            )
-          })}
+          {/* Every other copy, from the same helper the result cards use
+              (otherCopies in lib/storyLinks.ts): this page had its own host
+              test, which named a second AO3 posting "Also on AO3" beside an
+              AO3 button. */}
+          {otherCopies(story, SITE_LABELS).map(c => (
+            <a key={c.href} href={c.href} target="_blank" rel="noopener noreferrer nofollow"
+              className="btn btn--ghost">
+              {c.sameArchive ? `Another ${c.label} posting ↗` : `Also on ${c.label} ↗`}
+            </a>
+          ))}
         </div>
 
         {offlineMsg && (

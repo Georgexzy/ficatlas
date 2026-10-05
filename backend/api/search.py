@@ -2718,6 +2718,28 @@ def _pasted_work(text: str):
     return None
 
 
+
+# The main archives. A filter naming all of them restricts nothing a copy could
+# rescue, so it stays a plain IN and the planner sees the predicate it always has.
+_MAIN_SITES = {"ao3", "ffnet", "fictionalley"}
+
+
+def _site_pred(site_enums):
+    """`site IN (…)`, widened to works whose OTHER copy is on one of those sites.
+
+    The cross-post dedup keeps one row per story, so a story kept as its AO3 row
+    was invisible to a reader filtering for FanFiction.net, where it can equally
+    be read. `copy_sites` (copy_sites.py) names the archives of the merged-away
+    copies and is NULL for the ~99% of works with none, under a partial GIN
+    index, so the OR costs a small index probe.
+    """
+    names = {getattr(s, "value", str(s)) for s in site_enums}
+    if _MAIN_SITES <= names:
+        return Story.site.in_(site_enums)
+    return or_(Story.site.in_(site_enums),
+               and_(Story.copy_sites.isnot(None),
+                    Story.copy_sites.overlap(cast(sorted(names), PG_ARRAY(Text)))))
+
 @router.get("", response_model=SearchResponse)
 def search(          # NOT async — see below
     q:                     Optional[str] = Query(None),
@@ -3220,7 +3242,7 @@ def search(          # NOT async — see below
                 pass
 
     if site_enums:
-        filters.append(Story.site.in_(site_enums))
+        filters.append(_site_pred(site_enums))
 
     # Kept as a named object, not just appended, so the count of what it hid can
     # be rebuilt later from the same filter list minus this one predicate. See
@@ -3316,7 +3338,7 @@ def search(          # NOT async — see below
                                       "exclude": False, "raw": intent.fandom})
             if not sites and intent.site:
                 site_enums = [SiteEnum(intent.site)]
-                filters.append(Story.site.in_(site_enums))
+                filters.append(_site_pred(site_enums))
                 active_sites = [intent.site]
             parsed_tokens.extend(intent.tokens)
             trope_tags, trope_leftover = intent.tags, intent.tag_leftover
@@ -4114,7 +4136,7 @@ def search(          # NOT async — see below
             for _g in _gate_all:
                 fuzzy_q = fuzzy_q.filter(_g)
             if site_enums:
-                fuzzy_q = fuzzy_q.filter(Story.site.in_(site_enums))
+                fuzzy_q = fuzzy_q.filter(_site_pred(site_enums))
             if not explicit:
                 fuzzy_q = fuzzy_q.filter(or_(
                     Story.rating != RatingEnum.explicit, Story.rating.is_(None)))

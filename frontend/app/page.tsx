@@ -13,7 +13,7 @@ import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getLandingBrowse, type LandingBrowse, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, quoteValue, type ParsedToken } from "@/lib/queryParser"
 import SiteIcon from "./SiteIcon"
-import { storyLink, isSeedUrl } from "@/lib/storyLinks"
+import { storyLink, isSeedUrl, otherCopies } from "@/lib/storyLinks"
 import SyntaxHelp from "./SyntaxHelp"
 import { rememberSearch } from "@/lib/lastSearch"
 import { saveSearch, removeSaved, isSaved, noteRun, searchId, loadSaved,
@@ -665,6 +665,7 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
 
   const { href: externalUrl, label: externalLabel, isInternal: noExternalSource } =
     storyLink(story, SITE_LABELS)
+  const copies = otherCopies(story, SITE_LABELS)
 
   // Can we one-click import? Only sites FicHub handles, not already hosted, and
   // not a metadata-only seed row — there is no real page for FicHub to fetch.
@@ -692,6 +693,27 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
               <SiteIcon site={story.site} />
               {SITE_LABELS[story.site] ?? story.site}
             </span>
+            {/* Where ELSE this work can be read. The cross-post dedup keeps one
+                row per story, so the badge above names one archive; these name
+                the others, beside it, as links — it was "+1 copy" with the URLs
+                in a hover tooltip, which a phone never shows and nobody could
+                click, and seed placeholders counted as copies. See
+                otherCopies in lib/storyLinks.ts. */}
+            {copies.slice(0, 3).map(c => (
+              <a key={c.href} href={c.href} target="_blank" rel="noopener noreferrer nofollow"
+                className={`badge badge--also badge--site-${c.site}`}
+                title={c.sameArchive
+                  ? `Also posted a second time on ${c.label} — open that posting`
+                  : `Also posted on ${c.label} — read it there`}>
+                <span aria-hidden="true">+</span>
+                {c.site !== "other" && <SiteIcon site={c.site} />}
+                {c.sameArchive ? `another ${c.label} posting` : c.label}
+              </a>
+            ))}
+            {copies.length > 3 && (
+              <Link href={`/story/${story.id}`} className="badge badge--also"
+                title="Every copy is listed on the story page">+{copies.length - 3} more</Link>
+            )}
             {/* Only ever set in an admin's results — the API drops delisted rows
                 for everyone else. Loud on purpose: this card is invisible to
                 every reader, and an operator scanning results needs to know
@@ -721,12 +743,6 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
                 {story.series_position ? `#${story.series_position} ` : ""}
                 {story.series_name}
               </Link>
-            )}
-            {story.cross_post_urls && story.cross_post_urls.length > 0 && (
-              <span className="badge badge--crosspost"
-                title={`Also posted on:\n${story.cross_post_urls.join("\n")}`}>
-                +{story.cross_post_urls.length} {story.cross_post_urls.length === 1 ? "copy" : "copies"}
-              </span>
             )}
             {story.rating && <span className={`badge badge--rating badge--${story.rating.toLowerCase()}`}>{RATING_LABELS[story.rating] ?? story.rating}</span>}
             {story.status === "complete" && <span className="badge badge--complete">Complete</span>}

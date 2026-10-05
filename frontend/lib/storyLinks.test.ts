@@ -51,3 +51,35 @@ describe("uploaded works", () => {
     expect(t.isInternal).toBeFalsy()
   })
 })
+
+import { otherCopies } from "./storyLinks"
+
+describe("otherCopies", () => {
+  const labels = { ao3: "AO3", ffnet: "FF.net", fictionalley: "FictionAlley" }
+
+  it("names the archive of each copy and links it", () => {
+    const c = otherCopies({ site: "ao3", url: "https://archiveofourown.org/works/1",
+      cross_post_urls: ["https://www.fanfiction.net/s/9/1/"] }, labels)
+    expect(c).toEqual([{ site: "ffnet", label: "FF.net",
+      href: "https://www.fanfiction.net/s/9/1/", sameArchive: false }])
+  })
+
+  it("drops placeholders, junk and the work's own address", () => {
+    expect(otherCopies({ site: "ffnet", url: "https://www.fanfiction.net/s/8/1/",
+      cross_post_urls: ["seed://janelleshane/x", "&#039;https:", "ficatlas://upload/u",
+                        "http://www.fanfiction.net/s/8/1"] }, labels)).toEqual([])
+  })
+
+  it("tells a repost on the same archive apart, and lists it last", () => {
+    const c = otherCopies({ site: "ao3", url: "https://archiveofourown.org/works/1",
+      cross_post_urls: ["https://archiveofourown.org/works/2",
+                        "https://www.fanfiction.net/s/9/1/"] }, labels)
+    expect(c.map(x => [x.site, x.sameArchive])).toEqual([["ffnet", false], ["ao3", true]])
+  })
+
+  it("keeps an unknown mirror, labelled by its host", () => {
+    const c = otherCopies({ site: "ao3", url: "",
+      cross_post_urls: ["https://www.example-archive.org/story/5"] }, labels)
+    expect(c[0]).toMatchObject({ site: "other", label: "example-archive.org" })
+  })
+})

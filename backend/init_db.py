@@ -178,6 +178,12 @@ BEGIN
 END
 $ANALYSE$;
 CREATE INDEX IF NOT EXISTS ix_stories_cross_post_urls ON stories USING gin (cross_post_urls);
+-- The archives a merged work's OTHER copies are on, so a site filter finds a
+-- story kept as its AO3 row when the reader asked for FF.net. NULL for the
+-- ~99% with no copies, so the partial index holds only the rows that matter.
+-- Kept by a trigger (functions appended below from copy_sites.py).
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS copy_sites TEXT[];
+CREATE INDEX IF NOT EXISTS ix_stories_copy_sites ON stories USING gin (copy_sites) WHERE copy_sites IS NOT NULL;
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- Row-count sampling for the admin coverage panel. Counting "how many AO3 rows
@@ -1421,6 +1427,25 @@ CREATE TABLE IF NOT EXISTS tracking_secret (
     one_row BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (one_row),
     secret  TEXT NOT NULL
 );
+"""
+
+# copy_sites: the function is CREATE OR REPLACE (no table lock). The trigger is
+# created only when missing, inside a DO block that checks the catalogue first,
+# because DROP/CREATE TRIGGER takes ACCESS EXCLUSIVE on stories at every boot
+# otherwise -- the startup-lock trap recorded in CLAUDE.md.
+import copy_sites as _copy_sites  # noqa: E402
+SQL += _copy_sites.FUNCTION_SQL + """
+DO $copysites$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_fic_set_copy_sites')
+     AND EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_name = 'stories' AND column_name = 'copy_sites') THEN
+    CREATE TRIGGER trg_fic_set_copy_sites
+      BEFORE INSERT OR UPDATE OF cross_post_urls ON stories
+      FOR EACH ROW EXECUTE FUNCTION fic_set_copy_sites();
+  END IF;
+END
+$copysites$;
 """
 
 def _split_statements(sql: str) -> list[str]:

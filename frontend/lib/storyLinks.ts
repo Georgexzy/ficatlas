@@ -87,3 +87,66 @@ export function storyLink(
     isSearch: false,
   }
 }
+
+// ── Other copies of the same work ─────────────────────────────────────────────
+//
+// The cross-post dedup keeps ONE row per story and records the other copies'
+// URLs on it (backend/live_fetch/crosspost.py). What a reader needs from that
+// list is "where else can I read this", and the raw list could not say it:
+//
+//   * metadata seeds (`seed://…`) sat in it and counted as a copy — 1,363
+//     FF.net rows showed "+1 copy" for a placeholder with no page;
+//   * a second posting on the SAME archive (an author's repost, 3,355 AO3 rows)
+//     read exactly like a copy on another archive;
+//   * the card showed it as "+1 copy" with the URLs in a hover tooltip, which a
+//     phone never shows and nobody can click;
+//   * the story page labelled them with its own host test, the duplication this
+//     file exists to end.
+//
+// One function, used by both.
+
+export type OtherCopy = {
+  site: string          // a SITE_LABELS key, or "other"
+  label: string         // "FF.net", "AO3", or the host name
+  href: string
+  /** Another posting on the archive the work is already listed under. */
+  sameArchive: boolean
+}
+
+const COPY_HOSTS: [RegExp, string][] = [
+  [/(^|\.)archiveofourown\.org$/, "ao3"],
+  [/(^|\.)fanfiction\.net$/, "ffnet"],
+  [/(^|\.)fictionalley\.org$/, "fictionalley"],
+  [/(^|\.)squidgeworld\.org$/, "squidgeworld"],
+  [/(^|\.)wattpad\.com$/, "wattpad"],
+  [/(^|\.)royalroad\.com$/, "royalroad"],
+]
+
+export function otherCopies(
+  story: { site: string; url?: string | null; cross_post_urls?: string[] | null },
+  siteLabels: Record<string, string> = {},
+): OtherCopy[] {
+  const out: OtherCopy[] = []
+  const seen = new Set<string>()
+  const own = (story.url || "").replace(/^http:/, "https:").replace(/\/+$/, "")
+  for (const raw of story.cross_post_urls || []) {
+    let u: URL
+    try { u = new URL(raw) } catch { continue }          // "&#039;https:" and friends
+    if (u.protocol !== "https:" && u.protocol !== "http:") continue   // seed://, ficatlas://
+    const href = raw.replace(/^http:/, "https:")
+    const key = href.replace(/\/+$/, "")
+    if (key === own || seen.has(key)) continue
+    seen.add(key)
+    const host = u.hostname.replace(/^(www|m)\./, "")
+    const site = COPY_HOSTS.find(([re]) => re.test(host))?.[1] ?? "other"
+    out.push({
+      site,
+      label: site === "other" ? host : (siteLabels[site] ?? site),
+      href,
+      sameArchive: site === story.site,
+    })
+  }
+  // Other archives first: they are the news. A second posting on the same
+  // archive is worth knowing and is not "also on".
+  return out.sort((a, b) => Number(a.sameArchive) - Number(b.sameArchive))
+}

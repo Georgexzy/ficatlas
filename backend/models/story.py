@@ -119,6 +119,8 @@ class Story(Base):
     # URLs where this same story is cross-posted on other sites (FFN/AO3/etc).
     # Populated when a curator (DLP, manual) tells us "these point to the same work".
     cross_post_urls = Column(ARRAY(Text), default=list)
+    # Archives the other copies are on; trigger-kept from cross_post_urls (copy_sites.py).
+    copy_sites = Column(ARRAY(Text))
 
     published_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True), index=True)
