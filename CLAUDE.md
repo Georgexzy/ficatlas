@@ -507,6 +507,13 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **Reading progress resumes at the FURTHEST chapter, not the last opened.**
+  A tab left on chapter 22 re-saved "reading 22, now" on every
+  visibilitychange and won the sync by timestamp against a reader at 61. The
+  reader now flushes only a pending scroll, and `lib/readingProgress.ts`
+  resumes from the unioned per-chapter `positions`, offering the last-opened
+  chapter beside it. Anything that saves on focus/visibility must save only
+  what the user DID, or every stale tab is a writer.
 - **`ref_host` means two things.** For a pageview it is where the visitor came
   FROM; for an `out` click it is where they went TO. The Referrers report
   counted both, so every "Read on AO3" made AO3 the "top referrer" (156, all
