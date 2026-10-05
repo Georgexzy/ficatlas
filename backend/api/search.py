@@ -2738,7 +2738,7 @@ def _site_pred(site_enums):
         return Story.site.in_(site_enums)
     return or_(Story.site.in_(site_enums),
                and_(Story.copy_sites.isnot(None),
-                    Story.copy_sites.overlap(cast(sorted(names), PG_ARRAY(Text)))))
+                    Story.copy_sites.op("&&")(cast(sorted(names), PG_ARRAY(Text)))))
 
 @router.get("", response_model=SearchResponse)
 def search(          # NOT async — see below
