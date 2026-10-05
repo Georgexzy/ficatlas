@@ -14,6 +14,7 @@ import { searchStories, formatWordCount, formatNumber, chapterDisplay,
 import { parseQuery, parsedToSearchParams, quoteValue, type ParsedToken } from "@/lib/queryParser"
 import SiteIcon from "./SiteIcon"
 import { storyLink, isSeedUrl, otherCopies } from "@/lib/storyLinks"
+import { shortHubName } from "@/lib/hubNames"
 import SyntaxHelp from "./SyntaxHelp"
 import { rememberSearch } from "@/lib/lastSearch"
 import { saveSearch, removeSaved, isSaved, noteRun, searchId, loadSaved,
@@ -1396,7 +1397,10 @@ function BrowseExplorer() {
       <ul className="browse__list" role="tabpanel" aria-label={current.label}>
         {rows.map(r => (
           <li key={r.slug}>
-            <Link href={`/${current.hub}/${r.slug}`}>{r.name}</Link>
+            <Link href={`/${current.hub}/${r.slug}`} title={r.name} className="browse__item">
+              <span className="browse__name">{shortHubName(r.name)}</span>
+              <span className="browse__count">{formatNumber(r.work_count)}</span>
+            </Link>
           </li>
         ))}
       </ul>

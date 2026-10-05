@@ -468,3 +468,12 @@
   .cc-stat--link, .cc-rail__item, .cc-btn { transition: none; }
   .cc-stat--link:hover { transform: none; }
 }
+
+/* The live-query table sits in a half-width card. `max-width: 70ch` on the
+   query let it run past the card's edge; a fixed layout gives the query
+   column whatever is left and truncates there, with the full text on hover. */
+.cc-table--code { table-layout: fixed; }
+.cc-table--code th:first-child { width: 64px; }
+.cc-table--code th:nth-child(2) { width: 32%; }
+.cc-table--code td { overflow: hidden; }
+.cc-table--code code { max-width: 100%; }

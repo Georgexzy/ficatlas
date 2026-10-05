@@ -1,4 +1,5 @@
 import type { Metadata } from "next"
+import { shortHubName } from "@/lib/hubNames"
 import Link from "next/link"
 import SiteHeader from "../SiteHeader"
 
@@ -100,7 +101,7 @@ export default async function FandomsIndex() {
             {top.map(h => (
               <li key={h.slug}>
                 <Link href={`/fandom/${h.slug}`} className="hub__chip">
-                  <span className="hub__chip-name">{h.name}</span>
+                  <span className="hub__chip-name" title={h.name}>{shortHubName(h.name)}</span>
                   <span className="hub__chip-count">{h.work_count.toLocaleString()}</span>
                 </Link>
               </li>
