@@ -40,6 +40,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -66,16 +67,35 @@ _THREAD = re.compile(r"^/r/([^/]+)/comments/([a-z0-9]+)(?:/[^/]*)?/?\.rss$")
 _FLAIR = re.compile(r'^\s*flair:"([^"]+)"\s*$')
 
 
+# A heavy query is answered "Timeout. Maybe slow down a bit" as a 422, and a
+# busy moment as 429/5xx. Those pass, so they are retried here with a short
+# backoff. Raising instead sent the caller to its fallback -- Reddit itself,
+# which waits ~8 minutes for its own rate budget and then refuses this server
+# anyway: measured, a 5,000-thread read managed 30 threads in 90 minutes.
+_RETRY_AFTER = (5, 20, 60)
+_TRANSIENT = {422, 429, 500, 502, 503, 504}
+
+
 def _get_json(url: str) -> dict:
     global _last
-    with _lock:
-        wait = MIN_GAP - (time.monotonic() - _last)
-        if wait > 0:
-            time.sleep(wait)
-        _last = time.monotonic()
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        return json.load(r)
+    for attempt, backoff in enumerate((*_RETRY_AFTER, None)):
+        with _lock:
+            wait = MIN_GAP - (time.monotonic() - _last)
+            if wait > 0:
+                time.sleep(wait)
+            _last = time.monotonic()
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code not in _TRANSIENT or backoff is None:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if backoff is None:
+                raise
+        time.sleep(backoff)
+    raise RuntimeError("unreachable")
 
 
 def _iso(ts) -> str:
