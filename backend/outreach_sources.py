@@ -67,7 +67,7 @@ GAP = 1.5           # seconds between requests to either service
 # AND none of the tells that it is reporting rather than asking.
 _ASK = re.compile(
     r"\b(?:looking for (?:a |an |some |any |good )?(?:fic|fics|fanfic|fanfiction|story|stories|recs?)"
-    r"|any (?:good |fun |\w+ )?(?:fic |fanfic )?(?:recs?|recommendations)"
+    r"|any (?:[#\w'’/-]+ ){0,3}(?:recs?|recommendations)"
     r"|any (?:good )?fics? (?:where|with|about|that)"
     r"|(?:can|could|would) (?:any(?:one|body)|some(?:one|body)|you) (?:rec|recommend|help me find|suggest)"
     r"|does any(?:one|body) (?:know|have) (?:a |any |of )?(?:fic|fics|recs?|recommendations|a story)"
@@ -82,7 +82,9 @@ _NOT_AN_ASK = re.compile(
     r"\b(?:commissions? open|my (?:new )?fic|i (?:wrote|posted|updated)|new chapter"
     r"|chapter \d+ is (?:up|out)|read it here|link in bio|found it|edit:? found|found!"
     r"|shout ?out|thank(?:s| you) for (?:the|all) (?:recs?|recommendations)"
-    r"|not me|praising|recommended me|(?:bf|gf|friend|partner) recommend)", re.I)
+    r"|not me|praising|recommended me|(?:bf|gf|friend|partner) recommend"
+    r"|in case any(?:one|body)|i have (?:some )?(?:fic )?recs|do you need (?:fic )?recs"
+    r"|if you(?:'re| are) looking for|commissions?)", re.I)
 
 
 def looks_like_request(text_in: str) -> bool:
