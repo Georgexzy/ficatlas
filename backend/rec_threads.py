@@ -103,8 +103,6 @@ COMMUNITIES: list[dict] = [
      "query": 'flair:"Request"'},
     {"sub": "HPFanfiction", "fandom": "Harry Potter", "kind": "recs",
      "query": 'flair:"Recommendation"'},
-    {"sub": "FanFiction", "fandom": None, "kind": "recs",
-     "query": 'flair:"Recommendation"'},
     {"sub": "FanFiction", "fandom": None, "kind": "request",
      "query": 'flair:"Recs Wanted"'},
     {"sub": "AO3", "fandom": None, "kind": "thread",
@@ -297,7 +295,7 @@ def _store(db, community: str, thread_id: str, ms: list[dict]) -> int:
 
 
 def run(dry_run: bool = False, discover_only: bool = False,
-        read_limit: int | None = None) -> dict:
+        read_limit: int | None = None, discover: bool = True) -> dict:
     """One pass. Resumable: a refusal stops it where it stands.
 
     Every consumer of `reddit_fetch` is a resumable worklist, because the only
@@ -308,7 +306,7 @@ def run(dry_run: bool = False, discover_only: bool = False,
     with db_session() as db:
         # 1. Discover threads. One request per community, and only for a
         #    community whose last search is old enough to be worth repeating.
-        for c in COMMUNITIES:
+        for c in (COMMUNITIES if discover else []):
             try:
                 threads = find_threads(c["sub"], c["query"])
             except Refused as e:
@@ -435,7 +433,7 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if a.backfill:
         print(backfill(a.backfill))
-        out = run(read_limit=100000)
+        out = run(read_limit=100000, discover=False)
         print(out)
         return 0
     out = run(dry_run=a.dry_run, discover_only=a.discover)

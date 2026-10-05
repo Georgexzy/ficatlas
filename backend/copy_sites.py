@@ -81,7 +81,12 @@ BATCH = 5000
 def install(db) -> None:
     from sqlalchemy import text
     db.execute(text(FUNCTION_SQL))
-    # ACCESS EXCLUSIVE on stories: never let it queue in front of readers.
+    db.commit()
+    # The trigger only when missing: DROP/CREATE TRIGGER takes a lock on
+    # stories that a long scan holds off for minutes, and a run that re-made
+    # an existing trigger failed on that lock before it reached the backfill.
+    if db.execute(text("SELECT 1 FROM pg_trigger WHERE tgname = 'trg_fic_set_copy_sites'")).first():
+        return
     db.execute(text("SET LOCAL lock_timeout = '5s'"))
     db.execute(text(TRIGGER_SQL))
     db.commit()
