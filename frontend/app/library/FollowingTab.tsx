@@ -44,6 +44,77 @@ function fmtDate(iso: string | null): string {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
 }
 
+interface MailPrefs {
+  enabled: boolean
+  frequency: "daily" | "hourly"
+  has_email: boolean
+  mail_available: boolean
+}
+
+// Opt-in mail when a followed work gains chapters (backend/follow_email.py).
+// The list above only helps a reader who comes back; this is what brings them
+// back. Off until ticked, one digest rather than a mail per chapter, and each
+// chapter announced once.
+function FollowMail() {
+  const [prefs, setPrefs] = useState<MailPrefs | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    fetchWithTimeout("/api/follows/email", { credentials: "include" }, USER_TIMEOUT_MS)
+      .then(r => (r.ok ? r.json() : null)).then(setPrefs).catch(() => {})
+  }, [])
+
+  // The server is not offering mail at all (no relay configured), so a
+  // checkbox would promise something nothing will deliver.
+  if (!prefs || !prefs.mail_available) return null
+
+  const save = async (next: { enabled: boolean, frequency: MailPrefs["frequency"] }) => {
+    setBusy(true); setMsg(null)
+    try {
+      const r = await fetchWithTimeout("/api/follows/email", {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      }, USER_TIMEOUT_MS)
+      const d = await r.json().catch(() => null)
+      if (!r.ok) { setMsg(d?.detail || "Could not save that."); return }
+      setPrefs(d)
+      setMsg(d.enabled ? "Saved. Only chapters posted from now on will be emailed." : "Update emails are off.")
+    } catch {
+      setMsg("Could not save that.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="follow-mail">
+      <label className="follow-mail__toggle">
+        <input type="checkbox" checked={prefs.enabled}
+          disabled={busy || (!prefs.has_email && !prefs.enabled)}
+          onChange={e => save({ enabled: e.target.checked, frequency: prefs.frequency })} />
+        <span>Email me when stories I follow get new chapters</span>
+      </label>
+      {prefs.enabled && (
+        <select className="follow-mail__freq" value={prefs.frequency} disabled={busy}
+          aria-label="How often"
+          onChange={e => save({ enabled: true, frequency: e.target.value as MailPrefs["frequency"] })}>
+          <option value="daily">at most once a day</option>
+          <option value="hourly">as they happen (at most hourly)</option>
+        </select>
+      )}
+      {!prefs.has_email && (
+        <p className="follow-mail__note">
+          Your account has no email address yet.{" "}
+          <Link href="/settings?tab=account">Add one</Link> to turn this on.
+        </p>
+      )}
+      {msg && <p className="follow-mail__note" role="status">{msg}</p>}
+    </div>
+  )
+}
+
 export default function FollowingTab() {
   const { user, loading: authLoading } = useAuth()
   const [works, setWorks] = useState<FollowedWork[] | null>(null)
@@ -100,7 +171,7 @@ export default function FollowingTab() {
             follow works and be told when they update. Following is the one thing
             no single archive can do for you — a WIP on AO3, a long-runner on
             FanFiction.net and a finished series on FictionAlley in one list,
-            none of them emailing you.
+            and, if you want it, one email when any of them gains chapters.
           </p>
         )}
 
@@ -116,6 +187,7 @@ export default function FollowingTab() {
 
         {works !== null && works.length > 0 && (
           <>
+            <FollowMail />
             <p className="page-prose__muted">
               {works.length} work{works.length === 1 ? "" : "s"}
               {unread > 0 && <> · <strong>{unread} with updates</strong></>}

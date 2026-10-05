@@ -5999,6 +5999,15 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   color: var(--accent);
 }
 
+.follow-mail {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  margin: 14px 0 6px; padding: 12px 14px;
+  border: 1px solid var(--border2); border-radius: 10px; background: var(--surface, transparent);
+}
+.follow-mail__toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.follow-mail__toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+.follow-mail__freq { font: inherit; font-size: 0.9em; padding: 3px 6px; border-radius: 6px; }
+.follow-mail__note { flex-basis: 100%; margin: 0; font-size: 0.88em; color: var(--text-faint); }
 .follows { list-style: none; padding: 0; margin: 18px 0 0; }
 .follows__item {
   display: flex; align-items: flex-start; justify-content: space-between;

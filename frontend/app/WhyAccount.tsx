@@ -11,15 +11,16 @@ import Link from "next/link"
  * bother had a username field, a password field, and a sentence.
  *
  * Every item here is a thing the code really does; nothing is aspirational.
- * Note what following is NOT: there is no notification queue and nothing is
- * emailed. An update is a comparison made at read time — see the header of
- * backend/api/follows.py — so the copy says "shows which have gained chapters
- * since you last looked", which is what it does.
+ * Note what following is NOT: there is no notification queue. An update is a
+ * comparison made at read time — see the header of backend/api/follows.py — so
+ * the copy says "shows which have gained chapters since you last looked",
+ * which is what it does. Mail is OPT-IN (backend/follow_email.py): off until a
+ * reader ticks the box on their Following tab.
  * `follows` is backend/api/follows.py, WHAT SYNCS AND WHAT DOES NOT is
  * STORED_KEYS in lib/storageKeys.ts — check a claim here against that list and
  * nothing else, because it is the only list — and the email field is optional
- * at signup and only ever
- * used for a reset (backend/api/password_reset.py). If a feature is removed,
+ * at signup and used for a reset (backend/api/password_reset.py) and, only
+ * if the reader asks, follow-update mail. If a feature is removed,
  * remove the line — a list of promises that has drifted is worse than no list,
  * because this is the screen where a reader decides whether the site is honest.
  *
@@ -38,9 +39,10 @@ const REASONS: { title: string; body: string }[] = [
         + "archive's subscriptions can do.",
   },
   {
-    title: "Nothing lands in your inbox",
-    body: "Updates are shown when you come back, not emailed at you. An address "
-        + "is optional and is only ever used to reset a password.",
+    title: "Your inbox, only if you ask",
+    body: "Updates are shown when you come back. If you would rather be told, "
+        + "turn on one email when anything you follow gains chapters — daily or "
+        + "as it happens, off with one click. An address is optional.",
   },
   {
     title: "A shelf that outlives your browser",
@@ -99,7 +101,7 @@ export default function WhyAccount({ compact = false }: { compact?: boolean }) {
           training crawlers. */}
       <p className="why-account__catch">
         No email needed — add one only if you want to be able to reset a
-        forgotten password. Nothing is sold, no adverts, no tracking, and you
+        forgotten password, or to be told when a story you follow updates. Nothing is sold, no adverts, no tracking, and you
         can export or delete everything from{" "}
         <Link href="/settings">Settings</Link> whenever you like.
       </p>

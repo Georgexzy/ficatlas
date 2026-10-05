@@ -2235,6 +2235,33 @@ async def _admin_jobs_loop() -> None:
         await asyncio.sleep(admin_jobs.POLL_S)
 
 
+async def _follow_email_loop() -> None:
+    """Opt-in digest mail for followed works that gained chapters.
+
+    See follow_email.py. Checked every 15 minutes; each reader's own frequency
+    (hourly or daily) decides whether they are due, so the loop's interval only
+    bounds how late an hourly digest can be.
+    """
+    import follow_email
+    from db.session import db_session
+
+    interval = _num("FOLLOW_EMAIL_SEC", 900)
+    await asyncio.sleep(_num("FOLLOW_EMAIL_DELAY_SEC", 300))
+    while True:
+        try:
+            def _pass():
+                with db_session() as db:
+                    stats = follow_email.run(db)
+                    follow_email.record(db, stats)
+                    return stats
+            stats = await asyncio.to_thread(_pass)
+            if stats["sent"] or stats["failed"]:
+                log.info(f"follow email: {stats}")
+        except Exception as e:
+            log.warning(f"follow email failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _ffnet_listing_apply_loop() -> None:
     """Write the characters, pairings and genres the FF.net listing harvest reads.
 
@@ -2464,6 +2491,10 @@ async def main() -> None:
 
     # The listing harvest's metadata lines. Runs whether or not the harvester
     # is up: with nothing staged it is one empty DELETE every 30 seconds.
+    if _flag("FOLLOW_EMAIL", "true"):
+        tasks.append(asyncio.create_task(_supervised("follow_email_loop", _follow_email_loop)))
+        log.info("follow update mail enabled (opt-in readers only)")
+
     if _flag("FFNET_LISTING_APPLY", "true"):
         tasks.append(asyncio.create_task(_supervised("ffnet_listing_apply_loop", _ffnet_listing_apply_loop)))
         log.info("FF.net listing metadata apply enabled")

@@ -919,6 +919,22 @@ CREATE TABLE IF NOT EXISTS follows (
 CREATE INDEX IF NOT EXISTS ix_follows_user ON follows (user_id, followed_at DESC);
 CREATE INDEX IF NOT EXISTS ix_follows_story ON follows (story_id);
 
+-- Opt-in mail when a followed work gains chapters. A row means the reader
+-- asked for it, and unsubscribing deletes the row, so nothing here can mail
+-- anybody who did not tick the box. The token is what an unsubscribe link
+-- carries, because a link in a mailbox must work without a session.
+CREATE TABLE IF NOT EXISTS follow_email (
+    user_id      UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    frequency    TEXT NOT NULL DEFAULT 'daily',
+    token        TEXT NOT NULL UNIQUE,
+    enabled_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_sent_at TIMESTAMPTZ
+);
+-- The chapter count a reader was last MAILED about, beside the one they last
+-- SAW. Mail compares against the greater of the two, so one new chapter is
+-- announced once, however long it then sits unread.
+ALTER TABLE follows ADD COLUMN IF NOT EXISTS mailed_chapters INTEGER;
+
 CREATE TABLE IF NOT EXISTS ffnet_wayback_queue (
     story_id    BIGINT PRIMARY KEY,
     snapshot_ts VARCHAR(20) NOT NULL,

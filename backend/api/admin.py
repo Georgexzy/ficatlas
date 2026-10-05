@@ -300,6 +300,16 @@ _JOB_EVIDENCE = [
      "ffnet_listing.py.", 6,
      "SELECT to_timestamp(NULLIF(value,'')::bigint) FROM app_settings "
      " WHERE key = 'ffnet_listing_applied_at'"),
+    # Opt-in digests. Reads the PASS stamp, not the last send: a quiet week
+    # with nothing new for anyone who opted in is healthy and sends nothing,
+    # so "last sent" would cry wolf. A pass that cannot reach the database or
+    # has died stops this moving.
+    ("follow_email", "Follow update emails",
+     "Mails readers who opted in when a work they follow gains chapters — one "
+     "digest, hourly or daily by their choice. Needs SMTP on the worker; see "
+     "follow_email.py.", 2,
+     "SELECT to_timestamp(NULLIF(value,'')::bigint) FROM app_settings "
+     " WHERE key = 'follow_email_ran_at'"),
     # What a fandom is recommending LATELY, which is the one recommendation
     # question no archive can answer — and which has produced nothing at all.
     #

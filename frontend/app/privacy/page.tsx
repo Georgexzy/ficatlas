@@ -95,7 +95,7 @@ export default function Privacy() {
       {/* "and only this" makes this list a PROMISE, so it has to be complete,
           and the first version was not. It said an email address was used "for
           signing in" (you sign in with a username; the address is optional and
-          only ever used for a reset), described follows as "fandoms and
+          used for a reset and, opt-in, for follow-update mail), described follows as "fandoms and
           pairings" (you follow WORKS), and omitted session records — which
           include the browser string of each device — along with everything the
           reader's own data actually covers.
@@ -112,8 +112,9 @@ export default function Privacy() {
         <li>the username you choose, and the date the account was created;</li>
         <li>
           an email address, <em>only if you provide one</em>. It is optional;
-          sign-in uses your username, and the address is used solely to send a
-          password reset at your request;
+          sign-in uses your username, and the address is used to send a
+          password reset at your request and, only if you turn it on, an email
+          when a work you follow gains chapters;
         </li>
         <li>
           a password <em>hash</em>, never the password itself, so that it cannot
@@ -139,6 +140,13 @@ export default function Privacy() {
           bookmarks, your position in each story, the searches you have saved and
           those you have run recently, the works kept for offline reading, and
           your reader and search preferences;
+        </li>
+        <li>
+          if you turn on update emails: that you did, how often you asked for
+          them, when the last one was sent, the chapter count each followed work
+          had when it was last mentioned, and a random code that lets the link
+          in each email switch them off. Switching them off deletes all but the
+          chapter counts, which are part of your follows;
         </li>
         <li>
           {/* Small, and listed because the sentence above says "and only this".

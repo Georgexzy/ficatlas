@@ -32,7 +32,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+import secrets
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -127,6 +129,81 @@ def unread_count(db: Session = Depends(get_db),
          WHERE f.user_id = :u AND s.delisted_at IS NULL
     """), {"u": str(viewer.id)}).first()
     return {"unread": row[0] or 0, "following": row[1] or 0}
+
+
+class EmailPrefs(BaseModel):
+    enabled: bool
+    frequency: str = "daily"
+
+
+def _email_state(db: Session, user: User) -> dict:
+    import mailer
+    row = db.execute(text(
+        "SELECT frequency FROM follow_email WHERE user_id = :u"), {"u": str(user.id)}).first()
+    return {"enabled": bool(row), "frequency": row[0] if row else "daily",
+            "has_email": bool((user.email or "").strip()),
+            "mail_available": mailer.configured()}
+
+
+# Declared BEFORE "/{story_id}": FastAPI matches in order, and "email" is a
+# perfectly good story_id as far as a path parameter is concerned.
+@router.get("/email")
+def email_prefs(db: Session = Depends(get_db),
+                viewer: Optional[User] = Depends(get_current_user)):
+    """Whether this reader gets update mail. See follow_email.py."""
+    return _email_state(db, _require(viewer))
+
+
+@router.put("/email")
+def set_email_prefs(prefs: EmailPrefs, db: Session = Depends(get_db),
+                    viewer: Optional[User] = Depends(get_current_user)):
+    user = _require(viewer)
+    if prefs.frequency not in ("daily", "hourly"):
+        raise HTTPException(422, "frequency must be daily or hourly")
+    if not prefs.enabled:
+        db.execute(text("DELETE FROM follow_email WHERE user_id = :u"), {"u": str(user.id)})
+    else:
+        if not (user.email or "").strip():
+            raise HTTPException(400, "Add an email address to your account first.")
+        # Turning it on must not mail the reader about everything that moved
+        # before they asked: catch the mailed state up to now, so the first
+        # digest is about chapters posted AFTER the box was ticked.
+        db.execute(text("""
+            UPDATE follows f SET mailed_chapters = s.chapter_count
+              FROM stories s WHERE s.id = f.story_id AND f.user_id = :u
+               AND NOT EXISTS (SELECT 1 FROM follow_email e WHERE e.user_id = :u)
+        """), {"u": str(user.id)})
+        db.execute(text("""
+            INSERT INTO follow_email (user_id, frequency, token)
+            VALUES (:u, :f, :t)
+            ON CONFLICT (user_id) DO UPDATE SET frequency = EXCLUDED.frequency
+        """), {"u": str(user.id), "f": prefs.frequency, "t": secrets.token_urlsafe(24)})
+    db.commit()
+    return _email_state(db, user)
+
+
+@router.post("/email/unsubscribe")
+async def unsubscribe(request: Request, db: Session = Depends(get_db)):
+    """Stop update mail, by the token in the mail. No session needed.
+
+    POST only. Mail scanners and link previewers GET every link in a message,
+    and an unsubscribe that fires on GET switches readers off without their
+    knowing. Mail clients' own button POSTs here (RFC 8058, the token in the
+    query string), and the /unsubscribe page POSTs it as JSON from the fragment.
+    """
+    token = request.query_params.get("t")
+    if not token and "json" in (request.headers.get("content-type") or ""):
+        try:
+            token = (await request.json()).get("t")
+        except Exception:
+            token = None
+    if not token:
+        raise HTTPException(400, "Missing token.")
+    gone = db.execute(text("DELETE FROM follow_email WHERE token = :t"), {"t": token}).rowcount
+    db.commit()
+    # The same answer either way: a second click on an old link is not an
+    # error, and the token says nothing about whose it was.
+    return {"ok": True, "unsubscribed": bool(gone)}
 
 
 @router.get("/{story_id}")

@@ -158,26 +158,10 @@ def _send_email(to: str, code: str, username: str) -> bool:
         f"{SITE_URL or 'https://ficatlas.com'}\n"
     )
 
-    try:
-        import smtplib
-        from email.message import EmailMessage
-
-        msg = EmailMessage()
-        msg["Subject"] = "Reset your FicAtlas password"
-        msg["From"] = SMTP_FROM
-        msg["To"] = to
-        msg.set_content(body)
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
-            smtp.starttls()
-            if SMTP_USER:
-                smtp.login(SMTP_USER, SMTP_PASS)
-            smtp.send_message(msg)
-        return True
-    except Exception as e:
-        # Never surface this to the caller: whether mail worked must not become
-        # a signal about whether the account exists.
-        log.warning(f"reset email failed: {type(e).__name__}: {e}")
-        return False
+    # Whether mail worked must never become a signal about whether the account
+    # exists, so a failure is logged inside mailer.send and not raised.
+    import mailer
+    return mailer.send(to, "Reset your FicAtlas password", body)
 
 
 @router.post("/forgot")

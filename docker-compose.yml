@@ -387,6 +387,14 @@ services:
       # is served at /<key>.txt by the frontend — see backend/indexnow.py.
       INDEXNOW_KEY: ${INDEXNOW_KEY:-}
       PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-https://ficatlas.com}
+      # Opt-in follow-update digests (follow_email.py) go out from here, so the
+      # worker needs the same relay and site address as the API's reset mail.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://ficatlas.com}
       # The bulk AO3 dump stops at work id 63,178,258 (~mid-2024) while AO3 is
       # now issuing ~89.7M, so everything recent can only come from crawling.
       RECENT_WORKS: "true"
