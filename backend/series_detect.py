@@ -572,7 +572,15 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
                     name = f"{name} series"
                 groups.append((name, members, 30.0, "inferred"))
 
+            # A work the archive already files in a series is not evidence for
+            # one this detector invents: guessing it into a second grouping is
+            # how a story came to sit in four series at once. Removed BEFORE
+            # positions are worked out, so the guess numbers what is left.
+            filed = explicit_members(db, [w["id"] for w in works]) if groups else set()
             for name, members, score, source in merge_same_named(groups):
+                members = [m for m in members if m["id"] not in filed]
+                if len(members) < 2:
+                    continue
                 found += 1
                 # Author-stated position wins; otherwise publication order, which
                 # is AO3's own fallback for a series with no positions set.
@@ -710,56 +718,10 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
             # authoritative, and inference only fills gaps. A work an explicit
             # or stated series already claims is not evidence for an invented
             # one, whatever else that invented series contains.
-            trimmed = db.execute(sql_text("""
-                DELETE FROM series_works iw
-                USING series inf, series better, series_works bw
-                WHERE iw.series_id = inf.id
-                  AND inf.source = 'inferred'
-                  AND better.source IN ('stated','explicit')
-                  AND better.id <> inf.id
-                  AND lower(coalesce(better.author,'')) = lower(coalesce(inf.author,''))
-                  AND bw.series_id = better.id
-                  AND bw.story_id = iw.story_id
-            """)).rowcount
-            db.commit()
-            if trimmed:
-                log.info(f"  removed {trimmed:,} memberships an inferred series "
-                         f"shared with a stated or explicit one")
-                # A trimmed series is a series whose counts now lie, and both
-                # are read by the UI — `work_count` on the page and
-                # `member_count` in the length add-on's guard. Recomputed only
-                # for inferred series, which are the only ones this touched.
-                db.execute(sql_text("""
-                    UPDATE series s
-                       SET work_count = c.n, member_count = c.n
-                      FROM (SELECT sw.series_id, count(*) AS n
-                              FROM series_works sw GROUP BY 1) c
-                     WHERE c.series_id = s.id
-                       AND s.source = 'inferred'
-                       AND (s.work_count IS DISTINCT FROM c.n
-                            OR s.member_count IS DISTINCT FROM c.n)
-                """))
-                db.commit()
-
-            gone = db.execute(sql_text("""
-                DELETE FROM series inf
-                WHERE inf.source = 'inferred'
-                  AND EXISTS (
-                    SELECT 1 FROM series better
-                    WHERE better.source IN ('stated','explicit')
-                      AND lower(coalesce(better.author,'')) = lower(coalesce(inf.author,''))
-                      AND better.id <> inf.id
-                      AND NOT EXISTS (
-                        SELECT 1 FROM series_works iw
-                        WHERE iw.series_id = inf.id
-                          AND NOT EXISTS (
-                            SELECT 1 FROM series_works bw
-                            WHERE bw.series_id = better.id AND bw.story_id = iw.story_id))
-                  )
-            """)).rowcount
-            db.commit()
-            if gone:
-                log.info(f"  dropped {gone:,} inferred series superseded by a stated one")
+            r = supersede_weaker(db)
+            if r["trimmed"] or r["dropped"]:
+                log.info(f"  removed {r['trimmed']:,} memberships a stronger series "
+                         f"already holds; dropped {r['dropped']:,} emptied series")
             # Keep has_series honest after deletes (membership may have gone).
             # Only touch rows currently flagged — the partial index makes this
             # cheap; a WHERE NOT EXISTS over all 19.7M rows is not.
@@ -775,6 +737,95 @@ def run(dry_run: bool, only_author: str | None, limit_authors: int,
             db.commit()
         log.info(f"DONE — {found:,} candidate series, {stored:,} stored")
     return len(authors)
+
+
+# How much each source's word is worth when two series claim one work. Only the
+# archive's own grouping may share a work with another series: an AO3 author can
+# and does file one work in several series, and that is a fact about the work.
+# Everything below it is this index's GUESS at a grouping, and two guesses
+# holding the same work are one guess counted twice — measured 2026-10-05,
+# 2,838 of 3,000 sampled sequel/stated pairs had IDENTICAL membership, so the
+# series panel showed the same run twice under two invented names.
+SOURCE_RANK_SQL = """CASE source WHEN 'explicit' THEN 3 WHEN 'stated' THEN 2
+                     WHEN 'inferred' THEN 0 ELSE 1 END"""
+
+
+def supersede_weaker(db, dry_run: bool = False) -> dict:
+    """Take each work out of every non-explicit series a stronger one also holds.
+
+    Stronger means: higher source rank, then more members, then id — a strict
+    order, so of any set of series sharing a work exactly one keeps it, and
+    explicit series are never touched (the archive said so). Per WORK, not per
+    series: an all-or-nothing subset test let one extra work keep a whole
+    duplicate alive, which is what a reader sees as a story filed under a side
+    series it does not belong to. A detector series left with fewer than two
+    works is dropped.
+    """
+    db.execute(sql_text("SET LOCAL statement_timeout = 0"))
+    db.execute(sql_text(f"""
+        CREATE TEMP TABLE IF NOT EXISTS _series_rank AS
+        SELECT s.id, {SOURCE_RANK_SQL} AS rank,
+               (SELECT count(*) FROM series_works w WHERE w.series_id = s.id) AS n
+          FROM series s WITH NO DATA
+    """))
+    db.execute(sql_text("TRUNCATE _series_rank"))
+    db.execute(sql_text(f"""
+        INSERT INTO _series_rank
+        SELECT s.id, {SOURCE_RANK_SQL},
+               (SELECT count(*) FROM series_works w WHERE w.series_id = s.id)
+          FROM series s
+         WHERE EXISTS (SELECT 1 FROM series_works a JOIN series_works b
+                         ON b.story_id = a.story_id AND b.series_id <> a.series_id
+                        WHERE a.series_id = s.id)
+    """))
+    db.execute(sql_text("CREATE INDEX IF NOT EXISTS _series_rank_id ON _series_rank (id)"))
+    db.execute(sql_text("ANALYZE _series_rank"))
+    loser = """
+        FROM series_works sw JOIN _series_rank r ON r.id = sw.series_id
+        WHERE r.rank < 3
+          AND EXISTS (SELECT 1 FROM series_works bw JOIN _series_rank b ON b.id = bw.series_id
+                       WHERE bw.story_id = sw.story_id AND bw.series_id <> sw.series_id
+                         AND (b.rank, b.n, b.id::text) > (r.rank, r.n, r.id::text))
+    """
+    if dry_run:
+        n = db.execute(sql_text(f"SELECT count(*) {loser}")).scalar()
+        db.rollback()
+        return {"trimmed": n, "dropped": 0}
+    touched = [r[0] for r in db.execute(sql_text(
+        f"SELECT DISTINCT sw.series_id {loser}"))]
+    trimmed = db.execute(sql_text(f"""
+        DELETE FROM series_works d USING (SELECT sw.series_id, sw.story_id {loser}) x
+         WHERE d.series_id = x.series_id AND d.story_id = x.story_id
+    """)).rowcount
+    dropped = 0
+    if touched:
+        dropped = db.execute(sql_text("""
+            DELETE FROM series s
+             WHERE s.id = ANY(CAST(:ids AS uuid[])) AND s.source <> 'explicit'
+               AND (SELECT count(*) FROM series_works w WHERE w.series_id = s.id) < 2
+        """), {"ids": touched}).rowcount
+        # The counts are read by the UI (work_count on the page) and by the
+        # length add-on's guard (member_count), so a trimmed series must not
+        # keep claiming its old size. Explicit series carry AO3's own count.
+        db.execute(sql_text("""
+            UPDATE series s SET work_count = c.n, member_count = c.n
+              FROM (SELECT series_id, count(*) AS n FROM series_works
+                     WHERE series_id = ANY(CAST(:ids AS uuid[])) GROUP BY 1) c
+             WHERE c.series_id = s.id AND s.source <> 'explicit'
+        """), {"ids": touched})
+    db.commit()
+    return {"trimmed": trimmed, "dropped": dropped}
+
+
+def explicit_members(db, ids: list[str]) -> set[str]:
+    """Which of these works an archive series already holds."""
+    if not ids:
+        return set()
+    return {str(r[0]) for r in db.execute(sql_text("""
+        SELECT DISTINCT sw.story_id FROM series_works sw
+          JOIN series s ON s.id = sw.series_id
+         WHERE s.source = 'explicit' AND sw.story_id = ANY(CAST(:ids AS uuid[]))
+    """), {"ids": ids})}
 
 
 def repair_collisions(db, dry_run: bool = False) -> dict:
@@ -828,12 +879,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Group works into series")
     ap.add_argument("--repair-collisions", action="store_true",
                     help="renumber stored series holding two works on one number, then exit")
+    ap.add_argument("--supersede", action="store_true",
+                    help="take works out of guessed series a stronger series holds, then exit")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--author", default=None)
     ap.add_argument("--limit-authors", type=int, default=20000)
     ap.add_argument("--offset", type=int, default=0,
                     help="skip the first N authors (the background loop walks these)")
     args = ap.parse_args()
+    if args.supersede:
+        from db.session import db_session
+        with db_session() as db:
+            print(supersede_weaker(db, args.dry_run))
+        return 0
     if args.repair_collisions:
         from db.session import db_session
         with db_session() as db:
