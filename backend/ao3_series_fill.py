@@ -58,6 +58,11 @@ MAX_PAGES = int(os.getenv("SERIES_FILL_MAX_PAGES", "10"))
 RETRY_AFTER_DAYS = float(os.getenv("SERIES_FILL_RETRY_DAYS", "30"))
 
 
+# How many missing works' worth of priority a series gets for holding parts 2
+# and 3 without part 1 (half that for part 2 alone). See incomplete_series.
+LIFT_FIRST = int(os.getenv("SERIES_FILL_LIFT_FIRST", "4"))
+
+
 def incomplete_series(db, limit: int) -> list[tuple[str, str, str | None]]:
     """(series_id, ao3_id, name) for series we hold only part of.
 
@@ -101,9 +106,21 @@ def incomplete_series(db, limit: int) -> list[tuple[str, str, str | None]]:
                (count(*) <> count(DISTINCT sw.position)) DESC,
                CASE WHEN count(*) <> count(DISTINCT sw.position) THEN count(*) END ASC,
                (max(sw.position) - min(sw.position) + 1 - count(*))
-               + (min(sw.position) - 1) DESC
+               + (min(sw.position) - 1)
+               -- A slight lift for a series that holds the works AFTER the
+               -- first but not the first itself: readers start at 1, so a
+               -- series page beginning at part 2 is the most visible gap a
+               -- missing work can make, and one fetch closes it. Slight on
+               -- purpose -- a series missing forty works still outranks it.
+               + CASE WHEN min(sw.position) > 1
+                           AND bool_or(sw.position = 2) AND bool_or(sw.position = 3)
+                      THEN :lift_first
+                      WHEN min(sw.position) > 1 AND bool_or(sw.position = 2)
+                      THEN :lift_first / 2
+                      ELSE 0 END DESC
         LIMIT :lim
-    """), {"lim": limit, "retry_days": RETRY_AFTER_DAYS}).fetchall()
+    """), {"lim": limit, "retry_days": RETRY_AFTER_DAYS,
+           "lift_first": LIFT_FIRST}).fetchall()
     return [(str(r[0]), r[1], r[2]) for r in rows]
 
 
