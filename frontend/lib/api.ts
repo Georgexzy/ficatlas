@@ -130,8 +130,14 @@ export function formatNumber(n: number): string {
   return String(n)
 }
 
-export function chapterDisplay(count: number, total?: number | null): string {
+// "29/?" beside a "Complete" badge contradicts itself: the "?" is AO3's way
+// of saying more chapters are coming, and a finished work has said there are
+// not. Where the archive marked the work complete without a stated total, the
+// count IS the total.
+export function chapterDisplay(count: number, total?: number | null,
+                               status?: string | null): string {
   if (total) return `${count}/${total}`
+  if (status === "complete") return `${count}`
   return `${count}/?`
 }
 

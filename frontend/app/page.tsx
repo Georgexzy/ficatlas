@@ -790,15 +790,19 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
       {story.summary && <Summary text={story.summary} />}
 
       <div className="card__meta">
+        {/* Numbers with WORDS, not emoji. 📄 👁 💬 🔖 drew differently on every
+            platform, and the only thing saying what they meant was a title
+            tooltip, which a phone never shows — so "3.2M" beside an eye was a
+            guess. A label is a few characters and is never a guess. */}
         {story.word_count > 0
-          ? <span title="Words">📄 {formatWordCount(story.word_count)}</span>
-          : <span title="Word count not in metadata" className="card__meta-muted">📄 —</span>}
+          ? <span><b>{formatWordCount(story.word_count)}</b> words</span>
+          : <span className="card__meta-muted">words unknown</span>}
         <span className="dot">·</span>
-        <span title="Chapters">{chapterDisplay(story.chapter_count, story.chapter_count_total)} ch</span>
-        {story.kudos > 0 && <><span className="dot">·</span><span title="Kudos">♥ {formatNumber(story.kudos)}</span></>}
-        {story.hits > 0 && <><span className="dot">·</span><span title="Hits">👁 {formatNumber(story.hits)}</span></>}
-        {story.comments > 0 && <><span className="dot">·</span><span title="Comments">💬 {formatNumber(story.comments)}</span></>}
-        {story.bookmarks > 0 && <><span className="dot">·</span><span title="Bookmarks">🔖 {formatNumber(story.bookmarks)}</span></>}
+        <span><b>{chapterDisplay(story.chapter_count, story.chapter_count_total, story.status)}</b> ch</span>
+        {story.kudos > 0 && <><span className="dot">·</span><span><b>{formatNumber(story.kudos)}</b> kudos</span></>}
+        {story.hits > 0 && <><span className="dot">·</span><span><b>{formatNumber(story.hits)}</b> hits</span></>}
+        {story.comments > 0 && <><span className="dot">·</span><span><b>{formatNumber(story.comments)}</b> comments</span></>}
+        {story.bookmarks > 0 && <><span className="dot">·</span><span><b>{formatNumber(story.bookmarks)}</b> bookmarks</span></>}
         {story.language && story.language !== "English" && <><span className="dot">·</span><span>{story.language}</span></>}
 
         {/* Say WHICH date it is. A bare "2026-01-11" does not distinguish when a
@@ -3505,7 +3509,7 @@ function SearchPageInner() {
               button people hesitate over. Only rendered when there is something
               to leave. */}
           {searchIsActive && (
-<div className="search-exit">
+<div className={`search-exit${activeFilters === 0 ? " search-exit--plain" : ""}`}>
                 {/* The results state had NO heading at all, and the landing page
                     has one — so this was the same bug the empty state was fixed
                     for, in the other state. `LandingIntro`'s <h1> ("Find fic

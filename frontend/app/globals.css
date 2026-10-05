@@ -2456,12 +2456,13 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
 /* ── Search UX polish batch ──────────────────────────────────────────────── */
 .card__meta-muted { color: var(--text-faint); opacity: 0.6; }
 
-/* Sticky pagination feels more app-like on long result pages */
-.pagination {
-  position: sticky; bottom: 0;
-  background: linear-gradient(to top, var(--bg) 60%, transparent);
-  padding: 16px 0 8px; z-index: 10;
-}
+/* The pager sits at the END of the list, in the flow. It was sticky to the
+   bottom of the viewport over a 60%-opaque gradient, so it lay on top of the
+   card under it — measured on a 1440x900 screen, covering the third result's
+   summary — and a sticky bar is exactly what WCAG 2.2's "focus not obscured"
+   is about: tab to a link under it and the focus ring is hidden. The count
+   bar at the top already says which page this is. */
+.pagination { padding: 16px 0 8px; }
 
 /* The search loader's compass.
 
@@ -7479,3 +7480,98 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .channels__fandom, .channels__people { color: var(--text-faint); font-size: 13px; }
 .queue-item__src--bluesky { color: #6fa8e8; }
 .queue-item__src--tumblr  { color: #8fa3bf; }
+
+/* ══ UI refresh, 2026-10-05 ═════════════════════════════════════════════════
+   Measured against published guidance rather than taste, one rule per finding:
+
+   * Focus is always visible and never under the sticky header (WCAG 2.2
+     2.4.7 / 2.4.11). There was no global focus style, and no scroll padding
+     for a header that sticks to the top: tabbing down a results page put the
+     focused link behind it.
+   * Tap targets reach 24px everywhere and 44px for the primary actions on a
+     phone (WCAG 2.2 2.5.8; Apple and Material both say 44/48). The audit found
+     55 controls under 24px on a phone search page.
+   * Reading text is in the reading face. Tags, buttons and the stats line were
+     in DM Mono at 11px — a code face, for prose — which is the hardest thing on
+     the card to read. Mono stays where alignment matters: counts, badges.
+   * The first result starts sooner on a phone. Baymard's list-page research is
+     blunt about it: what pushes results below the fold is the cost, and on a
+     390x844 screen the first card began at 340px under a box that repeated the
+     search box word for word.
+   Everything below uses the theme's tokens, so light and dark are the same rules. */
+
+html { scroll-padding-top: 72px; }
+:where(a, button, select, input, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+}
+
+/* Reading face for reading text. */
+.tag, .chip, .card-btn, .card__meta, .results-bar, .results-bar__share {
+  font-family: var(--font-sans);
+}
+.tag, .chip { font-size: 12px; padding: 3px 8px; border-radius: 6px; }
+.card__meta { font-size: 12.5px; gap: 2px 6px; color: var(--text-faint); }
+.card__meta b { font-weight: 600; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.card-btn { font-size: 13px; min-height: 32px; padding: 5px 12px; border-radius: 8px; }
+.results-bar { font-size: 13px; }
+
+/* A plain text search: the row only needs its way out. */
+.search-exit--plain .search-exit__what { display: none; }
+.search-exit--plain {
+  border: 0; background: none; padding: 0; margin: -4px 0 4px;
+  justify-content: flex-end;
+}
+.search-exit--plain .search-exit__btn { font-size: 12.5px; }
+
+@media (max-width: 700px) {
+  .card-btn { min-height: 44px; padding: 8px 14px; font-size: 14px; }
+  .card-btn--primary { flex: 1 1 auto; justify-content: center; }
+  .tag, .chip { min-height: 28px; display: inline-flex; align-items: center; }
+  .search-exit--plain { margin: 0 0 6px; }
+  .search-exit--plain .search-exit__btn { min-height: 36px; }
+  .card { padding: 16px 14px; }
+  .card__title { font-size: 20px; line-height: 1.25; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
+
+/* The results bar as two tidy rows: what was found, then what to do with it.
+   It was one flex row whose children landed wherever the wrap put them — the
+   sort label stacked over its menu, Copy link floating mid-row, the count
+   pushed to the far edge — and four rows on a phone. The count leads because
+   it is the answer; sort and the actions share the line beneath it. */
+.results-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.results-bar__count { order: -1; flex: 1 1 100%; }
+.results-bar__sort { flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 6px; }
+.results-bar__sort .select, .results-bar__sort select { width: auto; min-height: 32px; font-size: 13px; }
+.results-bar__sort .sidebar__hint { flex-basis: 100%; }
+.results-bar__share { min-height: 32px; font-size: 13px; border-radius: 8px; }
+.results-bar__actions { margin-left: auto; }
+@media (max-width: 700px) {
+  /* A plain search's "Start over" is the logo and the box's own ×; the row
+     cost a full line above the first result. Filtered searches keep it. */
+  .search-exit--plain { display: none; }
+  .results-bar__share { min-height: 36px; }
+  .results-bar__sort select { min-height: 36px; max-width: 52vw; }
+}
+@media (max-width: 700px) {
+  /* One line for sort + Copy link + Save on a 360-390px phone: the label is
+     kept for screen readers (it is the select's <label>), and the select's
+     own text already says "Relevance". */
+  .results-bar__sort-label {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  .results-bar__sort select { max-width: 38vw; }
+  .results-bar { gap: 8px; }
+}
+@media (max-width: 700px) {
+  /* A filtered search on a phone: one line saying what is applied, one way
+     out. "Clear N filters" in the bar below repeated "Start over" one row
+     further down, and the line wrapped its button onto a second row. */
+  .search-exit:not(.search-exit--plain) { flex-wrap: nowrap; padding: 4px 4px 4px 12px; border-radius: 999px; }
+  .search-exit:not(.search-exit--plain) .search-exit__what { flex: 1 1 auto; }
+  .search-exit:not(.search-exit--plain) .search-exit__btn { min-height: 36px; padding: 6px 12px; }
+  .search-exit:not(.search-exit--plain) ~ .results .results-bar__clear { display: none; }
+}

@@ -27,7 +27,7 @@ interface StoryDetail {
   is_hosted: boolean; wayback_url?: string; cross_post_urls?: string[]; chapters: ChapterMeta[]
 }
 
-import { SITE_LABELS } from "@/lib/api"
+import { SITE_LABELS, chapterDisplay } from "@/lib/api"
 
 // This used to be `status === "complete" ? "Complete" : "In Progress"`, which
 // states "In Progress" for anything that is not explicitly finished. Most of
@@ -630,7 +630,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
 
         <dl className="story-detail__meta">
           <div><dt>Words</dt><dd>{story.word_count.toLocaleString()}</dd></div>
-          <div><dt>Chapters</dt><dd>{story.chapter_count}{story.chapter_count_total ? `/${story.chapter_count_total}` : "/?"}</dd></div>
+          <div><dt>Chapters</dt><dd>{chapterDisplay(story.chapter_count, story.chapter_count_total, story.status)}</dd></div>
           <div><dt>Status</dt><dd>{STATUS_LABEL[story.status] ?? "Not stated"}</dd></div>
           {story.rating && <div><dt>Rating</dt><dd>{story.rating}</dd></div>}
           {story.kudos > 0 && <div><dt>Kudos</dt><dd>{story.kudos.toLocaleString()}</dd></div>}
