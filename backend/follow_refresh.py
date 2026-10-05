@@ -53,7 +53,7 @@ def due_ao3(db, hours: float = FOLLOW_REFRESH_HOURS, limit: int = MAX_PER_PASS) 
            AND s.delisted_at IS NULL AND s.source_restricted_at IS NULL
            AND s.status IS DISTINCT FROM 'complete'
            AND (s.crawled_at IS NULL
-                OR s.crawled_at < now() - make_interval(hours => :h))
+                OR s.crawled_at < now() - :h * interval '1 hour')
          ORDER BY s.crawled_at NULLS FIRST
          LIMIT :n
     """), {"h": hours, "n": limit}).fetchall()

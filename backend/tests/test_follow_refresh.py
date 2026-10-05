@@ -59,7 +59,7 @@ def test_only_followed_unfinished_stale_ao3_works_are_due(db):
     for s in (stale, fresh, done):
         _follow(db, s)
     db.commit()
-    due = {str(r[0]) for r in follow_refresh.due_ao3(db, hours=3)}
+    due = {str(r[0]) for r in follow_refresh.due_ao3(db, hours=3.0)}  # float, as the worker passes it
     assert due == {stale}
     assert unfollowed not in due
 
