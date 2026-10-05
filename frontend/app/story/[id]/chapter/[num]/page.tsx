@@ -424,7 +424,13 @@ export default function ChapterPage() {
     window.addEventListener("scroll", onScroll, { passive: true })
     // A tab closed or backgrounded mid-chapter used to lose up to 600ms of
     // reading position; on a phone, backgrounding is how you leave.
-    const flush = () => { if (timer) { clearTimeout(timer); timer = null } save() }
+    // Only a PENDING save is flushed. Saving unconditionally on every
+    // visibility change meant a tab left open on an old chapter — on another
+    // device, or behind other tabs — re-asserted "reading chapter 22, now"
+    // just by being looked at, and the newer timestamp won the sync against
+    // the chapter the reader had actually reached (61, on the account that
+    // found this). A tab nobody scrolled has nothing new to say.
+    const flush = () => { if (timer) { clearTimeout(timer); timer = null; save() } }
     window.addEventListener("pagehide", flush)
     document.addEventListener("visibilitychange", flush)
     return () => {

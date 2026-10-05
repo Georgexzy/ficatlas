@@ -1,4 +1,5 @@
 "use client"
+import { resumePoint } from "@/lib/readingProgress"
 import { useEffect, useState, useRef } from "react"
 import { buildShelf, shelfHas, type ShelfItem, type ShelfFilter } from "@/lib/shelf"
 import Link from "next/link"
@@ -1155,8 +1156,9 @@ export default function LibraryPage() {
             <div className="library-list">
               {shelfShown.map(it => {
                 const p = it.progress
-                const href = p?.chapter ? `/story/${it.id}/chapter/${p.chapter}`
-                                        : `/story/${it.id}`
+                const resume = resumePoint(p)
+                const href = resume ? `/story/${it.id}/chapter/${resume.chapter}`
+                                    : `/story/${it.id}`
                 // Offline, a work without a download cannot be opened at all,
                 // and offering it as a tap is how a reader concludes that
                 // offline saving is broken. Same rule the old Offline tab
@@ -1178,9 +1180,9 @@ export default function LibraryPage() {
                         say, and it says it without the reader choosing a tab
                         first. */}
                     <p className="shelf-row__states">
-                      {p?.chapter ? (
+                      {resume ? (
                         <span className="shelf-state shelf-state--reading">
-                          {online || it.offline ? "Resume ch " : "Ch "}{p.chapter}
+                          {online || it.offline ? "Resume ch " : "Ch "}{resume.chapter}
                         </span>
                       ) : null}
                       {it.offline ? <span className="shelf-state shelf-state--offline">Offline</span> : null}
@@ -1994,17 +1996,18 @@ function BookCover({ story, onDelete, progress }: {
   // Compute % through story: (completed chapters + partial scroll) / total
   let pct: number | null = null
   let label = ""
-  if (progress?.chapter && progress.chapter > 0) {
-    const total = progress.totalChapters ?? story.chapter_count ?? 1
-    const completed = Math.max(0, progress.chapter - 1)
-    const partial = progress.scrollPct ?? 0
-    pct = Math.min(1, (completed + partial) / Math.max(total, 1))
-    label = `Ch ${progress.chapter}/${total} · ${Math.round(pct * 100)}%`
+  const resume = resumePoint(progress)
+  if (resume) {
+    const total = progress?.totalChapters ?? story.chapter_count ?? 1
+    const completed = Math.max(0, resume.chapter - 1)
+    pct = Math.min(1, (completed + resume.pct) / Math.max(total, 1))
+    label = `Ch ${resume.chapter}/${total} · ${Math.round(pct * 100)}%`
   }
 
-  // Continue Reading: deep-link straight to the saved chapter
-  const readHref = progress?.chapter
-    ? `/story/${story.id}/chapter/${progress.chapter}`
+  // Continue Reading: deep-link straight to the furthest chapter reached
+  // (lib/readingProgress.ts), not the last one some tab happened to open.
+  const readHref = resume
+    ? `/story/${story.id}/chapter/${resume.chapter}`
     : `/story/${story.id}`
 
   return (

@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/auth"
 import { describeError, type Failure } from "@/lib/errors"
 import OfflineLink from "@/app/OfflineLink"
 import { storyLink, isSeedUrl, otherCopies } from "@/lib/storyLinks"
+import { resumePoint } from "@/lib/readingProgress"
 import ArchiveLink from "./ArchiveLink"
 import SiteHeader from "@/app/SiteHeader"
 
@@ -438,9 +439,12 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
             const numbers = story.chapters.map(c => c.number).sort((a, b) => a - b)
             const first = numbers[0]
             let savedChapter = 0
+            let lastOpened: number | null = null
             try {
               const p = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
-              savedChapter = p[story.id]?.chapter ?? 0
+              const r = resumePoint(p[story.id])
+              savedChapter = r?.chapter ?? 0
+              lastOpened = r?.lastOpened ?? null
             } catch {}
             if (savedChapter !== first && numbers.includes(savedChapter)) {
               return (
@@ -448,6 +452,11 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
                   <OfflineLink href={`/story/${story.id}/chapter/${savedChapter}`} className="btn btn--primary">
                     {`Continue Chapter ${savedChapter}`}
                   </OfflineLink>
+                  {lastOpened && numbers.includes(lastOpened) && (
+                    <OfflineLink href={`/story/${story.id}/chapter/${lastOpened}`} className="btn btn--ghost">
+                      {`Back to Chapter ${lastOpened}`}
+                    </OfflineLink>
+                  )}
                   <OfflineLink href={`/story/${story.id}/chapter/${first}`} className="btn btn--ghost">
                     Start over
                   </OfflineLink>
