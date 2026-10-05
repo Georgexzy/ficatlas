@@ -7689,3 +7689,28 @@ html { scroll-padding-top: 72px; }
   .browse__list li { padding: 8px 10px; }
 }
 .empty__promises { font-family: var(--font-sans); font-size: 13px; }
+
+/* Browse tiles on a phone. The gaps between tiles were always 6px; what read
+   as gaps was centring: a one-line name in a row whose neighbour wraps to four
+   lines floated mid-box with empty space above and below. Contents sit at the
+   top now, so every tile reads from the same line. The list also spans the
+   page's own 14px gutter instead of a further 20px inset (.empty's padding),
+   which made tiles narrower and wrap more. Pairings are long names that wrap
+   two-up on a phone, so they are a one-column list with the size on the right. */
+.browse__list a.browse__item { justify-content: flex-start; }
+@media (max-width: 32rem) {
+  .browse { margin-left: -20px; margin-right: -20px; }
+  .browse__list--ship { grid-template-columns: 1fr; }
+  .browse__list--ship a.browse__item {
+    flex-direction: row; align-items: center; justify-content: space-between;
+    gap: 12px; min-height: 40px;
+  }
+  .browse__list--ship .browse__count { flex-shrink: 0; }
+}
+@media (max-width: 32rem) {
+  /* One name per row needs no reserved second line (that rule exists to even
+     out a GRID's row heights, and a single column has none to even out). */
+  .browse__list--ship { gap: 4px; }
+  .browse__list--ship li { padding: 6px 12px; }
+  .browse__list--ship a.browse__item { min-height: 32px; }
+}

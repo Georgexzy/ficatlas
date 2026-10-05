@@ -1394,7 +1394,7 @@ function BrowseExplorer() {
       {/* A grid of names, not a ranked bar chart. Every row is a link, so the
           count is decoration rather than the reason to click: it answers "is
           this worth it" without being the thing being compared. */}
-      <ul className="browse__list" role="tabpanel" aria-label={current.label}>
+      <ul className={`browse__list browse__list--${tab}`} role="tabpanel" aria-label={current.label}>
         {rows.map(r => (
           <li key={r.slug}>
             <Link href={`/${current.hub}/${r.slug}`} title={r.name} className="browse__item">
