@@ -1290,6 +1290,31 @@ async def _hubs_loop() -> None:
         except Exception as e:
             log.warning(f"ship hub rebuild failed: {type(e).__name__}: {e}")
 
+        # Trope hubs (topic_hubs.py): weekly, not daily. ~1,400 pages at ~1-2s
+        # of ranked reads each is most of an hour, and "the most-read time
+        # travel fics in Harry Potter" does not move day to day. Evidence is
+        # topic_hubs_built_at, which the admin panel reads.
+        try:
+            def _go_topics():
+                import time as _t
+                import topic_hubs
+                from sqlalchemy import text as sql_text
+                from api.settings import put_setting
+                with db_session() as db:
+                    last = db.execute(sql_text(
+                        "SELECT value FROM app_settings WHERE key = 'topic_hubs_built_at'"
+                    )).scalar()
+                    if last and _t.time() - float(last) < _num("TOPIC_HUBS_DAYS", 7) * 86400:
+                        return None
+                    n = topic_hubs.build(db)
+                    put_setting(db, "topic_hubs_built_at", str(int(_t.time())))
+                    return n
+            n = await asyncio.to_thread(_go_topics)
+            if n is not None:
+                log.info(f"trope hubs rebuilt: {n:,} pages")
+        except Exception as e:
+            log.warning(f"trope hub rebuild failed: {type(e).__name__}: {e}")
+
         await asyncio.sleep(interval)
 
 

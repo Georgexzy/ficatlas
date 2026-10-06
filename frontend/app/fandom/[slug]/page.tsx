@@ -90,6 +90,8 @@ interface Hub {
   related?: RelatedHub[]
   /** What works here tend to be — the refinement chips. */
   recommended?: Recommended[]
+  /** Trope pages under this fandom (backend/topic_hubs.py). */
+  topics?: { slug: string; tag: string; work_count: number }[]
   recommended_days?: number
 }
 
@@ -270,6 +272,40 @@ export default async function FandomHub(
           rather than a search box, they are true of every hub, and removing
           them would take away the only way to narrow without the bar. */}
 
+
+      {/* The fandom's tropes, each its own page. Near the top because "what
+          kind of story" is the next question a reader arriving here has, and
+          server-rendered because these are how a crawler reaches the trope
+          pages at all. */}
+      {!!hub.topics?.length && (
+        <nav className="hub__related hub__topics" aria-label={`${hub.name} by trope`}>
+          <h2 className="hub__heading">Browse by trope</h2>
+          {/* Twelve, then the rest folded: 24 chips filled a phone's first
+              screen before a single work. The folded ones are still in the
+              HTML, so every trope page stays linked for a crawler. */}
+          <ul className="hub-chips">
+            {hub.topics.slice(0, 12).map(x => (
+              <li key={x.slug}>
+                <Link href={`/fandom/${x.slug}`}>{x.tag}</Link>
+                <span className="hub-chips-count">{x.work_count.toLocaleString()}</span>
+              </li>
+            ))}
+          </ul>
+          {hub.topics.length > 12 && (
+            <details className="hub__topics-more">
+              <summary>{hub.topics.length - 12} more tropes</summary>
+              <ul className="hub-chips">
+                {hub.topics.slice(12).map(x => (
+                  <li key={x.slug}>
+                    <Link href={`/fandom/${x.slug}`}>{x.tag}</Link>
+                    <span className="hub-chips-count">{x.work_count.toLocaleString()}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </nav>
+      )}
 
       {/* WHAT THE FANDOM IS RECOMMENDING, above the archive lists on purpose.
           It is the only thing on this page that is not derivable from the

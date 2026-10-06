@@ -104,6 +104,13 @@ class RelatedHub(BaseModel):
     work_count: int
 
 
+class TopicLink(BaseModel):
+    slug: str          # "harry-potter/time-travel"
+    tag: str
+    work_count: int
+    content_at: str | None = None   # the sitemap's <lastmod>
+
+
 class HubDetail(BaseModel):
     slug: str
     name: str
@@ -120,6 +127,13 @@ class HubDetail(BaseModel):
     # sideways: the index linked 11,190 hubs, each hub linked 100 story pages,
     # and no hub linked to any other.
     related: list[RelatedHub] = []
+    # Trope pages under this fandom (topic_hubs.py): on a fandom hub, its
+    # tropes; on a trope hub, the fandom's OTHER tropes.
+    topics: list[TopicLink] = []
+    # Set on a trope hub only.
+    fandom_slug: str | None = None
+    fandom_name: str | None = None
+    tag: str | None = None
     # Empty until the harvest has read a thread for this fandom, which is the
     # normal state for most of 5,025 hubs — the section simply does not render.
     recommended: list[RecommendedWork] = []
@@ -371,20 +385,12 @@ def _related(db, kind: str, slug: str, name: str,
     return out[:RELATED_CAP]
 
 
-def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
-    table = _TABLES[kind]
-    response.headers["Cache-Control"] = CACHE
-    hub = db.execute(text(
-        f"SELECT slug, name, work_count, top_ids, top_by_site, site_counts, "
-        f"       variants "
-        f"  FROM {table} WHERE slug = :s"
-    ), {"s": slug}).fetchone()
-    if not hub:
-        raise HTTPException(status_code=404,
-                            detail="No such fandom" if kind == "fandom"
-                                   else "No such pairing")
+def _works_and_sections(db: Session, top_ids, top_by_site, site_counts):
+    """A hub's works, re-gated at read time, and its per-archive sections.
 
-    ids = list(hub[3] or [])
+    Shared by fandom, pairing and trope hubs so the gating below exists once.
+    """
+    ids = list(top_ids or [])
     works: list[HubWork] = []
     _fandoms: list[str] = []
     _rels: list[str] = []
@@ -460,9 +466,9 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     # Index 5, named rather than spelled inline: this row is unpacked by
     # position in four places and a column added in the middle of the SELECT
     # would silently shift every one of them.
-    _counts = hub[5] or {}
+    _counts = site_counts or {}
     sections: list[SiteSection] = []
-    for site, site_ids in (hub[4] or {}).items():
+    for site, site_ids in (top_by_site or {}).items():
         picked = [by_id[i] for i in site_ids if i in by_id]
         if picked:
             sections.append(SiteSection(site=site, works=picked,
@@ -478,6 +484,23 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
     # `len(s.works)` is kept as the tiebreak, for hubs built before the counts
     # existed: the ordering then is no worse than it was.
     sections.sort(key=lambda s: (-s.total, -len(s.works)))
+    return works, sections, _fandoms, _rels
+
+
+def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
+    table = _TABLES[kind]
+    response.headers["Cache-Control"] = CACHE
+    hub = db.execute(text(
+        f"SELECT slug, name, work_count, top_ids, top_by_site, site_counts, "
+        f"       variants "
+        f"  FROM {table} WHERE slug = :s"
+    ), {"s": slug}).fetchone()
+    if not hub:
+        raise HTTPException(status_code=404,
+                            detail="No such fandom" if kind == "fandom"
+                                   else "No such pairing")
+
+    works, sections, _fandoms, _rels = _works_and_sections(db, hub[3], hub[4], hub[5])
 
     nicknames: list[str] = []
     if kind == "ship":
@@ -495,10 +518,27 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
         log.warning("hub %s: recommended block unavailable", hub[0], exc_info=True)
         recommended, rec_days = [], 0
 
+    topics = _topics_for(db, hub[0]) if kind == "fandom" else []
+
     return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2],
                      nicknames=nicknames, works=works, sections=sections,
                      related=related, recommended=recommended,
-                     recommended_days=rec_days)
+                     recommended_days=rec_days, topics=topics)
+
+
+def _topics_for(db: Session, fandom_slug: str, exclude: str | None = None,
+                limit: int = 24) -> list[TopicLink]:
+    """A fandom's trope pages, biggest first. Never fails the page."""
+    try:
+        rows = db.execute(text("""
+            SELECT slug, tag, work_count FROM topic_hubs
+             WHERE fandom_slug = :f AND slug IS DISTINCT FROM :x
+             ORDER BY work_count DESC LIMIT :n
+        """), {"f": fandom_slug, "x": exclude, "n": limit}).fetchall()
+    except Exception:
+        db.rollback()
+        return []
+    return [TopicLink(slug=r[0], tag=r[1], work_count=r[2]) for r in rows]
 
 
 @router.get("", response_model=list[HubSummary])
@@ -572,6 +612,33 @@ def landing_browse(
 
     response.headers["Cache-Control"] = "public, max-age=600, s-maxage=3600"
     return out
+
+
+@router.get("/{fandom}/t/{tag}", response_model=HubDetail)
+def get_topic(fandom: str, tag: str, response: Response, db: Session = Depends(get_db)):
+    """A trope hub: one fandom, one trope. See topic_hubs.py."""
+    response.headers["Cache-Control"] = CACHE
+    row = db.execute(text("""
+        SELECT slug, name, work_count, top_ids, top_by_site, site_counts,
+               fandom_slug, fandom_name, tag
+          FROM topic_hubs WHERE slug = :s
+    """), {"s": f"{fandom}/{tag}"}).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="No such page")
+    works, sections, _f, _r = _works_and_sections(db, row[3], row[4], row[5])
+    return HubDetail(slug=row[0], name=row[1], work_count=row[2], works=works,
+                     sections=sections, topics=_topics_for(db, row[6], exclude=row[0]),
+                     fandom_slug=row[6], fandom_name=row[7], tag=row[8])
+
+
+@router.get("/topics/all", response_model=list[TopicLink])
+def list_topics(response: Response, db: Session = Depends(get_db)):
+    """Every trope page, for the sitemap."""
+    response.headers["Cache-Control"] = CACHE
+    rows = db.execute(text(
+        "SELECT slug, tag, work_count, content_at FROM topic_hubs ORDER BY slug")).fetchall()
+    return [TopicLink(slug=r[0], tag=r[1], work_count=r[2],
+                      content_at=r[3].isoformat() if r[3] else None) for r in rows]
 
 
 @router.get("/{slug}", response_model=HubDetail)

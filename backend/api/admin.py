@@ -306,6 +306,12 @@ _JOB_EVIDENCE = [
     # has died stops this moving.
     # Pass stamp, for the same reason as the mail row below: a pass with
     # nothing due is healthy and refreshes nothing.
+    # Trope hubs: weekly, so a week and a day before it is stale.
+    ("topic_hubs", "Trope hubs",
+     "Rebuilds the fandom + trope pages (/fandom/harry-potter/time-travel) "
+     "that search engines land readers on. See topic_hubs.py.", 8 * 24,
+     "SELECT to_timestamp(NULLIF(value,'')::bigint) FROM app_settings "
+     " WHERE key = 'topic_hubs_built_at'"),
     ("follow_refresh", "Followed works refresh",
      "Re-reads followed AO3 works every few hours and points the FF.net "
      "harvester at the fandoms holding followed works, so the Following tab "

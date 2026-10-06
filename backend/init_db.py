@@ -929,6 +929,32 @@ CREATE INDEX IF NOT EXISTS ix_follows_story ON follows (story_id);
 -- asked for it, and unsubscribing deletes the row, so nothing here can mail
 -- anybody who did not tick the box. The token is what an unsubscribe link
 -- carries, because a link in a mailbox must work without a session.
+-- Pasted AO3 links to works the index lacks, and what fetching them found:
+-- pending, added, restricted, missing, throttled. A row, not process memory,
+-- because the API runs several processes and each would fetch again. See
+-- work_lookup.py.
+CREATE TABLE IF NOT EXISTS pasted_fetches (
+    work_id  TEXT PRIMARY KEY,
+    state    TEXT NOT NULL,
+    at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Trope hubs: one bounded page per (fandom, trope). See topic_hubs.py.
+CREATE TABLE IF NOT EXISTS topic_hubs (
+    slug         TEXT PRIMARY KEY,
+    fandom_slug  TEXT NOT NULL,
+    fandom_name  TEXT NOT NULL,
+    tag          TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    work_count   INTEGER NOT NULL DEFAULT 0,
+    top_ids      TEXT[] NOT NULL DEFAULT '{}',
+    top_by_site  JSONB NOT NULL DEFAULT '{}',
+    site_counts  JSONB,
+    built_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    content_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_topic_hubs_fandom ON topic_hubs (fandom_slug, work_count DESC);
+
 CREATE TABLE IF NOT EXISTS follow_email (
     user_id      UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     frequency    TEXT NOT NULL DEFAULT 'daily',
