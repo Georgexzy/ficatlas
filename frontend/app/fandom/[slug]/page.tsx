@@ -93,6 +93,7 @@ interface Hub {
   /** Trope pages under this fandom (backend/topic_hubs.py). */
   topics?: { slug: string; tag: string; work_count: number }[]
   recommended_days?: number
+  recommended_ao3_tag?: string | null
 }
 
 const SITE_LABELS: Record<string, string> = {
@@ -332,9 +333,15 @@ export default async function FandomHub(
             ) : null}
           </h2>
           <p className="hub__recs-note">
-            From {recSources(hub.recommended.flatMap(r => r.communities ?? []))
-                   || "fandom discussion threads"}
-            , counted by how many different readers recommended each work — not by kudos.
+            Counted by how many different readers recommended each work, not by
+            kudos. From{" "}
+            {recSources(hub.recommended.flatMap(r => r.communities ?? []), hub.recommended_ao3_tag)
+              .map((src, i, all) => (
+                <span key={src.key}>
+                  <a href={src.href} target="_blank" rel="nofollow noopener noreferrer">{src.label}</a>
+                  {i < all.length - 2 ? ", " : i === all.length - 2 ? " and " : "."}
+                </span>
+              ))}
           </p>
           <ol className="hub__recs-list">
             {hub.recommended.slice(0, RECS_SHOWN).map(r => <RecCard key={r.id} r={r} />)}
@@ -478,23 +485,40 @@ function RecCard({ r }: { r: Recommended }) {
           version lets the reader weigh it. */}
       <p className="hub__rec-count">
         {r.people === 1 ? "1 reader recommended it" : `${r.people} readers recommended it`}
+        {r.communities?.length
+          ? <span className="hub__rec-where"> · {recSources(r.communities, null).map(x => x.short).join(", ")}</span>
+          : null}
       </p>
     </li>
   )
 }
 
-/** Where the recommendations came from, in words a reader recognises.
- *  Subreddits as "r/x"; the other sources by name, listed once each after
- *  the subreddits, and the subreddit list capped so the line stays one line. */
-const REC_SOURCE_NAMES: Record<string, string> = {
-  ao3_recs: "AO3 rec bookmarks",
-  bluesky: "Bluesky",
-  tumblr: "Tumblr",
-}
-function recSources(communities: string[]): string {
+/** Where the recommendations came from: every source, each with a link to it.
+ *  Named sources first, then subreddits. The AO3 link opens this fandom's rec
+ *  bookmarks newest first when its tag is known, else AO3's rec bookmarks. */
+type RecSource = { key: string; label: string; short: string; href: string }
+function recSources(communities: string[], ao3Tag: string | null | undefined): RecSource[] {
   const uniq = Array.from(new Set(communities))
-  const named = uniq.filter(c => REC_SOURCE_NAMES[c]).map(c => REC_SOURCE_NAMES[c])
-  const subs = uniq.filter(c => !REC_SOURCE_NAMES[c]).map(c => `r/${c}`)
-  const shown = subs.length > 4 ? [...subs.slice(0, 4), `${subs.length - 4} more subreddits`] : subs
-  return [...named, ...shown].join(", ")
+  const named: RecSource[] = []
+  const subs: RecSource[] = []
+  for (const c of uniq) {
+    if (c === "ao3_recs") {
+      const q = new URLSearchParams({ "bookmark_search[rec]": "1",
+        "bookmark_search[sort_column]": "created_at" })
+      if (ao3Tag) q.set("tag_id", ao3Tag.replace(/\//g, "*s*").replace(/\./g, "*d*")
+        .replace(/&/g, "*a*").replace(/#/g, "*h*").replace(/\?/g, "*q*"))
+      named.push({ key: c, label: "AO3 rec bookmarks", short: "AO3",
+        href: `https://archiveofourown.org/bookmarks?${q}` })
+    } else if (c === "bluesky") {
+      named.push({ key: c, label: "Bluesky", short: "Bluesky",
+        href: "https://bsky.app/search?q=%23ficrec" })
+    } else if (c === "tumblr") {
+      named.push({ key: c, label: "Tumblr", short: "Tumblr",
+        href: "https://www.tumblr.com/tagged/fic%20recs" })
+    } else {
+      subs.push({ key: c, label: `r/${c}`, short: `r/${c}`,
+        href: `https://www.reddit.com/r/${encodeURIComponent(c)}/` })
+    }
+  }
+  return [...named, ...subs]
 }

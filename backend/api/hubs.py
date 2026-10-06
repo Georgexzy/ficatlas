@@ -140,6 +140,10 @@ class HubDetail(BaseModel):
     # The window the counts describe, so the page can say "in the last 30 days"
     # rather than leaving a number to be read as all-time.
     recommended_days: int = 0
+    # The AO3 tag whose rec bookmarks were read for this fandom, so the hub can
+    # link straight to them. None when this fandom's bookmarks were not read
+    # (its AO3 recommendations then came via a crossover's fandom).
+    recommended_ao3_tag: Optional[str] = None
 
 
 # Both hub tables have the same shape, so listing and detail differ only in the
@@ -518,12 +522,23 @@ def _detail(kind: str, slug: str, response: Response, db: Session) -> HubDetail:
         log.warning("hub %s: recommended block unavailable", hub[0], exc_info=True)
         recommended, rec_days = [], 0
 
+    ao3_tag = None
+    if recommended:
+        try:
+            with db.begin_nested():
+                ao3_tag = db.execute(text(
+                    "SELECT tag FROM rec_ao3_state WHERE slug = :s"),
+                    {"s": hub[0]}).scalar()
+        except Exception:
+            ao3_tag = None
+
     topics = _topics_for(db, hub[0]) if kind == "fandom" else []
 
     return HubDetail(slug=hub[0], name=hub[1], work_count=hub[2],
                      nicknames=nicknames, works=works, sections=sections,
                      related=related, recommended=recommended,
-                     recommended_days=rec_days, topics=topics)
+                     recommended_days=rec_days, recommended_ao3_tag=ao3_tag,
+                     topics=topics)
 
 
 def _topics_for(db: Session, fandom_slug: str, exclude: str | None = None,
