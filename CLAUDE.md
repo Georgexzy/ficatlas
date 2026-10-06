@@ -507,6 +507,24 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **Hubs convert three times better than the front door, so trope hubs exist.**
+  30 days by first landing page, from search engines: pairing hub 47% opened
+  a story, fandom hub 46%, home/search 16%. `topic_hubs.py` builds
+  /fandom/<fandom>/<trope> (1,253 pages, weekly). The TAG NAME is a public,
+  shared URL, so `usable_tag` refuses anything sexual, abusive, gated, a
+  name, or archive metadata — broad on purpose; tests pin both directions.
+- **AO3's chapter redirect drops the query string.** Following /works/N ->
+  /chapters/M without re-adding view_adult=true returned the adult-content
+  interstitial for every Mature/Explicit multi-chapter work, which parses as
+  no work: refreshes silently did nothing for exactly those.
+- **Per-request state that must survive the next request lives in the
+  database**, again: pasted-link fetch state is `pasted_fetches`, because the
+  API runs several processes and an in-memory set let each fetch the same
+  work. Same lesson as admin passes.
+- **The search page remounts on every navigation**, so anything describing
+  "how this search came to be" (the read-as / corrected note) must be seeded
+  from `useSearchParams` at first render and compared ignoring quoting —
+  an effect is too late and window.location can still hold the old address.
 - **Reading progress resumes at the FURTHEST chapter, not the last opened.**
   A tab left on chapter 22 re-saved "reading 22, now" on every
   visibilitychange and won the sync by timestamp against a reader at 61. The
