@@ -7714,3 +7714,15 @@ html { scroll-padding-top: 72px; }
   .browse__list--ship li { padding: 6px 12px; }
   .browse__list--ship a.browse__item { min-height: 32px; }
 }
+.hub__topics-more { margin-top: 8px; }
+.hub__topics-more summary {
+  cursor: pointer; font-size: 13px; color: var(--accent); min-height: 32px;
+  display: inline-flex; align-items: center;
+}
+.hub__topics-more[open] summary { margin-bottom: 8px; }
+
+.no-results__fetch {
+  margin: 0 auto 12px; max-width: 46ch; padding: 10px 14px; border-radius: 10px;
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim);
+  font-size: 14px; line-height: 1.5;
+}

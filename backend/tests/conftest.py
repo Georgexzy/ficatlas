@@ -56,7 +56,14 @@ def _apply_schema(engine):
     """
     import init_db
 
-    for stmt in init_db._split_statements(init_db.SQL):
+    # The outreach worklist table is created by reddit_queue at runtime, not by
+    # init_db, and several tests used to define their own copy of it. Created
+    # here from the real definition, column-complete, so a column added there
+    # reaches the tests (yesterday's `source` did not, and three tests failed
+    # on a column their private copy lacked).
+    import reddit_queue
+    for stmt in [*init_db._split_statements(init_db.SQL),
+                 reddit_queue.DDL, reddit_queue.DDL_SOURCE]:
         try:
             with engine.begin() as conn:
                 conn.execute(text(stmt))

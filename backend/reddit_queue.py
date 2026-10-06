@@ -177,7 +177,11 @@ CREATE TABLE IF NOT EXISTS reddit_posts (
     -- as a silent absence.
     link_unsafe boolean NOT NULL DEFAULT false,
     -- new | answered | skipped. Set by a person, in the panel.
-    state       text NOT NULL DEFAULT 'new'
+    state       text NOT NULL DEFAULT 'new',
+    -- reddit | bluesky | tumblr. In the CREATE as well as DDL_SOURCE below:
+    -- reddit_answers reads it, and a table made fresh from this statement
+    -- alone (a new install, the test database) otherwise lacks it.
+    source      text NOT NULL DEFAULT 'reddit'
 )
 """
 

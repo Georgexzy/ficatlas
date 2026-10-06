@@ -1797,6 +1797,8 @@ function SearchPageInner() {
   // Whether the rewrite was a spelling/operator correction, carried in the
   // address as `fixed=1` so the right note comes back after a remount.
   const fixedRef = useRef<boolean>(initialRewrite?.fixed ?? false)
+  // How many times this page has re-asked about a pasted work being fetched.
+  const fetchPollsRef = useRef(0)
   const [copied, setCopied] = useState(false)
   // Whether the search on screen is one the reader kept. Held in state rather
   // than read during render because it lives in localStorage, and reading that
@@ -2580,6 +2582,16 @@ function SearchPageInner() {
         setQuery(data.interpreted.query)
         doSearchRef.current?.(true, undefined, data.interpreted.query)
         return
+      }
+      // Still fetching a pasted AO3 work: look again shortly, a bounded number
+      // of times. Same search, same address, so no new history entry.
+      if (data.fetching) {
+        if (fetchPollsRef.current < 8) {
+          fetchPollsRef.current += 1
+          setTimeout(() => doSearchRef.current?.(false, undefined, effectiveQuery), 3500)
+        }
+      } else {
+        fetchPollsRef.current = 0
       }
       // A search that found NOTHING, and was a typo the site already knows
       // the answer to: re-run it corrected, and say so. See lib/autoCorrect —
@@ -3947,7 +3959,28 @@ function SearchPageInner() {
                 onAuxClickCapture={recordResultClick}>
                 {shown.results.length === 0 ? (
                   <div className="no-results">
-                    <p className="no-results__title">No stories matched</p>
+                    {/* A pasted AO3 link to a work the index did not hold
+                        (backend/work_lookup.py). Said plainly, because "No
+                        stories matched" for a link the reader KNOWS works reads
+                        as the site being broken. */}
+                    {shown.fetching ? (
+                      <p className="no-results__fetch" role="status">
+                        That work is not in the index yet — fetching it from AO3
+                        now. This takes a few seconds.
+                      </p>
+                    ) : shown.fetch_state === "restricted" ? (
+                      <p className="no-results__fetch">
+                        AO3 only shows this work to signed-in AO3 users, so
+                        FicAtlas cannot read it. It is still there for you{" "}
+                        <a href={query.trim()} target="_blank" rel="noopener noreferrer">on AO3 ↗</a>.
+                      </p>
+                    ) : shown.fetch_state === "missing" ? (
+                      <p className="no-results__fetch">
+                        AO3 says this work does not exist — it may have been
+                        deleted, or the link may be mistyped.
+                      </p>
+                    ) : null}
+                    <p className="no-results__title">{shown.fetching ? "Fetching…" : "No stories matched"}</p>
                     {/* Spelling first, before any of the explanations below.
                         The archives are full of names nobody spells right the
                         first time, and a reader hunting a half-remembered work

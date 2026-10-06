@@ -2431,6 +2431,13 @@ class SearchResponse(BaseModel):
     # search. Populated only on a search that found nothing (or nearly
     # nothing) from typed words. See `_interpret`.
     interpreted: Optional[Interpreted] = None
+    # A pasted AO3 link to a work the index does not hold yet: it is being
+    # fetched in the background and the page should look again shortly. See
+    # work_lookup.py.
+    fetching: bool = False
+    # What fetching it found when it could not be added: "restricted" (AO3
+    # shows it to signed-in users only) or "missing" (deleted, or not a work).
+    fetch_state: Optional[str] = None
 
 
 # (column name, descending). Stored as names rather than bound expressions so the
@@ -2648,7 +2655,8 @@ def _should_fetch_live(sort: str, page: int, q: Optional[str]) -> bool:
 
 # ── Main endpoint ─────────────────────────────────────────────────────────────
 
-def _apply_cache_headers(response, viewer, ttl: int | None = None) -> None:
+def _apply_cache_headers(response, viewer, ttl: int | None = None,
+                         no_store: bool = False) -> None:
     """Tell a shared cache in front of us what it may do with this response.
 
     Every exit from search() must call this, including the cache hits. It used to
@@ -2667,6 +2675,10 @@ def _apply_cache_headers(response, viewer, ttl: int | None = None) -> None:
     shared cache may.
     """
     if response is None:
+        return
+    if no_store:
+        # An answer that changes within seconds (a pasted work being fetched).
+        response.headers["Cache-Control"] = "no-store"
         return
     if viewer is None:
         secs = ttl or SEARCH_CACHE_SECONDS
@@ -2895,9 +2907,29 @@ def search(          # NOT async — see below
     # (persist._SITE_PATTERNS), and applied as a FILTER, so the content gates and
     # every other rule still decide whether it is shown.
     url_work = _pasted_work(raw_query)
+    url_story_id = None
     if url_work:
         q = None
         raw_query = ""
+        # Which work the link means — its own row, or the copy it was merged
+        # into — and, for an AO3 work the index lacks, fetch it. See
+        # work_lookup.py. Answered immediately: the fetch is a background job.
+        from work_lookup import resolve as _resolve_link, start_fetch as _start_fetch
+        _site = getattr(url_work[0], "value", str(url_work[0]))
+        url_story_id = _resolve_link(db, _site, url_work[1])
+        if url_story_id is None and _site == "ao3":
+            _who = ""
+            if request is not None:
+                _who = (request.headers.get("cf-connecting-ip")
+                        or (request.client.host if request.client else ""))
+            _state = _start_fetch(db, url_work[1], _who)
+            # Never cached anywhere: this answer changes within seconds, when
+            # the background fetch lands.
+            _apply_cache_headers(response, viewer, no_store=True)
+            return SearchResponse(total=0, page=page, per_page=per_page, results=[],
+                                  sites_searched=["ao3"],
+                                  fetching=_state == "fetching",
+                                  fetch_state=_state if _state in ("restricted", "missing") else None)
     if q:
         pq = parse_query(q)
         parsed_tokens = pq.tokens
@@ -3212,7 +3244,9 @@ def search(          # NOT async — see below
     # Keyed on the visibility flag as well as the parameters: an operator sees
     # delisted rows and must never share an entry with the public.
     _ck = None
-    if request is not None:
+    # Never for a pasted link: its answer changes the moment a background fetch
+    # adds the work, and a cached "nothing" would outlive that.
+    if request is not None and not url_work:
         _ck = cache_key(str(request.url.query), is_operator)
         _t0 = time.monotonic()   # what this search costs, if it misses
         _hit = CACHE.get(_ck)
@@ -3550,8 +3584,11 @@ def search(          # NOT async — see below
         filters.append(func.lower(Story.author) == author.strip().lower())
 
     if url_work:
-        filters.append(Story.site == url_work[0])
-        filters.append(Story.site_id == url_work[1])
+        if url_story_id is not None:
+            filters.append(Story.id == url_story_id)
+        else:
+            filters.append(Story.site == url_work[0])
+            filters.append(Story.site_id == url_work[1])
 
     if search_within:
         filters.append(or_(

@@ -811,6 +811,7 @@ def test_the_queue_is_ordered_by_what_can_actually_be_answered(db):
     # whole query — so a missing column reads as an empty queue rather than as
     # an error, which is exactly as confusing as it sounds.
     db.execute(t("ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS flair text"))
+    db.execute(t("ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'reddit'"))
     db.execute(t("DELETE FROM reddit_posts"))
     for i, (works, unsafe) in enumerate([(5000, False), (12, False),
                                          (3, True), (None, False)]):
@@ -868,6 +869,7 @@ def test_the_queue_can_be_ordered_by_age_instead(db):
     # whole query — so a missing column reads as an empty queue rather than as
     # an error, which is exactly as confusing as it sounds.
     db.execute(t("ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS flair text"))
+    db.execute(t("ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'reddit'"))
     db.execute(t("DELETE FROM reddit_posts"))
     db.execute(t("""INSERT INTO reddit_posts (id, subreddit, title, url, works, posted_at)
                     VALUES ('old','FanFiction','old post','u',5,now()-interval '3 days'),
@@ -1020,6 +1022,7 @@ def test_a_recs_post_outranks_an_identification_post(db):
             state text NOT NULL DEFAULT 'new', flair text)
     """))
     db.execute(t("ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS flair text"))
+    db.execute(t("ALTER TABLE reddit_posts ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'reddit'"))
     db.execute(t("DELETE FROM reddit_posts"))
     db.execute(t("""INSERT INTO reddit_posts (id, subreddit, title, url, works, flair)
                     VALUES ('lost','FanFiction','a lost fic','u',3,'Lost Fic'),

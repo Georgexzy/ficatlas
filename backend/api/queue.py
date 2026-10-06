@@ -178,6 +178,11 @@ def list_queue(state: str = Query("new"),
     }.get(order)
     if not order_sql:
         raise HTTPException(status_code=400, detail="unknown order")
+    # Called directly (tests, scripts), an argument left out arrives as
+    # FastAPI's Query sentinel rather than "", and binding that fails the whole
+    # query — which this function reports as an empty queue.
+    if not isinstance(source, str):
+        source = ""
     try:
         rows = db.execute(text(f"""
             SELECT id, subreddit, title, body, url, posted_at,

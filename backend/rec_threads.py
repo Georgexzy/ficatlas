@@ -223,33 +223,9 @@ def mentions_in(xml: str, skip_op: bool = False) -> list[dict]:
     return out
 
 
-def _copy_urls(site: str, sid: str) -> list[str]:
-    """The spellings a copy's URL is stored under in `cross_post_urls`."""
-    if site == "ffnet":
-        return [f"{scheme}://{host}.fanfiction.net/s/{sid}{tail}"
-                for scheme in ("https", "http") for host in ("www", "m")
-                for tail in ("/1/", "/", "")]
-    return [f"{scheme}://archiveofourown.org/works/{sid}{tail}"
-            for scheme in ("https", "http") for tail in ("", "/")]
-
-
-def resolve(db, site: str, sid: str):
-    """The indexed work a link names, or None.
-
-    The row itself first. Failing that, the work it was MERGED into: the
-    cross-post dedup keeps one row per story and deletes the others, recording
-    their URLs on the survivor -- so a recommendation linking the FF.net copy
-    of a story we hold as its AO3 row found nothing, and the two copies' recs
-    could never be counted together.
-    """
-    row = db.execute(text("SELECT id FROM stories WHERE site=:s AND site_id=:i"),
-                     {"s": site, "i": sid}).first()
-    if row:
-        return row[0]
-    row = db.execute(text(
-        "SELECT id FROM stories WHERE cross_post_urls && CAST(:u AS text[]) LIMIT 1"),
-        {"u": _copy_urls(site, sid)}).first()
-    return row[0] if row else None
+# One definition of "which work does this link mean", shared with the search
+# box's pasted links. See work_lookup.py.
+from work_lookup import resolve  # noqa: E402
 
 
 def reresolve(db, limit: int = 2000) -> int:

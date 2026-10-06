@@ -77,6 +77,10 @@ export interface SearchResponse {
    *  the vocabulary could read them. Offered, never applied by the server —
    *  see Interpreted in backend/api/search.py. */
   interpreted?: Interpreted
+  /** A pasted AO3 link to a work the index lacks is being fetched. */
+  fetching?: boolean
+  /** Why a pasted AO3 work could not be added: "restricted" or "missing". */
+  fetch_state?: string | null
 }
 
 /** A sentence read as a search. */
