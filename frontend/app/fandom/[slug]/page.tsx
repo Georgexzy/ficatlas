@@ -280,28 +280,30 @@ export default async function FandomHub(
       {!!hub.topics?.length && (
         <nav className="trope-grid" aria-label={`${hub.name} by trope`}>
           <h2 className="hub__heading">Browse {hub.name} by trope</h2>
-          <ul className="trope-grid__list">
-            {hub.topics.slice(0, 12).map(x => (
+          {/* Pills, not tiles: a tile per trope pushed the works themselves
+              a whole screen down on a phone. One scrolling row there, two
+              wrapped rows on a wide screen, and the rest folded below. */}
+          <ul className="trope-pills">
+            {hub.topics.slice(0, TROPES_SHOWN).map(x => (
               <li key={x.slug}>
-                <Link href={`/fandom/${x.slug}`} className="trope-tile">
-                  <span className="trope-tile__name">{x.tag}</span>
-                  <span className="trope-tile__n">{x.work_count.toLocaleString()} works</span>
+                <Link href={`/fandom/${x.slug}`} className="trope-pill">
+                  {x.tag}
+                  <span className="trope-pill__n">{compact(x.work_count)}</span>
                 </Link>
               </li>
             ))}
           </ul>
           {/* The rest folded, still in the HTML so every trope page stays
-              linked for a crawler. */}
-          {hub.topics.length > 12 && (
+              linked for a crawler. A plain column list when opened: it is an
+              index, and an index of tiles is a wall. */}
+          {hub.topics.length > TROPES_SHOWN && (
             <details className="trope-grid__more">
-              <summary>Show all {hub.topics.length} tropes</summary>
-              <ul className="trope-grid__list">
-                {hub.topics.slice(12).map(x => (
+              <summary>All {hub.topics.length} tropes</summary>
+              <ul className="trope-index">
+                {hub.topics.slice(TROPES_SHOWN).map(x => (
                   <li key={x.slug}>
-                    <Link href={`/fandom/${x.slug}`} className="trope-tile">
-                      <span className="trope-tile__name">{x.tag}</span>
-                      <span className="trope-tile__n">{x.work_count.toLocaleString()} works</span>
-                    </Link>
+                    <Link href={`/fandom/${x.slug}`}>{x.tag}</Link>
+                    <span className="trope-index__n">{x.work_count.toLocaleString()}</span>
                   </li>
                 ))}
               </ul>
@@ -315,7 +317,10 @@ export default async function FandomHub(
           archives themselves, and the only part that changes week to week.
           Absent for most hubs, and the section simply does not render — an
           empty "recommended" heading would suggest the fandom has gone quiet
-          when it only means nobody has harvested its threads. */}
+          when it only means nobody has harvested its threads.
+          Compact cards, three across (a scrolling shelf on a phone), the rest
+          folded: a stacked list with summaries was taller than everything
+          else above the works combined. */}
       {!!hub.recommended?.length && (
         <section className="hub__recs">
           <h2 className="hub__heading">
@@ -327,34 +332,21 @@ export default async function FandomHub(
             ) : null}
           </h2>
           <p className="hub__recs-note">
-            Counted by how many different readers recommended each work in
-            {" "}{Array.from(new Set(hub.recommended.flatMap(r => r.communities ?? [])))
+            From {Array.from(new Set(hub.recommended.flatMap(r => r.communities ?? [])))
                     .map(c => `r/${c}`).join(", ") || "fandom discussion threads"}
-            {" "}— not by kudos. It is what people are pressing on each other
-            now, which is the one thing an archive cannot tell you about itself.
+            , counted by how many different readers recommended each work — not by kudos.
           </p>
           <ol className="hub__recs-list">
-            {hub.recommended.map(r => (
-              <li key={r.id} className="hub__rec">
-                <Link href={`/story/${r.id}`} className="hub__rec-title">{r.title}</Link>
-                <p className="hub__rec-meta">
-                  {[
-                    r.author ? `by ${r.author}` : null,
-                    r.site ? SITE_LABELS[r.site] ?? r.site.toUpperCase() : null,
-                    r.word_count ? `${Math.round(r.word_count / 1000)}k words` : null,
-                    r.complete === true ? "Complete" : r.complete === false ? "In progress" : null,
-                  ].filter(Boolean).join(" · ")}
-                </p>
-                {/* Said plainly, including when it is one. A block headed
-                    "most recommended" over a count of one would be overclaiming
-                    — the honest version lets the reader weigh it. */}
-                <p className="hub__rec-count">
-                  {r.people === 1 ? "1 reader recommended it" : `${r.people} readers recommended it`}
-                </p>
-                {r.summary ? <p className="hub__rec-summary">{r.summary}</p> : null}
-              </li>
-            ))}
+            {hub.recommended.slice(0, RECS_SHOWN).map(r => <RecCard key={r.id} r={r} />)}
           </ol>
+          {hub.recommended.length > RECS_SHOWN && (
+            <details className="trope-grid__more hub__recs-more">
+              <summary>{hub.recommended.length - RECS_SHOWN} more recommended</summary>
+              <ol className="hub__recs-list hub__recs-list--more">
+                {hub.recommended.slice(RECS_SHOWN).map(r => <RecCard key={r.id} r={r} />)}
+              </ol>
+            </details>
+          )}
         </section>
       )}
 
@@ -454,5 +446,39 @@ export default async function FandomHub(
       </p>
       </main>
     </div>
+  )
+}
+
+const TROPES_SHOWN = 12
+const RECS_SHOWN = 3
+
+/** 4,512 -> "4.5k". A pill has room for a magnitude, not a figure; the full
+ *  number is one click away on the trope page. */
+function compact(n: number): string {
+  if (n >= 10000) return `${Math.round(n / 1000)}k`
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`
+  return String(n)
+}
+
+function RecCard({ r }: { r: Recommended }) {
+  return (
+    <li className="hub__rec">
+      <Link href={`/story/${r.id}`} className="hub__rec-title">{r.title}</Link>
+      <p className="hub__rec-meta">
+        {[
+          r.author ? `by ${r.author}` : null,
+          r.site ? SITE_LABELS[r.site] ?? r.site.toUpperCase() : null,
+          r.word_count ? `${Math.round(r.word_count / 1000)}k words` : null,
+          r.complete === true ? "Complete" : r.complete === false ? "In progress" : null,
+        ].filter(Boolean).join(" · ")}
+      </p>
+      {r.summary ? <p className="hub__rec-summary">{r.summary}</p> : null}
+      {/* Said plainly, including when it is one. A block headed "most
+          recommended" over a count of one would be overclaiming — the honest
+          version lets the reader weigh it. */}
+      <p className="hub__rec-count">
+        {r.people === 1 ? "1 reader recommended it" : `${r.people} readers recommended it`}
+      </p>
+    </li>
   )
 }
