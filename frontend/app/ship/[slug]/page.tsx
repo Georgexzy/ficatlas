@@ -137,7 +137,16 @@ export async function generateMetadata(
 ): Promise<Metadata> {
   const { slug } = await params
   const hub = await fetchShip(slug)
-  if (!hub) return {}
+  // A failed or slow lookup must still name this page's own URL. Returning {}
+  // here sent the page out with the HOME page's title and no canonical while
+  // the body (which looks the hub up again) rendered fine — so a hub crawled
+  // during a slow spell (5-7 Sept 2026) was filed by Search Console as a
+  // "duplicate without user-selected canonical". The trope page and story
+  // page already do this; a slug that does not exist 404s with noindex anyway.
+  if (!hub) return {
+    title: `${slug.replace(/-/g, " ")} fanfiction`,
+    alternates: { canonical: `/ship/${slug}` },
+  }
   // The nickname leads the title, because it is what people type. Nobody
   // searches "Draco Malfoy/Harry Potter fanfiction"; they search "drarry". The
   // canonical tag stays in the title after it, so the page still matches the
