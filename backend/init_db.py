@@ -1181,6 +1181,17 @@ ALTER TABLE rec_threads ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'thr
 CREATE INDEX IF NOT EXISTS ix_rec_threads_unread
     ON rec_threads (community, posted_at DESC) WHERE read_at IS NULL;
 
+-- Where rec_sources.py got to in each fandom's AO3 rec bookmarks: the tag that
+-- worked, the newest bookmark day seen (pages stop there), and when it was
+-- last read, which is what spreads the fandoms over the day.
+CREATE TABLE IF NOT EXISTS rec_ao3_state (
+    slug        TEXT PRIMARY KEY,
+    tag         TEXT,
+    newest      DATE,
+    checked_at  TIMESTAMPTZ,
+    found       INTEGER NOT NULL DEFAULT 0
+);
+
 -- FF.net listing rows waiting to be applied. The browser harvester walks
 -- listing pages, 25 works each, and every row carries the work's metadata line:
 -- characters, pairings, genres, words, status and dates. It used to read only

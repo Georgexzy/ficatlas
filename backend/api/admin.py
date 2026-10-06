@@ -348,6 +348,14 @@ _JOB_EVIDENCE = [
      "stopped answering this server; stale here means the archives are down "
      "too — reddit_archive.py.", 72,
      "SELECT max(read_at) FROM rec_threads"),
+    # Evidence, like the row above: the newest mention one of these sources
+    # actually wrote, not a heartbeat from the loop.
+    ("rec_sources", "Recommendations: AO3, Bluesky, Tumblr",
+     "AO3 bookmarks marked Rec, and Bluesky and Tumblr posts linking a work, "
+     "with authors promoting their own fics filtered out — the sources beyond "
+     "Reddit for 'Being recommended lately'. rec_sources.py.", 12,
+     "SELECT max(mentioned_at) FROM rec_mentions WHERE source IN "
+     "('ao3_bookmarks','bluesky','tumblr')"),
     ("crawler", "Crawler fetching",
      "Thirteen loops fetch works: AO3 stubs and recent works, the archive walks, "
      "the fandom listing harvest, title repair and both Wayback passes. They all "

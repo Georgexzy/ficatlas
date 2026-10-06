@@ -507,6 +507,16 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **"Recommended lately" needs PEOPLE, and Reddit alone gave it 8 hubs of
+  5,663.** `rec_sources.py` adds AO3 rec bookmarks (per fandom, newest first),
+  Bluesky and Tumblr, beside 23 subreddits in `rec_threads.py`. Three traps:
+  an AO3 tag SYNONYM ("Naruto") 302s to the canonical tag's plain bookmarks
+  page and DROPS the rec/sort query, so the redirect is read for the canonical
+  name and re-asked, never followed; AO3 503s page 2+ of that search, so one
+  page per visit; and Bluesky shortens URLs in the visible text
+  (`works/53...`), so links come from facets/embeds only. Most posts linking
+  AO3 on Bluesky are authors announcing their own work — `_SELF` drops them,
+  and a test pins both directions.
 - **Hubs convert three times better than the front door, so trope hubs exist.**
   30 days by first landing page, from search engines: pairing hub 47% opened
   a story, fandom hub 46%, home/search 16%. `topic_hubs.py` builds

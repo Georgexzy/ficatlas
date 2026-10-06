@@ -1512,6 +1512,27 @@ async def _rec_threads_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _rec_sources_loop() -> None:
+    """The other places fandoms recommend: AO3 rec bookmarks, Bluesky, Tumblr.
+
+    Two-hourly. Each pass reads the latest Bluesky and Tumblr rec posts (a
+    few dozen requests, stopping at what the last pass read) and the AO3 rec
+    bookmarks of the next AO3_PER_PASS fandoms due, paced by ao3_budget like
+    every AO3 request. See rec_sources.py for why each counts.
+    """
+    import rec_sources
+
+    interval = _num("REC_SOURCES_INTERVAL_HOURS", 2) * 3600
+    await asyncio.sleep(_num("REC_SOURCES_START_DELAY_SEC", 1200))
+    while True:
+        try:
+            stats = await asyncio.to_thread(rec_sources.run)
+            log.info(f"rec sources: {stats}")
+        except Exception as e:
+            log.warning(f"rec sources failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _stats_loop() -> None:
     """Recompute the index totals on a timer, so no request ever has to.
 
@@ -2542,6 +2563,7 @@ async def main() -> None:
         tasks.append(asyncio.create_task(_supervised("outreach_sources_loop", _outreach_sources_loop)))
         tasks.append(asyncio.create_task(_supervised("reddit_answers_loop", _reddit_answers_loop)))
         tasks.append(asyncio.create_task(_supervised("rec_threads_loop", _rec_threads_loop)))
+        tasks.append(asyncio.create_task(_supervised("rec_sources_loop", _rec_sources_loop)))
         log.info("reddit fic-finder queue enabled (hourly, one feed at a time)")
 
     if _flag("RUN_SERIES_WORDCOUNT", "true"):

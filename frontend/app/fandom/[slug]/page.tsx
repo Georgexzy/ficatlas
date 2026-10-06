@@ -332,8 +332,8 @@ export default async function FandomHub(
             ) : null}
           </h2>
           <p className="hub__recs-note">
-            From {Array.from(new Set(hub.recommended.flatMap(r => r.communities ?? [])))
-                    .map(c => `r/${c}`).join(", ") || "fandom discussion threads"}
+            From {recSources(hub.recommended.flatMap(r => r.communities ?? []))
+                   || "fandom discussion threads"}
             , counted by how many different readers recommended each work — not by kudos.
           </p>
           <ol className="hub__recs-list">
@@ -481,4 +481,20 @@ function RecCard({ r }: { r: Recommended }) {
       </p>
     </li>
   )
+}
+
+/** Where the recommendations came from, in words a reader recognises.
+ *  Subreddits as "r/x"; the other sources by name, listed once each after
+ *  the subreddits, and the subreddit list capped so the line stays one line. */
+const REC_SOURCE_NAMES: Record<string, string> = {
+  ao3_recs: "AO3 rec bookmarks",
+  bluesky: "Bluesky",
+  tumblr: "Tumblr",
+}
+function recSources(communities: string[]): string {
+  const uniq = Array.from(new Set(communities))
+  const named = uniq.filter(c => REC_SOURCE_NAMES[c]).map(c => REC_SOURCE_NAMES[c])
+  const subs = uniq.filter(c => !REC_SOURCE_NAMES[c]).map(c => `r/${c}`)
+  const shown = subs.length > 4 ? [...subs.slice(0, 4), `${subs.length - 4} more subreddits`] : subs
+  return [...named, ...shown].join(", ")
 }

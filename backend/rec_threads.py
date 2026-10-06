@@ -123,6 +123,52 @@ COMMUNITIES: list[dict] = [
      "query": 'flair:"Fics I recommend"'},
     {"sub": "WormFanfic", "fandom": "Worm", "kind": "request",
      "query": 'flair:"Fic Search - General"'},
+    # Added 2026-10-06 after surveying ~60 fanfic subreddits' last 100 posts
+    # through Arctic Shift. Kept: active communities whose flair marks a
+    # request for recs or a rec post. Left out: identification flairs ("Lost
+    # Fic", "What's That Fic?"), self-promotion, and flairs like Wolfstar's
+    # "Fanfiction" or Destiel's "Fanfics" that mix authors posting their own
+    # work with recommendations.
+    {"sub": "BokuNoHeroFanfiction", "fandom": "My Hero Academia", "kind": "request",
+     "query": 'flair:"Looking for recommendations"'},
+    {"sub": "HPSlashFic", "fandom": "Harry Potter", "kind": "request",
+     "query": 'flair:"Seeking Recommendations"'},
+    {"sub": "HPSlashFic", "fandom": "Harry Potter", "kind": "recs",
+     "query": 'flair:"Recommendation"'},
+    {"sub": "HPfanfiction", "fandom": "Harry Potter", "kind": "request",
+     "query": 'flair:"Request"'},
+    {"sub": "NarutoFanfiction", "fandom": "Naruto", "kind": "recs",
+     "query": 'flair:"Recommendation"'},
+    {"sub": "tomarry", "fandom": "Harry Potter", "kind": "request",
+     "query": 'flair:"Rec Request"'},
+    {"sub": "Jily", "fandom": "Harry Potter", "kind": "recs",
+     "query": 'flair:"Fanfic Recommendation"'},
+    {"sub": "Jily", "fandom": "Harry Potter", "kind": "request",
+     "query": 'flair:"Request"'},
+    {"sub": "Destiel", "fandom": "Supernatural", "kind": "request",
+     "query": 'flair:"Fanfic Request"'},
+    {"sub": "AOTFanfiction", "fandom": "Attack on Titan", "kind": "request",
+     "query": 'flair:"Looking For?"'},
+    {"sub": "AOTFanfiction", "fandom": "Attack on Titan", "kind": "recs",
+     "query": 'flair:"Recommendation"'},
+    {"sub": "BleachFanfiction", "fandom": "Bleach", "kind": "request",
+     "query": 'flair:"Looking For?"'},
+    {"sub": "BleachFanfiction", "fandom": "Bleach", "kind": "recs",
+     "query": 'flair:"Recommendation"'},
+    {"sub": "rwbyfanfiction", "fandom": "RWBY", "kind": "recs",
+     "query": 'flair:"Recommendations"'},
+    {"sub": "BG3fanfiction", "fandom": "Baldur's Gate", "kind": "recs",
+     "query": 'flair:"Fic Rec"'},
+    {"sub": "Sherlock_Fanfiction", "fandom": "Sherlock", "kind": "request",
+     "query": 'flair:"[REQUEST]"'},
+    {"sub": "LOTRFanfiction", "fandom": "Tolkien", "kind": "request",
+     "query": 'flair:"Request"'},
+    {"sub": "Kpopfanfiction", "fandom": "K-pop", "kind": "request",
+     "query": 'flair:"Recs Wanted"'},
+    {"sub": "GenshinImpactFanfic", "fandom": "Genshin Impact", "kind": "request",
+     "query": 'flair:"Recs Wanted"'},
+    {"sub": "AO3", "fandom": None, "kind": "request",
+     "query": 'flair:"Requesting Recommendations"'},
 ]
 
 # Replies to a request arrive over days, and a thread is read ONCE. Reading it
@@ -336,7 +382,7 @@ def run(dry_run: bool = False, discover_only: bool = False,
     return {"threads_found": found, "threads_read": read, "mentions": stored}
 
 
-def backfill(days: int = 90) -> dict:
+def backfill(days: int = 90, only: set[str] | None = None) -> dict:
     """Record every flaired thread of the last `days`, paging the archive.
 
     The routine search sees the newest 25 per community, which is right for
@@ -354,6 +400,8 @@ def backfill(days: int = 90) -> dict:
     found = 0
     with db_session() as db:
         for c in COMMUNITIES:
+            if only and c["sub"].lower() not in only:
+                continue
             m = re.match(r'^flair:"(.+)"$', c["query"])
             if not m:
                 continue
@@ -405,10 +453,12 @@ def main() -> int:
                     help="record the threads but do not read them")
     ap.add_argument("--backfill", type=int, metavar="DAYS",
                     help="record every flaired thread of the last DAYS, then read them all")
+    ap.add_argument("--subs", help="with --backfill: comma-separated subreddits only")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if a.backfill:
-        print(backfill(a.backfill))
+        only = {x.strip().lower() for x in a.subs.split(",")} if a.subs else None
+        print(backfill(a.backfill, only))
         out = run(read_limit=100000, discover=False)
         print(out)
         return 0
