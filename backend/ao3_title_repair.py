@@ -317,7 +317,9 @@ THROTTLED = object()
 RESTRICTED = object()
 
 
-def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
+def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter", parse=None):
+    # `parse`: what to make of the page. Defaults to the title-repair fields;
+    # work_lookup passes the full work-page parser to add a missing work.
     # The process-wide budget comes first; the pass-local limiter still applies
     # on top so a single pass cannot monopolise the shared allowance.
     ao3_budget.wait()
@@ -359,6 +361,13 @@ def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
         # round trip is the only one worth declining.
         if not dest:
             return None
+        # Carry view_adult across the redirect. AO3's /works/N -> /chapters/M
+        # Location drops the query string, so a Mature or Explicit
+        # multi-chapter work answered the second request with the "this work
+        # could have adult content" interstitial, which parses as no work at
+        # all — every refresh of those works silently did nothing.
+        if "view_adult" not in dest:
+            dest += ("&" if "?" in dest else "?") + "view_adult=true"
         ao3_budget.wait()
         try:
             r = client.get(dest if dest.startswith("http")
@@ -369,7 +378,7 @@ def fetch_work(client: httpx.Client, work_id: str, limiter: "RateLimiter"):
         ao3_budget.note_response(r.status_code, r.headers.get("retry-after"))
     if r.status_code != 200:
         return None
-    return parse_work_page(r.text)
+    return (parse or parse_work_page)(r.text)
 
 
 # Enough in-flight requests to cover AO3's own latency, and no more.
