@@ -663,11 +663,6 @@ input, select { font-family: inherit; }
   display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--text-dim); line-height: 1.45;
 }
 .ix__live strong { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-.ix__not {
-  margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--surface);
-  font-size: 12.5px; line-height: 1.5; color: var(--text-dim);
-}
-.ix__not strong { color: var(--text); font-weight: 600; }
 .ix__build { margin: 10px 0 0; font-family: var(--font-mono); font-size: 10px; color: var(--text-faint); }
 
 /* ── Header link ──────────────────────────────────────────────────────────── */

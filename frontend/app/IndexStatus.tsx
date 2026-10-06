@@ -140,13 +140,6 @@ export default function IndexStatus() {
               </ul>
             )}
 
-            {/* Said outright, because silence reads as "everything". */}
-            <p className="ix__not">
-              <strong>Not searched yet:</strong> Wattpad, forum fiction
-              (SpaceBattles, Sufficient Velocity), and other smaller archives.
-              Every result links to the archive that hosts it.
-            </p>
-
             {built && (
               <p className="ix__build">
                 app build {new Date(built).toLocaleString(undefined,
