@@ -742,6 +742,16 @@ def overview(refresh: bool = False,
     # which is the right shape for a number nobody needs to the minute.
     out["growth"] = _growth_sample(db, out["tables"].get("stories") or 0)
 
+    # The whole disk, sampled six-hourly by the worker (disk_trend.py): the
+    # database shares the filesystem with images, backups and everything else
+    # on the box, so the disk is what runs out, not the database.
+    try:
+        import disk_trend
+        out["disk"] = disk_trend.trend(disk_trend._load(db))
+    except Exception:
+        log.info("disk trend unavailable", exc_info=True)
+        out["disk"] = None
+
     _CACHE, _CACHED_AT = out, time.time()
     return {**out, "cached": False, "age_s": 0}
 

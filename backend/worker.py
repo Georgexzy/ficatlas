@@ -1512,6 +1512,24 @@ async def _rec_threads_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _disk_trend_loop() -> None:
+    """Six-hourly disk and database size sample, for the admin panel's
+    "when does this box fill up". See disk_trend.py."""
+    import disk_trend
+
+    def once():
+        with db_session() as db:
+            disk_trend.sample(db)
+
+    await asyncio.sleep(_num("DISK_TREND_START_DELAY_SEC", 120))
+    while True:
+        try:
+            await asyncio.to_thread(once)
+        except Exception as e:
+            log.warning(f"disk trend sample failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(6 * 3600)
+
+
 async def _rec_sources_loop() -> None:
     """The other places fandoms recommend: AO3 rec bookmarks, Bluesky, Tumblr.
 
@@ -2564,6 +2582,7 @@ async def main() -> None:
         tasks.append(asyncio.create_task(_supervised("reddit_answers_loop", _reddit_answers_loop)))
         tasks.append(asyncio.create_task(_supervised("rec_threads_loop", _rec_threads_loop)))
         tasks.append(asyncio.create_task(_supervised("rec_sources_loop", _rec_sources_loop)))
+    tasks.append(asyncio.create_task(_supervised("disk_trend_loop", _disk_trend_loop)))
         log.info("reddit fic-finder queue enabled (hourly, one feed at a time)")
 
     if _flag("RUN_SERIES_WORDCOUNT", "true"):

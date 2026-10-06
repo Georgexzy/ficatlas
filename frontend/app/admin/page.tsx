@@ -85,6 +85,12 @@ interface Overview {
   // Sampled, not queried: grouping 20M rows by indexed_at measured 15.7s and
   // there is no index for it. per_day is null until an hour of samples exist.
   growth?: { per_day: number | null; window_h: number | null; samples: number }
+  // Sampled six-hourly by the worker (disk_trend.py). Rates are null until two
+  // samples a day apart exist; full_in_days is null when the disk is not growing.
+  disk?: { db_bytes: number; used_bytes: number; total_bytes: number; free_bytes: number
+           samples: number; used_per_day: number | null; db_per_day: number | null
+           window_days: number | null; full_in_days: number | null
+           ninety_in_days: number | null } | null
   // null when the count timed out under write load — shown as "—" rather than
   // as a confident zero, which would read as "nothing is hosted".
   hosted_public: number | null
@@ -477,6 +483,15 @@ export default function AdminPage() {
                   value={data.storage ? bytes(data.storage.db_bytes) : "—"}
                   sub={act ? `${act.total}/${act.max} connections${act.locks ? ` · ${act.locks} waiting on a lock` : ""}${act.longest > 30 ? ` · longest ${act.longest}s` : ""}` : "…"}
                   onClick={() => setTab("tools")} />
+                <Stat label="Disk"
+                  tone={!data.disk ? "none"
+                    : data.disk.used_bytes / data.disk.total_bytes > 0.9
+                      || (data.disk.full_in_days != null && data.disk.full_in_days < 45) ? "bad"
+                    : data.disk.used_bytes / data.disk.total_bytes > 0.8
+                      || (data.disk.full_in_days != null && data.disk.full_in_days < 120) ? "mid" : "ok"}
+                  value={data.disk ? `${bytes(data.disk.free_bytes)} free` : "—"}
+                  sub={diskLine(data.disk)}
+                  onClick={() => setTab("storage")} />
                 <Stat label="Works indexed" tone="none"
                   value={data.tables.stories != null ? compact(data.tables.stories) : "—"}
                   sub={data.growth?.per_day != null
@@ -666,7 +681,10 @@ export default function AdminPage() {
           {data && tab === "storage" && data.storage && (
             <>
               <ViewHead title="Storage"
-                sub={<>The database is <strong>{bytes(data.storage.db_bytes)}</strong> on a home box.</>}
+                sub={<>The database is <strong>{bytes(data.storage.db_bytes)}</strong> on a home box{data.disk
+                  ? <>, on a disk with <strong>{bytes(data.disk.free_bytes)}</strong> of {bytes(data.disk.total_bytes)} free. {diskLine(data.disk)}{data.disk.db_per_day != null
+                      ? <> The database itself is growing {bytes(Math.max(0, data.disk.db_per_day) * 7)} a week.</> : null}</>
+                  : "."}</>}
                 explain={<p>Bars compare each object with the largest, not with the database
                   total: <code>stories</code> is most of it, and against the total every
                   other bar is a stub. Dropping two unused trigram indexes once took the
@@ -779,4 +797,17 @@ export default function AdminPage() {
       </div>
     </main>
   )
+}
+
+/** "+2.8 GB a week · full in ~4 months (Feb 2027)", from the worker's samples. */
+function diskLine(d: Overview["disk"]): string {
+  if (!d) return "not sampled yet"
+  if (d.used_per_day == null) return `measuring · ${d.samples} sample${d.samples === 1 ? "" : "s"}`
+  const week = d.used_per_day * 7
+  const rate = `${week >= 0 ? "+" : "−"}${(Math.abs(week) / 1024 ** 3).toFixed(1)} GB a week`
+  if (d.full_in_days == null) return `${rate} · not filling`
+  const when = new Date(Date.now() + d.full_in_days * 86400000)
+    .toLocaleDateString(undefined, { month: "short", year: "numeric" })
+  const span = d.full_in_days < 60 ? `${d.full_in_days} days` : `~${Math.round(d.full_in_days / 30)} months`
+  return `${rate} · full in ${span} (${when})`
 }
