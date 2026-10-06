@@ -34,7 +34,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, "/app")
 from db.dsn import default_database_url  # noqa: E402 — needs the sys.path above
@@ -85,6 +85,18 @@ def _ffn_date(value: str, ref: datetime | None = None):
     line right there on the page carried them.
     """
     value = (value or "").strip()
+    # Within the last day the live listing writes a RELATIVE time — "22h ago",
+    # "5m ago" — and this function read none of them, so every FF.net work
+    # updated today was dropped: measured, 0 FF.net updates in the last day
+    # against 2,711 on AO3, while the harvester read ~276,000 listing rows a
+    # day. Relative to when the page was shown, so a reference is required.
+    rel = re.match(r"^(\d+)\s*([smhd])(?:\w*)?(?:\s+ago)?$", value, re.I)
+    if rel:
+        if ref is None:
+            return None
+        n, unit = int(rel.group(1)), rel.group(2).lower()
+        secs = n * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+        return ref - timedelta(seconds=secs)
     for fmt in ("%m/%d/%Y", "%m-%d-%y", "%m/%d/%y", "%m-%d-%Y",
                 # The LIVE site's listing pages render dates in words —
                 # "Sep 22, 2013" — and drop the year for the current one:
@@ -732,9 +744,15 @@ def _write_batch(items: list[tuple]) -> int:
                 story.status = StatusEnum.in_progress
 
             # Parsed already and previously discarded; only fills gaps.
-            if meta.get("words") and not (story.word_count or 0):
+            # Length follows a chapter increase, as it does for AO3
+            # (ao3_title_repair.apply_work): a new chapter brings new words, and
+            # keeping the dump's figure beside a fresh count understates the work.
+            grew = bool(meta.get("chapters")
+                        and (story.chapter_count or 0) < meta["chapters"])
+            if meta.get("words") and (not (story.word_count or 0)
+                                      or (grew and meta["words"] > story.word_count)):
                 story.word_count = meta["words"]
-            if meta.get("chapters") and (story.chapter_count or 0) < meta["chapters"]:
+            if grew:
                 story.chapter_count = meta["chapters"]
 
             written += 1

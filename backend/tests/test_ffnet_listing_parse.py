@@ -153,3 +153,15 @@ def test_a_listing_row_for_a_work_we_lack_becomes_a_new_work(db):
     assert s.word_count == 161943 and s.kudos == 4306
     assert s.published_at is not None and s.published_at.year == 2018
     assert s.summary.startswith("A simple decision")
+
+
+def test_same_day_updates_are_read_relative_to_when_the_page_was_seen():
+    # FF.net writes "Updated: 22h ago" for anything updated in the last day;
+    # unparsed, every such update was dropped (0 in a day against 2,711 AO3).
+    from datetime import datetime, timezone
+    from ffnet_enrich import _ffn_date
+    seen = datetime(2026, 10, 6, 20, 0, tzinfo=timezone.utc)
+    assert _ffn_date("22h ago", seen) == datetime(2026, 10, 5, 22, 0, tzinfo=timezone.utc)
+    assert _ffn_date("5m ago", seen) == datetime(2026, 10, 6, 19, 55, tzinfo=timezone.utc)
+    # With no reference there is no honest answer.
+    assert _ffn_date("22h ago") is None

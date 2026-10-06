@@ -412,7 +412,25 @@ async function main() {
         "SELECT value FROM app_settings WHERE key='ffnet_followed_sections'")
       followed = q.rows.length ? JSON.parse(q.rows[0].value) : []
     } catch { followed = [] }
-    for (const s of followed) {
+    // RECENT UPDATES, read on purpose. The walk below goes through each
+    // fandom by favourites, so an update was only ever seen by chance:
+    // measured, 960 FF.net updates reached the index in 30 days against
+    // 121,958 on AO3, while the walk read ~276,000 rows a day. The first
+    // pages of a fandom sorted by update date ARE its recent updates, so:
+    // the largest fandoms every pass (they update constantly), the next few
+    // hundred in rotation, and the fandoms holding followed stories.
+    const RECENT_TOP = Number(process.env.FFNET_RECENT_TOP || 10)
+    const RECENT_ROT = Number(process.env.FFNET_RECENT_ROT || 12)
+    const RECENT_POOL = Number(process.env.FFNET_RECENT_POOL || 300)
+    const pool = all.slice(RECENT_TOP, RECENT_POOL)
+    const rrot = pool.length ? (await cursorGet(db, "ffnet_recent_rot")) - 1 : 0
+    const recent = [
+      ...all.slice(0, RECENT_TOP),
+      ...Array.from({ length: Math.min(RECENT_ROT, pool.length) },
+                    (_, i) => pool[(rrot + i) % pool.length]),
+    ]
+    if (pool.length) await cursorSet(db, "ffnet_recent_rot", ((rrot + RECENT_ROT) % pool.length) + 1)
+    for (const s of [...new Set([...followed, ...recent])]) {
       const r = await harvestSection(browser, db, s, true)
       seen += r.seen; updated += r.updated; pages += r.pagesOk
     }

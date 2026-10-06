@@ -31,7 +31,7 @@ CLAIM_SQL = text("""
     DELETE FROM ffnet_listing_meta
      WHERE site_id IN (SELECT site_id FROM ffnet_listing_meta
                         ORDER BY seen_at LIMIT :n FOR UPDATE SKIP LOCKED)
-    RETURNING site_id, line, title, author, author_url, summary, fandom
+    RETURNING site_id, line, title, author, author_url, summary, fandom, seen_at
 """)
 
 
@@ -96,9 +96,13 @@ def apply_batch(limit: int = 2000, add_new: bool | None = None) -> dict:
 
     items, fresh, parsed, with_chars = [], [], 0, 0
     now = datetime.now(timezone.utc)
-    for site_id, line, title, author, author_url, summary, fandom in rows:
-        # A live listing page: a no-year date means this year.
-        meta = parse_ffn_meta(line, listing=True, ref=now)
+    for site_id, line, title, author, author_url, summary, fandom, seen_at in rows:
+        # A live listing page: a no-year date means this year, and "22h ago"
+        # means 22 hours before the page was READ — seen_at, not now.
+        ref = seen_at if seen_at is not None else now
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        meta = parse_ffn_meta(line, listing=True, ref=ref)
         if not meta:
             continue
         parsed += 1
