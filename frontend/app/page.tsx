@@ -15,6 +15,7 @@ import { parseQuery, parsedToSearchParams, quoteValue, type ParsedToken } from "
 import SiteIcon from "./SiteIcon"
 import { storyLink, isSeedUrl, otherCopies } from "@/lib/storyLinks"
 import { shortHubName } from "@/lib/hubNames"
+import { confidentSpelling, fixOperatorTypos } from "@/lib/autoCorrect"
 import SyntaxHelp from "./SyntaxHelp"
 import { rememberSearch } from "@/lib/lastSearch"
 import { saveSearch, removeSaved, isSaved, noteRun, searchId, loadSaved,
@@ -38,6 +39,13 @@ import { useAuth } from "@/lib/auth"
 // fresh search — this cannot serve stale results to a different query. Written
 // only after a fetch resolves (in doSearch), so it never races the instance
 // that produced it.
+// Two spellings of one query: the bar re-serialises a search from its filters
+// with its own quoting and spacing, so `fandom:"Naruto"` comes back as
+// `fandom:Naruto`. Compared through this, they are the same search.
+const sameQuery = (a: string, b: string) =>
+  a.replace(/["“”]/g, "").replace(/\s+/g, " ").trim().toLowerCase()
+  === b.replace(/["“”]/g, "").replace(/\s+/g, " ").trim().toLowerCase()
+
 let lastSearchCache: { url: string; data: SearchResponse } | null = null
 
 // Results fetched before they were asked for.
@@ -1745,12 +1753,32 @@ function SearchPageInner() {
   // A sentence that was re-read as a search, and the words the reader actually
   // typed. Kept so the banner can say what happened and hand them back their
   // own words — see `interpreted` in lib/types.ts.
+  // Seeded from the address at FIRST render, not in an effect: the page
+  // remounts on every navigation and its first search runs before effects do,
+  // so a note restored in an effect was always too late — that search rebuilt
+  // the address without `from=` and the note was gone. This component only
+  // renders in the browser (useSearchParams defers it), so this cannot
+  // disagree with server HTML.
+  const initialRewrite = useState(() => {
+    // useSearchParams, not window.location: on the remount after a search the
+    // router has the new address before the browser's location does, and the
+    // first version read the OLD one and lost the note on filter-only URLs.
+    const u = rawParams
+    const from = u.get("from")
+    if (!from) return null
+    return { from, q: u.get("q") ?? "", fixed: u.get("fixed") === "1" }
+  })[0]
   const [readAs, setReadAs] = useState<
-    { typed: string; terms: { kind: string; value: string; count: number }[] } | null>(null)
+    { typed: string; terms: { kind: string; value: string; count: number }[];
+      /** Set when the re-run was a spelling or operator correction, not a reading. */
+      corrected?: string } | null>(() => initialRewrite
+        ? { typed: initialRewrite.from, terms: [],
+            ...(initialRewrite.fixed ? { corrected: initialRewrite.q } : {}) }
+        : null)
   // The text already re-read once. Re-running the reader's literal words must
   // not bounce them straight back to the interpretation, and this is what
   // makes "search for what I typed" stick without a second flag.
-  const interpretedRef = useRef<string>("")
+  const interpretedRef = useRef<string>(initialRewrite?.from ?? "")
   // The words to write into `from=` on the next search, set when an
   // interpretation is about to be re-run.
   const pendingFromRef = useRef<string>("")
@@ -1758,7 +1786,17 @@ function SearchPageInner() {
   // that must not take `readAs` as a dependency — doing so rebuilds the
   // search function every time the banner changes, and the banner changes
   // because of a search.
-  const readAsRef = useRef<string>("")
+  const readAsRef = useRef<string>(initialRewrite?.from ?? "")
+  // The query the reader's words were REWRITTEN to (a reading or a correction).
+  // The page remounts on every navigation and searches again; without this,
+  // that second run of the rewritten query looked like "some other search"
+  // and cleared the note explaining it — measured, the note never survived.
+  // "*" when the page was loaded with `from=` and no `q=` (a reading that
+  // became filters): the first search this instance runs IS the rewrite.
+  const rewrittenRef = useRef<string>(initialRewrite ? (initialRewrite.q || "*") : "")
+  // Whether the rewrite was a spelling/operator correction, carried in the
+  // address as `fixed=1` so the right note comes back after a remount.
+  const fixedRef = useRef<boolean>(initialRewrite?.fixed ?? false)
   const [copied, setCopied] = useState(false)
   // Whether the search on screen is one the reader kept. Held in state rather
   // than read during render because it lives in localStorage, and reading that
@@ -2447,6 +2485,7 @@ function SearchPageInner() {
     } else if (readAsRef.current) {
       qs.set("from", readAsRef.current)
     }
+    if (qs.has("from") && fixedRef.current) qs.set("fixed", "1")
     // Remember where to come back to. Recorded here rather than in an effect
     // watching the URL, because this is the one place a search is deliberately
     // performed — the URL also changes on remount and on Back, and neither is a
@@ -2536,15 +2575,43 @@ function SearchPageInner() {
         pendingFromRef.current = effectiveQuery
         setReadAs({ typed: effectiveQuery, terms: data.interpreted.terms ?? [] })
         readAsRef.current = effectiveQuery
+        rewrittenRef.current = data.interpreted.query
+        fixedRef.current = false
         setQuery(data.interpreted.query)
         doSearchRef.current?.(true, undefined, data.interpreted.query)
         return
       }
+      // A search that found NOTHING, and was a typo the site already knows
+      // the answer to: re-run it corrected, and say so. See lib/autoCorrect —
+      // "the arithmancr" failed five times for two readers with the right
+      // answer offered underneath. Same guard as the reading above, so
+      // "search for what I typed instead" stays put.
+      // A mistyped operator is corrected whatever it found — "shgip:" is never
+      // what anybody meant, and as text it can still match a few stray works.
+      // A spelling correction only replaces a search that found NOTHING.
+      if (!data.interpreted && interpretedRef.current !== effectiveQuery) {
+        const fix = fixOperatorTypos(effectiveQuery)
+          ?? (data.total !== 0 || (data as any).hidden_explicit ? null
+              : confidentSpelling(effectiveQuery, (data.suggestions ?? []) as any))
+        if (fix && fix.trim() !== effectiveQuery.trim()) {
+          interpretedRef.current = effectiveQuery
+          pendingFromRef.current = effectiveQuery
+          setReadAs({ typed: effectiveQuery, terms: [], corrected: fix })
+          readAsRef.current = effectiveQuery
+          rewrittenRef.current = fix
+          fixedRef.current = true
+          setQuery(fix)
+          doSearchRef.current?.(true, undefined, fix)
+          return
+        }
+      }
       // Any other search clears the banner: it describes THIS result set, and
       // leaving it up over the next one would attribute an interpretation to a
       // search that never had one.
-      if (!data.interpreted && interpretedRef.current !== effectiveQuery) {
-        setReadAs(null); readAsRef.current = ""
+      if (rewrittenRef.current === "*") rewrittenRef.current = effectiveQuery
+      if (!data.interpreted && interpretedRef.current !== effectiveQuery
+          && !sameQuery(effectiveQuery, rewrittenRef.current)) {
+        setReadAs(null); readAsRef.current = ""; rewrittenRef.current = ""; fixedRef.current = false
       }
       setParsedTokens((data as any).parsed_tokens ?? [])
       lastSearchCache = { url: qs.toString(), data }
@@ -2599,8 +2666,12 @@ function SearchPageInner() {
   useEffect(() => {
     const from = rawParams.get("from")
     if (from && !readAsRef.current) {
+      const fixed = rawParams.get("fixed") === "1"
+      const q = rawParams.get("q") ?? ""
       readAsRef.current = from
-      setReadAs({ typed: from, terms: [] })
+      rewrittenRef.current = q
+      fixedRef.current = fixed
+      setReadAs({ typed: from, terms: [], ...(fixed ? { corrected: q } : {}) })
       interpretedRef.current = from   // do not re-interpret what is already read
     }
   }, [rawParams])
@@ -3837,9 +3908,19 @@ function SearchPageInner() {
                   words are one click away and stay put when clicked. */}
               {readAs && shown.results.length > 0 && (
                 <div className="read-as">
+                  {readAs.corrected ? (
+                    <p className="read-as__lead">
+                      Showing results for <strong>{readAs.corrected}</strong> —
+                      what you typed, “{readAs.typed.length > 48
+                        ? readAs.typed.slice(0, 48) + "…" : readAs.typed}”,
+                      looked like a typo.
+                    </p>
+                  ) : (
                   <p className="read-as__lead">
                     Nothing matched those words exactly, so they were read as a search:
                   </p>
+                  )}
+                  {!readAs.corrected && (
                   <p className="read-as__terms">
                     {readAs.terms.slice(0, 6).map(t => (
                       <span key={t.kind + t.value} className="read-as__chip">
@@ -3847,9 +3928,11 @@ function SearchPageInner() {
                       </span>
                     ))}
                   </p>
+                  )}
                   <button className="read-as__undo"
                     onClick={() => { setQuery(readAs.typed); setReadAs(null)
-                                     readAsRef.current = ""
+                                     readAsRef.current = ""; rewrittenRef.current = ""
+                                     fixedRef.current = false
                                      doSearch(true, undefined, readAs.typed) }}>
                     Search for “{readAs.typed.length > 48
                       ? readAs.typed.slice(0, 48) + "…" : readAs.typed}” instead
@@ -3891,7 +3974,13 @@ function SearchPageInner() {
                         expensive one; this is how they find out. */}
                     {(() => {
                       const sug = shown.suggestions ?? []
-                      const spelling = sug.filter(s => (s.reason ?? "spelling") === "spelling")
+                      // Not a suggestion when it is already in the search: offering
+                      // `King_of_WOW` back to `author:King_of_WOW` re-ran the same
+                      // empty search (all 77 works were adult-gated, which the
+                      // notice above already explains).
+                      const typedLower = query.toLowerCase()
+                      const spelling = sug.filter(s => (s.reason ?? "spelling") === "spelling"
+                        && !typedLower.includes(String(s.value).toLowerCase()))
                       // A third heading, because neither of the other two is
                       // true here. "Did you mean" says they made a spelling
                       // mistake and they did not; "every term is a

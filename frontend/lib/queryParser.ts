@@ -101,6 +101,9 @@ const SINGLE_TOKEN = new Set([
   "crossovers", "in_series",
 ])
 
+/** Every operator key the bar understands (fandom, ship, tag, …). */
+export function operatorKeys(): string[] { return Object.keys(FIELD_ALIASES) }
+
 export function canonicalSite(value: string): string | null {
   return SITE_ALIASES[value.toLowerCase().split(/\s+/).join(" ").trim()] ?? null
 }
