@@ -125,43 +125,15 @@ def _send_email(to: str, code: str, username: str) -> bool:
     # whose every claim is one sentence. Indented blocks instead — every client
     # renders those, and they make the link and the code selectable as a unit.
     # Wrapped under 72 so nothing re-flows ragged.
-    bare = (SITE_URL or "https://ficatlas.com").replace("https://", "")
-    body = (
-        f"Hi {username},\n"
-        "\n"
-        "Use the link below to choose a new password for your FicAtlas\n"
-        "account.\n"
-        "\n"
-        + (f"    {link}\n"
-           "\n"
-           f"The link expires in {TOKEN_TTL_MIN} minutes and can be used once.\n"
-           "\n"
-           f"If it does not open, go to {bare}/reset and enter this code:\n"
-           "\n"
-           f"    {code}\n"
-           if link else
-           f"Go to {bare}/reset and enter this code:\n"
-           "\n"
-           f"    {code}\n"
-           "\n"
-           f"It expires in {TOKEN_TTL_MIN} minutes and can be used once.\n")
-        + "\n"
-        "If you did not request this, you can ignore this email. Your\n"
-        "password has not been changed, and the link cannot be used by\n"
-        "anyone without access to this mailbox.\n"
-        "\n"
-        "Need help? Write to help@ficatlas.com.\n"
-        "\n"
-        "-- \n"
-        "FicAtlas\n"
-        "Search AO3, FanFiction.net and FictionAlley at once\n"
-        f"{SITE_URL or 'https://ficatlas.com'}\n"
-    )
-
+    # The copy and layout live in email_templates.reset_email, with every other
+    # email this site sends; the rules this comment used to list are there.
+    import email_templates
+    import mailer
+    subject, text_body, html_body = email_templates.reset_email(
+        username=username, link=link, code=code, ttl_min=TOKEN_TTL_MIN)
     # Whether mail worked must never become a signal about whether the account
     # exists, so a failure is logged inside mailer.send and not raised.
-    import mailer
-    return mailer.send(to, "Reset your FicAtlas password", body)
+    return mailer.send(to, subject, text_body, html=html_body)
 
 
 @router.post("/forgot")

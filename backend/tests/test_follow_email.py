@@ -44,8 +44,9 @@ class Outbox:
     def __init__(self):
         self.sent = []
 
-    def __call__(self, to, subject, body, headers):
+    def __call__(self, to, subject, body, headers, html=None):
         self.sent.append((to, subject, body, headers))
+        self.html = html
         return True
 
 

@@ -25,8 +25,13 @@ def configured() -> bool:
     return bool(SMTP_HOST and SMTP_FROM)
 
 
-def send(to: str, subject: str, body: str, headers: dict | None = None) -> bool:
-    """Best-effort plain-text delivery. Returns whether it actually went out."""
+def send(to: str, subject: str, body: str, headers: dict | None = None,
+         html: str | None = None) -> bool:
+    """Best-effort delivery. Returns whether it actually went out.
+
+    `body` is the plain text; `html`, when given, is added as the preferred
+    alternative (multipart/alternative), so every client gets one or the
+    other and nothing is lost to a client that shows only text."""
     if not configured():
         return False
     try:
@@ -40,6 +45,8 @@ def send(to: str, subject: str, body: str, headers: dict | None = None) -> bool:
         for k, v in (headers or {}).items():
             msg[k] = v
         msg.set_content(body)
+        if html:
+            msg.add_alternative(html, subtype="html")
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
             smtp.starttls()
             if SMTP_USER:

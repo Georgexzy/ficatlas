@@ -46,7 +46,7 @@ SITE_LABELS = {"ao3": "AO3", "ffnet": "FanFiction.net", "fictionalley": "Fiction
 
 def _due(db) -> list:
     return db.execute(text(f"""
-        SELECT fe.user_id::text, u.email, u.username, fe.token
+        SELECT fe.user_id::text, u.email, u.username, fe.token, fe.frequency
           FROM follow_email fe JOIN users u ON u.id = fe.user_id
          WHERE coalesce(u.email, '') <> ''
            AND (fe.last_sent_at IS NULL OR fe.last_sent_at < now() - CASE fe.frequency
@@ -72,46 +72,14 @@ def moved(db, user_id: str) -> list:
     """), {"u": user_id}).fetchall()
 
 
-def compose(username: str, works: list, token: str) -> tuple[str, str, dict]:
-    site = mailer.SITE_URL or "https://ficatlas.com"
-    n = len(works)
-    subject = (f"New chapter{'s' if works[0][5] > 1 else ''}: {works[0][1]}" if n == 1
-               else f"New chapters in {n} stories you follow")
-    lines = [f"Hi {username},", "",
-             ("A story you follow has a new chapter:" if n == 1 and works[0][5] == 1 else
-              "A story you follow has new chapters:" if n == 1 else
-              f"{n} stories you follow have new chapters:"), ""]
-    for sid, title, author, s, chapters, new in works[:MAX_LISTED]:
-        lines.append(f"  {title}" + (f" by {author}" if author else ""))
-        lines.append(f"  {new} new chapter{'s' if new != 1 else ''} (now {chapters})"
-                     f" · {SITE_LABELS.get(s, s)}")
-        lines.append(f"  {site}/story/{sid}")
-        lines.append("")
-    if n > MAX_LISTED:
-        lines += [f"…and {n - MAX_LISTED} more.", ""]
-    unsub_page = f"{site}/unsubscribe#t={token}"
-    lines += [
-        "Everything you follow, across every archive, in one list:",
-        f"  {site}/library?tab=following",
-        "",
-        "You are getting this because you turned on update emails at",
-        "FicAtlas. To stop them, open this link, or untick the box on your",
-        "Following tab:",
-        f"  {unsub_page}",
-        "",
-        "-- ",
-        "FicAtlas",
-        "Search AO3, FanFiction.net and FictionAlley at once",
-        site,
-    ]
-    headers = {
-        # RFC 8058 one-click: mail clients show their own Unsubscribe button and
-        # POST here without opening a page. Gmail and Yahoo require it of
-        # anyone sending in volume, and it is what keeps a digest out of spam.
-        "List-Unsubscribe": f"<{site}/api/follows/email/unsubscribe?t={token}>",
-        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-    }
-    return subject, "\n".join(lines) + "\n", headers
+def compose(username: str, works: list, token: str, frequency: str = "daily",
+            test: bool = False):
+    """(subject, text, headers, html). The layout and copy are in email_templates."""
+    import email_templates
+    subject, text_body, html_body, headers = email_templates.digest_email(
+        username=username, works=works, token=token, frequency=frequency,
+        max_listed=MAX_LISTED, test=test)
+    return subject, text_body, headers, html_body
 
 
 def run(db, send=None) -> dict:
@@ -120,13 +88,13 @@ def run(db, send=None) -> dict:
     stats = {"due": 0, "sent": 0, "failed": 0, "works": 0}
     if send is mailer.send and not mailer.configured():
         return stats
-    for user_id, email, username, token in _due(db):
+    for user_id, email, username, token, frequency in _due(db):
         stats["due"] += 1
         works = moved(db, user_id)
         if not works:
             continue
-        subject, body, headers = compose(username, works, token)
-        if not send(email, subject, body, headers):
+        subject, body, headers, html_body = compose(username, works, token, frequency)
+        if not send(email, subject, body, headers, html=html_body):
             stats["failed"] += 1
             continue
         stats["sent"] += 1

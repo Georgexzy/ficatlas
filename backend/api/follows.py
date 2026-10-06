@@ -232,17 +232,17 @@ def send_test(db: Session = Depends(get_db),
     """), {"u": str(user.id)}).fetchall()
     token = db.execute(text("SELECT token FROM follow_email WHERE user_id = :u"),
                        {"u": str(user.id)}).scalar() or "test"
+    freq = db.execute(text("SELECT frequency FROM follow_email WHERE user_id = :u"),
+                      {"u": str(user.id)}).scalar() or "daily"
+    html_body = None
     if rows:
-        subject, body, headers = follow_email.compose(user.username, list(rows), token)
-        subject = "[Test] " + subject
-        body = ("This is a TEST of your FicAtlas update emails. Nothing below\n"
-                "has necessarily updated — it shows what a real one looks like.\n\n" + body)
+        subject, body, headers, html_body = follow_email.compose(
+            user.username, list(rows), token, freq, test=True)
     else:
-        subject = "[Test] Your FicAtlas update emails work"
-        body = (f"Hi {user.username},\n\nThis is a test. Update emails reach this address.\n"
-                "Follow a story and you will hear when it gains chapters.\n")
+        import email_templates
+        subject, body, html_body = email_templates.setup_test_email(username=user.username)
         headers = {}
-    if not mailer.send(user.email, subject, body, headers):
+    if not mailer.send(user.email, subject, body, headers, html=html_body):
         raise HTTPException(502, "The email could not be sent. Try again later.")
     _last_test[str(user.id)] = now
     return {"ok": True, "to": _mask(user.email)}
