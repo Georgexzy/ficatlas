@@ -48,25 +48,52 @@ interface MailPrefs {
   enabled: boolean
   frequency: "daily" | "hourly"
   has_email: boolean
+  email: string | null
+  last_sent_at: string | null
+  following: number
   mail_available: boolean
 }
 
+const FREQUENCIES: { value: MailPrefs["frequency"]; title: string; body: string }[] = [
+  { value: "daily", title: "Daily digest",
+    body: "At most one email a day, listing everything that updated." },
+  { value: "hourly", title: "As it happens",
+    body: "Within the hour of a new chapter, several updates batched into one email." },
+]
+
+function ago(iso: string | null): string | null {
+  if (!iso) return null
+  const ms = Date.now() - new Date(iso).getTime()
+  if (!Number.isFinite(ms)) return null
+  const h = Math.round(ms / 3_600_000)
+  if (h < 1) return "less than an hour ago"
+  if (h < 24) return `${h} hour${h === 1 ? "" : "s"} ago`
+  const d = Math.round(h / 24)
+  return `${d} day${d === 1 ? "" : "s"} ago`
+}
+
 // Opt-in mail when a followed work gains chapters (backend/follow_email.py).
-// The list above only helps a reader who comes back; this is what brings them
-// back. Off until ticked, one digest rather than a mail per chapter, and each
-// chapter announced once.
+// The list below only helps a reader who comes back; this is what brings them
+// back. Off until switched on, one digest rather than a mail per chapter, and
+// each chapter announced once.
+//
+// A settings card rather than a sentence with a checkbox: it says where the
+// mail goes, what each frequency means before you pick it, when the last one
+// went, and lets you send a test — "is this working?" is the question every
+// opt-in mail gets, usually from somebody whose follows have not updated yet.
 function FollowMail() {
   const [prefs, setPrefs] = useState<MailPrefs | null>(null)
-  const [msg, setMsg] = useState<string | null>(null)
+  const [msg, setMsg] = useState<{ text: string; tone: "ok" | "err" } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [testing, setTesting] = useState(false)
 
   useEffect(() => {
     fetchWithTimeout("/api/follows/email", { credentials: "include" }, USER_TIMEOUT_MS)
       .then(r => (r.ok ? r.json() : null)).then(setPrefs).catch(() => {})
   }, [])
 
-  // The server is not offering mail at all (no relay configured), so a
-  // checkbox would promise something nothing will deliver.
+  // The server is not offering mail at all (no relay configured), so a switch
+  // would promise something nothing will deliver.
   if (!prefs || !prefs.mail_available) return null
 
   const save = async (next: { enabled: boolean, frequency: MailPrefs["frequency"] }) => {
@@ -78,40 +105,109 @@ function FollowMail() {
         body: JSON.stringify(next),
       }, USER_TIMEOUT_MS)
       const d = await r.json().catch(() => null)
-      if (!r.ok) { setMsg(d?.detail || "Could not save that."); return }
+      if (!r.ok) { setMsg({ text: d?.detail || "Could not save that.", tone: "err" }); return }
+      const turnedOn = d.enabled && !prefs.enabled
       setPrefs(d)
-      setMsg(d.enabled ? "Saved. Only chapters posted from now on will be emailed." : "Update emails are off.")
+      setMsg(turnedOn
+        ? { text: "On. You will hear about chapters posted from now on.", tone: "ok" }
+        : !d.enabled ? { text: "Update emails are off.", tone: "ok" }
+        : { text: "Saved.", tone: "ok" })
     } catch {
-      setMsg("Could not save that.")
+      setMsg({ text: "Could not save that.", tone: "err" })
     } finally {
       setBusy(false)
     }
   }
 
+  const sendTest = async () => {
+    setTesting(true); setMsg(null)
+    try {
+      const r = await fetchWithTimeout("/api/follows/email/test",
+        { method: "POST", credentials: "include" }, USER_TIMEOUT_MS)
+      const d = await r.json().catch(() => null)
+      setMsg(r.ok
+        ? { text: `Test email sent to ${d?.to ?? "your address"}. If it is not there in a minute, check spam.`, tone: "ok" }
+        : { text: d?.detail || "Could not send a test email.", tone: "err" })
+    } catch {
+      setMsg({ text: "Could not send a test email.", tone: "err" })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const noAddress = !prefs.has_email
+  const lastSent = ago(prefs.last_sent_at)
+
   return (
-    <div className="follow-mail">
-      <label className="follow-mail__toggle">
-        <input type="checkbox" checked={prefs.enabled}
-          disabled={busy || (!prefs.has_email && !prefs.enabled)}
-          onChange={e => save({ enabled: e.target.checked, frequency: prefs.frequency })} />
-        <span>Email me when stories I follow get new chapters</span>
-      </label>
-      {prefs.enabled && (
-        <select className="follow-mail__freq" value={prefs.frequency} disabled={busy}
-          aria-label="How often"
-          onChange={e => save({ enabled: true, frequency: e.target.value as MailPrefs["frequency"] })}>
-          <option value="daily">at most once a day</option>
-          <option value="hourly">as they happen (at most hourly)</option>
-        </select>
-      )}
-      {!prefs.has_email && (
-        <p className="follow-mail__note">
+    <section className={`mail-card${prefs.enabled ? " mail-card--on" : ""}`}
+      aria-labelledby="mail-card-title">
+      <div className="mail-card__head">
+        <div className="mail-card__intro">
+          <h2 id="mail-card-title" className="mail-card__title">Update emails</h2>
+          <p className="mail-card__lede">
+            One email when stories you follow get new chapters — across AO3,
+            FanFiction.net and FictionAlley.
+          </p>
+        </div>
+        <button type="button" role="switch" aria-checked={prefs.enabled}
+          aria-labelledby="mail-card-title"
+          className={`switch${prefs.enabled ? " switch--on" : ""}`}
+          disabled={busy || (noAddress && !prefs.enabled)}
+          onClick={() => save({ enabled: !prefs.enabled, frequency: prefs.frequency })}>
+          <span className="switch__thumb" aria-hidden="true" />
+          <span className="visually-hidden">{prefs.enabled ? "On" : "Off"}</span>
+        </button>
+      </div>
+
+      {noAddress ? (
+        <p className="mail-card__note">
           Your account has no email address yet.{" "}
-          <Link href="/settings?tab=account">Add one</Link> to turn this on.
+          <Link href="/settings?tab=account">Add one</Link> to turn this on — it is
+          used for this and password resets, and nothing else.
+        </p>
+      ) : (
+        <p className="mail-card__to">
+          Sent to <strong>{prefs.email}</strong>
+          {" · "}<Link href="/settings?tab=account">change</Link>
         </p>
       )}
-      {msg && <p className="follow-mail__note" role="status">{msg}</p>}
-    </div>
+
+      {prefs.enabled && (
+        <>
+          <fieldset className="mail-card__freq" disabled={busy}>
+            <legend className="mail-card__legend">How often</legend>
+            {FREQUENCIES.map(f => (
+              <label key={f.value}
+                className={`freq-option${prefs.frequency === f.value ? " freq-option--on" : ""}`}>
+                <input type="radio" name="mail-frequency" value={f.value}
+                  checked={prefs.frequency === f.value}
+                  onChange={() => save({ enabled: true, frequency: f.value })} />
+                <span className="freq-option__title">{f.title}</span>
+                <span className="freq-option__body">{f.body}</span>
+              </label>
+            ))}
+          </fieldset>
+
+          <div className="mail-card__foot">
+            <span className="mail-card__status">
+              {lastSent
+                ? <>Last email {lastSent}</>
+                : <>No email yet — the first goes out when a followed story updates</>}
+              {" · "}following {prefs.following.toLocaleString()}{" "}
+              {prefs.following === 1 ? "story" : "stories"}
+            </span>
+            <button type="button" className="btn btn--ghost mail-card__test"
+              onClick={sendTest} disabled={testing}>
+              {testing ? "Sending…" : "Send me a test email"}
+            </button>
+          </div>
+        </>
+      )}
+
+      {msg && (
+        <p className={`mail-card__msg mail-card__msg--${msg.tone}`} role="status">{msg.text}</p>
+      )}
+    </section>
   )
 }
 

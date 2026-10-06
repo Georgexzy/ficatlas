@@ -136,12 +136,27 @@ class EmailPrefs(BaseModel):
     frequency: str = "daily"
 
 
+def _mask(email: str) -> str | None:
+    """g•••@gmail.com — enough to recognise, not enough to read off a screen."""
+    e = (email or "").strip()
+    if "@" not in e:
+        return None
+    local, domain = e.split("@", 1)
+    return f"{local[:1]}•••@{domain}"
+
+
 def _email_state(db: Session, user: User) -> dict:
     import mailer
-    row = db.execute(text(
-        "SELECT frequency FROM follow_email WHERE user_id = :u"), {"u": str(user.id)}).first()
+    row = db.execute(text("""
+        SELECT frequency, last_sent_at FROM follow_email WHERE user_id = :u
+    """), {"u": str(user.id)}).first()
+    following = db.execute(text(
+        "SELECT count(*) FROM follows WHERE user_id = :u"), {"u": str(user.id)}).scalar() or 0
     return {"enabled": bool(row), "frequency": row[0] if row else "daily",
             "has_email": bool((user.email or "").strip()),
+            "email": _mask(user.email or ""),
+            "last_sent_at": row[1].isoformat() if row and row[1] else None,
+            "following": int(following),
             "mail_available": mailer.configured()}
 
 
@@ -180,6 +195,57 @@ def set_email_prefs(prefs: EmailPrefs, db: Session = Depends(get_db),
         """), {"u": str(user.id), "f": prefs.frequency, "t": secrets.token_urlsafe(24)})
     db.commit()
     return _email_state(db, user)
+
+
+# One test mail per account per ten minutes, per API process. Approximate
+# across processes, which is fine for its purpose: a reader checking the mail
+# arrives, not a way to send mail at volume.
+_TEST_GAP_S = 600
+_last_test: dict[str, float] = {}
+
+
+@router.post("/email/test")
+def send_test(db: Session = Depends(get_db),
+              viewer: Optional[User] = Depends(get_current_user)):
+    """Send this reader a sample update email, so they can see it arrives.
+
+    The commonest question about an opt-in mail is "is it working?", asked by
+    somebody whose followed works have not updated yet. This answers it now,
+    with what a real digest of their own follows looks like.
+    """
+    import time as _time
+    import follow_email
+    import mailer
+    user = _require(viewer)
+    if not mailer.configured():
+        raise HTTPException(503, "Email is not available on this site right now.")
+    if not (user.email or "").strip():
+        raise HTTPException(400, "Add an email address to your account first.")
+    now = _time.time()
+    if now - _last_test.get(str(user.id), 0) < _TEST_GAP_S:
+        raise HTTPException(429, "A test email was sent a few minutes ago — check your inbox, and your spam folder.")
+    rows = db.execute(text("""
+        SELECT s.id::text, s.title, s.author, s.site::text, s.chapter_count, 1
+          FROM follows f JOIN stories s ON s.id = f.story_id
+         WHERE f.user_id = :u AND s.delisted_at IS NULL
+         ORDER BY s.updated_at DESC NULLS LAST LIMIT 3
+    """), {"u": str(user.id)}).fetchall()
+    token = db.execute(text("SELECT token FROM follow_email WHERE user_id = :u"),
+                       {"u": str(user.id)}).scalar() or "test"
+    if rows:
+        subject, body, headers = follow_email.compose(user.username, list(rows), token)
+        subject = "[Test] " + subject
+        body = ("This is a TEST of your FicAtlas update emails. Nothing below\n"
+                "has necessarily updated — it shows what a real one looks like.\n\n" + body)
+    else:
+        subject = "[Test] Your FicAtlas update emails work"
+        body = (f"Hi {user.username},\n\nThis is a test. Update emails reach this address.\n"
+                "Follow a story and you will hear when it gains chapters.\n")
+        headers = {}
+    if not mailer.send(user.email, subject, body, headers):
+        raise HTTPException(502, "The email could not be sent. Try again later.")
+    _last_test[str(user.id)] = now
+    return {"ok": True, "to": _mask(user.email)}
 
 
 @router.post("/email/unsubscribe")
