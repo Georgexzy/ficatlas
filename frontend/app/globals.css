@@ -7770,3 +7770,103 @@ html { scroll-padding-top: 72px; }
 .switch--on .switch__thumb { transform: translateX(20px); background: var(--bg); }
 .switch:disabled { opacity: 0.5; cursor: not-allowed; }
 .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* ── Trope pages and the fandom hub's trope grid ────────────────────────── */
+.topic-hero { margin: 4px 0 18px; }
+.topic-hero__eyebrow {
+  margin: 0 0 4px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.topic-hero__eyebrow a { color: var(--accent); text-decoration: none; }
+.topic-hero__eyebrow a:hover { text-decoration: underline; }
+.hub-page h1.topic-hero__title {
+  margin: 0 0 8px; font-family: var(--font-serif); font-size: clamp(30px, 5vw, 44px);
+  line-height: 1.1; letter-spacing: -0.01em;
+}
+.topic-hero__lede { margin: 0 0 14px; color: var(--text-dim); font-size: 16px; max-width: 60ch; }
+.topic-hero__lede strong { color: var(--text); }
+.topic-hero__split { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+.topic-split {
+  display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 12px;
+  border-radius: 999px; border: 1px solid var(--border2); background: var(--surface);
+  font-size: 13px;
+}
+.topic-split__site { font-weight: 600; color: var(--text); }
+.topic-split__n { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.topic-hero__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.topic-btn {
+  display: inline-flex; align-items: center; min-height: 40px; padding: 8px 14px;
+  border-radius: 10px; border: 1px solid var(--border2); background: var(--surface2);
+  color: var(--text-dim); font-size: 14px; text-decoration: none;
+}
+.topic-btn:hover { border-color: var(--accent); color: var(--accent); }
+.topic-btn--primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.topic-btn--primary:hover { color: var(--bg); filter: brightness(1.08); }
+
+.topic-siblings {
+  display: flex; align-items: center; gap: 10px; margin: 0 0 22px; padding: 10px 0;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+.topic-siblings__label { flex: none; font-size: 12.5px; color: var(--text-faint); }
+.topic-siblings__list {
+  list-style: none; padding: 0; margin: 0; display: flex; gap: 6px; overflow-x: auto;
+  scrollbar-width: none; -webkit-mask-image: linear-gradient(to right, #000 90%, transparent);
+          mask-image: linear-gradient(to right, #000 90%, transparent);
+}
+.topic-siblings__list::-webkit-scrollbar { display: none; }
+.topic-siblings__list a {
+  display: inline-flex; align-items: center; min-height: 32px; padding: 4px 11px; white-space: nowrap;
+  border: 1px solid var(--border2); border-radius: 999px; font-size: 13px;
+  color: var(--text-dim); text-decoration: none; background: var(--surface);
+}
+.topic-siblings__list a:hover { border-color: var(--accent); color: var(--accent); }
+
+.trope-grid { margin: 8px 0 28px; }
+.trope-grid__list {
+  list-style: none; padding: 0; margin: 0; display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr));
+}
+.trope-tile {
+  display: flex; flex-direction: column; gap: 2px; height: 100%; padding: 10px 12px;
+  border: 1px solid var(--border2); border-radius: 10px; background: var(--surface);
+  text-decoration: none; transition: border-color .12s, background .12s;
+}
+.trope-tile:hover { border-color: var(--accent-dim); background: var(--surface2); }
+.trope-tile__name { color: var(--text); font-size: 14px; font-weight: 500; line-height: 1.3; }
+.trope-tile:hover .trope-tile__name { color: var(--accent); }
+.trope-tile__n { color: var(--text-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.trope-grid__more { margin-top: 10px; }
+.trope-grid__more summary {
+  cursor: pointer; display: inline-flex; align-items: center; min-height: 36px; padding: 6px 14px;
+  border: 1px solid var(--border2); border-radius: 999px; font-size: 13px; color: var(--accent);
+  list-style: none;
+}
+.trope-grid__more summary::-webkit-details-marker { display: none; }
+.trope-grid__more[open] summary { margin-bottom: 10px; }
+@media (max-width: 560px) {
+  .trope-grid__list { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .trope-tile { padding: 9px 10px; }
+  .topic-btn { flex: 1 1 auto; justify-content: center; }
+  .topic-btn--primary { flex-basis: 100%; }
+}
+
+/* Collapsed update-emails card: one line until opened. */
+.mail-card { padding: 0; }
+.mail-card__summary {
+  display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 10px 16px;
+  cursor: pointer; list-style: none; border-radius: 12px;
+}
+.mail-card__summary::-webkit-details-marker { display: none; }
+.mail-card__summary-title { font-weight: 600; font-size: 14.5px; color: var(--text); }
+.mail-card__pill {
+  font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border2);
+  color: var(--text-faint);
+}
+.mail-card__pill--on { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+.mail-card__chev {
+  margin-left: auto; width: 8px; height: 8px; border-right: 2px solid var(--text-faint);
+  border-bottom: 2px solid var(--text-faint); transform: rotate(45deg); transition: transform .15s;
+}
+.mail-card[open] .mail-card__chev { transform: rotate(-135deg); }
+.mail-card__body { padding: 0 18px 16px; }
+.mail-card__lede { margin-top: 0; }

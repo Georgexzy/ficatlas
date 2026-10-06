@@ -126,13 +126,59 @@ export default async function TopicHub(
           },
         ]) }} />
 
-        <h1>{t.fandom_name}: {t.tag}</h1>
-        <p className="hub__lede">
-          {t.work_count.toLocaleString()} {t.fandom_name} works tagged {t.tag}, from
-          Archive of Our Own, FanFiction.net and FictionAlley. The most-read of each
-          archive are below; <Link rel="nofollow" href={searchHref(t)}>search all of them</Link> with
-          your own filters.
-        </p>
+        {/* The header answers, in order: what is this (the trope, with its
+            fandom as the eyebrow), how much is there and WHERE (the archive
+            split is the claim this site makes), and what can I do next — the
+            three filters readers apply most, one tap each, before the list. */}
+        <header className="topic-hero">
+          <p className="topic-hero__eyebrow">
+            <Link href={`/fandom/${t.fandom_slug}`}>{t.fandom_name}</Link> fanfiction
+          </p>
+          <h1 className="topic-hero__title">{t.tag}</h1>
+          <p className="topic-hero__lede">
+            <strong>{t.work_count.toLocaleString()}</strong> {t.fandom_name} works
+            tagged {t.tag}, searched across three archives at once.
+          </p>
+          {sections.length > 1 && (
+            <ul className="topic-hero__split" aria-label="Where these works are">
+              {[...sections].sort((a, b) => (b.total ?? 0) - (a.total ?? 0)).map(sec => (
+                <li key={sec.site} className={`topic-split topic-split--${sec.site}`}>
+                  <span className="topic-split__site">{SITE_LABELS[sec.site] ?? sec.site}</span>
+                  <span className="topic-split__n">{(sec.total ?? sec.works.length).toLocaleString()}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <nav className="topic-hero__actions" aria-label="Search these works">
+            <Link rel="nofollow" className="topic-btn topic-btn--primary" href={searchHref(t)}>
+              Search all {t.work_count.toLocaleString()} →
+            </Link>
+            <Link rel="nofollow" className="topic-btn" href={`${searchHref(t)}&status=complete`}>
+              Complete only
+            </Link>
+            <Link rel="nofollow" className="topic-btn" href={`${searchHref(t)}&word_count_min=100000`}>
+              100k+ words
+            </Link>
+            <Link rel="nofollow" className="topic-btn"
+              href={`${searchHref(t)}&updated_after=${new Date().getFullYear()}-01-01`}>
+              Updated this year
+            </Link>
+          </nav>
+        </header>
+
+        {/* The fandom's other tropes, near the top: the commonest next move
+            from "time travel" is "what else is there", not the end of a
+            list. One scrollable row on a phone. */}
+        {!!t.topics?.length && (
+          <nav className="topic-siblings" aria-label={`Other ${t.fandom_name} tropes`}>
+            <span className="topic-siblings__label">More {t.fandom_name}:</span>
+            <ul className="topic-siblings__list">
+              {t.topics.slice(0, 14).map(x => (
+                <li key={x.slug}><Link href={`/fandom/${x.slug}`}>{x.tag}</Link></li>
+              ))}
+            </ul>
+          </nav>
+        )}
 
         {sections.length === 0 ? (
           <p className="hub__empty">Nothing to show here yet.</p>
@@ -167,7 +213,7 @@ export default async function TopicHub(
             crawler arriving on one can walk to the rest. */}
         {!!t.topics?.length && (
           <nav className="hub__related" aria-label="More in this fandom">
-            <h2>More {t.fandom_name} tropes</h2>
+            <h2>Every {t.fandom_name} trope</h2>
             <ul className="hub-chips">
               {t.topics.map(x => (
                 <li key={x.slug}>

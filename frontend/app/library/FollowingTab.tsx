@@ -86,6 +86,7 @@ function FollowMail() {
   const [msg, setMsg] = useState<{ text: string; tone: "ok" | "err" } | null>(null)
   const [busy, setBusy] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [open, setOpen] = useState(false)
 
   useEffect(() => {
     fetchWithTimeout("/api/follows/email", { credentials: "include" }, USER_TIMEOUT_MS)
@@ -139,18 +140,30 @@ function FollowMail() {
   const lastSent = ago(prefs.last_sent_at)
 
   return (
-    <section className={`mail-card${prefs.enabled ? " mail-card--on" : ""}`}
-      aria-labelledby="mail-card-title">
+    // Collapsed to one line by default: the card is a setting you change once,
+    // and opened it pushed the list of followed stories — the reason for this
+    // tab — most of a phone screen down. The line still says the state.
+    <details className={`mail-card${prefs.enabled ? " mail-card--on" : ""}`}
+      open={open} onToggle={e => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary className="mail-card__summary">
+        <span className="mail-card__summary-title">Update emails</span>
+        <span className={`mail-card__pill${prefs.enabled ? " mail-card__pill--on" : ""}`}>
+          {prefs.enabled
+            ? (prefs.frequency === "daily" ? "On · daily digest" : "On · as it happens")
+            : "Off"}
+        </span>
+        <span className="mail-card__chev" aria-hidden="true" />
+      </summary>
+      <div className="mail-card__body">
       <div className="mail-card__head">
         <div className="mail-card__intro">
-          <h2 id="mail-card-title" className="mail-card__title">Update emails</h2>
-          <p className="mail-card__lede">
+          <p id="mail-card-title" className="mail-card__lede">
             One email when stories you follow get new chapters — across AO3,
             FanFiction.net and FictionAlley.
           </p>
         </div>
         <button type="button" role="switch" aria-checked={prefs.enabled}
-          aria-labelledby="mail-card-title"
+          aria-label="Update emails"
           className={`switch${prefs.enabled ? " switch--on" : ""}`}
           disabled={busy || (noAddress && !prefs.enabled)}
           onClick={() => save({ enabled: !prefs.enabled, frequency: prefs.frequency })}>
@@ -207,7 +220,8 @@ function FollowMail() {
       {msg && (
         <p className={`mail-card__msg mail-card__msg--${msg.tone}`} role="status">{msg.text}</p>
       )}
-    </section>
+      </div>
+    </details>
   )
 }
 
@@ -297,7 +311,7 @@ export default function FollowingTab() {
                     <p className="follows__meta">
                       {w.author && <>{w.author} · </>}
                       {SITE_LABELS[w.site] ?? w.site}
-                      {w.chapter_count != null && <> · {chapterDisplay(w.chapter_count)}</>}
+                      {w.chapter_count != null && <> · {chapterDisplay(w.chapter_count, null, w.status)}</>}
                       {w.word_count != null && <> · {formatWordCount(w.word_count)}</>}
                       {w.updated_at && <> · updated {fmtDate(w.updated_at)}</>}
                     </p>

@@ -278,27 +278,30 @@ export default async function FandomHub(
           server-rendered because these are how a crawler reaches the trope
           pages at all. */}
       {!!hub.topics?.length && (
-        <nav className="hub__related hub__topics" aria-label={`${hub.name} by trope`}>
-          <h2 className="hub__heading">Browse by trope</h2>
-          {/* Twelve, then the rest folded: 24 chips filled a phone's first
-              screen before a single work. The folded ones are still in the
-              HTML, so every trope page stays linked for a crawler. */}
-          <ul className="hub-chips">
+        <nav className="trope-grid" aria-label={`${hub.name} by trope`}>
+          <h2 className="hub__heading">Browse {hub.name} by trope</h2>
+          <ul className="trope-grid__list">
             {hub.topics.slice(0, 12).map(x => (
               <li key={x.slug}>
-                <Link href={`/fandom/${x.slug}`}>{x.tag}</Link>
-                <span className="hub-chips-count">{x.work_count.toLocaleString()}</span>
+                <Link href={`/fandom/${x.slug}`} className="trope-tile">
+                  <span className="trope-tile__name">{x.tag}</span>
+                  <span className="trope-tile__n">{x.work_count.toLocaleString()} works</span>
+                </Link>
               </li>
             ))}
           </ul>
+          {/* The rest folded, still in the HTML so every trope page stays
+              linked for a crawler. */}
           {hub.topics.length > 12 && (
-            <details className="hub__topics-more">
-              <summary>{hub.topics.length - 12} more tropes</summary>
-              <ul className="hub-chips">
+            <details className="trope-grid__more">
+              <summary>Show all {hub.topics.length} tropes</summary>
+              <ul className="trope-grid__list">
                 {hub.topics.slice(12).map(x => (
                   <li key={x.slug}>
-                    <Link href={`/fandom/${x.slug}`}>{x.tag}</Link>
-                    <span className="hub-chips-count">{x.work_count.toLocaleString()}</span>
+                    <Link href={`/fandom/${x.slug}`} className="trope-tile">
+                      <span className="trope-tile__name">{x.tag}</span>
+                      <span className="trope-tile__n">{x.work_count.toLocaleString()} works</span>
+                    </Link>
                   </li>
                 ))}
               </ul>
