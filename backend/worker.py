@@ -2582,8 +2582,9 @@ async def main() -> None:
         tasks.append(asyncio.create_task(_supervised("reddit_answers_loop", _reddit_answers_loop)))
         tasks.append(asyncio.create_task(_supervised("rec_threads_loop", _rec_threads_loop)))
         tasks.append(asyncio.create_task(_supervised("rec_sources_loop", _rec_sources_loop)))
-    tasks.append(asyncio.create_task(_supervised("disk_trend_loop", _disk_trend_loop)))
         log.info("reddit fic-finder queue enabled (hourly, one feed at a time)")
+    # Not behind a flag: it is one statvfs and one size query every six hours.
+    tasks.append(asyncio.create_task(_supervised("disk_trend_loop", _disk_trend_loop)))
 
     if _flag("RUN_SERIES_WORDCOUNT", "true"):
         tasks.append(asyncio.create_task(_supervised("series_wordcount_loop", _series_wordcount_loop)))
