@@ -26,7 +26,7 @@ export async function GET(
 ) {
   const { file } = await params
   const name = file.replace(/\.xml$/, "")
-  const { fandoms, ships, topics } = await loadHubs()
+  const { fandoms, ships, topics, authors } = await loadHubs()
   const s = split(ships), f = split(fandoms)
 
   if (name === "core") {
@@ -46,6 +46,13 @@ export async function GET(
     const slice = chunk(topics, Number(t[1]))
     if (slice.length === 0) return new Response("Not found", { status: 404 })
     return xml(urlset(slice.map(entry("/fandom"))))
+  }
+
+  const a = /^authors-(\d+)$/.exec(name)
+  if (a) {
+    const slice = chunk(authors, Number(a[1]))
+    if (slice.length === 0) return new Response("Not found", { status: 404 })
+    return xml(urlset(slice.map(entry("/author"))))
   }
 
   const m = /^(ships|fandoms)-(\d+)$/.exec(name)

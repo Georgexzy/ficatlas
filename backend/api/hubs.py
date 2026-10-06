@@ -674,3 +674,60 @@ def list_ships(
 @ships_router.get("/{slug}", response_model=HubDetail)
 def get_ship(slug: str, response: Response, db: Session = Depends(get_db)):
     return _detail("ship", slug, response, db)
+
+
+# ── Author pages ─────────────────────────────────────────────────────────────
+# See author_hubs.py for which authors get one and why. Same shape and same
+# read-time gating as every other hub, through _works_and_sections.
+authors_router = APIRouter()
+
+
+@authors_router.get("", response_model=list[HubSummary])
+def list_authors(
+    response: Response,
+    limit: int = Query(2000, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Every author page, for the sitemap. Ordered by slug so a page near a
+    file boundary does not hop between sitemap files as its count moves."""
+    response.headers["Cache-Control"] = CACHE
+    try:
+        rows = db.execute(text("""
+            SELECT slug, name, work_count, content_at FROM author_hubs
+             ORDER BY slug LIMIT :lim OFFSET :off
+        """), {"lim": limit, "off": offset}).fetchall()
+    except Exception:
+        db.rollback()
+        return []
+    return [HubSummary(slug=r[0], name=r[1], work_count=r[2],
+                       content_at=r[3].isoformat() if r[3] else None) for r in rows]
+
+
+@authors_router.get("/{slug}", response_model=HubDetail)
+def get_author(slug: str, response: Response, db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = CACHE
+    try:
+        row = db.execute(text("""
+            SELECT slug, name, work_count, top_ids, top_by_site, site_counts, fandoms
+              FROM author_hubs WHERE slug = :s
+        """), {"s": slug}).fetchone()
+    except Exception:
+        db.rollback()
+        row = None
+    if not row:
+        raise HTTPException(status_code=404, detail="No such author page")
+    works, sections, _f, _r = _works_and_sections(db, row[3], row[4], row[5])
+    # Their fandoms, as links to those fandom hubs: the author page's lateral
+    # links, and the way a crawler gets from a writer to the rest of the site.
+    related: list[RelatedHub] = []
+    for name in (row[6] or []):
+        hub = db.execute(text("""
+            SELECT slug, name, work_count FROM fandom_hubs
+             WHERE variants && ARRAY[CAST(:f AS text)] LIMIT 1
+        """), {"f": name}).fetchone()
+        if hub and all(r.slug != hub[0] for r in related):
+            related.append(RelatedHub(kind="fandom", slug=hub[0], name=hub[1],
+                                      work_count=hub[2]))
+    return HubDetail(slug=row[0], name=row[1], work_count=row[2], works=works,
+                     sections=sections, related=related)

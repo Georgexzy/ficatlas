@@ -1184,6 +1184,23 @@ CREATE INDEX IF NOT EXISTS ix_rec_threads_unread
 -- Where rec_sources.py got to in each fandom's AO3 rec bookmarks: the tag that
 -- worked, the newest bookmark day seen (pages stop there), and when it was
 -- last read, which is what spreads the fandoms over the day.
+-- Author pages (author_hubs.py): one row per well-read author, same shape as
+-- the fandom and ship hubs. author_key is lower(stories.author), which is what
+-- story pages look their author's page up by.
+CREATE TABLE IF NOT EXISTS author_hubs (
+    slug        TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    author_key  TEXT NOT NULL,
+    work_count  INTEGER NOT NULL DEFAULT 0,
+    top_ids     TEXT[] NOT NULL DEFAULT '{}',
+    top_by_site JSONB NOT NULL DEFAULT '{}'::jsonb,
+    site_counts JSONB,
+    fandoms     TEXT[] NOT NULL DEFAULT '{}',
+    built_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    content_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_author_hubs_key ON author_hubs (author_key);
+
 CREATE TABLE IF NOT EXISTS rec_ao3_state (
     slug        TEXT PRIMARY KEY,
     tag         TEXT,

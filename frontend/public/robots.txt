@@ -73,6 +73,9 @@ Allow: /fandom/
 # that no single archive's tag page can. See backend/ship_hubs.py.
 Allow: /ships
 Allow: /ship/
+# Author pages, one per well-read writer, bounded the same way. See
+# backend/author_hubs.py.
+Allow: /author/
 # The sitemap is an index now; its children live under /sitemaps/ and a crawler
 # that can read the index but not what it points at is worse off than before.
 Allow: /sitemap.xml
@@ -160,6 +163,7 @@ Allow: /fandoms
 Allow: /fandom/
 Allow: /ships
 Allow: /ship/
+Allow: /author/
 Allow: /sitemap.xml
 Allow: /sitemaps/
 Crawl-delay: 10
@@ -178,6 +182,7 @@ Allow: /fandoms
 Allow: /fandom/
 Allow: /ships
 Allow: /ship/
+Allow: /author/
 Allow: /sitemap.xml
 Allow: /sitemaps/
 Crawl-delay: 10

@@ -507,6 +507,18 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **Author pages are bounded and the name is a public URL.** `author_hubs.py`
+  builds the 10,000 most-read authors weekly (sitemap `authors-N`). Excluded:
+  `author_permissions.policy='deny'`, placeholders, and names that are really a
+  fandom — 115,457 FF.net rows carry "Axis Powers" as author, from Hetalia.
+  Usernames run words together, so they get `_UNSAFE_NAME` (substring, tuned so
+  "Cumberbatch", "Essex", "grapes" pass) and NOT topic_hubs' broad `_UNSAFE`,
+  which refused "EssexGirl" and "Sussex". Tests pin both directions.
+- **A hub's metadata must never `return {}` on a failed lookup.** The body
+  looks the hub up again, so a slow spell produced a 200 page with the HOME
+  page's title and no canonical — Search Console's "duplicate without
+  user-selected canonical" examples were all hubs crawled 5-7 Sept 2026. The
+  canonical comes from the URL slug; `lib/hubMetadata.test.ts` pins it.
 - **"Recommended lately" needs PEOPLE, and Reddit alone gave it 8 hubs of
   5,663.** `rec_sources.py` adds AO3 rec bookmarks (per fandom, newest first),
   Bluesky and Tumblr, beside 23 subreddits in `rec_threads.py`. Three traps:

@@ -312,6 +312,10 @@ _JOB_EVIDENCE = [
      "that search engines land readers on. See topic_hubs.py.", 8 * 24,
      "SELECT to_timestamp(NULLIF(value,'')::bigint) FROM app_settings "
      " WHERE key = 'topic_hubs_built_at'"),
+    ("author_hubs", "Author pages",
+     "Rebuilds /author/<name> for the 10,000 most-read writers, weekly. "
+     "Evidence is the newest page built. See author_hubs.py.", 8 * 24,
+     "SELECT max(built_at) FROM author_hubs"),
     ("follow_refresh", "Followed works refresh",
      "Re-reads followed AO3 works every few hours and points the FF.net "
      "harvester at the fandoms holding followed works, so the Following tab "

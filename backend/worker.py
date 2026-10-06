@@ -1315,6 +1315,29 @@ async def _hubs_loop() -> None:
         except Exception as e:
             log.warning(f"trope hub rebuild failed: {type(e).__name__}: {e}")
 
+        # Author pages (author_hubs.py): weekly, like the tropes. One grouped
+        # scan of stories (~1 min) plus three indexed reads per author.
+        try:
+            def _go_authors():
+                import time as _t
+                import author_hubs
+                from sqlalchemy import text as sql_text
+                from api.settings import put_setting
+                with db_session() as db:
+                    last = db.execute(sql_text(
+                        "SELECT value FROM app_settings WHERE key = 'author_hubs_built_at'"
+                    )).scalar()
+                    if last and _t.time() - float(last) < _num("AUTHOR_HUBS_DAYS", 7) * 86400:
+                        return None
+                    n = author_hubs.build(db)
+                    put_setting(db, "author_hubs_built_at", str(int(_t.time())))
+                    return n
+            n = await asyncio.to_thread(_go_authors)
+            if n is not None:
+                log.info(f"author pages rebuilt: {n:,} pages")
+        except Exception as e:
+            log.warning(f"author page rebuild failed: {type(e).__name__}: {e}")
+
         await asyncio.sleep(interval)
 
 

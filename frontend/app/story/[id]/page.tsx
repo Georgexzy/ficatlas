@@ -33,7 +33,7 @@ const INTERNAL_API = process.env.INTERNAL_API_URL || "http://backend:8000"
 // the description of the listing.
 export const revalidate = 900
 
-interface HubLink { kind: "fandom" | "ship"; slug: string; name: string }
+interface HubLink { kind: "fandom" | "ship" | "author"; slug: string; name: string }
 
 interface StoryMeta {
   title?: string
@@ -253,9 +253,9 @@ export default async function StoryPage(
             <span className="story-hubs__label">More like this</span>
             {story.hubs.map(h => (
               <Link key={`${h.kind}-${h.slug}`}
-                href={h.kind === "fandom" ? `/fandom/${h.slug}` : `/ship/${h.slug}`}
+                href={`/${h.kind}/${h.slug}`}
                 className={`story-hubs__link story-hubs__link--${h.kind}`}>
-                {h.name}
+                {h.kind === "author" ? `More by ${h.name}` : h.name}
               </Link>
             ))}
           </>

@@ -343,6 +343,18 @@ def _hub_links(db: Session, story) -> list[dict]:
     except Exception:
         # Hubs are a navigation nicety. A story page must render without them.
         return []
+    # The author's page, when they have one (author_hubs.py). First, because
+    # "more by this writer" is the likeliest next click from a work you liked.
+    if story.author:
+        try:
+            with db.begin_nested():
+                row = db.execute(sql_text(
+                    "SELECT slug, name FROM author_hubs WHERE author_key = :k LIMIT 1"
+                ), {"k": story.author.lower()}).fetchone()
+            if row:
+                out.insert(0, {"kind": "author", "slug": row[0], "name": row[1]})
+        except Exception:
+            pass
     return out
 
 
