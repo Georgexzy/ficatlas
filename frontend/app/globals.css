@@ -626,41 +626,49 @@ input, select { font-family: inherit; }
 }
 .index-status__btn--active { border-color: var(--accent-dim); color: var(--accent); }
 @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }
-.index-status__panel {
-  position: absolute; top: calc(100% + 8px); right: 0; width: 290px;
-  background: var(--surface2); border: 1px solid var(--border2);
-  border-radius: 6px; padding: 14px 16px; z-index: 200;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+/* The panel. Anchored under its button on a wide screen; on a phone it is
+   anchored to the VIEWPORT (fixed, inset both sides), because the button sits
+   mid-row and a panel pinned to its right edge ran 85px off a 320px screen. */
+.ix {
+  position: absolute; top: calc(100% + 8px); right: 0; width: 340px; z-index: 200;
+  background: var(--surface2); border: 1px solid var(--border2); border-radius: 10px;
+  padding: 16px 18px 14px; box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+  font-family: var(--font-sans, inherit); color: var(--text);
 }
-
-/* On a phone the panel could not fit where it was anchored.
-   It is 290px wide and pinned to the RIGHT edge of its button, so it grows
-   leftwards — and the button is not at the edge of the screen, it sits in the
-   middle of the header row with the user menu and page controls beside it. On a
-   320px viewport the button's right edge is at x=205, so a 290px panel started
-   at x=-85 and 85px of it was off-screen. Measured at 320, 360 and 390: 85px,
-   85px and 3px over.
-   Anchoring to the button is the problem, not the width, so below the width
-   where that can work the panel is anchored to the VIEWPORT instead: fixed,
-   inset on both sides, so it fits by construction at any size. The header is
-   sticky at the top, so a fixed offset lands just under it. */
 @media (max-width: 560px) {
-  .index-status__panel {
-    position: fixed;
-    top: 62px;
-    left: 12px;
-    right: 12px;
-    width: auto;
-    max-height: calc(100dvh - 80px);
-    overflow-y: auto;
+  .ix {
+    position: fixed; top: 62px; left: 12px; right: 12px; width: auto;
+    max-height: calc(100dvh - 80px); overflow-y: auto;
   }
 }
-.index-status__heading { font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 10px; }
-.index-status__site { font-size: 13px; font-weight: 500; color: var(--text); }
-.index-status__active > span:first-child { display: flex; align-items: center; gap: 6px; }
-@keyframes slide { 0% { transform: translateX(-200%); } 100% { transform: translateX(350%); } }
-.index-status__hint { margin-top: 10px; font-size: 11px; color: var(--text-faint); line-height: 1.5; }
-.index-status__hint code { font-family: var(--font-mono); background: var(--surface3); padding: 1px 4px; border-radius: 2px; font-size: 10px; }
+.ix__eyebrow {
+  margin: 0 0 2px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.ix__headline { margin: 0 0 14px; font-size: 15px; line-height: 1.4; color: var(--text-dim); }
+.ix__headline strong { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ix__sites { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.ix__site-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.ix__site-name { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; min-width: 0; }
+.ix__site-n { font-size: 13px; color: var(--text-dim); font-variant-numeric: tabular-nums; flex: none; }
+.ix__swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; background: var(--accent); }
+.ix__swatch--ao3 { background: #990000; }
+.ix__swatch--ffnet { background: #2a4a8a; }
+.ix__swatch--fictionalley { background: #6b3fa0; }
+.ix__meter { height: 4px; margin: 6px 0 4px; background: var(--surface3); border-radius: 2px; overflow: hidden; }
+.ix__meter-fill { display: block; width: auto; height: 100%; border-radius: 2px; }
+.ix__site-note { margin: 0; font-size: 12px; color: var(--text-faint); }
+.ix__live {
+  list-style: none; margin: 0 0 12px; padding: 12px 0 0; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--text-dim); line-height: 1.45;
+}
+.ix__live strong { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ix__not {
+  margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--surface);
+  font-size: 12.5px; line-height: 1.5; color: var(--text-dim);
+}
+.ix__not strong { color: var(--text); font-weight: 600; }
+.ix__build { margin: 10px 0 0; font-family: var(--font-mono); font-size: 10px; color: var(--text-faint); }
 
 /* ── Header link ──────────────────────────────────────────────────────────── */
 /* nowrap, because "Sign in" was breaking across two lines.
@@ -1078,18 +1086,6 @@ kbd {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--green); display: inline-block;
 }
-.index-status__totals {
-  display: grid; grid-template-columns: 1fr 1fr 1fr;
-  gap: 10px; margin-bottom: 14px; padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
-}
-.index-status__totals div { display: flex; flex-direction: column; gap: 2px; }
-.index-status__totals dt { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); }
-.index-status__totals dd { font-size: 15px; color: var(--text); font-family: var(--font-serif); }
-.index-status__sites { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-.index-status__site { display: flex; justify-content: space-between; align-items: center; }
-.index-status__count { font-size: 13px; color: var(--text-dim); font-family: var(--font-mono); }
-
 /* ── Import pane ──────────────────────────────────────────────────────────── */
 .import-pane { display: flex; flex-direction: column; gap: 24px; }
 .import-section {
@@ -3521,35 +3517,6 @@ html, body { overflow-x: clip; max-width: 100%; }
 .results-bar__split { color: var(--text-faint); }
 .results-bar__split strong { color: var(--text-dim); font-weight: 600; }
 
-/* ── Index status: proportion, not just counts ──────────────────────────────
-   The panel listed three raw numbers, which doesn't convey that AO3 is two
-   thirds of the index. A bar per archive does it at a glance. */
-.index-status__site { margin-bottom: 9px; }
-.index-status__site-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  margin-bottom: 4px;
-}
-.index-status__count { display: flex; align-items: baseline; gap: 6px;
-  font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
-.index-status__pct { color: var(--text-faint); font-size: 10px; min-width: 26px; text-align: right; }
-.index-status__meter {
-  height: 3px; background: var(--surface3); border-radius: 2px; overflow: hidden;
-}
-.index-status__meter-fill { height: 100%; border-radius: 2px; background: var(--accent); }
-/* Match each archive's badge colour so the bar and label read as one unit. */
-.index-status__meter-fill--ao3          { background: #7aa2f7; }
-.index-status__meter-fill--ffnet        { background: #9ece6a; }
-.index-status__meter-fill--fictionalley { background: #bb9af7; }
-
-
-/* Which build the page is actually running. A fix can be live on the server
-   while an installed PWA still runs a bundle it cached days ago, and from the
-   outside those look identical. */
-.index-status__build {
-  margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border);
-  font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
-}
-
 /* ── No title is ever truncated ─────────────────────────────────────────────
    AO3 titles run to 255 characters where FF.net's stop at 103, and 62,938 AO3
    titles are over 60 — so they are the ones that hit any clamp first, which is
@@ -4882,7 +4849,6 @@ body.is-resizing * { cursor: col-resize !important; }
 .shelf-sort__select:hover { border-color: var(--border2); }
 
 /* Live-ish counter in the index panel — the index grows while you use it. */
-.index-status__live { color: var(--accent); }
 
 /* Characters on a result card — same treatment as ships, one row above the
    freeform tags. */

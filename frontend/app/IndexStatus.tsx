@@ -48,136 +48,126 @@ export default function IndexStatus() {
     return `${Math.round(hrs / 24)}d ago`
   }
 
-  // The per-archive breakdown now comes out of the SAME payload as the headline
-  // figure rather than from a second request to /api/stats/sites.
-  //
-  // That second request is the defect this replaces. It is a different scan of
-  // the same table, recomputed on its own lock at its own moment, and the panel
-  // rendered its total from one and its per-archive bars from the other — so
-  // "Stories: 20,852,026" sat directly above a set of bars that added up to
-  // something else. Measured on the live index: one breakdown 684 rows behind
-  // the total, a fresher one 259 rows ahead of it, in the same response.
-  //
-  // A reader can add those bars up. They are the shape of the index, and showing
-  // them is the reason to show them, so a panel that cannot make them agree
-  // with its own total is visibly broken. One payload, one scan, and `stories`
-  // is the sum of `sites` server-side — see `_with_sites` in backend/api/stats.py.
-  //
-  // Falls back to no breakdown at all when the first sites refresh has not
-  // landed, rather than fetching a second number that might not match.
-  const sites = Object.entries(totals?.sites ?? {})
+  // The per-archive breakdown comes out of the SAME payload as the headline
+  // figure, never from a second request: a second scan recomputed at its own
+  // moment once printed a total directly above bars that added up to
+  // something else (684 rows apart, measured). `stories` is the sum of `sites`
+  // server-side — see `_with_sites` in backend/api/stats.py.
+  const sites = Object.entries(totals?.sites ?? {}).sort((a, b) => b[1] - a[1])
   const siteTotal = sites.reduce((a, [, n]) => a + (n || 0), 0)
-  const newestIndexed = Object.values(totals?.sites_updated_at ?? {})
-    .sort()
-    .pop()
+  const n = sites.length || 3
+
+  // The button has to say WHAT is indexed. "21.1M indexed" left a reader
+  // asking whether that was every archive or one, which is the whole pitch.
+  const label = totals
+    ? `${n} archives · ${fmt(totals.stories)}`
+    : `${n} archives`
 
   return (
     <div className="index-status">
-      <button className="index-status__btn" onClick={() => setOpen(o => !o)}>
-        <span className="index-status__dot" />
-        {totals ? `${fmt(totals.stories)} indexed` : "Index"}
+      <button className="index-status__btn" onClick={() => setOpen(o => !o)}
+        aria-expanded={open} aria-haspopup="dialog"
+        title="Which archives FicAtlas searches">
+        <span className="index-status__dot" aria-hidden="true" />
+        {label}
       </button>
 
       {open && (
         <>
           <button className="index-status__backdrop" onClick={() => setOpen(false)} aria-label="Close" />
-          <div className="index-status__panel">
-            <p className="index-status__heading">Index</p>
+          <div className="ix" role="dialog" aria-label="What FicAtlas searches">
+            <p className="ix__eyebrow">Every search covers</p>
+            <p className="ix__headline">
+              {totals
+                ? <><strong>{totals.stories.toLocaleString()}</strong> stories from {n} archives</>
+                : <>Three archives</>}
+            </p>
 
+            {/* One row per archive, full name first: the badges' "FF.net" is
+                fine on a result card and too terse for the place that answers
+                "what is in here". The bar is the share of the same total. */}
+            {sites.length > 0 && (
+              <ul className="ix__sites">
+                {sites.map(([site, count]) => {
+                  const pct = siteTotal ? (count / siteTotal) * 100 : 0
+                  const info = ARCHIVES[site]
+                  return (
+                    <li key={site} className="ix__site">
+                      <div className="ix__site-row">
+                        <span className="ix__site-name">
+                          <span className={`ix__swatch ix__swatch--${site}`} aria-hidden="true" />
+                          {info?.name ?? SITE_LABELS[site] ?? site}
+                        </span>
+                        <span className="ix__site-n">{count.toLocaleString()}</span>
+                      </div>
+                      <div className="ix__meter" aria-hidden="true">
+                        <div className={`ix__meter-fill ix__swatch--${site}`}
+                          style={{ width: `${Math.max(pct, 0.8)}%` }} />
+                      </div>
+                      <p className="ix__site-note">
+                        {pct < 1 ? "under 1%" : `${pct.toFixed(0)}%`}
+                        {" · "}
+                        {info?.closed
+                          ? info.closed
+                          : totals?.sites_updated_at?.[site]
+                            ? `newest story added ${ago(totals.sites_updated_at[site])}`
+                            : "kept up to date"}
+                      </p>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+
+            {/* Proof the index is alive, in sentences rather than a grid of
+                abbreviated labels. "At least" because updated_at is NULL for
+                most rows, so that figure is a floor. */}
             {totals && (
-              <dl className="index-status__totals">
-                <div><dt>Stories</dt><dd>{totals.stories.toLocaleString()}</dd></div>
-                <div><dt>Readable here</dt><dd>{totals.hosted.toLocaleString()}</dd></div>
-                <div><dt>Words</dt><dd>{fmt(totals.total_words)}</dd></div>
-                {/* What the background workers have actually added. The index
-                    is not a static dump, and without this there is no sign of
-                    that from the outside. */}
-                {totals.indexed_last_hour != null && (
-                  <div>
-                    <dt>Added past hour</dt>
-                    <dd className="index-status__live">
-                      +{totals.indexed_last_hour.toLocaleString()}
-                    </dd>
-                  </div>
-                )}
+              <ul className="ix__live">
                 {totals.indexed_last_day != null && totals.indexed_last_day > 0 && (
-                  <div><dt>Added past 24h</dt><dd>+{fmt(totals.indexed_last_day)}</dd></div>
+                  <li><strong>+{fmt(totals.indexed_last_day)}</strong> stories added in the past day
+                    {totals.indexed_last_hour ? <> ({totals.indexed_last_hour.toLocaleString()} this hour)</> : null}</li>
                 )}
-                {/* Freshness, which is a different claim from "added".
-                    "Added past 24h" is what WE pulled in; this is how much of
-                    the index is a living work an author is still writing.
-                    Prefixed "at least" because updated_at is NULL for 64% of
-                    rows, so the true figure is higher and this one is a floor —
-                    quoting it bare would understate the index and read as a
-                    precise measurement it is not. */}
                 {totals.updated_last_month != null && totals.updated_last_month > 0 && (
-                  <div>
-                    <dt>Updated past 30d</dt>
-                    <dd title="A floor: 64% of the index has no recorded update date">
-                      at least {fmt(totals.updated_last_month)}
-                    </dd>
-                  </div>
+                  <li title="A floor: many works have no recorded update date">
+                    At least <strong>{fmt(totals.updated_last_month)}</strong> updated by their authors this month
+                  </li>
                 )}
                 {totals.checked_last_week != null && totals.checked_last_week > 0 && (
-                  <div>
-                    <dt>Re-checked past 7d</dt>
-                    <dd title="Works re-read from their source archive in the last week">
-                      {fmt(totals.checked_last_week)}
-                    </dd>
-                  </div>
+                  <li><strong>{fmt(totals.checked_last_week)}</strong> re-checked against their archive this week</li>
                 )}
-                {totals.dlp != null && totals.dlp > 0 && (
-                  <div><dt>Dark Lord Potter picks</dt><dd>{totals.dlp.toLocaleString()}</dd></div>
-                )}
-                {totals.hpffa != null && totals.hpffa > 0 && (
-                  <div><dt>HP FanFiction Archive</dt><dd>{totals.hpffa.toLocaleString()}</dd></div>
-                )}
-              </dl>
+                <li><strong>{fmt(totals.total_words)}</strong> words in all</li>
+              </ul>
             )}
 
-            {/* A bar per archive: the share each contributes is the thing worth
-                seeing, and a column of raw numbers doesn't convey it. The shares
-                are of the same total printed above, because both now come from
-                one scan. */}
-            {sites.length > 0 && (
-            <div className="index-status__sites">
-              {sites.map(([site, count]) => {
-                const pct = siteTotal ? (count / siteTotal) * 100 : 0
-                return (
-                  <div key={site} className="index-status__site">
-                    <div className="index-status__site-row">
-                      <span className={`badge badge--site-${site}`}>{SITE_LABELS[site] ?? site}</span>
-                      <span className="index-status__count">
-                        {count.toLocaleString()}
-                        <span className="index-status__pct">{pct.toFixed(0)}%</span>
-                      </span>
-                    </div>
-                    <div className="index-status__meter">
-                      <div className={`index-status__meter-fill index-status__meter-fill--${site}`}
-                        style={{ width: `${Math.max(pct, 0.5)}%` }} />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-            )}
+            {/* Said outright, because silence reads as "everything". */}
+            <p className="ix__not">
+              <strong>Not searched yet:</strong> Wattpad, forum fiction
+              (SpaceBattles, Sufficient Velocity), and other smaller archives.
+              Every result links to the archive that hosts it.
+            </p>
 
             {built && (
-              <p className="index-status__build">
+              <p className="ix__build">
                 app build {new Date(built).toLocaleString(undefined,
                   { dateStyle: "medium", timeStyle: "short" })}
               </p>
             )}
-
-            <p className="index-status__hint">
-              {newestIndexed
-                ? <>Last new story indexed <strong>{ago(newestIndexed)}</strong>. Updates to
-                   tracked fandoms are picked up automatically.</>
-                : <>Built from public archive releases, and extended from live fetches.</>}
-            </p>
           </div>
         </>
       )}
     </div>
   )
+}
+
+/** The archives' own names, and the one fact about each a reader needs. */
+const ARCHIVES: Record<string, { name: string; closed?: string }> = {
+  ao3: { name: "Archive of Our Own (AO3)" },
+  ffnet: { name: "FanFiction.net" },
+  fictionalley: {
+    name: "FictionAlley",
+    // It shut down; its works are kept from archived copies. A freshness
+    // line would imply a live source.
+    closed: "the archive has closed; kept from archived copies",
+  },
 }
