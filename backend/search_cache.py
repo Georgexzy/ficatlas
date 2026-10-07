@@ -238,7 +238,8 @@ def key_for_page(query_string: str, is_operator: bool, page: int) -> str:
 # arbitrary slice. Same URL, same shape, different order — and a very different
 # one: on `fandoms=Harry Potter` the first result changes from a work nobody
 # would name to the most-read work on the site.
-SCHEMA_VERSION = "v22"   # author_page: a search naming an author links their page (v21 cached it empty)
+SCHEMA_VERSION = "v23"   # a pasted link shows its work even under a placeholder title
+# v22: author_page (v21 cached it empty)
 # v20: a pasted work link now returns that work (it searched the URL as text)
 
 # Expired rows are swept probabilistically on write rather than by a scheduled

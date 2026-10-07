@@ -2939,6 +2939,18 @@ def search(          # NOT async — see below
     # every other rule still decide whether it is shown.
     url_work = _pasted_work(raw_query)
     url_story_id = None
+    # A pasted AUTHOR link (archiveofourown.org/users/<name>/...) is a request
+    # for that author's works. It was searched as text and found nothing —
+    # measured 2026-10-06, a reader pasting /users/rkiveink/pseuds/rkiveink/works
+    # while the index held nine of their works.
+    if not url_work and raw_query and not author:
+        _m = re.match(r"\s*(?:https?://)?(?:www\.)?archiveofourown\.org/users/([^/?#\s]+)",
+                      raw_query)
+        if _m:
+            from urllib.parse import unquote as _unquote
+            author = _unquote(_m.group(1))
+            q = None
+            raw_query = ""
     if url_work:
         q = None
         raw_query = ""
@@ -3176,7 +3188,11 @@ def search(          # NOT async — see below
     # Reversible per request rather than a policy: `include_broken_titles=true`
     # brings them back, so nothing is unreachable — an exact-title search that
     # wants them can still ask.
-    if not include_broken_titles:
+    # Not for a pasted link: that names ONE exact work, and hiding it because
+    # the bulk dump stored its title as "unknown" told a reader who pasted the
+    # link four times that the index did not have a work it has (measured
+    # 2026-10-06, works/38125705).
+    if not include_broken_titles and not url_work:
         filters.append(and_(
             Story.title.isnot(None),
             func.btrim(Story.title) != "",
