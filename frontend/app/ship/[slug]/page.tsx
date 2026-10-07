@@ -46,6 +46,8 @@ interface Work {
   id: string
   title: string
   author?: string
+  /** Set when the author has a page (author_hubs.py). */
+  author_slug?: string | null
   summary?: string
   word_count?: number
   chapter_count?: number
@@ -314,7 +316,9 @@ export default async function ShipHub(
                 <p className="hub__meta">
                   {w.author && (
                     <>
-                      by <Link rel="nofollow" href={`/?author=${encodeURIComponent(w.author)}`}>{w.author}</Link>
+                      by {w.author_slug
+                        ? <Link href={`/author/${w.author_slug}`}>{w.author}</Link>
+                        : <Link rel="nofollow" href={`/?author=${encodeURIComponent(w.author)}`}>{w.author}</Link>}
                     </>
                   )}
                   {fmt(w.word_count) && <span>{fmt(w.word_count)} words</span>}

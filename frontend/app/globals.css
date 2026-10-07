@@ -1128,17 +1128,6 @@ kbd {
 .url-detected__text strong { font-size: 13px; color: var(--text); font-weight: 500; }
 .url-detected__sub { font-size: 12px; color: var(--text-dim); }
 
-/* ── Refresh button — make it look fresh-coded ────────────────────────────── */
-.page-btn--refresh {
-  background: var(--surface);
-  border-color: var(--accent-dim);
-  color: var(--accent);
-}
-.page-btn--refresh:hover:not(:disabled) {
-  background: var(--accent-bg);
-  color: var(--accent);
-  border-color: var(--accent);
-}
 
 /* ── EPUB drag/drop ───────────────────────────────────────────────────────── */
 /* One definition, not two. An earlier block set cursor, border-radius and
@@ -3114,9 +3103,6 @@ body:has(.reader-shell[data-theme="default"]) {
 
 /* ── No-results active fetch ─────────────────────────────────────────────── */
 .no-results__fetch { margin: 16px auto 8px; display: inline-flex; }
-.no-results__refresh-msg {
-  color: var(--green); font-size: 13px; margin: 8px 0;
-}
 
 /* ── Offline reading ─────────────────────────────────────────────────────── */
 .offline-msg {

@@ -17,7 +17,7 @@ const SITE = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
 export const revalidate = 3600
 
 interface Work {
-  id: string; title: string; author?: string; summary?: string
+  id: string; title: string; author?: string; author_slug?: string | null; summary?: string
   word_count?: number; chapter_count?: number; site?: string; complete?: boolean
 }
 interface SiteSection { site: string; works: Work[]; total?: number }
@@ -197,7 +197,9 @@ export default async function TopicHub(
                 <li key={w.id} className="hub__item">
                   <Link href={`/story/${w.id}`} className="hub__title">{w.title}</Link>
                   <p className="hub__meta">
-                    {w.author && <>by <Link rel="nofollow" href={`/?author=${encodeURIComponent(w.author)}`}>{w.author}</Link></>}
+                    {w.author && <>by {w.author_slug
+                        ? <Link href={`/author/${w.author_slug}`}>{w.author}</Link>
+                        : <Link rel="nofollow" href={`/?author=${encodeURIComponent(w.author)}`}>{w.author}</Link>}</>}
                     {fmt(w.word_count) && <span>{fmt(w.word_count)} words</span>}
                     {w.chapter_count ? <span>{w.chapter_count} ch</span> : null}
                     {w.complete && <span className="badge badge--complete">Complete</span>}

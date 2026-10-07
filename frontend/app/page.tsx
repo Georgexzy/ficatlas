@@ -1728,7 +1728,6 @@ function SearchPageInner() {
         ? lastRendered.data
         : null)
   const [parsedTokens, setParsedTokens] = useState<ParsedToken[]>([])
-  const [refreshing,   setRefreshing]   = useState(false)
 
   // What is actually on the screen, and whether it is on its way out. Every
   // render below asks these rather than `results`, so "there are results here"
@@ -1747,9 +1746,6 @@ function SearchPageInner() {
     if (results) lastRendered = { url: rawParams.toString(), data: results }
   }, [results, rawParams])
 
-  // Tracks which query we've already auto-deepened for, so a thin-result search
-  // pulls fresh AO3 data once without looping on every re-render.
-  const autoDeepenedRef = useRef<string>("")
   // A sentence that was re-read as a search, and the words the reader actually
   // typed. Kept so the banner can say what happened and hand them back their
   // own words — see `interpreted` in lib/types.ts.
@@ -1846,7 +1842,6 @@ function SearchPageInner() {
     document.body.style.overflow = filtersOpen ? "hidden" : ""
     return () => { document.body.style.overflow = "" }
   }, [filtersOpen])
-  const [refreshMsg,   setRefreshMsg]   = useState<string | null>(null)
   const [importing,    setImporting]    = useState(false)
   const [importMsg,    setImportMsg]    = useState<string | null>(null)
 
@@ -1880,26 +1875,6 @@ function SearchPageInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detectedUrl, user])
 
-  const refreshFromAO3 = useCallback(async () => {
-    setRefreshing(true); setRefreshMsg(null)
-    try {
-      const API_BASE = ""  // relative — handled by Next.js rewrite to backend
-      const fd = new FormData()
-      const pq = parseQuery(query)
-      if (pq.cleanText) fd.append("q", pq.cleanText)
-      if (pq.fandoms.length) fd.append("fandom", pq.fandoms[0])
-      fd.append("pages", "5")
-      const r = await fetchWithTimeout(`${API_BASE}/api/library/refresh-ao3`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
-      const data = await r.json()
-      setRefreshMsg(`Found ${data.fetched} live results — ${data.newly_indexed} new added to index.`)
-      doSearch(false)
-    } catch (e: any) {
-      setRefreshMsg(`Refresh failed: ${e.message}`)
-    } finally {
-      setRefreshing(false)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query])
 
   // Live parse for sidebar highlighting (does NOT mutate chip state — chips
   // only commit on doSearch submit via the merge in fandoms/etc. params).
@@ -2634,22 +2609,6 @@ function SearchPageInner() {
       // all — the reader met page 4 from wherever they had been standing in
       // page 3 — and on a warm one it animated a column that was being
       // replaced underneath it. It happens at the click now: see goToPage.
-
-      // Auto-deepen: a casual searcher just wants fics. If this query returned
-      // very few results, AO3 is a selected site, and we haven't already deepened
-      // for this exact query, pull a deeper live batch once and re-search. The
-      // guard ref prevents looping. Only on a real query (page 1, has text/fandom).
-      const indexedCount = (data as any).total ?? 0
-      const thin = indexedCount < 5
-      const hasQuery = (pg === 1) && (effectiveQuery.trim().length > 0 || (p as any).fandoms)
-      // Admin-gated server-side, so for a logged-out visitor this fired a 401
-      // on every thin result set — and they saw no benefit either way, since
-      // the deepened results only appear after the re-search it triggers.
-      if (thin && hasQuery && sites.includes("ao3") && user?.can_manage
-          && autoDeepenedRef.current !== query && !refreshing) {
-        autoDeepenedRef.current = query
-        refreshFromAO3()   // pulls 5 pages from AO3, persists, then re-searches
-      }
     } catch (e: any) {
       // Classified rather than printed. "Failed to fetch" is what the browser
       // says when it cannot open a socket, and it told a reader nothing about
@@ -2661,7 +2620,7 @@ function SearchPageInner() {
     } finally {
       if (seq === searchSeqRef.current) setLoading(false)
     }
-  }, [buildParams, page, pathname, router, query, sites, refreshing, filterSig])
+  }, [buildParams, page, pathname, router, query, sites, filterSig])
 
   // Published for the self-call above, after every render so it is never the
   // stale closure from the render that started the search.
@@ -3863,15 +3822,9 @@ function SearchPageInner() {
                   )}
                 </span>
                 <span className="results-bar__actions">
-                  {sites.includes("ao3") && user?.can_manage && (
-                    <button className="page-btn page-btn--refresh" onClick={refreshFromAO3} disabled={refreshing} title="Pull fresh AO3 results and add them to the index">
-                      {refreshing ? "Refreshing…" : "↻ Refresh from AO3"}
-                    </button>
-                  )}
                   <span className="results-bar__page">Page {shown.page} of {totalPages}</span>
                 </span>
               </div>
-              {refreshMsg && <div className="alert alert--success" style={{marginBottom:10}}>{refreshMsg}</div>}
 
               {/* On its own line under the results bar, not tucked inside it.
                   The first version was a small inline link among the counts and
@@ -4158,13 +4111,6 @@ function SearchPageInner() {
                         </Link>
                       </>
                     )}
-                    {sites.includes("ao3") && user?.can_manage && (
-                      <button className="btn btn--primary no-results__fetch"
-                        onClick={refreshFromAO3} disabled={refreshing}>
-                        {refreshing ? "Searching AO3…" : "🔍 Search AO3 directly for this"}
-                      </button>
-                    )}
-                    {refreshMsg && <p className="no-results__refresh-msg">{refreshMsg}</p>}
                     <p className="no-results__hint">
                       Have a specific story in mind? Paste its AO3 or FF.net URL into the search bar to import it.
                     </p>

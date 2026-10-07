@@ -54,6 +54,9 @@ class HubWork(BaseModel):
     kudos: Optional[int] = None
     site: Optional[str] = None
     complete: Optional[bool] = None
+    # The author's page (author_hubs.py) when they have one, so a hub can link
+    # the name to it — the way a crawler gets from a hub to a writer.
+    author_slug: Optional[str] = None
 
 
 class RecommendedWork(BaseModel):
@@ -462,6 +465,18 @@ def _works_and_sections(db: Session, top_ids, top_by_site, site_counts):
             )
             for r in rows
         ]
+        keys = sorted({w.author.lower() for w in works if w.author})
+        if keys:
+            try:
+                with db.begin_nested():
+                    slugs = dict(db.execute(text(
+                        "SELECT author_key, slug FROM author_hubs WHERE author_key = ANY(:k)"
+                    ), {"k": keys}).fetchall())
+                for w in works:
+                    if w.author:
+                        w.author_slug = slugs.get(w.author.lower())
+            except Exception:
+                pass    # author links are a nicety; the hub renders without them
 
     # Group into per-archive sections using the stored per-site ordering. Built
     # from the same `works` list, so the delisted/restricted re-check above
