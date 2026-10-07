@@ -3826,6 +3826,16 @@ function SearchPageInner() {
                 </span>
               </div>
 
+              {/* The search named an author who has a page: offer it. A search
+                  for a writer is usually a request for everything they wrote,
+                  across archives, which is what that page is. */}
+              {shown.author_page && (
+                <Link href={`/author/${shown.author_page.slug}`} className="author-jump">
+                  <span className="author-jump__label">Author</span>
+                  <span className="author-jump__name">{shown.author_page.name}</span>
+                  <span className="author-jump__go">Everything they’ve written, by archive →</span>
+                </Link>
+              )}
               {/* On its own line under the results bar, not tucked inside it.
                   The first version was a small inline link among the counts and
                   was reported as invisible — which it effectively was: it is a

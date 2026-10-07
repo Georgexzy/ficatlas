@@ -81,6 +81,8 @@ export interface SearchResponse {
   fetching?: boolean
   /** Why a pasted AO3 work could not be added: "restricted" or "missing". */
   fetch_state?: string | null
+  /** The author this search names, when they have a page (author_hubs.py). */
+  author_page?: { slug: string; name: string } | null
 }
 
 /** A sentence read as a search. */

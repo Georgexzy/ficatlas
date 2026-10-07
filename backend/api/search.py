@@ -2438,6 +2438,37 @@ class SearchResponse(BaseModel):
     # What fetching it found when it could not be added: "restricted" (AO3
     # shows it to signed-in users only) or "missing" (deleted, or not a work).
     fetch_state: Optional[str] = None
+    # The author's own page (author_hubs.py), when the search names an author
+    # who has one -- by `author:`, or by typing the name on its own. The
+    # results page offers it as a link: a search for a writer is usually a
+    # request for "everything they wrote", which is exactly that page.
+    author_page: Optional[dict] = None
+
+
+def _author_page(db, author: Optional[str], q: Optional[str]) -> Optional[dict]:
+    """{slug, name} for the author this search names, or None.
+
+    `author:` first; otherwise the typed text, but only when it is short enough
+    to be a username (<= 3 words) -- a sentence that happens to equal a pen
+    name is not a request for that author. Exact, case-insensitive, one
+    indexed lookup.
+    """
+    cands = []
+    if author:
+        cands += [a.strip().strip('"').lower() for a in author.split(",") if a.strip()]
+    if q and len(q.split()) <= 3:
+        cands.append(q.strip().strip('"').lower())
+    cands = [c for c in cands if c]
+    if not cands:
+        return None
+    try:
+        with db.begin_nested():
+            row = db.execute(sql_text(
+                "SELECT slug, name FROM author_hubs WHERE author_key = ANY(:k) LIMIT 1"
+            ), {"k": cands}).fetchone()
+    except Exception:
+        return None
+    return {"slug": row[0], "name": row[1]} if row else None
 
 
 # (column name, descending). Stored as names rather than bound expressions so the
@@ -5395,6 +5426,7 @@ def search(          # NOT async — see below
         parsed_tokens=[ParsedToken(**t) for t in parsed_tokens],
         suggestions=_suggestions,
         interpreted=interpreted,
+        author_page=_author_page(db, author, q),
     )
     # What it cost, and therefore what it has earned. Computed before the cache
     # writes below so the in-process copy, the shared row and the edge all agree.

@@ -7850,3 +7850,15 @@ html { scroll-padding-top: 72px; }
 .mail-card[open] .mail-card__chev { transform: rotate(-135deg); }
 .mail-card__body { padding: 0 18px 16px; }
 .mail-card__lede { margin-top: 0; }
+
+/* "This search names an author with a page" — one line under the results bar. */
+.author-jump {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+  margin: 0 0 12px; padding: 10px 14px; border-radius: 10px;
+  border: 1px solid var(--border2); border-left: 3px solid var(--accent);
+  background: var(--surface); text-decoration: none; color: var(--text);
+}
+.author-jump:hover { border-color: var(--accent-dim); background: var(--surface2); }
+.author-jump__label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); }
+.author-jump__name { font-weight: 600; }
+.author-jump__go { color: var(--accent); font-size: 14px; margin-left: auto; }
