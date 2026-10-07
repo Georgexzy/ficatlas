@@ -507,6 +507,18 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   See `backend/api/auth.py`.
 
 ## Gotchas
+- **The rotating-proxy botnet is a real Chrome in every header, and that was
+  measured, not assumed.** 2026-10-07: logging `sec-ch-ua`, `Sec-Fetch-Mode`
+  and `Accept-Language` (now the last three fields of nginx's log) showed the
+  botnet sending all three exactly as Chrome does — the hypothesis that it
+  would lack them was wrong. What separates it is BEHAVIOUR: it never runs
+  JavaScript or fetches assets. So nginx answers a search URL (`/?…`) that has
+  no referrer and no `fa_b` cookie with a few hundred bytes that set the
+  cookie in JS and reload (`$js_gate`, `location = /__js_check`). A reader
+  arriving from anywhere has a referrer and never sees it; a bare link costs
+  a browser one blink, once a year. The cookie is not `Secure` deliberately:
+  it holds nothing, and Secure made the flow untestable over the origin's
+  plain HTTP. If readers report a blank page on shared links, check this first.
 - **Author pages are bounded and the name is a public URL.** `author_hubs.py`
   builds the 10,000 most-read authors weekly (sitemap `authors-N`). Excluded:
   `author_permissions.policy='deny'`, placeholders, and names that are really a
