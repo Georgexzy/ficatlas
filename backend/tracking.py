@@ -245,7 +245,10 @@ def record(kind: str, path: str, visitor: str, *,
            results: Optional[int] = None, bot: bool = False,
            kind_of_bot: Optional[str] = None,
            seen: Optional[str] = None,
-           pos: Optional[int] = None) -> None:
+           pos: Optional[int] = None,
+           duration_ms: Optional[int] = None,
+           status_code: Optional[int] = None,
+           extract_ms: Optional[int] = None) -> None:
     """Queue one event. Never raises, never blocks on I/O."""
     global _dropped
     if not ENABLED:
@@ -266,6 +269,15 @@ def record(kind: str, path: str, visitor: str, *,
             # this is a bucket the BROWSER computes rather than an identifier
             # this server derives.
             "seen": (seen or None),
+            # Search reliability and latency, with no extra identity data.
+            # `extract_ms` is NULL when the normal search path did not invoke
+            # the prose extractor; zero is a real, memoized invocation.
+            "duration_ms": (max(0, min(int(duration_ms), 600_000))
+                            if duration_ms is not None else None),
+            "status_code": (int(status_code) if status_code is not None
+                            and 100 <= int(status_code) <= 599 else None),
+            "extract_ms": (max(0, min(int(extract_ms), 600_000))
+                           if extract_ms is not None else None),
         }
     except Exception:
         return
@@ -300,10 +312,10 @@ def flush() -> int:
             db.execute(text("""
                 INSERT INTO visit_events
                     (at, visitor, kind, path, ref_host, q, results, bot,
-                     bot_kind, seen, pos)
+                     bot_kind, seen, pos, duration_ms, status_code, extract_ms)
                 VALUES
                     (:at, :visitor, :kind, :path, :ref_host, :q, :results, :bot,
-                     :bot_kind, :seen, :pos)
+                     :bot_kind, :seen, :pos, :duration_ms, :status_code, :extract_ms)
             """), batch)
             db.commit()
         return len(batch)

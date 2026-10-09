@@ -29,6 +29,7 @@ Shorthand without operator key:
   explicit / mature / teen / general → rating
 """
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -96,10 +97,27 @@ def _take_value(available: str, canonical: str | None = None) -> tuple[str, int]
     _SINGLE_TOKEN.
     """
     if available.startswith('"'):
-        end = available.find('"', 1)
-        if end == -1:
+        # Quotes inside a facet name (for example Alastor "Mad-Eye" Moody)
+        # are escaped by serializers. Find the actual closing quote and then
+        # unescape the value; otherwise the query is split at "Mad-Eye" and
+        # silently searches for a different character.
+        end = 1
+        while end < len(available):
+            if available[end] == '"':
+                escapes = 0
+                prev = end - 1
+                while prev >= 0 and available[prev] == "\\":
+                    escapes += 1
+                    prev -= 1
+                if escapes % 2 == 0:
+                    break
+            end += 1
+        if end >= len(available):
             return available[1:].strip(), len(available)
-        return available[1:end].strip(), end + 1
+        try:
+            return json.loads(available[:end + 1]).strip(), end + 1
+        except (ValueError, AttributeError):
+            return available[1:end].replace('\\"', '"').strip(), end + 1
 
     words = available.split()
 
@@ -570,7 +588,7 @@ def _quote(value: str) -> str:
     if not v:
         return v
     if '"' in v:
-        return '"%s"' % v.replace('"', "")
+        return '"%s"' % v.replace('\\', '\\\\').replace('"', '\\"')
     words = v.split()
     if len(words) > 1 and _SHORTHAND_RE.match(words[-1]):
         return '"%s"' % v

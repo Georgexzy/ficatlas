@@ -9,7 +9,7 @@ out to the archive that hosts them.
 
 Search a half-remembered plot in plain English — *"fic where harry is a
 wandmaker"*, *"hermione time turner ron dies"* — or use AO3-parity filters and
-operators. Free, no adverts, no tracking, no AI trained on anybody's fic.
+operators. Free, no adverts, no third-party analytics, no AI trained on anybody's fic.
 
 **Try these:** [Drarry](https://ficatlas.com/ship/draco-malfoy-harry-potter) ·
 [Every pairing](https://ficatlas.com/ships) ·
@@ -203,7 +203,10 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   still resolves and redirects there. The control is shown to signed-out readers
   too, linking to sign-in with `?next=` back to the story — it used to render
   only for an account, so the one feature built to bring people back was
-  invisible to everybody who had not already come back
+  invisible to everybody who had not already come back. A **welcome back banner**
+  on the landing page tells returning readers what has moved and what to resume
+  reading, and prompts them to add an email address if they are following works
+  but have not set up update notifications
 - **Update emails** — opt-in, from **Library → Following**: a daily digest or one as updates happen, listing each followed work with how many new chapters it has and a link to read on. One email across all three archives with no account on any of them, which is the thing their own alerts cannot do. A worker loop re-checks followed works every 20 minutes so an update is noticed the day it lands. One-click unsubscribe (RFC 8058) on every message, a test email button, and the address shown masked
 - **Optional accounts** — username + password (bcrypt), no email required. 90-day httponly cookie sessions.
   Session tokens are stored as a SHA-256 digest, not verbatim: the table would
@@ -317,7 +320,7 @@ Four areas, named for the work rather than for what was built: **Index**,
 - **Needs attention** — the Index tab leads with what is actually wrong, worst first, ranking stale jobs and metadata gaps in one list. They are comparable only once both are expressed as what they cost: a coverage gap is ranked by how many works it denies a reader, weighted by what the field is *for* (a work with no characters cannot be found by the filter people use most; one with no kudos merely sorts late), and a job by how far past its own staleness limit it is. Every figure in it was already on that page before, ordered by nothing — which is how the weekly cross-archive popularity pass sat broken for **thirteen days** with the evidence on screen the whole time
 - **Job evidence, not heartbeats** — each background job is judged by something it *left behind* (a build timestamp, a watermark), because a heartbeat says "I ran" and evidence says "I achieved something". Alongside them, queue depths, which answer the opposite question: not "did it run" but "is it keeping up"
 - **Outreach is one screen** — the site's distribution problem is that nobody has heard of it, and the audience already asking the question it answers is the fic-finder threads (r/FanFiction's Lost Fic flair, r/AO3's Fic/Work Search). A worklist fetches those posts, runs each through the same extractor the search box uses, and ranks by how *few* works the answer holds — four can be read, five thousand cannot. Picking one hands it straight to the finder, already extracted, with the post it answers named above the results. It posts nothing and holds no credential that could: the reply is text on a clipboard and a person decides. Posts whose reply would carry a link the subreddit's own rules forbid are stored with the reason, sorted last, and labelled rather than hidden
-- **Traffic counts journeys, not just events** — where a visit *starts* and what it does next, because a hub page appearing as two views says nothing about whether the visitor it brought went on to use the site. Plus a **scraper flag**: everything in the traffic table was *served*, so a named scraper appearing in it is the record of an edge rule that did not fire, and the panel says so with the days, the peak arrival rate and the paths needed to write a new one
+- **Traffic counts journeys, not just events** — where a visit *starts* and what it does next, because a hub page appearing as two views says nothing about whether the visitor it brought went on to use the site. Plus a **scraper flag**: everything in the traffic table was *served*, so a named scraper appearing in it is the record of an edge rule that did not fire, and the panel says so with the days, the peak arrival rate and the paths needed to write a new one. The "Did they come back" section also shows a **returning rate** — the share of visitors whose browser reports having been here before — which is the closest the site can get to retention without identifying anyone
 - **Retention without identification** — the visitor hash is salted with the date, so nothing links one day to the next and returning readers were structurally invisible. The browser answers instead and hands over only the answer: it keeps its own last-seen date and sends one of three words. What arrives is a bucket, not an identifier — the same three values for everybody, joinable to nothing, and useless for telling two people apart
 
 ### Not being scraped to death

@@ -1,14 +1,13 @@
 "use client"
 
 import ThemeToggle from "../ThemeToggle"
-import { useEffect, useState, useMemo, useRef } from "react"
+import { useEffect, useState, useRef } from "react"
 import Link from "next/link"
 import BackLink from "../BackLink"
 import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 import { writePref, mergePrefs, type Prefs } from "@/lib/prefs"
 import { fetchJson } from "@/lib/errors"
-import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 import { EMPTY_MUTES, loadMutes, muteCount, saveMutes, type MuteList } from "@/lib/mutelist"
 import { DATA_GROUPS, clearGroup, downloadExport, groupSize,
          importFromFile } from "@/lib/localdata"
@@ -36,9 +35,9 @@ const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 // already records why collapsing is worse ("a collapsed section on a phone is a
 // section that does not exist"). A tab in the address bar is also linkable,
 // which is what /settings?tab=account and the #content anchor below need.
-type TabId = "reading" | "hidden" | "account" | "data" | "site"
+type TabId = "reading" | "hidden" | "account" | "data"
 
-const TABS: { id: TabId; label: string; hint: string; adminOnly?: boolean }[] = [
+const TABS: { id: TabId; label: string; hint: string }[] = [
   { id: "reading", label: "Reading & search",
     hint: "How stories look, and what a search starts from." },
   { id: "hidden", label: "Never show me",
@@ -47,12 +46,6 @@ const TABS: { id: TabId; label: string; hint: string; adminOnly?: boolean }[] = 
     hint: "Who you are signed in as, and how you get back in." },
   { id: "data", label: "Your data",
     hint: "What is stored, where, and how to remove it." },
-  // Not about the person reading — it changes what the instance indexes, for
-  // everybody. Rendered only for an account that can actually save it, the same
-  // rule the Import tab and the Admin link follow: a control that 403s teaches
-  // a reader the site is broken rather than that it is not theirs.
-  { id: "site", label: "This site", adminOnly: true,
-    hint: "What this instance crawls and keeps. Affects every visitor." },
 ]
 
 // Deep links that predate the tabs. The search page sends readers to
@@ -66,42 +59,8 @@ const HASH_TAB: Record<string, TabId> = {
   "#data": "data",
 }
 
-// Settings, split by who a setting belongs to rather than by topic.
-//
-// It used to be one list. Every visitor saw "Tracked fandom", "Live AO3 fetch",
-// feed word-count filters and a direct-crawler switch — instance-wide operator
-// controls, on a page with a single Save button. Three things were wrong with
-// that, and they get worse the moment the site is public:
-//
-//   * /api/settings POST already requires admin, and saveAll never checked the
-//     response, so a signed-out reader pressed Save and got "✓ Saved" while
-//     thirteen requests 403'd. The page lied about the one thing it does.
-//   * Font and width were instance-wide, so one reader choosing sans-serif
-//     would have changed the default for everybody.
-//   * A reader scrolled past crawler scheduling and Cloudflare notes to reach
-//     the two settings that were theirs.
-//
-// Now: YOUR side is per-device and needs no account, saving as you touch it.
-// THE SITE'S side only renders for someone who can actually save it — the same
-// reasoning as can_import in the header, where showing a control that 403s
-// teaches a reader the app is broken rather than that it is not theirs.
-interface AdminSettings {
-  tracked_fandom: string
-  crawl_mode: string
-  crawl_rotate_count: string
-  poll_on_load: string
-  live_fetch: string
-  feed_min_words: string
-  feed_max_words: string
-  feed_complete_only: string
-  enable_direct_crawl: string
-}
-
-const ADMIN_KEYS: (keyof AdminSettings)[] = [
-  "tracked_fandom", "crawl_mode", "crawl_rotate_count", "poll_on_load", "live_fetch",
-  "feed_min_words", "feed_max_words", "feed_complete_only", "enable_direct_crawl",
-]
-
+// Reader preferences live here. Instance-wide controls are in /admin under
+// Configuration, alongside the other tools for running the site.
 // The five things worth muting, in the order people reach for them. Ships and
 // tags lead because those are what a reader wants gone; authors last because
 // muting a person is a heavier act than muting a trope, and burying it slightly
@@ -145,7 +104,6 @@ const PREF_FALLBACK: Prefs = {
 
 export default function SettingsPage() {
   const { user, loading: authLoading, forgetRemote } = useAuth()
-  const isAdmin = !!user?.can_manage
 
   // Which tab, from the address so it can be linked and survives Back. Read
   // once on mount rather than through useSearchParams, because switching tabs
@@ -180,17 +138,7 @@ export default function SettingsPage() {
     window.scrollTo({ top: 0 })
   }
 
-  const visibleTabs = useMemo(
-    () => TABS.filter(t => !t.adminOnly || isAdmin), [isAdmin])
-
-  // A tab the reader cannot see is not a tab they can be left on. `?tab=site`
-  // in a shared link, or an admin who signs out with that tab open, would
-  // otherwise render an empty panel with every tab unselected — which looks
-  // exactly like a broken page. Fall back rather than clearing the state, so an
-  // admin whose `me` fetch is still in flight lands on their tab when it
-  // arrives instead of being bounced to the first one.
-  const activeTab: TabId =
-    visibleTabs.some(t => t.id === tab) ? tab : "reading"
+  const activeTab: TabId = TABS.some(t => t.id === tab) ? tab : "reading"
 
   // The standing mute list. Saved on every edit, like the rest of this side of
   // the page — there is no Save button for a reader's own settings.
@@ -272,46 +220,17 @@ export default function SettingsPage() {
   }
 
   const [prefs, setPrefs] = useState<Prefs | null>(null)
-  const [admin, setAdmin] = useState<AdminSettings | null>(null)
-  // What the server last confirmed, so "has anything changed" is a comparison
-  // rather than a flag that has to be cleared correctly on every path.
-  const [adminSaved, setAdminSaved] = useState<AdminSettings | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [saveState, setSaveState] = useState<null | { ok: boolean; text: string }>(null)
-  const [autoDisabled, setAutoDisabled] = useState<{ ao3: boolean; ffnet: boolean }>({ ao3: false, ffnet: false })
-  const [pendingTakedowns, setPendingTakedowns] = useState(0)
-
-  // These three go through fetchJson purely for its timeout. Their failure
-  // handling is already right — a settings page whose server call fails is still
-  // a usable settings page, because the preferences that matter to a reader live
-  // on this device — but a raw fetch cannot fail, it can only hang, and a
-  // settings screen stuck behind a spinner is not usable at all.
-  const loadCrawlStatus = () =>
-    fetchJson(`${API_BASE}/api/library/crawl-status`)
-      .then(d => setAutoDisabled(d.auto_disabled || { ao3: false, ffnet: false }))
-      .catch(() => {})
-
   useEffect(() => {
     // The server row is the INSTANCE default; this device's own choices win over
     // it. Same read order the reader has always used for font and width.
     fetchJson(`${API_BASE}/api/settings`).then(s => {
       setPrefs({ ...PREF_FALLBACK, ...s, ...mergePrefs({}) } as Prefs)
-      const loaded = Object.fromEntries(ADMIN_KEYS.map(k => [k, s[k] ?? ""])) as AdminSettings
-      setAdmin(loaded); setAdminSaved(loaded)
     }).catch(() => {
       // Offline or the API is down — your own preferences are on this device
       // and still perfectly editable, so show them rather than a dead page.
       setPrefs({ ...PREF_FALLBACK, ...mergePrefs({}) } as Prefs)
     })
-    loadCrawlStatus()
   }, [])
-
-  useEffect(() => {
-    if (!isAdmin) return
-    fetchJson(`${API_BASE}/api/takedown/pending-count`, { credentials: "include" })
-      .then(d => d && setPendingTakedowns(d.pending || 0))
-      .catch(() => {})
-  }, [isAdmin])
 
   // Preferences save the moment you touch them. There is no Save button for
   // this half and no failure mode worth reporting: it is a localStorage write
@@ -319,51 +238,6 @@ export default function SettingsPage() {
   const setPref = (key: keyof Prefs, value: string) => {
     setPrefs(p => p ? { ...p, [key]: value } : p)
     writePref(key, value)
-  }
-
-  const setAdminValue = (key: keyof AdminSettings, value: string) =>
-    setAdmin(a => a ? { ...a, [key]: value } : a)
-
-  const resetBreaker = async (site: "ao3" | "ffnet") => {
-    try {
-      const fd = new FormData(); fd.append("site", site)
-      // Awaited, deliberately. loadCrawlStatus() below re-reads the breaker, so
-      // firing this and reading in the same tick would read the state from
-      // before the reset landed — which is the exact bug the "reload and see
-      // the flag clear" advice would then send the admin to check.
-      await fetchWithTimeout(`${API_BASE}/api/library/crawl-reset-breaker`,
-        { method: "POST", body: fd }, USER_TIMEOUT_MS)
-      loadCrawlStatus()
-    } catch {}
-  }
-
-  const saveAdmin = async () => {
-    if (!admin) return
-    setSaving(true); setSaveState(null)
-    try {
-      // Checked, unlike before. Anything that did not save has to say so —
-      // "✓ Saved" over a 403 is worse than no feedback at all, because you go
-      // away believing the crawler is configured.
-      const results = await Promise.all(ADMIN_KEYS.map(async key => {
-        const fd = new FormData()
-        fd.append("key", key); fd.append("value", String(admin[key] ?? ""))
-        try {
-          const r = await fetchWithTimeout(`${API_BASE}/api/settings`,
-            { method: "POST", body: fd }, USER_TIMEOUT_MS)
-          return r.ok
-        } catch { return false }
-      }))
-      const failed = results.filter(x => !x).length
-      if (failed === 0) {
-        setAdminSaved(admin)          // this is now the confirmed state
-        setSaveState({ ok: true, text: "✓ Saved" })
-        setTimeout(() => setSaveState(null), 2500)
-      } else {
-        setSaveState({ ok: false, text: `${failed} of ${results.length} settings could not be saved — you may have been signed out.` })
-      }
-    } finally {
-      setSaving(false)
-    }
   }
 
   const toggleSite = (id: string) => {
@@ -386,15 +260,6 @@ export default function SettingsPage() {
   )
 
   const sites = prefs.default_sites.split(",").filter(Boolean)
-  // The admin half is ~1500px tall, so a save button pinned at its end sits
-  // off-screen while you are editing the field it saves. position:sticky could
-  // not fix that — as the last child it has no scroll range to float within, so
-  // it simply arrived at the bottom like any other element. A bar that appears
-  // only once something has actually changed is better than either: it stays
-  // reachable when it matters and is absent the rest of the time.
-  const dirty = !!admin && !!adminSaved &&
-    ADMIN_KEYS.some(k => (admin[k] ?? "") !== (adminSaved[k] ?? ""))
-
   return (
     <main id="main" className="settings-shell">
       <SiteHeader current="settings" />
@@ -427,10 +292,10 @@ export default function SettingsPage() {
           below without navigating, so a screen reader is told that rather than
           being handed five links that appear to go nowhere. */}
       <div className="settings-tabs" role="tablist" aria-label="Settings sections">
-        {visibleTabs.map(t => (
+        {TABS.map(t => (
           <button key={t.id} role="tab" id={`tab-${t.id}`}
             aria-selected={activeTab === t.id}
-            aria-controls={`panel-${activeTab}`}
+            aria-controls="settings-panel"
             className={`settings-tab${activeTab === t.id ? " settings-tab--on" : ""}`}
             onClick={() => show(t.id)}>
             {t.label}
@@ -438,10 +303,10 @@ export default function SettingsPage() {
         ))}
       </div>
 
-      <div className="settings-panel" role="tabpanel" id={`panel-${activeTab}`}
+      <div className="settings-panel" role="tabpanel" id="settings-panel"
         aria-labelledby={`tab-${activeTab}`}>
       <p className="settings-panel__hint">
-        {visibleTabs.find(t => t.id === activeTab)?.hint}
+        {TABS.find(t => t.id === activeTab)?.hint}
       </p>
 
       {activeTab === "account" && <AccountTab />}
@@ -787,227 +652,6 @@ export default function SettingsPage() {
 
       </>}
 
-      {/* ── the site's own settings ─────────────────────────────────────────
-          Its own tab, not a section below the fold, because these are not about
-          the person reading — they change what the instance indexes, for
-          everybody, and a reader scrolling to the end of their own preferences
-          should not arrive at crawler scheduling. */}
-      {activeTab === "site" && isAdmin && admin && (
-        <>
-          <div className="settings-divider">
-            <span className="settings-divider__label">Site administration</span>
-          </div>
-          <p className="settings-lede settings-lede--admin">
-            These apply to the whole instance and to every visitor. Readers never
-            see this section.
-          </p>
-
-          {/* One entry, because there is now one page.
-              These were two sections — "Requests from authors" and "Index
-              health" — pointing into what became a single tabbed admin page when
-              those two routes were merged, so Settings still presented the
-              takedown queue as a destination of its own alongside the page that
-              contains it. The pending count stays: it is the only part of the
-              admin surface where a person is waiting on an answer, and it is
-              worth seeing without opening anything. */}
-          <section className="settings-group">
-            <h2 className="settings-group__title">Operator tools</h2>
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">
-                  Index health and author requests
-                  {pendingTakedowns > 0 && (
-                    <span className="settings-badge">{pendingTakedowns} waiting</span>
-                  )}
-                </span>
-                <span className="setting-row__hint">
-                  {pendingTakedowns > 0
-                    ? "Someone is waiting on a decision — the text is already down, but the reply is not sent. Also: what is thin, what the crawler is pointed at next, and whether AO3 is throttling this instance."
-                    : "What is thin, what the crawler is pointed at next, whether AO3 is throttling this instance, and any takedown requests."}
-                </span>
-              </div>
-              <Link href={pendingTakedowns > 0 ? "/admin?tab=moderation" : "/admin"}
-                className="btn btn--ghost">Open</Link>
-            </div>
-          </section>
-
-          <section className="settings-group">
-            <h2 className="settings-group__title">Fresh content</h2>
-
-            {/* This loop is the ONLY source of works published after the bulk
-                dumps end, so whatever it is pointed at decides what the whole
-                fresh end of the index contains. Pinned to one fandom, that
-                meant everything newer than mid-2024 was Harry Potter and
-                nothing else — a site-wide bias produced by one person's taste
-                and invisible from the outside. Hence the mode. */}
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">What to keep current</span>
-                <span className="setting-row__hint">
-                  New works are found by walking AO3 tag pages. This is the only
-                  route for anything published after the bulk imports, so it
-                  decides which fandoms stay up to date.
-                </span>
-              </div>
-              <div className="setting-pills">
-                {[["rotate", "Rotate"], ["mixed", "Mixed"], ["pinned", "Pinned"]].map(([id, label]) => (
-                  <button key={id} aria-pressed={admin.crawl_mode === id}
-                    className={`pill ${admin.crawl_mode === id ? "pill--on" : ""}`}
-                    onClick={() => setAdminValue("crawl_mode", id)}>{label}</button>
-                ))}
-              </div>
-            </div>
-            <p className="settings-group__hint settings-group__hint--tight">
-              {admin.crawl_mode === "rotate"
-                ? "Walks the largest fandoms in the index in turn, so coverage follows what the index actually holds rather than anyone's preferences."
-                : admin.crawl_mode === "pinned"
-                ? "Only the fandoms listed below. Everything else stops gaining new works — fine for a personal instance, a visible bias on a public one."
-                : "Your fandoms every pass, plus the next few from the rotation. Keeps what you read current without it being the only thing that is."}
-            </p>
-
-            {admin.crawl_mode !== "rotate" && (
-              <div className="setting-row">
-                <div className="setting-row__label">
-                  <span className="setting-row__name">Your fandoms</span>
-                  <span className="setting-row__hint">Comma-separate for several. Use AO3&apos;s own tag name.</span>
-                </div>
-                <input className="setting-input" value={admin.tracked_fandom}
-                  onChange={e => setAdminValue("tracked_fandom", e.target.value)}
-                  placeholder="Harry Potter - J. K. Rowling" />
-              </div>
-            )}
-
-            {admin.crawl_mode !== "pinned" && (
-              <div className="setting-row">
-                <div className="setting-row__label">
-                  <span className="setting-row__name">Fandoms per pass</span>
-                  <span className="setting-row__hint">
-                    How many rotation fandoms each run visits. Higher sweeps the
-                    list faster and spends more of the AO3 rate limit doing it.
-                  </span>
-                </div>
-                <select className="setting-select" value={admin.crawl_rotate_count}
-                  onChange={e => setAdminValue("crawl_rotate_count", e.target.value)}>
-                  {["1", "2", "3", "5", "8"].map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </div>
-            )}
-
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">Pull on load</span>
-                <span className="setting-row__hint">Fetch latest works each time the site opens.</span>
-              </div>
-              <Toggle on={admin.poll_on_load === "true"} label="Pull on load"
-                onToggle={v => setAdminValue("poll_on_load", String(v))} />
-            </div>
-
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">Live AO3 fetch</span>
-                <span className="setting-row__hint">Top up each search with fresh AO3 results. Thin searches also auto-pull deeper from AO3.</span>
-              </div>
-              <Toggle on={admin.live_fetch === "true"} label="Live AO3 fetch"
-                onToggle={v => setAdminValue("live_fetch", String(v))} />
-            </div>
-          </section>
-
-          <section className="settings-group">
-            <h2 className="settings-group__title">Feed filters</h2>
-            <p className="settings-group__hint">
-              Applied to the auto-pulled feed. The feed always returns the 25 most recent works
-              for a tag; only the ones matching these are kept, so tight filters yield fewer results.
-            </p>
-
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">Minimum word count</span>
-                <span className="setting-row__hint">e.g. 100000 to keep only works over 100k. Blank for none.</span>
-              </div>
-              <input className="setting-input" type="number" min={0} step={1000}
-                value={admin.feed_min_words}
-                onChange={e => setAdminValue("feed_min_words", e.target.value)}
-                placeholder="(no minimum)" />
-            </div>
-
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">Maximum word count</span>
-                <span className="setting-row__hint">Blank for no cap.</span>
-              </div>
-              <input className="setting-input" type="number" min={0} step={1000}
-                value={admin.feed_max_words}
-                onChange={e => setAdminValue("feed_max_words", e.target.value)}
-                placeholder="(no maximum)" />
-            </div>
-
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">Complete only</span>
-                <span className="setting-row__hint">Skip works in progress.</span>
-              </div>
-              <Toggle on={admin.feed_complete_only === "true"} label="Complete only"
-                onToggle={v => setAdminValue("feed_complete_only", String(v))} />
-            </div>
-          </section>
-
-          <section className="settings-group">
-            <h2 className="settings-group__title">Direct crawling</h2>
-            <p className="settings-group__hint">
-              When on, FicAtlas crawls AO3 and FF.net directly every few hours, on top of the
-              Atom feed poller. AO3 works from a residential connection — its heavy pages are
-              just slow (5–20s), which the app waits out. <strong>FF.net stays
-              Cloudflare-blocked</strong> for direct server requests whatever the IP, so its
-              crawler will keep failing; use one-click URL import (via FicHub) for FF.net
-              instead. Leave off if you rely on feeds and imports.
-            </p>
-            <div className="setting-row">
-              <div className="setting-row__label">
-                <span className="setting-row__name">Enable direct AO3 / FF.net crawling</span>
-                <span className="setting-row__hint">Takes effect on the next scheduled run — no restart. Check backend logs to confirm it is reaching the sites.</span>
-              </div>
-              <Toggle on={admin.enable_direct_crawl === "true"} label="Direct crawling"
-                onToggle={v => setAdminValue("enable_direct_crawl", String(v))} />
-            </div>
-            {(autoDisabled.ao3 || autoDisabled.ffnet) && (
-              <div className="setting-row">
-                <div className="setting-row__label">
-                  <span className="setting-row__name">⚠ Auto-disabled crawlers</span>
-                  <span className="setting-row__hint">
-                    A site is paused automatically after repeated crawl failures so it stops
-                    hammering a blocked endpoint and filling the log. Fix connectivity, then
-                    re-enable here — it resumes on the next scheduled run.
-                  </span>
-                </div>
-                <div className="setting-pills">
-                  {autoDisabled.ao3 && (
-                    <button className="pill" onClick={() => resetBreaker("ao3")}>Re-enable AO3</button>
-                  )}
-                  {autoDisabled.ffnet && (
-                    <button className="pill" onClick={() => resetBreaker("ffnet")}>Re-enable FF.net</button>
-                  )}
-                </div>
-              </div>
-            )}
-          </section>
-
-          <div className={`settings-actions ${dirty || saving || saveState ? "settings-actions--live" : ""}`}>
-            {saveState && !saveState.ok && (
-              <p className="settings-save-error" role="alert">{saveState.text}</p>
-            )}
-            {dirty && !saving && (
-              <span className="settings-actions__dirty">Unsaved changes</span>
-            )}
-            <button className="btn btn--primary settings-save" onClick={saveAdmin}
-              disabled={saving || (!dirty && !saveState)}>
-              {saving ? "Saving…" : saveState?.ok ? "✓ Saved" : "Save site settings"}
-            </button>
-          </div>
-        </>
-      )}
-
-      </div>
-
       {/* Signed out, nothing above needed an account — so this is an offer, not
           a gate. It says what signing in ADDS rather than what it unlocks, and
           it is suppressed on the Account tab, which makes the same case at
@@ -1019,6 +663,7 @@ export default function SettingsPage() {
           shelf and your place in every story. Everything here works without one.
         </p>
       )}
+      </div>
     </main>
   )
 }

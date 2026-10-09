@@ -464,7 +464,7 @@ interface EntryRow {
 }
 interface HubRow {
   path: string; label: string; sessions: number; views: number
-  searched: number; went_out: number
+  searched: number; went_out: number; search_referrals: number
 }
 /** /api/traffic/clicks — which search results get opened, by position. */
 interface Clicks {
@@ -472,6 +472,12 @@ interface Clicks {
   total: number
   positions: { bucket: string; clicks: number; people: number }[]
   queries: { query: string; runs: number; results: number | null; clicks: number }[]
+}
+interface SearchPerformance {
+  requests: number; measured: number; unmeasured: number; errors: number
+  error_rate: number | null; p50_ms: number | null; p95_ms: number | null
+  extract_runs: number; extract_p50_ms: number | null; extract_p95_ms: number | null
+  measured_since: string | null
 }
 
 interface Entry {
@@ -590,6 +596,7 @@ export default function TrafficPanel(
   const [scr, setScr] = useState<Scrapers | null>(null)
   const [entry, setEntry] = useState<Entry | null>(null)
   const [clk, setClk] = useState<Clicks | null>(null)
+  const [performance, setPerformance] = useState<SearchPerformance | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async (d: number) => {
@@ -603,12 +610,13 @@ export default function TrafficPanel(
     try {
       // In parallel: four small aggregates over the same window, and waiting for
       // them one after another would show the page filling in for no reason.
-      const [s, p, q, rf, rt, sc, en, ck] = await Promise.all([
+      const [s, p, q, rf, rt, sc, en, ck, pf] = await Promise.all([
         get("summary"), get("pages"), get("searches"), get("referrers"),
         get("routes"), get("scrapers"), get("entry"), get("clicks").catch(() => null),
+        get("performance").catch(() => null),
       ])
       setSummary(s); setPages(p.pages); setSearches(q); setRefs(rf.referrers)
-      setRoutes(rt); setScr(sc); setEntry(en); setClk(ck)
+      setRoutes(rt); setScr(sc); setEntry(en); setClk(ck); setPerformance(pf)
     } catch (e: any) { setError(e.message) }
 
     // Deliberately NOT in the Promise.all above. This one leaves the building
@@ -681,6 +689,7 @@ export default function TrafficPanel(
     { id: "entry",      label: "Where visits start" },
     { id: "sources",    label: "Routes to a story" },
     { id: "clicks",     label: "What gets opened" },
+    { id: "performance", label: "Search speed" },
     { id: "searches",   label: "Searches" },
     { id: "empty",      label: "Found nothing" },
     { id: "pages",      label: "Pages" },
@@ -1030,6 +1039,15 @@ export default function TrafficPanel(
                 <Tile key={k} label={SEEN_LABEL[k] ?? k}
                       value={entry.returning[k]} />
               ))}
+            {(() => {
+              const r = entry.returning
+              const total = (r.first || 0) + (r.week || 0) + (r.return || 0)
+              if (total > 0) {
+                const pct = Math.round(((r.week || 0) + (r.return || 0)) / total * 100)
+                return <Tile key="rate" label="Returning rate" value={pct} display={`${pct}%`} />
+              }
+              return null
+            })()}
           </div>
           <p className="admin-note">
             Counted from {longDate(entry.returning_since)}, when browsers
@@ -1091,14 +1109,15 @@ export default function TrafficPanel(
           {entry.hubs.length > 0 && (
             <details className="entry-hubs">
               <summary className="scraper-detail__summary">
-                Which hub pages brought people in
+                Which hub pages search engines brought people to
                 <span className="scraper-detail__count">
-                  top {entry.hubs.length} by sessions
+                  top {entry.hubs.length} by search referrals
                 </span>
               </summary>
               <table className="traffic-table">
                   <thead>
                     <tr><th>Hub</th><th className="num">Sessions</th>
+                        <th className="num">Search engines</th>
                         <th className="num">Searched</th>
                         <th className="num">Went to archive</th></tr>
                   </thead>
@@ -1107,6 +1126,7 @@ export default function TrafficPanel(
                       <tr key={h.path}>
                         <td><a href={h.path} target="_blank" rel="noopener noreferrer">{h.label}</a></td>
                         <td className="num">{h.sessions}</td>
+                        <td className="num">{h.search_referrals}</td>
                         <td className="num">{h.searched}</td>
                         <td className="num">{h.went_out}</td>
                       </tr>
@@ -1240,6 +1260,39 @@ export default function TrafficPanel(
                 ))}
               </tbody>
             </table>
+          </>
+        )}
+      </Section>
+
+      <Section id="performance" title="Search speed and reliability" onActive={onActive}
+        note="Measured at the API for real search requests. The extractor is a prose-query rescue, invoked only when a sentence returns no or very few results; ordinary keyword searches do not pay that cost.">
+        {!performance || performance.measured === 0 ? (
+          <p className="admin-note">
+            Search timings will appear after this build starts recording them.
+            {performance?.unmeasured ? ` ${performance.unmeasured.toLocaleString()} earlier searches have no timing data.` : ""}
+          </p>
+        ) : (
+          <>
+            <div className="admin-tiles">
+              <Tile label="Search median" value={performance.p50_ms ?? 0}
+                display={performance.p50_ms == null ? "—" : `${performance.p50_ms} ms`} />
+              <Tile label="Search p95" value={performance.p95_ms ?? 0}
+                display={performance.p95_ms == null ? "—" : `${performance.p95_ms} ms`}
+                tone={performance.p95_ms != null && performance.p95_ms > 3000 ? "warn" : undefined} />
+              <Tile label="Search errors" value={performance.errors}
+                display={performance.error_rate == null ? String(performance.errors)
+                  : `${performance.errors} · ${performance.error_rate}%`}
+                tone={performance.errors > 0 ? "bad" : "good"} />
+              <Tile label="Prose extractor p95" value={performance.extract_p95_ms ?? 0}
+                display={performance.extract_p95_ms == null ? "—"
+                  : `${performance.extract_p95_ms} ms`}
+                sub={`${performance.extract_runs.toLocaleString()} searches invoked it`} />
+            </div>
+            <p className="admin-note">
+              Timed {performance.measured.toLocaleString()} of {performance.requests.toLocaleString()} search requests
+              {performance.measured_since ? ` since ${longDate(performance.measured_since.slice(0, 10))}` : ""}.
+              {performance.unmeasured > 0 && ` ${performance.unmeasured.toLocaleString()} earlier requests predate timing data.`}
+            </p>
           </>
         )}
       </Section>

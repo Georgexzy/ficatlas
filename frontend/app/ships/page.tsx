@@ -69,11 +69,9 @@ export default async function ShipsIndex() {
       </nav>
       <h1>Browse pairings</h1>
       <p className="hub__lede">
-        {ships.length.toLocaleString()} pairings indexed across Archive of Our
-        Own, FanFiction.net and FictionAlley — every archive at once, which no single
-        archive&rsquo;s tag page can do. Pick one to see its most popular works,
-        browse <Link href="/fandoms">by fandom</Link> instead, or{" "}
-        <Link href="/">search the whole index</Link> if you know what you want.
+        Explore {ships.length.toLocaleString()} pairings from AO3, FanFiction.net and
+        FictionAlley. Choose one to browse its works, or{" "}
+        <Link href="/fandoms">browse fandoms</Link> instead.
       </p>
 
       {ships.length === 0 ? (
@@ -82,7 +80,7 @@ export default async function ShipsIndex() {
         </p>
       ) : (
         <>
-          <h2 className="hub__heading">Biggest pairings</h2>
+          <h2 className="hub__heading">Pairings with the most works</h2>
           <ul className="hub__grid">
             {top.map(h => (
               <li key={h.slug}>

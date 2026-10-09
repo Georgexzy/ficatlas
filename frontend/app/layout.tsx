@@ -7,6 +7,7 @@ import SiteFooter from "./SiteFooter"
 import PreviewBanner from "./PreviewBanner"
 import EmailPrompt from "./EmailPrompt"
 import HealthBanner from "./HealthBanner"
+import SiteNotice from "./SiteNotice"
 import { escapeJsonLd } from "@/lib/jsonLd"
 import "./globals.css"
 
@@ -67,7 +68,7 @@ export const metadata: Metadata = {
     // written by frontend/tools/make-icons.py's sibling copy of this sentence).
     "Search 20+ million fanworks across Archive of Our Own, FanFiction.net and "
     + "FictionAlley in one place, then read them on the archive that hosts them. "
-    + "No adverts, no tracking, no AI trained on fic.",
+    + "No adverts, no third-party analytics, no AI trained on fic.",
   manifest: "/manifest.json",
   // The site had NO favicon. /favicon.ico was a 404, and the only icons that
   // existed were the 192/512 PWA ones referenced from manifest.json — which a
@@ -171,6 +172,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </Suspense>
         <AuthProvider>
           <HealthBanner />
+          <SiteNotice />
           <PreviewBanner />
           <EmailPrompt />
           {children}

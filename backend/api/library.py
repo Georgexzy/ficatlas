@@ -594,6 +594,7 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
         # would publish it for everybody on one reader's action.
         if not private:
             existing.is_hosted = True
+            existing.private_only = False
         existing.summary = existing.summary or parsed["summary"]
         story = existing
         # Clear old chapters if any
@@ -623,12 +624,16 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
             word_count=parsed["word_count"],
             chapter_count=len(parsed["chapters"]),
             chapter_count_total=len(parsed["chapters"]),
-            fandoms=[], characters=[], relationships=[], tags=["imported"],
+            fandoms=[], characters=[], relationships=[],
+            # Private-only rows are storage records, not index entries. Do not
+            # seed the public facet vocabulary with their import marker.
+            tags=[] if private else ["imported"],
             warnings=[], categories=[], genres=[],
             # A private import is not on the public shelf. The row and its
             # chapters exist in the shared tables so dedup and cross-post
             # matching still see them; only the grant below opens the text.
             is_hosted=not private,
+            private_only=bool(private),
             published_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
@@ -788,19 +793,36 @@ def remove_mine(story_id: str, db: Session = Depends(get_db),
                       viewer: Optional[User] = Depends(get_current_user)):
     """Give up your copy of a story.
 
-    Drops the user_hosted row only. The story and its chapters stay in the
-    shared tables, because dedup and cross-post matching depend on them and
-    another reader may hold the same import. Nothing is deleted that anyone
-    else's access relies on, and nothing of yours survives.
+    Drops this user's grant. Shared public metadata stays in the index. A
+    private-only row is deleted with its chapters when the last reader releases
+    it, so the final user's removal also removes the stored copy.
     """
     if viewer is None:
         raise HTTPException(401, "Sign in to manage your library.")
     res = db.execute(sql_text(
         "DELETE FROM user_hosted WHERE user_id = :u AND story_id = :s"
     ), {"u": str(viewer.id), "s": story_id})
-    db.commit()
     if not res.rowcount:
         raise HTTPException(404, "That story is not in your library.")
+    # Private imports can add chapter text to an existing public metadata row.
+    # Once its final grant is gone, remove that text unless the story is on the
+    # public hosted shelf. A private-only row can then be removed as well.
+    db.execute(sql_text("""
+        DELETE FROM chapters c
+         USING stories s
+         WHERE c.story_id = s.id AND s.id = :s AND NOT s.is_hosted
+           AND NOT EXISTS (
+               SELECT 1 FROM user_hosted uh WHERE uh.story_id = s.id
+           )
+    """), {"s": story_id})
+    db.execute(sql_text("""
+        DELETE FROM stories s
+         WHERE s.id = :s AND s.private_only
+           AND NOT EXISTS (
+               SELECT 1 FROM user_hosted uh WHERE uh.story_id = s.id
+           )
+    """), {"s": story_id})
+    db.commit()
     return {"ok": True, "removed": story_id}
 
 

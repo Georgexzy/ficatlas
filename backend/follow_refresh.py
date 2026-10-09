@@ -48,7 +48,8 @@ def due_ao3(db, hours: float = FOLLOW_REFRESH_HOURS, limit: int = MAX_PER_PASS) 
     return db.execute(text("""
         SELECT s.id, s.site_id
           FROM stories s
-         WHERE s.id IN (SELECT DISTINCT story_id FROM follows)
+         WHERE s.id IN (SELECT story_id FROM follows UNION SELECT story_id FROM watched_works
+                                WHERE watched_at > now() - interval '30 days')
            AND s.site = 'ao3' AND s.site_id ~ '^[0-9]+$'
            AND s.delisted_at IS NULL AND s.source_restricted_at IS NULL
            AND s.status IS DISTINCT FROM 'complete'
@@ -88,7 +89,8 @@ def followed_ffnet_sections(db) -> list[str]:
     rows = db.execute(text("""
         SELECT f, count(*) FROM (
             SELECT unnest(s.fandoms) AS f FROM stories s
-             WHERE s.id IN (SELECT DISTINCT story_id FROM follows)
+             WHERE s.id IN (SELECT story_id FROM follows UNION SELECT story_id FROM watched_works
+                                WHERE watched_at > now() - interval '30 days')
                AND s.site = 'ffnet' AND s.delisted_at IS NULL
                AND s.status IS DISTINCT FROM 'complete') x
          GROUP BY f ORDER BY count(*) DESC

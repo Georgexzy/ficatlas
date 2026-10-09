@@ -78,13 +78,20 @@ def _load_persisted_sites() -> list | None:
 
 
 def _compute_sites(db: Session) -> list:
-    rows = (db.query(Story.site, func.count(Story.id), func.max(Story.indexed_at))
+    rows = (db.query(Story.site, func.count(Story.id),
+                     func.max(Story.indexed_at),
+                     func.max(Story.crawled_at),
+                     func.count(Story.id).filter(
+                         Story.crawled_at > func.now() - text("interval '7 days'")))
+            .filter(Story.private_only.is_(False))
             .group_by(Story.site).all())
     return [
         {
             "site":  r[0].value if hasattr(r[0], "value") else str(r[0]),
             "count": r[1],
             "last_indexed": r[2].isoformat() if r[2] else None,
+            "last_crawled": r[3].isoformat() if r[3] else None,
+            "crawled_last_week": int(r[4] or 0),
         }
         for r in rows
     ]
@@ -462,6 +469,7 @@ _COVERAGE_SQL = text("""
            count(*) FILTER (WHERE relationships <> '{}' AND relationships IS NOT NULL) AS ships,
            count(*) FILTER (WHERE characters    <> '{}' AND characters    IS NOT NULL) AS chars
     FROM stories TABLESAMPLE SYSTEM_ROWS(60000)
+    WHERE NOT private_only
     GROUP BY site
 """)
 
@@ -493,7 +501,7 @@ def _compute_coverage(db) -> dict:
                 SELECT count(*) AS n,
                        count(*) FILTER (WHERE relationships <> '{}' AND relationships IS NOT NULL) AS ships,
                        count(*) FILTER (WHERE characters    <> '{}' AND characters    IS NOT NULL) AS chars
-                FROM stories WHERE site = :s
+                FROM stories WHERE site = :s AND NOT private_only
             """), {"s": site}).mappings().first()
             if e and e["n"]:
                 out[site] = {"ships": round(100 * e["ships"] / e["n"]),
@@ -536,6 +544,7 @@ _TOTALS_SQL = text("""
            count(*) FILTER (WHERE updated_at > now() - interval '365 days') AS updated_last_year,
            count(*) FILTER (WHERE crawled_at > now() - interval '7 days')   AS checked_last_week
     FROM stories
+    WHERE NOT private_only
 """)
 
 
@@ -603,6 +612,14 @@ def _with_sites(payload: dict | None) -> dict | None:
         "sites_updated_at": {
             r["site"]: r["last_indexed"] for r in rows
             if r.get("site") and r.get("last_indexed")
+        },
+        "sites_crawled_at": {
+            r["site"]: r["last_crawled"] for r in rows
+            if r.get("site") and r.get("last_crawled")
+        },
+        "sites_crawled_last_week": {
+            r["site"]: int(r.get("crawled_last_week") or 0)
+            for r in rows if r.get("site")
         },
         "stories_scanned": payload.get("stories"),
         "stories": sum(counts.values()),
@@ -920,7 +937,7 @@ def rebuild_facets(db: Session, min_count: int = 1) -> dict:
         db.execute(text(
             "INSERT INTO author_facets (value, count) "
             "SELECT author, count(*) AS c FROM stories "
-            "WHERE author IS NOT NULL AND btrim(author) <> '' "
+            "WHERE author IS NOT NULL AND btrim(author) <> '' AND NOT private_only "
             "GROUP BY author HAVING count(*) >= :author_min"
         ), {"author_min": _AUTHOR_FACET_MIN_WORKS})
         built["author_facets"] = db.execute(
@@ -1005,7 +1022,8 @@ def rebuild_title_facets(db) -> None:
         "INSERT INTO title_facets (value, count, author) "
         "SELECT DISTINCT ON (title) title, kudos, author FROM stories "
         "WHERE kudos >= :k AND title IS NOT NULL AND btrim(title) <> '' "
-        "  AND delisted_at IS NULL AND NOT gate_underage AND NOT gate_adult "
+        "  AND delisted_at IS NULL AND NOT private_only "
+        "  AND NOT gate_underage AND NOT gate_adult "
         "ORDER BY title, kudos DESC"), {"k": TITLE_FACET_MIN_KUDOS})
 
 

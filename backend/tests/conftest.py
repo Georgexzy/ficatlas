@@ -22,7 +22,7 @@ _TRUNCATE = (
     # hub_build and read by api/hubs, and a test that seeds one has to start
     # from empty or its second insert hits the primary key.
     "fandom_hubs", "ship_hubs",
-    "users", "user_sessions", "user_hosted", "takedowns", "source_gone",
+    "users", "user_sessions", "user_hosted", "user_data", "takedowns", "source_gone",
     "search_cache_entries", "visit_events",
     # Recommendation mining. `rec_mentions` has a uniqueness constraint on
     # (comment_id, site, site_id), so a row left behind by one test makes the

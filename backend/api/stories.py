@@ -372,6 +372,10 @@ def get_story(story_id: str = Depends(valid_story_id), db: Session = Depends(get
     # to look at what was removed.
     if delisted_as_gone(story, viewer):
         raise HTTPException(404, "Story not found")
+    # Private URL imports with no pre-existing public index row are visible to
+    # the importing reader only, including their metadata and chapter outline.
+    if story.private_only and not may_read_text(db, story, viewer):
+        raise HTTPException(404, "Story not found")
 
     chapter_meta = [
         ChapterMeta(
@@ -522,6 +526,7 @@ def similar_stories(
     story_id: str = Depends(valid_story_id),
     count: int = Query(6, ge=1, le=20),
     db: Session = Depends(get_db),
+    viewer: Optional[User] = Depends(get_current_user),
 ):
     """"If you like this, try…" — stories sharing this one's tags.
 
@@ -536,6 +541,8 @@ def similar_stories(
     """
     story = db.query(Story).filter(Story.id == story_id).first()
     if not story:
+        raise HTTPException(404, "Story not found")
+    if story.private_only and not may_read_text(db, story, viewer):
         raise HTTPException(404, "Story not found")
 
     ships = [s for s in (story.relationships or []) if s][:6]
@@ -552,6 +559,7 @@ def similar_stories(
             FROM stories
             WHERE id <> :sid
               AND delisted_at IS NULL
+              AND NOT private_only
               -- Content gates, both tiers, columns AND arrays.
               --
               -- "If you like this, try…" is rendered on every story page, and

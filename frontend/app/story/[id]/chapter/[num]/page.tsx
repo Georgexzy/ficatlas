@@ -1,6 +1,7 @@
 "use client"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
+import Link from "next/link"
 import { describeError, type Failure } from "@/lib/errors"
 import { useAuth } from "@/lib/auth"
 import { navigateTo } from "@/lib/navigation"
@@ -20,6 +21,7 @@ import { fetchWithTimeout, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/
 // Nothing on the offline path may be lazily loaded. The saving here was one
 // small chunk on a route that is the reason the chunk exists.
 import { getOfflineStory } from "@/lib/offline"
+import ReadAloud from "./ReadAloud"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
@@ -31,12 +33,6 @@ interface ChapterFull {
 
 interface StoryMin {
   id: string; title: string; author: string; chapter_count: number;
-  // How long the work actually is, as distinct from `chapter_count`. They are
-  // different numbers offline and the difference is the whole bug: offline
-  // `chapter_count` is how many chapters this device holds, so a 4-of-199 work
-  // rendered "Chapter 3 of 4". `savedStoryToDetail` has always carried this
-  // field for the story page; the reader's type was the one place it was
-  // missing, which is why it read as absent rather than as unread.
   chapter_count_total?: number
   language?: string
   characters?: string[]
@@ -48,6 +44,11 @@ interface StoryMin {
   summary?: string
   word_count?: number
   chapters: { number: number; title?: string }[]
+}
+
+interface SimilarCard {
+  id: string; title: string; author: string;
+  word_count: number; relationships?: string[]; fandoms?: string[];
 }
 
 // Stored languages are display names in their own script ("Русский", not "ru"),
@@ -154,6 +155,8 @@ export default function ChapterPage() {
   // True while the reader is being placed at the start of a chapter, so the
   // position-saving listener ignores the scrolls that placement causes.
   const restoringRef = useRef(false)
+  const [similar, setSimilar] = useState<SimilarCard[]>([])
+  const [similarFor, setSimilarFor] = useState<string | null>(null)
 
   useEffect(() => {
     const savedSize = localStorage.getItem("ficatlas:reader-fontsize")
@@ -630,6 +633,22 @@ export default function ChapterPage() {
     }
   }, [storyId, nextNum, prevNum, router, chapter, networkAlive])
 
+  // End-of-work recommendations: fetch similar stories when the reader reaches the
+  // last chapter. Fired only once per story+chapter, and only when there IS a last
+  // chapter — not on every page load for a 300-chapter work.
+  useEffect(() => {
+    if (!storyId || nextNum != null || similarFor === storyId) return
+    setSimilarFor(storyId)
+    setSimilar([])
+    const ac = new AbortController()
+    fetchWithTimeout(`${API_BASE}/api/stories/${storyId}/similar?count=6`,
+      { signal: ac.signal }, BACKGROUND_TIMEOUT_MS)
+      .then(r => r.ok ? r.json() : [])
+      .then((data: SimilarCard[]) => setSimilar(data))
+      .catch(() => {})
+    return () => ac.abort()
+  }, [storyId, nextNum, similarFor])
+
   // Keyboard navigation
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -696,12 +715,12 @@ export default function ChapterPage() {
           title={story?.title ? `Back to ${story.title}` : "Back to story"}>
           ← {story?.title ?? "Back to story"}
         </a>
-        {/* One "Aa" button instead of eight controls, the way Apple Books does
-            it. On a 390px phone the inline toolbar wrapped to THREE rows, so
-            eight buttons stood between the reader and the first line of prose.
-            The panel below holds the same settings and is a bottom sheet on a
-            phone, a popover on a desktop. */}
+        {/* Typography controls stay behind one "Aa" button. On a 390px phone
+            the old inline controls wrapped to three rows before the first line
+            of prose. The settings panel below is a bottom sheet on phones and
+            a popover on desktop. */}
         <div className="reader-controls">
+          {chapter && <ReadAloud key={`${storyId}/${chapter.number}`} html={chapter.content} language={langCode} />}
           <button
             className={`reader-ctrl reader-ctrl--aa ${settingsOpen ? "is-on" : ""}`}
             onClick={() => setSettingsOpen(o => !o)}
@@ -962,9 +981,48 @@ export default function ChapterPage() {
             </div>
             <button className="reader-nav__btn" disabled={nextNum == null}
               onClick={() => nextNum != null && goChapter(nextNum)}>Next →</button>
+            {story && story.chapters && story.chapters.length > 0 && num != null
+              && story.chapters[story.chapters.length - 1].number > num && (() => {
+              const lastNum = story.chapters[story.chapters.length - 1].number
+              return (
+                <button
+                  className="reader-nav__skip"
+                  title="Skip to the latest chapter (this is a work in progress)"
+                  onClick={() => goChapter(lastNum)}>
+                  ↥ Latest
+                </button>
+              )
+            })()}
           </nav>
 
           <p className="reader-hint">Keys: ← → chapters · + − text size · t theme · j justify. Line spacing, serif/sans &amp; column width: buttons above.</p>
+
+          {nextNum == null && similar.length > 0 && (
+            // End-of-work suggestions. Deliberately below the fold and visually
+            // subordinate to the chapter nav — this reader is on the last page
+            // and the last thing they clicked was "Next" going nowhere, so the
+            // hook is the natural place to surface "what next". Uses the same
+            // /similar endpoint as the story page, so the picks are the ones the
+            // algorithm already trusts. Not shown to logged-out readers: the link
+            // targets go through /story/[id] which requires an account for hosted
+            // chapters, and a click that 401s erodes trust faster than it earns
+            // it.
+            <div className="reader-end">
+              <h4 className="reader-end__title">Still reading?</h4>
+              <div className="reader-end__grid">
+                {similar.slice(0, 6).map(s => (
+                  <Link key={s.id} href={`/story/${s.id}`} className="reader-end__card">
+                    <span className="reader-end__title-link">{s.title}</span>
+                    <span className="reader-end__author">by {s.author}</span>
+                    <span className="reader-end__meta">
+                      {s.word_count > 0 ? `${Math.round(s.word_count / 1000)}k words` : ""}
+                      {s.relationships?.[0] ? ` · ${s.relationships[0]}` : ""}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
 </main>

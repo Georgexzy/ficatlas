@@ -317,10 +317,10 @@ input, select { font-family: inherit; }
 .input-pair__sep { color: var(--text-faint); font-size: 11px; flex-shrink: 0; }
 
 /* ── Main area ─────────────────────────────────────────────────────────────── */
-.main { flex: 1; min-width: 0; padding: 20px 24px 40px; }
+.main { flex: 1; min-width: 0; padding: 14px 24px 28px; }
 
 /* ── Search ────────────────────────────────────────────────────────────────── */
-.search-wrap { margin-bottom: 16px; position: relative; }
+.search-wrap { margin-bottom: 12px; position: relative; }
 .search-bar { display: flex; gap: 8px; align-items: center; position: relative; }
 .search-input {
   flex: 1; background: var(--surface2); border: 1px solid var(--border2);
@@ -910,6 +910,12 @@ input, select { font-family: inherit; }
 .reader-nav__btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .reader-nav__index { font-size: 12px; color: var(--text-faint); font-family: var(--font-mono); }
 .reader-nav__index:hover { color: var(--accent); }
+.reader-nav__skip {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--accent); border: none; background: transparent;
+  cursor: pointer; padding: 4px 6px;
+}
+.reader-nav__skip:hover { opacity: 0.8; }
 /* The middle of the reader nav: a chapter picker and the way out. Column on a
    phone, where three controls in a row would each be too narrow to hit. */
 .reader-nav__mid {
@@ -927,12 +933,55 @@ input, select { font-family: inherit; }
 }
 .reader-nav__jump:hover { border-color: var(--accent); color: var(--accent); }
 @media (max-width: 560px) {
-  .reader-nav__mid { flex-direction: column; gap: 4px; }
-  .reader-nav__jump { max-width: 150px; }
+  .reader-nav {
+    flex-direction: column; align-items: stretch; gap: 8px;
+    margin-top: 24px; padding-top: 16px;
+  }
+  .reader-nav__btn, .reader-nav__index, .reader-nav__skip {
+    width: 100%; text-align: center; margin: 0;
+  }
+  .reader-nav__btn { min-height: 40px; padding: 8px 12px; }
+  .reader-nav__mid { flex-direction: column; gap: 6px; align-items: stretch; }
+  .reader-nav__jump { max-width: 100%; }
 }
 .reader-hint {
   text-align: center; font-size: 11px; color: var(--text-faint);
   font-family: var(--font-mono); margin-top: 20px;
+}
+.reader-end {
+  margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border);
+}
+.reader-end__title {
+  font-size: 14px; font-weight: 600; color: var(--text-faint);
+  margin-bottom: 12px; text-align: center;
+}
+.reader-end__grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+.reader-end__card {
+  display: block; text-decoration: none; color: inherit;
+  padding: 12px; border: 1px solid var(--border); border-radius: 6px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.reader-end__card:hover {
+  border-color: var(--accent); background: var(--bg-hover);
+}
+.reader-end__title-link {
+  display: block; font-size: 14px; font-weight: 500;
+  margin-bottom: 4px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.reader-end__author {
+  display: block; font-size: 12px; color: var(--text-faint);
+  margin-bottom: 2px;
+}
+.reader-end__meta {
+  display: block; font-size: 11px; color: var(--text-dim);
+}
+@media (max-width: 600px) {
+  .reader-end__grid { grid-template-columns: 1fr; }
 }
 
 /* ── Library ───────────────────────────────────────────────────────────────── */
@@ -1678,6 +1727,9 @@ kbd {
   font-family: var(--font-mono);
 }
 .reader-ctrl:hover { border-color: var(--accent); color: var(--accent); }
+.reader-ctrl--listen { min-width: 34px; }
+.reader-ctrl--listen-stop { color: var(--text-faint); }
+.reader-listen-error { max-width: 260px; color: var(--text-dim); font: 11px/1.35 var(--font-sans); }
 
 /* ── No-results state ─────────────────────────────────────────────────────── */
 .no-results {
@@ -2942,13 +2994,13 @@ body:has(.reader-shell[data-theme="default"]) {
 
 /* ── Surprise me button ──────────────────────────────────────────────────── */
 .empty__surprise {
-  margin-top: 24px;
+  margin-top: 16px;
   background: var(--surface2); border: 1px solid var(--border2);
-  color: var(--text); padding: 10px 22px; border-radius: 999px;
-  font-size: 14px; cursor: pointer; transition: all 0.15s;
+  color: var(--text-faint); padding: 8px 20px; border-radius: 999px;
+  font-size: 13px; cursor: pointer; transition: all 0.15s;
 }
 .empty__surprise:hover {
-  background: var(--accent); color: var(--surface); border-color: var(--accent);
+  background: var(--accent-bg); color: var(--accent); border-color: var(--accent-dim);
   transform: translateY(-1px);
 }
 
@@ -3670,7 +3722,7 @@ body.is-resizing * { cursor: col-resize !important; }
 
 /* Landing page nudge replacing the old example-query buttons. */
 .empty__nudge {
-  font-size: 12px; color: var(--text-faint); margin-bottom: 18px; line-height: 1.6;
+  font-size: 11px; color: var(--text-faint); margin-bottom: 14px; line-height: 1.6;
 }
 .empty__nudge kbd {
   font-family: var(--font-mono); font-size: 11px;
@@ -4096,6 +4148,23 @@ body.is-resizing * { cursor: col-resize !important; }
   color: var(--text); cursor: pointer;
 }
 .health-banner__retry:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Owner-authored reader notice. It sits beside health status in the global
+   shell, but uses the accent as information rather than the fault colour. */
+.site-notice {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 9px 16px; font-size: 13px; line-height: 1.5;
+  color: var(--text); background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.site-notice__message { flex: 1 1 260px; }
+.site-notice__dismiss {
+  margin-left: auto; background: none; border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 10px; font: inherit; font-size: 12px;
+  color: var(--text-dim); cursor: pointer;
+}
+.site-notice__dismiss:hover { border-color: var(--accent); color: var(--accent); }
+.site-notice-input { max-width: 520px; min-height: 82px; resize: vertical; }
 
 /* Retry sits inside the alert, because "try again" is the whole response to a
    retryable failure and making someone hunt for it is the wrong shape. */
@@ -5167,6 +5236,15 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    under it. Give empty states room to sit in that space instead of above it. */
 .library-empty { margin-block: clamp(56px, 14vh, 140px); }
 
+/* The desktop empty state uses the spare viewport height to keep a short
+   library page from feeling stranded. On a phone, that same vertical margin
+   pushed the only next step below the fixed tab bar: at 390×844 the “Find
+   something to read” action was hidden until the reader scrolled. Keep the
+   breathing room, but let the empty state and its action fit above the bar. */
+@media (max-width: 700px) {
+  .library-empty { margin-block: clamp(24px, 5vh, 44px); }
+}
+
 /* A button that has to read as a link — used where an action sits mid-sentence
    and a real <button> would break the line's rhythm. */
 .linklike {
@@ -5255,7 +5333,7 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    Quiet by design: it should reassure a first-time visitor without competing
    with the search bar, which is what they came for. Set in mono at small size
    so it reads as a factual footnote rather than marketing — the claims are
-   verifiable (PolyForm Noncommercial licence, no analytics in the bundle,
+   verifiable (PolyForm Noncommercial licence, no third-party analytics,
    robots.txt refusing training crawlers), and overselling them would undercut
    the very trust they exist to establish. */
 .empty__promises {
@@ -5264,7 +5342,7 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
      items stacked into four lines, which reads as a list of terms and
      conditions; on one or two rows they read as a single reassurance and stay
      subordinate to the search bar. */
-  margin: 40px auto 0; max-width: 620px;
+  margin: 22px auto 0; max-width: 620px;
   display: flex; flex-wrap: wrap; justify-content: center;
   gap: 8px 18px;
   font-family: var(--font-mono); font-size: 11px;
@@ -5309,21 +5387,17 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    live. It is the biggest thing on the landing page after the search bar, so
    it gets its own space rather than sharing the promises' tight margin. */
 .browse {
-  margin: 48px auto 0;
-  /* 46rem, not 720px — the same measure as `.landing-hero` and
-     `.search-wrap--hero` directly above it. At 720px this block was 16px
-     narrower than the search bar it sits under, and both are centred, so it read
-     as an 8px inset on each side. Nobody chose 720 to be narrower than 46rem;
-     it was a number that happened to be there. Measured at 1440px: hero left
-     352 / width 736, browse left 360 / width 720. */
+  margin: 14px auto 0;
   max-width: 46rem;
 }
+@media (min-width: 56rem) { .browse { max-width: 56rem; } }
+@media (min-width: 72rem) { .browse { max-width: 72rem; } }
 .browse__tabs {
-  display: flex; gap: 4px; margin-bottom: 20px;
+  display: flex; gap: 4px; margin-bottom: 14px;
   border-bottom: 1px solid var(--border);
 }
 .browse__tab {
-  background: none; border: 0; padding: 8px 14px;
+  background: none; border: 0; padding: 6px 12px;
   font: inherit; color: var(--text-faint); cursor: pointer;
   font-size: 13px; font-weight: 500;
   border-bottom: 2px solid transparent; margin-bottom: -1px;
@@ -5371,14 +5445,17 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   list-style: none; margin: 0; padding: 0;
   display: grid;
   grid-template-columns: 1fr;
-  gap: 8px;
+  gap: 6px;
 }
 @media (min-width: 32rem) { .browse__list { grid-template-columns: repeat(2, 1fr); } }
 @media (min-width: 48rem) { .browse__list { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 64rem) { .browse__list { grid-template-columns: repeat(4, 1fr); } }
+@media (min-width: 80rem) { .browse__list { grid-template-columns: repeat(5, 1fr); } }
+@media (min-width: 90rem) { .browse__list { grid-template-columns: repeat(6, 1fr); } }
 
 .browse__list li {
   background: var(--surface2); border: 1px solid var(--border2);
-  border-radius: 8px; padding: 9px 12px;
+  border-radius: 5px; padding: 6px 8px;
   transition: border-color 0.12s, background 0.12s;
 }
 .browse__list li:hover {
@@ -5408,12 +5485,12 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
      that somehow needed a third line still grows the tile rather than being
      clipped, so nothing is lost when the vocabulary has a surprise in it. The
      ladder above is chosen so that in practice nothing has to. */
-  min-height: calc(2 * 1.35em);
+   min-height: calc(1.5 * 1.35em);
 }
 .browse__list a:hover { text-decoration: underline; }
 
 .browse__more {
-  margin: 18px 0 0; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 14px;
+  margin: 8px 0 0; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 14px;
   align-items: baseline; justify-content: center;
 }
 .browse__more a { color: var(--accent); }
@@ -6516,10 +6593,11 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
  * you are on the page.
  */
 .landing-hero {
-  max-width: 46rem;
-  margin: clamp(1.5rem, 6vw, 4rem) auto clamp(1rem, 3vw, 1.75rem);
+  max-width: 56rem;
+  margin: clamp(0.5rem, 2vw, 1.25rem) auto clamp(0.3rem, 1vw, 0.5rem);
   text-align: center;
 }
+@media (min-width: 72rem) { .landing-hero { max-width: 72rem; } }
 
 /* The heading carries the page. It was inheriting the same size as a section
    title, which is what let a 20-million-work index read like a settings pane. */
@@ -6532,9 +6610,9 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 
 .landing-hero .empty__sub {
-  font-size: clamp(0.95rem, 2.2vw, 1.075rem);
-  line-height: 1.5;
-  margin: 0 auto 0.5rem;
+  font-size: clamp(0.9rem, 2vw, 1rem);
+  line-height: 1.45;
+  margin: 0 auto 0.35rem;
   max-width: 38rem;
   text-wrap: pretty;
 }
@@ -6552,22 +6630,23 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
  * syntax popover, the recent-search dropdown) is the same element as in the
  * toolbar state, so there is one search bar on this site and not two. */
 .search-wrap--hero {
-  max-width: 46rem;
+  max-width: 56rem;
   margin-left: auto;
   margin-right: auto;
   width: 100%;
 }
+@media (min-width: 72rem) { .search-wrap--hero { max-width: 72rem; } }
 
 .search-wrap--hero .search-input {
-  font-size: clamp(1rem, 2.6vw, 1.15rem);
-  padding-top: 0.95rem;
-  padding-bottom: 0.95rem;
+  font-size: clamp(0.95rem, 2.4vw, 1.1rem);
+  padding-top: 0.8rem;
+  padding-bottom: 0.8rem;
 }
 
 .search-wrap--hero .search-btn {
-  font-size: 1rem;
-  padding-left: 1.5rem;
-  padding-right: 1.5rem;
+  font-size: 0.95rem;
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
 }
 
 /* A little lift, so the primary control reads as raised rather than inset.
@@ -6585,8 +6664,9 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 
 /* The nudge belongs to the input above it, not to the browse list below. */
 .main--landing .empty__nudge {
-  margin-top: 0.85rem;
+  margin-top: 0.4rem;
   text-align: center;
+  font-size: 11px;
 }
 
 .main--landing .empty {
@@ -6600,6 +6680,365 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    the hub chips kept inheriting centred text from `.browse__more`. */
 .main--landing .empty__promises {
   text-align: left;
+}
+
+/* ── Landing retention strip ───────────────────────────────────────────────────
+ * Welcome-back banner and continue-reading carousel: grouped so they read as one
+ * signal, with a single outer margin rather than two stacked blocks.
+ */
+.reading-activity {
+  max-width: 56rem;
+  margin: 0 auto 1.25rem;
+  padding: 0 1rem;
+}
+@media (min-width: 72rem) { .reading-activity { max-width: 72rem; } }
+.reading-activity__header {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: 8px;
+}
+.reading-activity__title {
+  font-size: 12px; font-weight: 500; margin: 0;
+  color: var(--text-dim); letter-spacing: 0.03em;
+}
+.reading-activity__close {
+  background: none; border: none; color: var(--text-faint);
+  font-size: 20px; padding: 2px 6px; cursor: pointer;
+  min-width: 32px; min-height: 32px;
+}
+.reading-activity__close:hover { color: var(--text-dim); }
+.reading-activity__greeting {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+  font-size: 13.5px; color: var(--text-dim);
+}
+.reading-activity__item {
+  color: var(--accent); text-decoration: none; font-weight: 500;
+  white-space: nowrap;
+}
+.reading-activity__item--muted { color: var(--text-faint); }
+.reading-activity__item:hover { text-decoration: underline; }
+@media (max-width: 600px) {
+  .reading-activity { margin: 0 1rem 1rem; }
+  .reading-activity__greeting { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .reading-activity__item { white-space: normal; }
+}
+
+/* ── Welcome back banner ──────────────────────────────────────────────────────
+ *
+ * Shown at the top of the landing page when a logged-in reader has followed
+ * works with new chapters or reading progress to resume. It is the only
+ * retention signal the site can give without the reader doing anything — the
+ * thing that brings somebody back is a reason to come back, and this says so
+ * before they have to navigate.
+ */
+.welcome-back {
+  max-width: 56rem;
+  margin: 0 auto 1rem;
+  padding: 0 1rem;
+  position: relative;
+}
+@media (min-width: 72rem) { .welcome-back { max-width: 72rem; } }
+.welcome-back__inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius);
+  padding: 0.7rem 1rem;
+}
+.welcome-back__greeting {
+  font-weight: 500;
+  color: var(--accent);
+  font-size: 14px;
+}
+.welcome-back__items {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.welcome-back__item {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.welcome-back__item--muted {
+  opacity: 0.8;
+  font-size: 12px;
+}
+.welcome-back__link {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.welcome-back__link:hover {
+  color: var(--accent);
+}
+.welcome-back__close {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 0.2rem;
+  cursor: pointer;
+  margin-left: 0.25rem;
+}
+.welcome-back__close:hover {
+  color: var(--text);
+}
+@media (max-width: 600px) {
+  .welcome-back__inner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.7rem;
+  }
+  .welcome-back__greeting {
+    font-size: 15px;
+  }
+  .welcome-back__items {
+    flex: 1;
+    min-width: 0;
+  }
+  .welcome-back__item {
+    flex: 1 1 100%;
+    font-size: 14px;
+  }
+  .welcome-back__close {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    font-size: 20px;
+    padding: 0.25rem;
+    min-width: 36px;
+    min-height: 36px;
+  }
+}
+.continue-reading {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.continue-reading__heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+}
+.continue-reading__eyebrow {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  line-height: 1.4;
+  margin-bottom: 0.15rem;
+}
+.continue-reading__title {
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: clamp(17px, 2.2vw, 21px);
+  font-weight: 600;
+  line-height: 1.25;
+}
+.continue-reading__heading-action {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-shrink: 0;
+  padding-bottom: 2px;
+}
+.continue-reading__hint,
+.continue-reading__library-link {
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.continue-reading__hint span { color: var(--accent); }
+.continue-reading__library-link {
+  color: var(--accent);
+  text-underline-offset: 3px;
+}
+.continue-reading__library-link:hover { text-decoration: underline; }
+.continue-reading__grid {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scroll-padding-inline: 2px;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px 2px 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+}
+.continue-reading__grid::-webkit-scrollbar { height: 5px; }
+.continue-reading__grid::-webkit-scrollbar-track { background: transparent; }
+.continue-reading__grid::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 99px;
+}
+.continue-reading__card {
+  --jacket: #77534c;
+  --jacket-light: #b88c79;
+  display: flex;
+  align-items: stretch;
+  gap: 13px;
+  flex: 0 0 min(340px, calc((100% - 24px) / 3));
+  min-width: 250px;
+  min-height: 132px;
+  padding: 10px;
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  background: linear-gradient(145deg, var(--surface2), var(--surface));
+  color: inherit;
+  text-decoration: none;
+  scroll-snap-align: start;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+.continue-reading__card[data-archive="ao3"] { --jacket: #6b3442; --jacket-light: #c38783; }
+.continue-reading__card[data-archive="ffnet"] { --jacket: #354f67; --jacket-light: #91adbd; }
+.continue-reading__card[data-archive="fictionalley"] { --jacket: #55503b; --jacket-light: #c4ad72; }
+.continue-reading__card:hover {
+  border-color: var(--accent-dim);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.continue-reading__card:focus-visible,
+.continue-reading__library-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.continue-reading__jacket {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex: 0 0 76px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  overflow: hidden;
+  border-radius: 3px;
+  background:
+    radial-gradient(ellipse at 80% 15%, rgba(255,255,255,0.14), transparent 48%),
+    linear-gradient(155deg, var(--jacket-light), var(--jacket) 72%);
+  color: #fff8ed;
+  box-shadow: inset 3px 0 rgba(0,0,0,0.15), inset 4px 0 rgba(255,255,255,0.1);
+}
+.continue-reading__jacket::after {
+  position: absolute;
+  z-index: -1;
+  right: -17px;
+  bottom: -26px;
+  width: 76px;
+  height: 76px;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 50%;
+  content: "";
+}
+.continue-reading__monogram {
+  font-family: var(--font-serif);
+  font-size: 34px;
+  line-height: 1;
+  text-shadow: 0 1px 8px rgba(0,0,0,0.18);
+}
+.continue-reading__archive {
+  max-width: 100%;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.08em;
+  opacity: 0.88;
+  text-transform: uppercase;
+}
+.continue-reading__details {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+}
+.continue-reading__card-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.continue-reading__author {
+  display: block;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.continue-reading__progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+.continue-reading__progress-label span:last-child { color: var(--text-faint); }
+.continue-reading__bar {
+  display: block;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  margin-top: 5px;
+  border-radius: 99px;
+  background: var(--border2);
+}
+.continue-reading__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--jacket-light), var(--accent));
+  transition: width 300ms ease;
+}
+.continue-reading__resume {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 500;
+}
+.continue-reading__resume span { transition: transform 160ms ease; }
+.continue-reading__card:hover .continue-reading__resume span { transform: translateX(3px); }
+@media (max-width: 600px) {
+  .continue-reading__heading { align-items: end; gap: 0.5rem; }
+  .continue-reading__heading-action { gap: 0; }
+  .continue-reading__hint { display: none; }
+  .continue-reading__grid { margin-inline: -2px; }
+  .continue-reading__card {
+    flex-basis: min(84%, 320px);
+    min-width: 0;
+    min-height: 122px;
+    gap: 11px;
+  }
+  .continue-reading__jacket { flex-basis: 68px; }
+  .continue-reading__card-title { font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .continue-reading__card,
+  .continue-reading__fill,
+  .continue-reading__resume span { transition: none; }
+  .continue-reading__card:hover { transform: none; }
 }
 
 /* ── Archive badges ───────────────────────────────────────────────────────────
@@ -7560,6 +7999,11 @@ html { scroll-padding-top: 72px; }
   .story-detail__actions {
     display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
   }
+  /* Archive works render their primary archive link and private-copy action
+     inside `.btn-row`. Let those controls participate in the page's action
+     grid: the read link gets the full first row, and secondary actions keep
+     comfortable tap targets instead of shrinking the main CTA to half width. */
+  .story-detail__actions > .btn-row { display: contents; }
   .story-detail__actions > * { width: 100%; min-width: 0; }
   .story-detail__actions .btn, .story-detail__actions > a, .story-detail__actions > button {
     justify-content: center; text-align: center; min-height: 44px; margin: 0;
@@ -7635,9 +8079,9 @@ html { scroll-padding-top: 72px; }
    tiles 1,700px of boxes under the search. */
 .browse__list a.browse__item {
   flex-direction: column; align-items: flex-start; justify-content: center;
-  text-align: left; gap: 1px; min-height: 44px;
+  text-align: left; gap: 1px; min-height: 36px;
 }
-.browse__name { color: var(--text); font-size: 13.5px; line-height: 1.3; }
+.browse__name { color: var(--text); font-size: 12.5px; line-height: 1.3; }
 .browse__count {
   color: var(--text-faint); font-size: 11.5px; font-variant-numeric: tabular-nums;
 }
@@ -7662,7 +8106,7 @@ html { scroll-padding-top: 72px; }
   .browse__list--ship { grid-template-columns: 1fr; }
   .browse__list--ship a.browse__item {
     flex-direction: row; align-items: center; justify-content: space-between;
-    gap: 12px; min-height: 40px;
+    gap: 10px; min-height: 38px;
   }
   .browse__list--ship .browse__count { flex-shrink: 0; }
 }
@@ -7862,3 +8306,136 @@ html { scroll-padding-top: 72px; }
 .author-jump__label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-faint); }
 .author-jump__name { font-weight: 600; }
 .author-jump__go { color: var(--accent); font-size: 14px; margin-left: auto; }
+
+/* ── Quiet reading shortcut ──────────────────────────────────────────────────
+   Reading progress is useful on return, but it should not compete with search.
+   Keep the most recent work as one low-contrast row and tuck the rest behind a
+   native disclosure. */
+.reading-activity {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  max-width: 72rem;
+  margin: 2px auto 18px;
+  padding: 9px 30px 9px 2px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.reading-activity__resume-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  min-width: 0;
+  flex: 1 1 320px;
+}
+.reading-activity__label {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.reading-activity__resume {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px 9px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  text-decoration: none;
+}
+.reading-activity__work {
+  max-width: min(42vw, 360px);
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reading-activity__chapter { color: var(--text-faint); font-size: 11px; }
+.reading-activity__arrow { color: var(--accent); transition: transform 140ms ease; }
+.reading-activity__resume:hover .reading-activity__arrow { transform: translateX(2px); }
+.reading-activity__updates {
+  color: var(--accent);
+  font-size: 11px;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-dim);
+  text-underline-offset: 3px;
+}
+.reading-activity__more { position: relative; font-size: 11px; }
+.reading-activity__more summary {
+  cursor: pointer;
+  color: var(--text-faint);
+  list-style: none;
+}
+.reading-activity__more summary::-webkit-details-marker { display: none; }
+.reading-activity__more summary::after { content: " +"; color: var(--accent); }
+.reading-activity__more[open] summary::after { content: " −"; }
+.reading-activity__more summary span { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.reading-activity__more ul {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 9px);
+  right: 0;
+  width: min(340px, calc(100vw - 40px));
+  padding: 5px;
+  list-style: none;
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+.reading-activity__more li + li { border-top: 1px solid var(--border); }
+.reading-activity__more li a {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 9px;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+.reading-activity__more li a:hover { color: var(--text); background: var(--surface2); }
+.reading-activity__more li a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reading-activity__more li small { flex: none; color: var(--text-faint); font-size: 10px; }
+.reading-activity__close {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 17px;
+  line-height: 1;
+}
+.reading-activity__close:hover { background: var(--surface2); color: var(--text); }
+.reading-activity__resume:focus-visible,
+.reading-activity__updates:focus-visible,
+.reading-activity__more summary:focus-visible,
+.reading-activity__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (max-width: 600px) {
+  .reading-activity { gap: 8px 12px; margin-bottom: 14px; padding-top: 8px; padding-bottom: 8px; }
+  .reading-activity__resume-row { flex-basis: 100%; }
+  .reading-activity__work { max-width: calc(100vw - 170px); }
+  .reading-activity__more ul { left: 0; right: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reading-activity__arrow { transition: none; }
+}
+
+.browse__heading {
+  margin: 30px 0 10px;
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: clamp(18px, 2vw, 22px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}

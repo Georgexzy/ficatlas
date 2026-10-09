@@ -120,7 +120,7 @@ def candidates(db: Session, limit: int) -> list[tuple[str, str, int]]:
                    count(*) FILTER (WHERE popularity >= :floor) AS good,
                    max(popularity) AS best
               FROM stories
-             WHERE author IS NOT NULL AND delisted_at IS NULL
+             WHERE author IS NOT NULL AND delisted_at IS NULL AND NOT private_only
              GROUP BY lower(author), author
         )
         SELECT k, (array_agg(author ORDER BY n DESC))[1] AS display,
@@ -167,19 +167,20 @@ def build(db: Session, limit: int = LIMIT, trial: int | None = None) -> int:
                                                         ORDER BY {RANK}) rn
                       FROM stories
                      WHERE lower(author) = :k
-                       AND delisted_at IS NULL AND source_restricted_at IS NULL
+                       AND delisted_at IS NULL AND NOT private_only
+                       AND source_restricted_at IS NULL
                        AND NOT gate_adult AND NOT gate_underage
                 ) r WHERE rn <= :n ORDER BY site, rn
             """), {"k": key, "n": WORKS_PER_SITE}).fetchall()
             counts = dict(db.execute(text("""
                 SELECT site::text, count(*) FROM stories
-                 WHERE lower(author) = :k AND delisted_at IS NULL
+                 WHERE lower(author) = :k AND delisted_at IS NULL AND NOT private_only
                    AND NOT gate_adult AND NOT gate_underage
                  GROUP BY 1
             """), {"k": key}).fetchall())
             fandoms = [r[0] for r in db.execute(text("""
                 SELECT f, count(*) FROM stories, unnest(fandoms) f
-                 WHERE lower(author) = :k AND delisted_at IS NULL
+                 WHERE lower(author) = :k AND delisted_at IS NULL AND NOT private_only
                  GROUP BY f ORDER BY 2 DESC LIMIT 6
             """), {"k": key}).fetchall()]
         except Exception:

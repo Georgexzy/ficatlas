@@ -107,11 +107,22 @@ export default function IndexStatus() {
                       <p className="ix__site-note">
                         {pct < 1 ? "under 1%" : `${pct.toFixed(0)}%`}
                         {" · "}
-                        {info?.closed
-                          ? info.closed
-                          : totals?.sites_updated_at?.[site]
-                            ? `newest story added ${ago(totals.sites_updated_at[site])}`
-                            : "kept up to date"}
+                        {info?.closed ? info.closed : (() => {
+                          const details = [
+                            totals?.sites_updated_at?.[site]
+                              ? `newest story added ${ago(totals.sites_updated_at[site])}`
+                              : null,
+                          ]
+                          const crawled = totals?.sites_crawled_last_week?.[site]
+                          if (crawled != null) {
+                            details.push(crawled > 0
+                              ? `${fmt(crawled)} works crawled this week`
+                              : totals?.sites_crawled_at?.[site]
+                                ? `last crawled ${ago(totals.sites_crawled_at[site])}`
+                                : "no recent crawl recorded")
+                          }
+                          return details.filter(Boolean).join(" · ") || "freshness unavailable"
+                        })()}
                       </p>
                     </li>
                   )

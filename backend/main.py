@@ -1,6 +1,7 @@
 """FicAtlas Backend — FastAPI entry point"""
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -108,12 +109,13 @@ from ratelimit import rate_limit_middleware, client_ip, is_internal_render  # no
 # attack, not an audience.
 @app.middleware("http")
 async def track_search_middleware(request: Request, call_next):
+    started = time.perf_counter()
     response = await call_next(request)
+    duration_ms = int((time.perf_counter() - started) * 1000)
     try:
         import tracking
         if (tracking.ENABLED
                 and request.url.path.rstrip("/") == "/api/search"
-                and response.status_code < 400
                 and not is_internal_render(request)):
             q = (request.query_params.get("q") or "").strip()
             # A search made entirely from the filter panel is still a search.
@@ -175,6 +177,9 @@ async def track_search_middleware(request: Request, call_next):
                     results=getattr(request.state, "search_total", None),
                     bot=tracking.is_bot(ua),
                     kind_of_bot=tracking.bot_kind(ua),
+                    duration_ms=duration_ms,
+                    status_code=response.status_code,
+                    extract_ms=getattr(request.state, "extract_ms", None),
                 )
     except Exception:
         pass  # analytics may never fail a request

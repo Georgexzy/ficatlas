@@ -263,8 +263,8 @@ export default async function ShipHub(
         </p>
       )}
       <p className="hub__lede">
-        {hub.work_count.toLocaleString()} works tagged with this pairing across
-        Archive of Our Own, FanFiction.net and FictionAlley.
+        {hub.work_count.toLocaleString()} works for this pairing across AO3,
+        FanFiction.net and FictionAlley. Open a work to read it on its archive.
       </p>
 
       {/* Removed: the in-page search box and the "Popular here" qualities.

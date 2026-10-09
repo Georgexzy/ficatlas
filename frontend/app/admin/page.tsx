@@ -6,6 +6,7 @@ import TrafficPanel from "./TrafficPanel"
 import OutreachTab from "./OutreachTab"
 import ToolsView, { DbActivity } from "./ToolsView"
 import PassesView from "./PassesView"
+import ConfigView from "./ConfigView"
 import "./admin.css"
 import { ADMIN_GROUPS, adminTabFor, type AdminTab } from "@/lib/adminTabs"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
@@ -346,7 +347,7 @@ export default function AdminPage() {
 
   if (authLoading) return (
     <main id="main" className="settings-shell"><SiteHeader />
-      <BackLink fallback="/settings" fallbackLabel="Settings" /><p className="loading">Loading…</p></main>
+      <BackLink fallback="/settings" fallbackLabel="Reader settings" /><p className="loading">Loading…</p></main>
   )
   // TWO DIFFERENT FAILURES, told apart: signed out, and signed in without the
   // owner role. "Not found" for both once cost a real diagnosis — a stale bundle
@@ -419,7 +420,7 @@ export default function AdminPage() {
             </div>
           ))}
           <div className="cc-rail__foot">
-            <Link href="/settings">Site settings</Link>
+            <Link href="/settings">Reader settings</Link>
             <Link href="/" target="_blank">Open the site ↗</Link>
           </div>
         </nav>
@@ -431,6 +432,7 @@ export default function AdminPage() {
             onGoToOutreach={q => { setOutreachPrefill(q); setTab("outreach") }} />}
           {tab === "outreach" && <OutreachTab prefill={outreachPrefill} />}
           {tab === "moderation" && <TakedownQueue />}
+          {tab === "configuration" && <ConfigView />}
           {tab === "tools" && (
             <>
               <ViewHead title="Tools" sub="Look things up and measure them, without a terminal. Nothing here writes."
@@ -634,7 +636,7 @@ export default function AdminPage() {
           {data && tab === "crawler" && (
             <>
               <ViewHead title="Crawler" sub="What it fetches next, and how hard each archive is letting it."
-                ><Link href="/settings" className="cc-btn">Change in Settings</Link></ViewHead>
+                ><button type="button" className="cc-btn" onClick={() => setTab("configuration")}>Edit configuration</button></ViewHead>
               <div className="cc-cols">
                 <section className="cc-card">
                   <header className="cc-card__head"><h3>Next up</h3></header>

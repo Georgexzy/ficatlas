@@ -154,7 +154,9 @@ describe("quoteValue", () => {
   })
 
   it("quotes a value containing a quote", () => {
-    expect(quoteValue('The "Real" Thing')).toBe('"The "Real" Thing"')
+    const encoded = quoteValue('The "Real" Thing')
+    expect(encoded).toBe('"The \\"Real\\" Thing"')
+    expect(parseQuery(`tag:${encoded}`).tags).toEqual(['The "Real" Thing'])
   })
 
   it("round-trips a bare multi-word fandom with another operator after it", () => {

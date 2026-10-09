@@ -43,6 +43,14 @@ def test_free_text_only():
     assert pq.tokens == []
 
 
+def test_escaped_quotes_round_trip_inside_a_facet_value():
+    value = 'Alastor "Mad-Eye" Moody'
+    query = 'char:"Alastor \\"Mad-Eye\\" Moody"'
+    parsed = parse_query(query)
+    assert parsed.characters == [value]
+    assert parsed.clean_text.strip() == ""
+
+
 def test_series_true():
     assert parse_query("series:true").in_series is True
 

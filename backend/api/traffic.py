@@ -930,6 +930,59 @@ def clicks(days: int = Query(30, ge=1, le=365),
     }
 
 
+@router.get("/performance")
+def performance(days: int = Query(30, ge=1, le=365),
+                db: Session = Depends(get_db),
+                _owner=Depends(require_owner)):
+    """Search latency, failures, and the cost of the prose fallback.
+
+    Only API search requests are included. Older rows have NULL timings and
+    remain visible as an unmeasured count, so turning this on does not pretend
+    to have historical performance data. The same bot/script exclusions as the
+    reader reports keep an operator's own probes from looking like audience
+    performance.
+    """
+    first, last = _span(days)
+    row = db.execute(text(f"""
+        SELECT count(*) AS requests,
+               count(*) FILTER (WHERE duration_ms IS NOT NULL) AS measured,
+               count(*) FILTER (WHERE status_code >= 500) AS errors,
+               percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms)
+                   FILTER (WHERE duration_ms IS NOT NULL) AS p50_ms,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)
+                   FILTER (WHERE duration_ms IS NOT NULL) AS p95_ms,
+               count(*) FILTER (WHERE extract_ms IS NOT NULL) AS extract_runs,
+               percentile_cont(0.50) WITHIN GROUP (ORDER BY extract_ms)
+                   FILTER (WHERE extract_ms IS NOT NULL) AS extract_p50_ms,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY extract_ms)
+                   FILTER (WHERE extract_ms IS NOT NULL) AS extract_p95_ms,
+               min(at) FILTER (WHERE duration_ms IS NOT NULL) AS measured_since
+          FROM visit_events_public e
+         WHERE e.at >= CAST(:first AS date)
+           AND e.at < CAST(:last AS date) + interval '1 day'
+           AND e.kind = 'search'
+           AND e.path LIKE '/api/search%%' AND NOT e.bot
+           AND NOT ({_NOT_A_BROWSER}) AND NOT ({_SWARM})
+    """), {"first": first, "last": last}).mappings().one()
+    measured = int(row["measured"] or 0)
+    return {
+        "requests": int(row["requests"] or 0),
+        "measured": measured,
+        "unmeasured": int(row["requests"] or 0) - measured,
+        "errors": int(row["errors"] or 0),
+        "error_rate": round(100 * int(row["errors"] or 0) / measured, 2) if measured else None,
+        "p50_ms": round(row["p50_ms"]) if row["p50_ms"] is not None else None,
+        "p95_ms": round(row["p95_ms"]) if row["p95_ms"] is not None else None,
+        "extract_runs": int(row["extract_runs"] or 0),
+        "extract_p50_ms": round(row["extract_p50_ms"])
+            if row["extract_p50_ms"] is not None else None,
+        "extract_p95_ms": round(row["extract_p95_ms"])
+            if row["extract_p95_ms"] is not None else None,
+        "measured_since": row["measured_since"].isoformat()
+            if row["measured_since"] else None,
+    }
+
+
 @router.get("/referrers")
 def referrers(days: int = Query(30, ge=1, le=365),
               limit: int = Query(30, ge=1, le=200),
@@ -1194,8 +1247,13 @@ def entry(days: int = Query(30, ge=1, le=365),
     # WHICH hubs, not just how many. A hub that brings twenty sessions a month
     # is a page worth improving by hand; the other 11,000 are not, and the
     # panel cannot say which is which from a list sorted by total views.
+    search_engine_pattern = (
+        r"(^|\.)google\.[a-z.]+$|(^|\.)bing\.com$|(^|\.)duckduckgo\.com$|"
+        r"(^|\.)search\.yahoo\.[a-z.]+$|(^|\.)yahoo\.[a-z.]+$|"
+        r"(^|\.)ecosia\.org$|(^|\.)yandex\.[a-z.]+$|(^|\.)brave\.com$"
+    )
     hubs = [{"path": r[0], "label": r[1], "sessions": r[2], "views": r[3],
-             "searched": r[4], "went_out": r[5]}
+             "searched": r[4], "went_out": r[5], "search_referrals": r[6]}
             for r in db.execute(text(f"""
         WITH ev AS (
           SELECT * FROM visit_events_public e
@@ -1203,7 +1261,7 @@ def entry(days: int = Query(30, ge=1, le=365),
              AND e.at <  CAST(:last AS date) + interval '1 day'
              AND NOT e.bot AND NOT ({_NOT_A_BROWSER}) AND NOT ({_SWARM})),
         landing AS (
-          SELECT DISTINCT ON (visitor) visitor, path
+          SELECT DISTINCT ON (visitor) visitor, path, ref_host
             FROM ev WHERE kind = 'page' ORDER BY visitor, at),
         acts AS (
           SELECT visitor,
@@ -1212,11 +1270,13 @@ def entry(days: int = Query(30, ge=1, le=365),
             FROM ev GROUP BY visitor)
         SELECT l.path, '' AS label, count(*) AS sessions,
                (SELECT count(*) FROM ev x WHERE x.path = l.path AND x.kind='page'),
-               count(*) FILTER (WHERE a.s > 0), count(*) FILTER (WHERE a.o > 0)
+               count(*) FILTER (WHERE a.s > 0), count(*) FILTER (WHERE a.o > 0),
+               count(*) FILTER (WHERE l.ref_host ~* :search_engine_pattern)
           FROM landing l JOIN acts a USING (visitor)
          WHERE l.path LIKE '/ship/%' OR l.path LIKE '/fandom/%'
-         GROUP BY l.path ORDER BY 3 DESC, 4 DESC LIMIT 25
-    """), {"first": first, "last": last}).fetchall()]
+         GROUP BY l.path ORDER BY 7 DESC, 3 DESC, 4 DESC LIMIT 25
+    """), {"first": first, "last": last,
+            "search_engine_pattern": search_engine_pattern}).fetchall()]
     for h in hubs:
         h["label"] = _labels(db, [h["path"]]).get(h["path"], h["path"])
 

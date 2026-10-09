@@ -141,6 +141,7 @@ def build_groups(
                       FROM stories
                      WHERE {array_col} && :variants
                        AND delisted_at IS NULL
+                       AND NOT private_only
                        AND source_restricted_at IS NULL
                 ) ranked
                  WHERE rn <= :n
@@ -177,6 +178,7 @@ def build_groups(
             per_site = db.execute(text(f"""
                 SELECT site, count(*) FROM stories
                  WHERE {array_col} && :variants AND delisted_at IS NULL
+                   AND NOT private_only
                  GROUP BY site
             """), {"variants": variants}).fetchall()
             site_counts = {str(k): int(v) for k, v in per_site}

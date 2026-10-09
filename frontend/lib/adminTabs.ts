@@ -1,9 +1,8 @@
 /**
  * Which admin area a `?tab=` value means.
  *
- * The admin page was five panels named after what had been built — Index
- * health, Takedown requests, Traffic, Posts to answer, Fic finder — and is now
- * views named after the work, grouped in ADMIN_GROUPS below.
+ * The admin page groups operational views by the work they serve, including
+ * instance configuration, in ADMIN_GROUPS below.
  *
  * The old names still resolve, and this lives in lib/ rather than inside the
  * page so it can be tested. A rename that breaks its own inbound links is a
@@ -14,7 +13,7 @@
  * and this exists for the ones outside this repo's control.
  */
 export type AdminTab =
-  | "overview" | "tools" | "passes"
+  | "overview" | "configuration" | "tools" | "passes"
   | "coverage" | "crawler" | "storage"
   | "people" | "audience" | "outreach" | "moderation"
 
@@ -23,6 +22,7 @@ export type AdminTab =
 export const ADMIN_GROUPS: { title: string; tabs: { key: AdminTab; label: string }[] }[] = [
   { title: "Site", tabs: [
     { key: "overview", label: "Overview" },
+    { key: "configuration", label: "Configuration" },
     { key: "tools", label: "Tools" },
     { key: "passes", label: "Passes" },
   ] },

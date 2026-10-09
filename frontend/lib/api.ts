@@ -78,6 +78,7 @@ export function buildSearchParams(raw: Record<string, string | string[] | undefi
 
   return {
     q: get("q"),
+    describe: get("describe"),
     sites: get("sites"),
     fandoms: get("fandoms"),
     characters: get("characters"),
@@ -357,6 +358,10 @@ export interface IndexTotals {
   sites?: Record<string, number>
   /** When each archive was last added to, for the freshness line. */
   sites_updated_at?: Record<string, string>
+  /** Per-archive crawl activity; unlike author `updated_at`, this is FicAtlas's
+   *  own work of checking or adding metadata from that source. */
+  sites_crawled_at?: Record<string, string>
+  sites_crawled_last_week?: Record<string, number>
   /** The raw `count(*)` from the totals scan, before `stories` was replaced by
    *  the sum of `sites`. The gap between it and `stories` is the age difference
    *  between two scans. Informational — no page should display a total that

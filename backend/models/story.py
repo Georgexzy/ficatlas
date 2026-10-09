@@ -104,6 +104,10 @@ class Story(Base):
 
     # New: hosted content
     is_hosted = Column(Boolean, default=False, index=True)   # we have the full text
+    # A newly imported private copy with no pre-existing public index row.
+    # Existing public metadata rows remain public when a user privately imports
+    # their text; this flag prevents a URL-only import from publishing a new row.
+    private_only = Column(Boolean, nullable=False, default=False, server_default="false")
     # Set when an author asks for their text not to be hosted here. The row
     # stays — only the full text stops being served. See api/takedown.py.
     text_withdrawn_at = Column(DateTime(timezone=True))

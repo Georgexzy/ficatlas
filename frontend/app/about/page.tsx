@@ -35,7 +35,9 @@ export default function About() {
       </p>
       <p>
         It is an independent, non-commercial project. There is no advertising,
-        no third-party tracking, and no data is sold.
+        no third-party analytics, and no data is sold. FicAtlas does keep
+        short-lived, first-party traffic counts; the <Link href="/privacy">privacy page</Link>
+        explains what they contain and when they are deleted.
       </p>
 
       <h2>Where the writing lives</h2>

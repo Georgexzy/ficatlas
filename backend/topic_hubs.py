@@ -140,14 +140,16 @@ def build(db: Session, fandoms: int = FANDOMS, per_fandom: int = PER_FANDOM,
                                                             ORDER BY {RANK}) rn
                           FROM stories
                          WHERE fandoms && :v AND tags @> ARRAY[CAST(:t AS text)]
-                           AND delisted_at IS NULL AND source_restricted_at IS NULL
+                           AND delisted_at IS NULL AND NOT private_only
+                           AND source_restricted_at IS NULL
                            AND NOT gate_adult AND NOT gate_underage
                     ) r WHERE rn <= :n ORDER BY site, rn
                 """), {"v": list(variants), "t": tag, "n": WORKS_PER_SITE}).fetchall()
                 counts = dict(db.execute(text("""
                     SELECT site::text, count(*) FROM stories
                      WHERE fandoms && :v AND tags @> ARRAY[CAST(:t AS text)]
-                       AND delisted_at IS NULL AND NOT gate_adult AND NOT gate_underage
+                       AND delisted_at IS NULL AND NOT private_only
+                       AND NOT gate_adult AND NOT gate_underage
                      GROUP BY 1
                 """), {"v": list(variants), "t": tag}).fetchall())
             except Exception:

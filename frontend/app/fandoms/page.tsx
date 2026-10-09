@@ -84,10 +84,9 @@ export default async function FandomsIndex() {
       </nav>
       <h1>Browse fandoms</h1>
       <p className="hub__lede">
-        {hubs.length.toLocaleString()} fandoms indexed across Archive of Our Own,
-        FanFiction.net and FictionAlley. Pick one to see its most popular works,
-        browse <Link href="/ships">by pairing</Link> instead, or{" "}
-        <Link href="/">search the whole index</Link> if you know what you want.
+        Explore {hubs.length.toLocaleString()} fandoms from AO3, FanFiction.net and
+        FictionAlley. Choose one to browse its works, or{" "}
+        <Link href="/ships">browse pairings</Link> instead.
       </p>
 
       {hubs.length === 0 ? (
@@ -96,7 +95,7 @@ export default async function FandomsIndex() {
         </p>
       ) : (
         <>
-          <h2 className="hub__heading">Biggest fandoms</h2>
+          <h2 className="hub__heading">Fandoms with the most works</h2>
           <ul className="hub__grid">
             {top.map(h => (
               <li key={h.slug}>

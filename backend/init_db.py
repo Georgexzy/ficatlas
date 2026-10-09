@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS stories (
 -- Migrations for existing installs
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS is_hosted BOOLEAN DEFAULT FALSE;
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS wayback_url TEXT;
+-- Private URL imports that have no public index row must not become public
+-- search results merely because the shared story tables hold their text.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS private_only BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS chapters (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1201,6 +1204,14 @@ CREATE TABLE IF NOT EXISTS author_hubs (
 );
 CREATE INDEX IF NOT EXISTS ix_author_hubs_key ON author_hubs (author_key);
 
+-- Works a browser follows WITHOUT an account (api/follows.py /status): which
+-- works somebody is waiting on, never who. follow_refresh treats the last 30
+-- days of these like account follows, so a signed-out follow is kept fresh.
+CREATE TABLE IF NOT EXISTS watched_works (
+    story_id    UUID PRIMARY KEY,
+    watched_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS rec_ao3_state (
     slug        TEXT PRIMARY KEY,
     tag         TEXT,
@@ -1467,6 +1478,19 @@ ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS bot_kind VARCHAR(24);
 -- last-seen date in localStorage and sends the ANSWER — one of three words,
 -- the same three for everybody, joinable to nothing. See api/traffic.hit.
 ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS seen VARCHAR(8);
+
+-- Search reliability and latency, measured at the API boundary. The query is
+-- already recorded for search-quality reports; these fields add no visitor
+-- identity. extract_ms is NULL when prose extraction was not tried.
+ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS duration_ms INTEGER;
+ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS status_code SMALLINT;
+ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS extract_ms INTEGER;
+
+-- Recreate after every additive column above. `SELECT *` in a PostgreSQL view
+-- expands when the view is created; leaving this earlier in the migration
+-- meant fresh installs could have a view without the latest telemetry fields.
+CREATE OR REPLACE VIEW visit_events_public AS
+    SELECT * FROM visit_events WHERE NOT internal;
 
 CREATE INDEX IF NOT EXISTS ix_visit_events_at ON visit_events (at DESC);
 CREATE INDEX IF NOT EXISTS ix_visit_events_kind_at ON visit_events (kind, at DESC);

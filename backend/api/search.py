@@ -1,5 +1,6 @@
 """Search API — unified search across all indexed sites with hybrid live fetch"""
 import hashlib
+import json
 import logging
 from functools import lru_cache
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -1364,19 +1365,53 @@ _SUGGEST_CAP = int(os.getenv("SEARCH_SUGGEST_CAP", "2000"))
 
 # WHEN A SEARCH WAS REALLY A SENTENCE.
 #
-# Four words before an empty search is re-read: below that a miss is a typo,
-# which `_did_you_mean` already answers better. Six before a search that DID
-# find something is second-guessed, because overriding a search that worked is
-# the expensive mistake — "levi ackerman whump" finds plenty and must be left
-# alone, while "something where harry time travels and meets his parents"
-# found four works and meant `Time Travelling Harry Potter`.
+# Four words before a zero-result search is re-read: below that a miss is a
+# typo, which `_did_you_mean` already answers better. Thin positive searches
+# use stricter sentence, confidence and candidate-gain thresholds below.
 _NL_MIN_WORDS = int(os.getenv("SEARCH_NL_MIN_WORDS", "4"))
 _NL_SENTENCE_WORDS = int(os.getenv("SEARCH_NL_SENTENCE_WORDS", "6"))
 _NL_MAX_RESULTS = int(os.getenv("SEARCH_NL_MAX_RESULTS", "9"))
+_NL_MIN_CANDIDATE = int(os.getenv("SEARCH_NL_MIN_CANDIDATE", "10"))
+_NL_MIN_GAIN = int(os.getenv("SEARCH_NL_MIN_GAIN", "5"))
 # A query already written in the query language is not a sentence, whoever
 # typed it. Every fic-finder link and every sidebar filter produces one of
 # these, and re-reading it would throw away a deliberate search.
 _HAS_OPERATOR = re.compile(r'-?\b\w+:(?:"|\S)')
+
+
+def _should_interpret_search(typed: str, total: int, candidate_total: int = 0,
+                             selected_terms: int = 0,
+                             specific_entities: int = 0) -> bool:
+    """Use extraction for empty searches, or when it clearly improves a thin one.
+
+    A thin result set is only reconsidered for a long natural-language request,
+    when extraction found multiple real index terms and its filtered candidate
+    set is at least five times larger (and at least ten works). Two explicit
+    named entities are a stronger intent signal: for those, a twofold gain is
+    enough, because requiring a broad result count discards useful intersections
+    such as two named characters in a rare era.
+    """
+    words = len(typed.split())
+    if not typed or _HAS_OPERATOR.search(typed) or words < _NL_MIN_WORDS:
+        return False
+    if total == 0:
+        return candidate_total >= _DESCRIBE_MIN_WORKS and selected_terms >= 1
+    gain = 2 if specific_entities >= 2 else _NL_MIN_GAIN
+    return (total <= _NL_MAX_RESULTS and words >= _NL_SENTENCE_WORDS
+            and selected_terms >= 2
+            and candidate_total >= max(_NL_MIN_CANDIDATE, total * gain))
+
+
+def _interpretation_context_supported(request) -> bool:
+    """Avoid comparing unlike searches when other active filters are present."""
+    if request is None:
+        return True
+    pass_through = {"q", "sites", "ratings", "explicit", "include_underage",
+                    "include_unknown", "match_mode", "page", "per_page", "sort",
+                    "live"}
+    false_values = {"", "false", "0", "none"}
+    return all(key in pass_through or value.strip().lower() in false_values
+               for key, value in request.query_params.multi_items())
 
 # TAGS THAT NAME AN EVENT, not a story.
 #
@@ -1473,7 +1508,8 @@ def _as_query(terms: list, status=None, wc_min=None, wc_max=None,
     """A filter set back in the search bar's own syntax."""
     op = {"fandom": "fandom", "character": "char",
           "relationship": "ship", "tag": "tag"}
-    parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in terms]
+    parts = [f'{op.get(t.kind, "tag")}:{json.dumps(t.value, ensure_ascii=False)}'
+             for t in terms]
     if status:
         parts.append("complete" if status in ("complete", "completed") else "wip")
     if crossovers in ("exclude", "only"):
@@ -1735,7 +1771,7 @@ _DESCRIBE_MIN_WORDS = int(os.getenv("SEARCH_DESCRIBE_MIN_WORDS", "6"))
 _DESCRIBE_MIN_WORKS = int(os.getenv("SEARCH_DESCRIBE_MIN_WORKS", "3"))
 
 
-def _describe_suggestion(db, typed: str) -> list[Suggestion]:
+def _describe_suggestion(db, typed: str, request=None) -> list[Suggestion]:
     """They described the story instead of naming it. Search for the description.
 
     The commonest unhelped empty search, measured by replaying every
@@ -1785,7 +1821,7 @@ def _describe_suggestion(db, typed: str) -> list[Suggestion]:
     if len(words) < _DESCRIBE_MIN_WORDS:
         return []
     try:
-        ex = _extract_once(typed, db)
+        ex = _extract_once(typed, db, request=request)
     except Exception:
         log.debug("describe extraction failed", exc_info=True)
         return []
@@ -1827,7 +1863,8 @@ def _names_one_work(db, typed: str) -> list[Suggestion]:
     if re.fullmatch(r"\d{5,9}", typed):
         row = db.execute(sql_text("""
             SELECT title, author, site FROM stories
-             WHERE site_id = :i ORDER BY COALESCE(kudos,0) DESC LIMIT 1
+             WHERE site_id = :i AND NOT private_only
+             ORDER BY COALESCE(kudos,0) DESC LIMIT 1
         """), {"i": typed}).first()
         if row and row[0]:
             out.append(Suggestion(
@@ -1842,7 +1879,7 @@ def _names_one_work(db, typed: str) -> list[Suggestion]:
         title, author = m.group(1).strip(" \"'"), m.group(2).strip(" \"'")
         rows = db.execute(sql_text("""
             SELECT title, author FROM stories
-             WHERE lower(title) = lower(:t)
+             WHERE lower(title) = lower(:t) AND NOT private_only
              ORDER BY COALESCE(kudos,0) DESC LIMIT 20
         """), {"t": title}).fetchall()
         if rows:
@@ -2042,21 +2079,26 @@ def _probe_total(db, query: str) -> int:
 _EXTRACT_MEMO: dict[str, tuple[float, object]] = {}
 
 
-def _extract_once(text_in: str, db):
+def _extract_once(text_in: str, db, request=None):
     """`extract`, memoised for two minutes per process.
 
     A zero-result sentence ran the whole extractor TWICE in one request — once
     to describe it as a suggestion, once to interpret it — 7.3s of a 22s empty
     search, measured. Same text, same answer; the second call reads the first.
     """
+    started = time.perf_counter()
     now = time.monotonic()
     hit = _EXTRACT_MEMO.get(text_in)
     if hit and now - hit[0] < 120:
-        return hit[1]
-    out = extract(text=text_in, db=db)
-    if len(_EXTRACT_MEMO) > 256:
-        _EXTRACT_MEMO.clear()
-    _EXTRACT_MEMO[text_in] = (now, out)
+        out = hit[1]
+    else:
+        out = extract(text=text_in, db=db)
+        if len(_EXTRACT_MEMO) > 256:
+            _EXTRACT_MEMO.clear()
+        _EXTRACT_MEMO[text_in] = (now, out)
+    if request is not None:
+        previous = getattr(request.state, "extract_ms", 0) or 0
+        request.state.extract_ms = int(previous) + int((time.perf_counter() - started) * 1000)
     return out
 
 
@@ -2380,18 +2422,20 @@ def _did_you_mean(db, q: str, min_sim: float | None = None) -> list[Suggestion]:
 
 
 class Interpreted(BaseModel):
-    """A sentence read as a search, offered when the literal words found nothing.
+    """A sentence read as a search when literal results are absent or thin.
 
-    OFFERED, never silently applied. The frontend re-runs this and says what it
-    did, which keeps two things true that matter more than the round trip it
-    costs: the address bar ends up holding the query that actually ran, so the
-    page is shareable and the back button works — and the reader can see the
-    interpretation was a guess and go back to their own words.
+    The frontend re-runs accepted interpretations and explains what changed.
+    The address bar then holds the query that actually ran, so the page is
+    shareable and the back button works; the reader can see the interpretation
+    was a guess and return to their original words with one click.
 
     Quietly rewriting somebody's search is how a search engine loses their
-    trust the first time it guesses wrong, and this one guesses.
+    trust the first time it guesses wrong, and this one guesses. Thin-result
+    rewrites therefore carry the original result count and require a material
+    candidate-count improvement before they are offered.
     """
     query: str
+    source_total: int = 0
     # Forward-referenced: `ExtractedTerm` is defined with the extractor, far
     # below this, and the model is REUSED rather than copied so the chips the
     # search offers and the chips the extractor returns cannot drift apart.
@@ -3047,6 +3091,9 @@ def search(          # NOT async — see below
     # hiding them from the person who has to judge them would make the reversal
     # the policy promises impossible to carry out.
     is_operator = viewer is not None and viewer.at_least(ROLE_ADMIN)
+    # Admin searches do not grant access to a reader's private imports. Those
+    # rows exist to store chapters and authorize that reader alone.
+    filters.append(Story.private_only.is_(False))
     if not is_operator:
         filters.append(Story.delisted_at.is_(None))
 
@@ -4216,7 +4263,8 @@ def search(          # NOT async — see below
             # Its own query, so it needs the gate again — this arm bypasses
             # `filters` entirely and would otherwise be a hole straight through
             # the exclusions above.
-            fuzzy_q = db.query(Story).filter(Story.delisted_at.is_(None))
+            fuzzy_q = db.query(Story).filter(Story.delisted_at.is_(None),
+                                             Story.private_only.is_(False))
             for _g in _gate_all:
                 fuzzy_q = fuzzy_q.filter(_g)
             if site_enums:
@@ -5325,7 +5373,7 @@ def search(          # NOT async — see below
         # a sentence) and are the last two things a reader should be offered.
         _suggestions = (_spelling_rescues(db, _typed)
                         or _misspelt_title(db, _typed)
-                        or _describe_suggestion(db, _typed))
+                        or _describe_suggestion(db, _typed, request=request))
     elif (_typed and 0 < total <= SUGGEST_MAX_RESULTS
             and len(_typed.split()) <= SUGGEST_MAX_WORDS):
         # A LOWER similarity floor than the zero-result path, and it is the
@@ -5367,22 +5415,61 @@ def search(          # NOT async — see below
     # never find out the site could have helped. A full-text search over titles
     # and summaries cannot answer a sentence; the vocabulary can.
     #
-    # Deliberately NOT applied here. This hands back an interpretation and the
-    # frontend re-runs it, so the address bar ends up holding the query that
-    # actually ran — shareable, back-buttonable — and the reader is told what
-    # was assumed. See `Interpreted`.
+    # Zero-result searches can recover when the extracted query has candidates.
+    # A thin positive search is reconsidered only when a long natural-language
+    # query extracts several structured terms and the candidate count is at
+    # least five times higher. The frontend reruns accepted interpretations and
+    # carries the original words and result count in the URL so the change is
+    # visible, shareable and reversible.
     interpreted: Optional[Interpreted] = None
-    _words = len(_typed.split())
     if (_typed and not _HAS_OPERATOR.search(_typed)
-            and (total == 0 and _words >= _NL_MIN_WORDS
-                 or 0 < total <= _NL_MAX_RESULTS and _words >= _NL_SENTENCE_WORDS)):
+            and len(_typed.split()) >= _NL_MIN_WORDS
+            and total <= _NL_MAX_RESULTS
+            and _interpretation_context_supported(request)):
         try:
-            _ex = _extract_once(_typed, db)
-            # Only when it found something to search FOR. An extraction that
-            # returns the words back, or nothing, is not an interpretation —
-            # it is the same failed search with more steps.
-            if _ex.query and _ex.terms and _ex.query.strip() != _typed:
-                interpreted = Interpreted(query=_ex.query, terms=_ex.terms)
+            _ex = _extract_once(_typed, db, request=request)
+            # Compare the candidate against the result count the reader just
+            # saw. The same filtered probe used to build the extracted query
+            # counts its selected terms, request constraints and content gates.
+            # Do not auto-apply a mere vocabulary hit: it must have real,
+            # searchable candidates, and a thin positive search needs a large
+            # enough gain plus more than one extracted detail.
+            _pq_candidate = parse_query(_ex.query) if _ex.query else None
+            _probe_terms = (
+                [_Term("relationship", v) for v in _pq_candidate.relationships]
+                + [_Term("fandom", v) for v in _pq_candidate.fandoms]
+                + [_Term("character", v) for v in _pq_candidate.characters]
+                + [_Term("tag", v) for v in _pq_candidate.tags]
+            ) if _pq_candidate else []
+            if _ex.query and _probe_terms and _ex.query.strip() != _typed:
+                _candidate_floor = (
+                    max(_NL_MIN_CANDIDATE, total * (
+                        2 if _pq_candidate and
+                        len(_pq_candidate.characters) +
+                        len(_pq_candidate.relationships) >= 2
+                        else _NL_MIN_GAIN))
+                    if total else _DESCRIBE_MIN_WORKS
+                )
+                _candidate_total = _probe_count(
+                    db,
+                    _probe_terms,
+                    _ex.word_count_min, _ex.status, _ex.crossovers,
+                    cap=_candidate_floor,
+                    word_count_max=_ex.word_count_max,
+                    site=_ex.site, sites=sites, ratings=ratings,
+                    exclude_tags=_ex.exclude_tags,
+                )
+                _selected = len(_probe_terms)
+                _specific_entities = (
+                    len(_pq_candidate.characters) +
+                    len(_pq_candidate.relationships)
+                    if _pq_candidate else 0)
+                if _should_interpret_search(_typed, total,
+                                            _candidate_total, _selected,
+                                            _specific_entities):
+                    interpreted = Interpreted(query=_ex.query,
+                                              terms=_ex.terms,
+                                              source_total=total)
         except Exception:
             log.debug("interpretation failed", exc_info=True)
 
@@ -6814,6 +6901,74 @@ def _prose_words(db) -> set[str]:
     return _TAG_PROSE
 
 
+# Words that are BOTH single-word character names AND other facet kinds.
+#
+# The n-gram pass matches every 1-4 word run against `facets`, so a lowercase
+# English word that the archive happens to file under character AND tag/fandom
+# matches both ways at once — "set" from "fic set during the war" resolves to
+# `char:"Set"` (116 works) and then `_canonical_character` expands it via LIKE
+# prefix to `Set (Ancient Egyptian)`, killing every other term in the post
+# because 0 works co-occur.
+#
+# The evidence the word is NOT a character reference is that the SAME string
+# appears under a different kind — if "set" is also a tag, a fandom, or a
+# relationship, it is a common English word that the archives used in two places,
+# not a name a reader typed to mean the deity. This is queried from the facets
+# table itself so it tracks whatever spelling drift the index has picked up,
+# rather than needing a per-bug addition.
+_CWC_CACHE: set[str] = set()
+_CWC_AT: float = 0.0
+_CWC_LOADED = False
+_CWC_TTL = float(os.getenv("COMMON_CHAR_WORD_CACHE_SEC", "600"))
+
+
+def _common_word_character_words(db) -> set[str]:
+    """Lowercase single words that are a character facet AND another kind.
+
+    A word like "set" appears as `char:"Set"` AND as a tag/fandom — it is a
+    common English word, not a character reference. Matching it from prose
+    sends the query to a character deity instead of acting as a verb, and the
+    downstream canonicalisation then expanded it to
+    `Set (Ancient Egyptian)` (116 works), killing every other term the post
+    asked for.
+
+    Queried dynamically from the same `facets` table the n-gram pass already
+    reads, because the vocabulary of "things the archive has tagged" is itself
+    the evidence: a word that the archive files under character AND tag/fandom
+    is a common word that got into a name, not a name a reader is asking for.
+    """
+    global _CWC_CACHE, _CWC_AT, _CWC_LOADED
+    now = time.monotonic()
+    # An empty vocabulary is a valid cached answer too. Testing the set itself
+    # meant a sentence with no common-word character matches re-ran this query
+    # once per candidate — eight identical reads in one extraction on the live
+    # index.
+    if _CWC_LOADED and now - _CWC_AT < _CWC_TTL:
+        return _CWC_CACHE
+    try:
+        with db.begin_nested():
+            rows = db.execute(sql_text("""
+                SELECT DISTINCT lower(f1.value) AS word
+                  FROM facets f1
+                 WHERE f1.kind = 'character'
+                   AND lower(f1.value) NOT LIKE '% %'
+                   AND EXISTS (
+                       SELECT 1 FROM facets f2
+                        WHERE lower(f2.value) = lower(f1.value)
+                          AND f2.kind IN ('tag', 'relationship', 'fandom', 'fandom_ao3')
+                          AND f2.count >= :min
+                   )
+            """), {"min": EXTRACT_MIN_WORKS}).fetchall()
+            _CWC_CACHE = {r[0] for r in rows}
+            _CWC_AT = now
+            _CWC_LOADED = True
+    except Exception:
+        log.debug("common word character lookup failed", exc_info=True)
+        _CWC_AT = now
+    return _CWC_CACHE
+
+
+
 # WHAT THE READER MEANT, when they did not use the archive's word for it.
 #
 # See tag_hints.py. The extractor matches runs of a post against the tag
@@ -6938,6 +7093,38 @@ def _stem_sibling(db, tag: str) -> Optional[tuple[str, int]]:
     return (row[0], row[1]) if row else None
 
 
+def _longer_tag(db, tag: str) -> Optional[tuple[str, int]]:
+    """The longest tag that starts with *tag*, if one exists.
+
+    Finds specificity the reader spelled out. `first wizarding war` →
+    `First Wizarding War with Voldemort (Harry Potter)` (3,385 works), which
+    co-occurs with named characters where the general tag does not (20 vs 0
+    against `char:"Alastor ..."` `char:"Marauders ..."`). The reader's words
+    are a prefix of the archive's, so the longer spelling is the same request
+    stated more precisely.
+
+    Only multi-word tags are considered (single words like "fluff" have no
+    longer form to find), and the candidate must be at least two words longer
+    — otherwise `Harry Potter` would lift to `Harry Potter and the
+    Philosopher's Stone` on any HP post.
+    """
+    base = tag.lower().strip()
+    if " " not in base or len(base.split()) > 5:
+        return None
+    row = db.execute(sql_text("""
+        SELECT value, count FROM facets
+         WHERE kind = 'tag'
+           AND value ILIKE :prefix
+           AND lower(value) != :base
+           AND array_length(regexp_split_to_array(btrim(value), '[[:space:]]+'), 1)
+               >= :min_words
+         ORDER BY length(value) DESC, count DESC
+         LIMIT 1
+    """), {"prefix": f"{base}%", "base": base,
+            "min_words": len(base.split()) + 2}).first()
+    return (row[0], row[1]) if row else None
+
+
 # How many works survive a candidate query. Capped: the question is "is this
 # still worth searching", not "how many", and a bounded count answers it for a
 # fraction of the cost.
@@ -7044,7 +7231,11 @@ def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
                  status: Optional[str] = None,
                  crossovers: Optional[str] = None,
                  cap: Optional[int] = None,
-                 word_count_max: Optional[int] = None) -> int:
+                 word_count_max: Optional[int] = None,
+                 site: Optional[str] = None,
+                 sites: Optional[str] = None,
+                 ratings: Optional[str] = None,
+                 exclude_tags: Optional[list[str]] = None) -> int:
     """Would this combination of concepts find anything at all?"""
     # OR within a concept, AND between them — the shape the search itself
     # builds. Probing ONE spelling per concept is why good combinations were
@@ -7078,6 +7269,29 @@ def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
     if word_count_max:
         clauses.append("word_count <= :wcmax")
         params["wcmax"] = int(word_count_max)
+    if site:
+        clauses.append("site = :site")
+        params["site"] = site
+    if sites:
+        _site_names = [s.strip() for s in sites.split(",")
+                       if s.strip() in SiteEnum.__members__]
+        if _site_names:
+            params["sites"] = _site_names
+            if _MAIN_SITES <= set(_site_names):
+                clauses.append("site = ANY(CAST(:sites AS text[]))")
+            else:
+                clauses.append("(site = ANY(CAST(:sites AS text[])) OR "
+                               "(copy_sites IS NOT NULL AND "
+                               "copy_sites && CAST(:sites AS text[])))")
+    if ratings:
+        _rating_values = [r.strip().upper() for r in ratings.split(",")
+                          if r.strip()]
+        if _rating_values:
+            clauses.append("rating::text = ANY(CAST(:ratings AS text[]))")
+            params["ratings"] = _rating_values
+    if exclude_tags:
+        clauses.append("NOT (tags && CAST(:exclude_tags AS text[]))")
+        params["exclude_tags"] = exclude_tags
     # The STATUS counts too, and leaving it out was the last place a query
     # could pass the probe and still be narrowed to nothing afterwards: on
     # "best aot fics, ongoing, levi whump" the probe saw twelve works and the
@@ -7115,6 +7329,7 @@ def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
     params["cap"] = cap or _PROBE_CAP
     return int(db.execute(sql_text(
         "SELECT count(*) FROM (SELECT 1 FROM stories WHERE delisted_at IS NULL "
+        "AND NOT private_only "
         "AND " + " AND ".join(clauses) + " LIMIT :cap) x"), params).scalar() or 0)
 
 
@@ -7803,6 +8018,81 @@ def extract(
         except Exception:
             log.debug("squashed facet lookup failed", exc_info=True)
 
+    # THIRD + FOURTH PASS: normalized character-name matches.
+    #
+    # The reader writes the LAST name of a character, the archive files the FIRST
+    # name too — "mad eye moody" vs `Alastor "Mad-Eye" Moody` (2,800 works).
+    # Neither the exact match (spaces vs hyphens, quotes) nor the squash pass
+    # (full-string equality) reaches it: squashing gives "madeyemoody" against
+    # "alastormadeyemoody", a prefix, not a match.
+    #
+    # This pass squashes both sides and checks whether the reader's n-gram sits at
+    # the END of a character's squashed name. Bounded to multi-word n-grams whose
+    # squash is at least six characters — a single-letter suffix would match
+    # half the alphabet — and only against characters, where the extra name is a
+    # genuine disambiguation rather than a qualifier.
+    #
+    # Measured: "mad eye moody" → char:"Alastor "Mad-Eye" Moody" (2,800 works)
+    # on the live index, against zero without it. Cost: a sequential scan over
+    # the ~5.7K character facets, sub-second.
+    # The old implementation scanned all 620k character facets once per
+    # n-gram, applying regexp_replace to every row each time. A 20-word plot
+    # description made 99 sequential scans and spent 9.2 seconds in those
+    # reads. The existing trigram GIN index on `facets.value` can answer the
+    # same candidate question with one batched ILIKE ANY lookup; Python then
+    # verifies the exact normalized prefix/suffix, so the index is only a
+    # candidate finder and cannot broaden what we accept.
+    squash_specs: list[tuple[str, str, str]] = []
+    squash_patterns: list[str] = []
+    for g, span in grams.items():
+        sq = _sq(g)
+        if len(sq) < 6:
+            continue
+        words_in_gram = len(g.split())
+        mode = "suffix" if words_in_gram >= 2 else "prefix"
+        # Keep punctuation as a wildcard in the candidate pattern: `Mad-Eye`
+        # should be found by `mad eye`, while the exact squash check below
+        # remains authoritative.
+        phrase = re.sub(r"[^a-z0-9]+", "%", g.lower()).strip("%")
+        if not phrase:
+            continue
+        pattern = f"%{phrase}%" if mode == "suffix" else f"{phrase}%"
+        squash_specs.append((g, sq, mode))
+        squash_patterns.append(pattern)
+
+    suffix_matches: list = []
+    prefix_matches: list = []
+    if squash_patterns:
+        try:
+            with db.begin_nested():
+                candidate_rows = db.execute(sql_text("""
+                    SELECT kind, value, count FROM facets
+                     WHERE kind = 'character' AND count >= :min
+                       AND value ILIKE ANY(CAST(:patterns AS text[]))
+                """), {"patterns": list(dict.fromkeys(squash_patterns)),
+                       "min": EXTRACT_MIN_WORKS}).fetchall()
+            for row in candidate_rows:
+                base_squashed = _sq(_base(row[1]))
+                for g, sq, mode in squash_specs:
+                    matched = (base_squashed.endswith(sq) if mode == "suffix"
+                               else base_squashed.startswith(sq))
+                    if not matched:
+                        continue
+                    if mode == "suffix":
+                        suffix_matches.append((*row, g))
+                    elif _keep_squashed(row[1]):
+                        prefix_matches.append((*row, g))
+        except Exception:
+            log.debug("batched character squash lookup failed", exc_info=True)
+    rows = list(rows) + suffix_matches + prefix_matches
+
+    # Words the prefix pass rescued: a tag match becomes secondary to a character.
+    # The set of reader n-grams that prefix-squash matched to a character. For
+    # these words, a tag exact-match on the same word is DROPPED — the character is
+    # the named entity, and keeping the tag would let it claim the word position in
+    # the `used` set and block the character from ever being picked.
+    _prefix_words = {g for _, _, _, g in prefix_matches}
+
     RANK = {"relationship": 0, "character": 1, "fandom": 2, "tag": 3}
     cands = []
     for row in rows:
@@ -7810,6 +8100,8 @@ def extract(
         span = grams.get(value.lower())
         if span is None and len(row) > 3:
             span = squashed.get(row[3])
+        if span is None and len(row) > 3:
+            span = grams.get(row[3])
         if span is None:
             continue
         if _is_grammar(value):
@@ -7823,9 +8115,49 @@ def extract(
         if _is_framing(value):
             continue
 
+        # A lowercase single-word match where that word is also a CHARACTER
+        # facet is almost certainly a verb or adjective in prose, not a named
+        # entity. "set" in "fic set during the war" matches BOTH `char:"Set"`
+        # (116 works — the archive filed the Egyptian deity) AND `tag:"Set"`
+        # (500 works — someone tagged with it), and both resolve from the
+        # reader's lowercase verb via the same n-gram exact match. The
+        # evidence: the SAME string appears under another facet kind, so it is
+        # a common English word that the archives used in two places, not a
+        # name the reader asked for. Blocking it here — at the source — stops
+        # the tag from winning the frequency sort and the character from being
+        # canonicalised downstream.
+        #
+        # Capitalised input ("Set") is NOT blocked — a reader who means the
+        # deity or the tag can capitalise. Multi-word values ("Set (Ancient
+        # Egyptian)", "Fluff and Stuff") are NOT blocked — the disambiguation
+        # in the full name is enough.
+        #
+        # Only characters and tags are checked. Fandoms keep their existing
+        # `_usable_fandom` guard (`_COMMON_WORD_FANDOMS`), and a fandom that
+        # also happens to be a character name is still a fandom the reader
+        # meant — "naruto" reaches `fandom:"Naruto"` even if "Naruto" is also
+        # a character, because the fandom match is the reader's intent.
+        #
+        # A TAG match is DROPPED when the prefix pass found a CHARACTER for the
+        # same word. "marauders" as a tag (6,452) loses to
+        # `char:"Marauders (Harry Potter)"` (2,109) — the character is the
+        # named entity, the tag is a word that happens to be tagged. Without
+        # this, the tag's higher count claims the word in the `used` set and
+        # the character never gets a chance to be picked.
+        matched_words = words[span[0]:span[1]]
+        if kind in ("character", "tag") and " " not in value:
+            if (len(matched_words) == 1
+                    and matched_words[0].islower()
+                    and matched_words[0].lower()
+                    in _common_word_character_words(db)):
+                continue
+        if (kind == "tag"
+                and matched_words[0].islower()
+                and (matched_words[0] in _prefix_words)):
+            continue
         cands.append({"count": count, "rank": RANK.get(kind, 9),
-                      "n": span[1] - span[0], "kind": kind,
-                      "value": value, "span": span})
+                       "n": span[1] - span[0], "kind": kind,
+                       "value": value, "span": span})
     # By HOW MUCH THE ARCHIVE USES IT, then by what kind of thing it is.
     #
     # Two orderings were tried and both were wrong, in instructive ways. By
@@ -7958,6 +8290,17 @@ def extract(
         # over one post, and nothing reconciled them.
         if t.value in exclude_tags:
             return True
+        # A TAG found by the line path yields to the same character the n-gram
+        # path already rescued. `resolve_trope_tags` found `tag:"Marauders"` (6,452
+        # works) from the word "marauders", the same word the prefix-squash pass
+        # used to find `char:"Marauders (Harry Potter)"` (2,109). The character is
+        # the named entity; the tag is a word the reader wrote that happens to be
+        # tagged. Without this the line path re-introduces the tag after the
+        # candidate loop already dropped it, and the term list offers both.
+        if (t.kind == "tag"
+                and " " not in t.value.strip()
+                and t.value.strip().lower() in _prefix_words):
+            return True
         return False
 
     line_terms = [t for t in line_terms if not _already_a_filter(t)]
@@ -8062,6 +8405,25 @@ def extract(
             if sib and sib[1] > t.count * 10:
                 t = ExtractedTerm(kind="tag", value=sib[0], count=sib[1],
                                   matched=t.matched)
+            # A LONGEST-MATCH lift for tags that the reader spelled out.
+            #
+            # "first wizarding war" matches `tag:"first wizarding war"` (293 works)
+            # exactly, but `tag:"First Wizarding War with Voldemort (Harry Potter)"`
+            # (3,385) is what actually co-occurs with named characters — 20 works
+            # against the pair where the general tag gives 0. Without this lift the
+            # probing loop drops the general tag and never tries the specific one,
+            # though the reader's words were a prefix of it and nothing else.
+            #
+            # The longest tag whose lowercased value starts with the reader's wins
+            # — `First Wizarding War with Voldemort (Harry Potter)` beats
+            # `First Wizarding War Era` because the former is the latter plus "with
+            # Voldemort (Harry Potter)". Ranked on the reader's COUNT, not the
+            # specific tag's, so the swap fixes a spelling and cannot reorder
+            # against other terms the reader named directly.
+            _spec = _longer_tag(db, t.value)
+            if _spec:
+                t = ExtractedTerm(kind="tag", value=_spec[0], count=t.count,
+                                  matched=t.matched)
         # A reader naming a character uses the name they say out loud, and the
         # archives file the full one. Same swap as the tag above and the same
         # argument: `Damon` is a character on 76 works and `Damon Salvatore` on
@@ -8070,6 +8432,25 @@ def extract(
         # `_resolve_pair` has canonicalised each half of a PAIRING this way
         # since it was written — the rule was simply never applied to a
         # character found loose in the prose, which is how most of them arrive.
+        elif (t.kind == "character"
+              and t.value.strip().lower().startswith("the ")):
+            # A collective is commonly filed under its name without the
+            # article. The exact facet `the Marauders` is thin (113 works),
+            # while `Marauders (Harry Potter)` is the canonical character
+            # facet (2,109); keeping the literal makes the later co-occurrence
+            # probe reject a real entity that the search parser can find.
+            bare = t.value.strip()[4:].strip()
+            full = _canonical_character(db, bare, _post_fandom)
+            if full and full.lower() != t.value.strip().lower():
+                cnt = db.execute(sql_text(
+                    "SELECT count FROM facets WHERE kind='character' AND value=:v"),
+                    {"v": full}).scalar()
+                if int(cnt or 0) > max(t.count * 10, t.count + 100):
+                    spellings = [full, t.value]
+                    t = ExtractedTerm(kind="character", value=full,
+                                      count=int(cnt), matched=t.matched,
+                                      from_line=t.from_line,
+                                      spellings=spellings)
         elif t.kind == "character" and " " not in t.value.strip():
             full = _canonical_character(db, t.value, _post_fandom)
             if full and full.lower() != t.value.strip().lower():
@@ -8614,7 +8995,17 @@ def extract(
         except Exception:
             log.debug("extract seed probe failed", exc_info=True)
 
-    for t in terms[:6]:
+    # Named people form the most useful shared search when prose also mentions
+    # an era or an action word. If a war tag is kept between Moody and the
+    # Marauders, adding the latter is tested against Moody + war and rejected
+    # at zero, even though the two characters together are a strong 44-work
+    # candidate. Give the entity intersection its first chance; weaker tags
+    # can still join afterward when they actually co-occur.
+    candidate_terms = terms[:6]
+    if sum(t.kind == "character" for t in terms) >= 2:
+        candidate_terms = [t for t in terms if t.kind == "character"][:6]
+        candidate_terms += [t for t in terms if t.kind != "character"][:6-len(candidate_terms)]
+    for t in candidate_terms:
         if t in kept:
             continue
         # A term already IMPLIED by one that is kept adds no information and
@@ -8668,7 +9059,25 @@ def extract(
         # has 3,529, making the spoilers tag look like it keeps a seventeenth
         # when it keeps a nintieth. The threshold is set for the compressed
         # scale, not the true one.
-        keeps_enough = prev_n is None or n >= prev_n * _PROBE_MIN_RETAIN
+        #
+        # TWO NAMED CHARACTERS skip the ratio entirely. A reader who wrote two
+        # character names is asking for the intersection, not browsing a trope
+        # bandwagon. `Alastor "Mad-Eye" Moody` (2,800 works) +
+        # `Marauders (Harry Potter)` (2,109) co-occur in 20 — 0.7%, which the
+        # tenth-a-ratio guard would call noise, but those twenty works are the
+        # answer. The absolute floor (_PROBE_MIN_KEEP) still applies: 10 works
+        # before a third clause joins them.
+        #
+        # A tag against a tag keeps the full guard: "fluff" + "romance"
+        # co-occur for 90% of romance writers, and a tenth says the second
+        # term is noise. A character plus a tag uses the default ratio too —
+        # "alastor moody" (2,800) + "trains" (2,532) co-occur in zero, and
+        # there is no named-entity argument for keeping a tag nobody paired.
+        _retain = _PROBE_MIN_RETAIN
+        if (kept and kept[0].kind == "character"
+                and kept[0].kind == t.kind):
+            _retain = 0.0
+        keeps_enough = prev_n is None or n >= prev_n * _retain
         if n >= _PROBE_MIN_KEEP and keeps_enough:
             kept = cand
             prev_n = n
@@ -8677,7 +9086,8 @@ def extract(
             # this is the guard most likely to be wrong in a new way.
             log.debug("extract: dropped %r — keeps %s of %s", t.value, n, prev_n)
 
-    parts = [f'{op.get(t.kind, "tag")}:"{t.value}"' for t in kept]
+    parts = [f'{op.get(t.kind, "tag")}:{json.dumps(t.value, ensure_ascii=False)}'
+             for t in kept]
 
     # If nothing survived, fall back to the single best term rather than
     # returning nothing. The probe is a refinement, not a gate: a one-term
@@ -8711,7 +9121,7 @@ def extract(
     # otherwise build a query of nine hard filters, and an exclusion that
     # matches nothing still costs a predicate.
     for v in exclude_tags[:_MAX_EXCLUDES]:
-        parts.append(f'-tag:"{v}"')
+        parts.append(f'-tag:{json.dumps(v, ensure_ascii=False)}')
     if wc_min:
         # The SERIES add-on, turned on whenever the post named a length.
         #
@@ -8782,7 +9192,7 @@ def extract(
         have = _query_text or ""
         lead = []
         for kind, value in anchor_terms:
-            clause = f'{kind}:"{value}"'
+            clause = f'{kind}:{json.dumps(value, ensure_ascii=False)}'
             if clause.lower() not in have.lower():
                 lead.append(clause)
         if lead:
@@ -8935,7 +9345,7 @@ def random_stories(
     # Deliberately harsher than search, where the same works are ranked DOWN but
     # still reachable: there a reader asked for something specific and may want
     # a thin row that matches it. Nobody asked for this one.
-    where = ["word_count > :min_w", "delisted_at IS NULL",
+    where = ["word_count > :min_w", "delisted_at IS NULL", "NOT private_only",
              "summary IS NOT NULL", "summary <> ''"]
     params: dict = {"min_w": min_w, "count": count}
     # Raw SQL, so the ORM filter cannot reach it — and "Surprise me" is on the
@@ -8994,6 +9404,7 @@ def random_stories(
     # records happening on this very endpoint.
     q = db.query(Story).filter(Story.word_count > min_w,
                                Story.delisted_at.is_(None),
+                               Story.private_only.is_(False),
                                Story.summary.isnot(None),
                                Story.summary != "")
     if UNDERAGE_FILTER_ON:

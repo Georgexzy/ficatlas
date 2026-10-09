@@ -416,6 +416,7 @@ def _works_and_sections(db: Session, top_ids, top_by_site, site_counts):
               FROM unnest(CAST(:ids AS uuid[])) WITH ORDINALITY AS t(id, ord)
               JOIN stories s ON s.id = t.id
              WHERE s.delisted_at IS NULL
+               AND NOT s.private_only
                AND s.source_restricted_at IS NULL
                -- Sexualised minors, excluded here as everywhere. Hub pages are
                -- the crawlable surface and the pages search engines send

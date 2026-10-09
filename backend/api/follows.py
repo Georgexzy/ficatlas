@@ -32,8 +32,12 @@ from __future__ import annotations
 
 from typing import Optional
 
+import json
+import os
 import secrets
+import uuid
 
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -83,6 +87,10 @@ def list_follows(db: Session = Depends(get_db),
           JOIN stories s ON s.id = f.story_id
          WHERE f.user_id = :u
            AND s.delisted_at IS NULL
+           AND (NOT s.private_only OR EXISTS (
+               SELECT 1 FROM user_hosted uh
+                WHERE uh.user_id = f.user_id AND uh.story_id = s.id
+           ))
          ORDER BY (s.chapter_count > f.seen_chapters) DESC,
                   s.updated_at DESC NULLS LAST
     """), {"u": str(user.id)}).fetchall()
@@ -127,8 +135,165 @@ def unread_count(db: Session = Depends(get_db),
           FROM follows f
           JOIN stories s ON s.id = f.story_id
          WHERE f.user_id = :u AND s.delisted_at IS NULL
+           AND (NOT s.private_only OR EXISTS (
+               SELECT 1 FROM user_hosted uh
+                WHERE uh.user_id = f.user_id AND uh.story_id = s.id
+           ))
     """), {"u": str(viewer.id)}).first()
     return {"unread": row[0] or 0, "following": row[1] or 0}
+
+
+class WelcomeBack(BaseModel):
+    follow_unread: int = 0
+    follow_works: list[dict] = []
+    resume: dict | None = None
+    has_email: bool = False
+    continue_reading: list[dict] = []
+
+
+# A welcome banner on every home page load is noise. This is the gap (in minutes)
+# since the reader last saw the landing page before the banner is shown again.
+# Long enough to filter out tab switches and back-button returns, short enough to
+# feel responsive when someone actually comes back after being away. Tunned on the
+# observation that a reader who opened the home page five minutes ago is not
+# "welcome back".
+_RETURNING_THRESHOLD_MIN = int(os.environ.get("WELCOME_RETURNING_THRESHOLD_MIN", "60"))
+
+
+@router.get("/welcome")
+def welcome_back(db: Session = Depends(get_db),
+                 viewer: Optional[User] = Depends(get_current_user)):
+    """What a returning reader might want to know about.
+
+    Returns the works they follow that have moved since they last looked, and
+    the most recent reading progress so the home page can offer a resume link.
+    Answers an empty object for a signed-out reader rather than 401: this is
+    called on the landing page, and a 401 there would be noise.
+
+    The banner only appears when the reader is RETURNING — i.e. they have not
+    seen the landing page in the last WELCOME_RETURNING_THRESHOLD_MIN minutes.
+    This prevents it from firing on every tab switch or back-button return.
+    last_home_visit in user_data is updated on every call; the actual welcome
+    data is only returned when the threshold is exceeded.
+    """
+    if viewer is None:
+        return WelcomeBack().dict()
+
+    now = datetime.utcnow()
+    last_home_raw = db.execute(text(
+        "SELECT value FROM user_data WHERE user_id = :u AND key = 'last_home_visit'"
+    ), {"u": str(viewer.id)}).scalar()
+    returning = True
+    if last_home_raw:
+        try:
+            last_val = last_home_raw if isinstance(last_home_raw, dict) else json.loads(last_home_raw)
+            if isinstance(last_val, dict) and "at" in last_val:
+                last_at = datetime.fromisoformat(last_val["at"])
+                returning = (now - last_at) >= timedelta(minutes=_RETURNING_THRESHOLD_MIN)
+        except (ValueError, KeyError, json.JSONDecodeError):
+            returning = True
+
+    db.execute(text("""
+        INSERT INTO user_data (user_id, key, value)
+        VALUES (:u, 'last_home_visit', :v)
+        ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value
+    """), {"u": str(viewer.id), "v": json.dumps({"at": now.isoformat()})})
+    db.commit()
+
+    # Always read progress — not just for returning users. The home page shows
+    # a Continue Reading carousel to every signed-in reader who has it, not just
+    # people the banner fires for.
+    progress = db.execute(text("""
+        SELECT value FROM user_data WHERE user_id = :u AND key = 'progress'
+    """), {"u": str(viewer.id)}).scalar()
+    continue_reading: list[dict] = []
+    resume = None
+    if progress:
+        try:
+            prog = progress if isinstance(progress, dict) else json.loads(progress)
+            best = None
+            best_at = ""
+            entries: list[tuple[str, float, int]] = []
+            for sid, v in prog.items():
+                if not isinstance(v, dict):
+                    continue
+                ch = v.get("chapter")
+                at = v.get("at", "")
+                if ch and at > best_at:
+                    best = sid
+                    best_at = at
+                if ch and at:
+                    entries.append((sid, ch, at))
+            if best:
+                v = prog[best]
+                resume = {"story_id": best, "chapter": v.get("chapter"), "at": v.get("at")}
+            # Sort by recency, take the five most recent in-progress works,
+            # enriched with story metadata for the carousel.
+            entries.sort(key=lambda x: x[2], reverse=True)
+            try:
+                sids = [uuid.UUID(e[0]) for e in entries[:5] if e[0]]
+            except (ValueError, AttributeError):
+                sids = []
+            if sids:
+                rows = db.execute(text("""
+                    SELECT id::text, title, author, word_count, chapter_count, site, is_hosted
+                      FROM stories
+                     WHERE id = ANY(CAST(:ids AS uuid[])) AND delisted_at IS NULL
+                """), {"ids": sids}).fetchall()
+                story_map = {r[0]: r for r in rows}
+                for sid, ch, at in entries[:5]:
+                    if sid in story_map:
+                        r = story_map[sid]
+                        continue_reading.append({
+                            "id": r[0], "title": r[1], "author": r[2],
+                            "word_count": r[3], "chapters": r[4], "site": r[5],
+                            "is_hosted": r[6], "chapter": ch, "at": at,
+                        })
+        except Exception:
+            pass
+
+    if not returning:
+        return WelcomeBack(continue_reading=continue_reading).dict()
+
+    unread_count = db.execute(text("""
+        SELECT count(*)
+          FROM follows f
+          JOIN stories s ON s.id = f.story_id
+         WHERE f.user_id = :u
+           AND s.delisted_at IS NULL
+           AND (NOT s.private_only OR EXISTS (
+               SELECT 1 FROM user_hosted uh
+                WHERE uh.user_id = f.user_id AND uh.story_id = s.id
+           ))
+           AND (s.chapter_count > f.seen_chapters
+                OR (s.updated_at IS NOT NULL
+                    AND f.seen_updated IS NOT NULL
+                    AND s.updated_at > f.seen_updated))
+    """), {"u": str(viewer.id)}).scalar() or 0
+    unread = db.execute(text("""
+        SELECT s.id::text, s.title, s.chapter_count, s.updated_at
+          FROM follows f
+          JOIN stories s ON s.id = f.story_id
+         WHERE f.user_id = :u
+           AND s.delisted_at IS NULL
+           AND (NOT s.private_only OR EXISTS (
+               SELECT 1 FROM user_hosted uh
+                WHERE uh.user_id = f.user_id AND uh.story_id = s.id
+           ))
+           AND (s.chapter_count > f.seen_chapters
+                OR (s.updated_at IS NOT NULL
+                    AND f.seen_updated IS NOT NULL
+                    AND s.updated_at > f.seen_updated))
+         ORDER BY s.updated_at DESC NULLS LAST
+         LIMIT 3
+    """), {"u": str(viewer.id)}).fetchall()
+    follow_works = [
+        {"id": r[0], "title": r[1], "chapters": r[2], "updated_at": r[3].isoformat() if r[3] else None}
+        for r in unread
+    ]
+    has_email = bool((viewer.email or "").strip())
+    return WelcomeBack(follow_unread=unread_count, follow_works=follow_works,
+                      resume=resume, has_email=has_email, continue_reading=continue_reading).dict()
 
 
 class EmailPrefs(BaseModel):
@@ -186,6 +351,10 @@ def set_email_prefs(prefs: EmailPrefs, db: Session = Depends(get_db),
         db.execute(text("""
             UPDATE follows f SET mailed_chapters = s.chapter_count
               FROM stories s WHERE s.id = f.story_id AND f.user_id = :u
+               AND (NOT s.private_only OR EXISTS (
+                   SELECT 1 FROM user_hosted uh
+                    WHERE uh.user_id = f.user_id AND uh.story_id = s.id
+               ))
                AND NOT EXISTS (SELECT 1 FROM follow_email e WHERE e.user_id = :u)
         """), {"u": str(user.id)})
         db.execute(text("""
@@ -228,6 +397,10 @@ def send_test(db: Session = Depends(get_db),
         SELECT s.id::text, s.title, s.author, s.site::text, s.chapter_count, 1
           FROM follows f JOIN stories s ON s.id = f.story_id
          WHERE f.user_id = :u AND s.delisted_at IS NULL
+           AND (NOT s.private_only OR EXISTS (
+               SELECT 1 FROM user_hosted uh
+                WHERE uh.user_id = f.user_id AND uh.story_id = s.id
+           ))
          ORDER BY s.updated_at DESC NULLS LAST LIMIT 3
     """), {"u": str(user.id)}).fetchall()
     token = db.execute(text("SELECT token FROM follow_email WHERE user_id = :u"),
@@ -304,10 +477,14 @@ def follow(story_id: str, db: Session = Depends(get_db),
     """
     user = _require(viewer)
     story = db.execute(text(
-        "SELECT chapter_count, updated_at FROM stories "
+        "SELECT chapter_count, updated_at, private_only FROM stories "
         " WHERE id = :s AND delisted_at IS NULL"
     ), {"s": story_id}).first()
     if not story:
+        raise HTTPException(404, "No such story.")
+    if story[2] and not db.execute(text(
+        "SELECT 1 FROM user_hosted WHERE user_id = :u AND story_id = :s"
+    ), {"u": str(user.id), "s": story_id}).first():
         raise HTTPException(404, "No such story.")
 
     db.execute(text("""

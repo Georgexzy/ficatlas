@@ -15,6 +15,33 @@ from sqlalchemy import text
 from api.search import extract, _is_grammar
 
 
+def test_interpretation_policy_compares_empty_and_thin_searches():
+    from api.search import _should_interpret_search
+    assert _should_interpret_search("looking for Levi whump in space", 0, 3, 1)
+    assert not _should_interpret_search("looking for Levi whump in space", 0, 2, 1)
+    assert _should_interpret_search("looking for Levi whump in space", 1, 10, 2)
+    assert not _should_interpret_search("looking for Levi whump in space", 1, 9, 2)
+    assert _should_interpret_search(
+        "first wizarding war Moody trains the Marauders", 4, 12, 3, 2)
+    assert not _should_interpret_search(
+        "first wizarding war Moody trains the Marauders", 4, 12, 3, 0)
+    assert not _should_interpret_search(
+        "first wizarding war Moody trains the Marauders", 4, 9, 3, 2)
+    assert not _should_interpret_search("looking for Levi whump in space", 2, 9, 2)
+    assert not _should_interpret_search("looking for Levi whump in space", 10, 100, 2)
+    assert not _should_interpret_search('tag:"Whump"', 0, 20, 2)
+    assert not _should_interpret_search("levi whump", 0, 20, 2)
+
+
+def test_interpretation_comparison_skips_other_active_filters():
+    from starlette.requests import Request
+    from api.search import _interpretation_context_supported
+    base = Request({"type": "http", "query_string": b"q=looking+for+fluff&sites=ao3"})
+    filtered = Request({"type": "http", "query_string": b"q=looking+for+fluff&tags=Fluff"})
+    assert _interpretation_context_supported(base)
+    assert not _interpretation_context_supported(filtered)
+
+
 @pytest.fixture()
 def vocab(db):
     db.execute(text("DELETE FROM facets"))
@@ -1240,7 +1267,7 @@ def _search(db, q):
     from main import app
     app.dependency_overrides[get_db] = lambda: db
     try:
-        r = TestClient(app).get("/api/search", params={"q": q, "limit": 5})
+        r = TestClient(app).get("/api/search", params={"q": q, "per_page": 5})
         assert r.status_code == 200, r.text
         return r.json()
     finally:
@@ -1248,6 +1275,16 @@ def _search(db, q):
 
 
 def test_a_sentence_that_found_nothing_is_read_as_a_search(sentences):
+    from sqlalchemy import text as t
+    for i in range(12):
+        sentences.execute(t("""
+            INSERT INTO stories (site, site_id, url, title, author, word_count,
+                                 fandoms, relationships, tags)
+            VALUES ('ao3', :id, :url, 'Drarry story', 'a', 100000,
+                    ARRAY['Harry Potter - J. K. Rowling'],
+                    ARRAY['Draco Malfoy/Harry Potter'], ARRAY['Drarry'])
+        """), {"id": f"drarry{i}", "url": f"https://example.test/drarry{i}"})
+    sentences.commit()
     out = _search(sentences, "a long drarry fic where draco isnt a total douche no smut")
     assert out["total"] == 0
     assert out["interpreted"] is not None
@@ -1279,6 +1316,31 @@ def test_a_search_that_worked_is_left_alone(sentences, db):
     out = _search(sentences, "levi ackerman whump")
     assert out["total"] > 0
     assert out["interpreted"] is None
+
+
+def test_thin_search_is_rewritten_only_when_extraction_materially_improves_it(sentences):
+    """Compare the original text search with the extractor's structured query.
+
+    Only one work contains all the words, but twenty works carry the two
+    extracted details. That is a substantial enough improvement to use the
+    interpretation and tell the reader what changed.
+    """
+    from sqlalchemy import text as t
+    for i in range(20):
+        sentences.execute(t("""
+            INSERT INTO stories (site, site_id, url, title, author, characters, tags)
+            VALUES ('ao3', :id, :url, :title, 'a',
+                    ARRAY['Levi Ackerman'], ARRAY['Whump'])
+        """), {"id": f"levi{i}", "url": f"https://example.test/levi{i}",
+                "title": "Levi Ackerman whump in space with dragons" if i == 0
+                         else f"Levi Ackerman whump story {i}"})
+    sentences.commit()
+    out = _search(sentences, "levi ackerman whump in space with dragons")
+    assert out["total"] == 1
+    assert out["interpreted"] is not None
+    assert out["interpreted"]["source_total"] == 1
+    interpreted = _search(sentences, out["interpreted"]["query"])
+    assert interpreted["total"] == 20
 
 
 def test_a_query_in_the_query_language_is_never_re_read(sentences):
@@ -1385,6 +1447,204 @@ def test_the_hint_table_being_absent_is_not_an_error(db):
                 lift     REAL NOT NULL,
                 docs     INTEGER NOT NULL,
                 built_at TIMESTAMP DEFAULT now(),
-                PRIMARY KEY (word, tag)
-            )"""))
+                 PRIMARY KEY (word, tag)
+             )"""))
         db.commit()
+
+
+# ── A common English word that matches a character facet ──────────────────────
+
+@pytest.fixture()
+def common_word_chars(db):
+    """A character name that is also a common English word.
+
+    "Set" is filed as a character (116 works) AND as a tag (500 works) — the
+    reader typing "set" in "fic set during the war" means the verb, not the
+    deity. The fixture models this by giving "Set" BOTH a character and tag
+    facet row.
+    """
+    import api.search as S
+    S._CWC_CACHE, S._CWC_AT, S._CWC_LOADED = set(), 0.0, False
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('character','Set',116),
+          ('tag','Set',500),
+          ('character','Daphne',79),
+          ('character','Daphne Greengrass',6973),
+          ('character','Damon',76),
+          ('character','Damon Salvatore',5200),
+          ('tag','Fluff',1130841),
+          ('fandom','Harry Potter - J. K. Rowling',686558),
+          ('relationship','Daphne Greengrass/Harry Potter',1035)
+    """))
+    db.commit()
+    yield db
+    S._CWC_CACHE, S._CWC_AT, S._CWC_LOADED = set(), 0.0, False
+    db.execute(text("DELETE FROM facets"))
+    db.commit()
+
+
+def test_a_lowercase_common_word_does_not_match_a_character(common_word_chars):
+    """"set" in "fic set during first wizarding war" must NOT resolve to
+    `char:"Set"` — the reader is using the verb, not naming the Egyptian
+    deity, and the archives happen to tag "Set" as well as file it as a
+    character.
+
+    The evidence that it is a common word: the SAME lowercase string appears
+    as a tag facet, so it is a word the archive uses in two ways, not a name
+    the reader is asking for.
+    """
+    out = extract(text="fic set during first wizarding war where mad eye moody",
+                  db=common_word_chars)
+    values = [t.value for t in out.terms]
+    assert "Set" not in values
+    assert not any(t.kind == "character" and t.value == "Set" for t in out.terms)
+
+
+def test_a_capitalized_common_word_still_matches_a_character(common_word_chars):
+    """"Set" capitalised IS a character reference — the reader named the deity.
+    Capitalisation is the signal that "this is a name, not a word"."
+    """
+    out = extract(text="looking for Set (Ancient Egyptian) fanfic",
+                  db=common_word_chars)
+    values = [t.value for t in out.terms]
+    assert "Set" in values
+
+
+def test_a_non_common_word_first_name_is_not_blocked(common_word_chars):
+    """"Damon" is not a common English word — it appears only as a character
+    facet — so the lowercase "damon" still resolves and is canonicalised."
+    """
+    out = extract(text="damon centric harry potter fic",
+                  db=common_word_chars)
+    values = [t.value for t in out.terms]
+    assert any("Damon" in v and t.kind == "character" for t, v in
+               [(t, t.value) for t in out.terms])
+
+
+def test_the_cache_resets_between_tests(common_word_chars):
+    """The _common_word_character_words cache must not leak between test
+    fixtures. Dropping the cache marker is enough to force a rebuild."
+    """
+    import api.search as S
+    S._CWC_CACHE, S._CWC_AT = set(), 0.0
+    # After reset, the function re-queries and should still find "set"
+    words = S._common_word_character_words(common_word_chars)
+    assert "set" in words
+
+
+# ── Suffix-squash pass: reader writes the last name of a character ────────────
+
+@pytest.fixture()
+def suffix_char_vocab(db):
+    """Characters whose names are multi-word, so the reader's n-gram is a suffix.
+
+    "mad eye moody" squashes to "madeyemoody", which is a suffix of
+    `_sq('Alastor "Mad-Eye" Moody')` = "alastormadeyemoody". The exact match
+    fails (hyphens vs spaces, quotes) and the squash pass fails (prefix, not
+    full-string equality). Only the suffix-squash pass reaches it.
+
+    Stories are inserted too: `_character_fits_fandom` queries the stories table
+    to verify a character belongs to the post's fandom, and a character without
+    a parenthetical fandom in its name needs enough matching rows or it is
+    dropped as wrong-fandom. Fifteen stories carry BOTH characters so the probe
+    loop's character-character ratio bypass (10-work floor) is satisfied and
+    both survive to the query.
+    """
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("""
+        INSERT INTO facets (kind, value, count) VALUES
+          ('character','Alastor "Mad-Eye" Moody',2800),
+          ('tag','first wizarding war',293),
+          ('tag','First Wizarding War with Voldemort (Harry Potter)',3385),
+          ('tag','Trains',2532),
+          ('character','Marauders (Harry Potter)',2109),
+          ('character','the Marauders',113),
+          ('tag','Marauders',6452),
+          ('fandom','Harry Potter - J. K. Rowling',686558)
+    """))
+    db.execute(text("""
+        INSERT INTO stories (site, site_id, url, title, author,
+                             fandoms, characters)
+        SELECT 'ao3', 'hp_' || g, 'https://example.test/hp_' || g,
+               'x', 'y',
+               ARRAY['Harry Potter - J. K. Rowling'],
+               ARRAY['Alastor "Mad-Eye" Moody', 'Marauders (Harry Potter)']
+        FROM generate_series(0, 14) g
+    """))
+    db.commit()
+    yield db
+    db.execute(text("DELETE FROM facets"))
+    db.execute(text("DELETE FROM stories WHERE url LIKE 'https://example.test/hp_%'"))
+    db.commit()
+
+
+def test_suffix_squash_finds_a_character_from_a_last_name(suffix_char_vocab):
+    """"mad eye moody" should resolve to `char:"Alastor "Mad-Eye" Moody"` even
+    though the archive spelled it with the first name and curly quotes."""
+    import api.search as S
+    S._CWC_CACHE, S._CWC_AT = set(), 0.0
+    out = extract(text="mad eye moody trains marauders",
+                  db=suffix_char_vocab)
+    values = [t.value for t in out.terms]
+    assert any(v == 'Alastor "Mad-Eye" Moody' for v in values)
+
+
+def test_prefix_squash_prefers_character_over_tag(suffix_char_vocab):
+    """"marauders" matches BOTH `tag:"Marauders"` (6,452) and
+    `char:"Marauders (Harry Potter)"` (2,109) -- the prefix-squash pass finds
+    the character, and the candidate loop drops the tag because the character
+    is the named entity."""
+    import api.search as S
+    S._CWC_CACHE, S._CWC_AT = set(), 0.0
+    out = extract(text="mad eye moody trains marauders",
+                  db=suffix_char_vocab)
+    assert len(out.terms) >= 1
+    assert any(t.kind == "character" and t.value == "Marauders (Harry Potter)"
+               for t in out.terms)
+    assert not any(t.kind == "tag" and t.value == "Marauders"
+                   for t in out.terms)
+
+
+def test_longer_tag_lift_finds_specific_tag(suffix_char_vocab):
+    """"first wizarding war" should lift to the specific tag
+    `First Wizarding War with Voldemort (Harry Potter)` (3,385 works), which is
+    what co-occurs with the named characters."""
+    import api.search as S
+    S._CWC_CACHE, S._CWC_AT = set(), 0.0
+    out = extract(text="first wizarding war where mad eye moody trains marauders",
+                  db=suffix_char_vocab)
+    values = [t.value for t in out.terms]
+    assert "First Wizarding War with Voldemort (Harry Potter)" in values
+
+
+def test_character_character_ratio_is_relaxed(suffix_char_vocab):
+    """Two named characters co-occurring in <10% of works is a valid request,
+    not noise. The query must contain both Alastor and Marauders."""
+    import api.search as S
+    S._CWC_CACHE, S._CWC_AT = set(), 0.0
+    out = extract(text="mad eye moody trains marauders",
+                  db=suffix_char_vocab)
+    from query_parser import parse_query
+    parsed = parse_query(out.query)
+    assert 'Alastor "Mad-Eye" Moody' in parsed.characters
+    assert "Marauders (Harry Potter)" in parsed.characters
+    assert "Marauders (Harry Potter)" in out.query
+
+
+def test_the_article_does_not_hide_a_second_named_character(suffix_char_vocab):
+    """An era tag between Moody and 'the Marauders' must not block their
+    character intersection. The literal article form is a thin facet, while
+    the canonical character spelling co-occurs in the indexed works."""
+    import api.search as S
+    from query_parser import parse_query
+    S._CWC_CACHE, S._CWC_AT, S._CWC_LOADED = set(), 0.0, False
+    out = extract(
+        text="first wizarding war Alastor 'Mad Eye' Moody trains the marauders",
+        db=suffix_char_vocab)
+    parsed = parse_query(out.query)
+    assert 'Alastor "Mad-Eye" Moody' in parsed.characters
+    assert "Marauders (Harry Potter)" in parsed.characters
+    assert "the Marauders" not in parsed.characters
+    assert r'char:"Alastor \"Mad-Eye\" Moody"' in out.query

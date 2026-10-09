@@ -1,11 +1,16 @@
 """Runtime settings — small key/value store for user-configurable options."""
-from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi import APIRouter, Body, Depends, Form, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from db.session import get_db
 from api.auth import require_admin, get_current_user
 
 router = APIRouter()
+
+
+class SettingsBatch(BaseModel):
+    values: dict[str, str]
 
 DEFAULTS = {
     "tracked_fandom":      "Harry Potter - J. K. Rowling",
@@ -40,6 +45,10 @@ DEFAULTS = {
     "reader_font":         "serif",
     "reader_width":        "narrow",
     "show_explicit":       "false",
+    # A short owner-authored message shown above every page. Useful for a new
+    # feature, a crawl delay, or an outage that the automated health check
+    # cannot explain. Blank keeps the public UI quiet.
+    "site_notice":          "",
     "live_fetch":          "true",
     # Feed-poll filters — post-filter the 25 newest works per tag
     "feed_min_words":      "",        # blank = no min
@@ -53,7 +62,7 @@ DEFAULTS = {
     # Per-site circuit breaker. When a site's scheduled crawl fails repeatedly
     # (see CRAWL_FAIL_* env in scheduler.py), it's auto-disabled by flipping the
     # matching flag below to "true". Blank/"false" = the site may crawl normally.
-    # Reset to "" in Settings to re-enable after fixing connectivity.
+    # Reset to "" in Admin → Configuration to re-enable after fixing connectivity.
     "crawl_disabled_ao3":   "",
     "crawl_disabled_ffnet": "",
 }
@@ -99,8 +108,8 @@ def put_setting(db: Session, key: str, value: str) -> None:
 # What an anonymous reader is allowed to read back, and nothing else.
 #
 # This endpoint returned the WHOLE `app_settings` table to anybody, unauthenticated
-# — measured on the live instance, 140 keys, of which 6 are the reader-facing
-# defaults the Settings page actually wants. The other 134 are operator state:
+# — measured on the live instance, 140 keys, of which only reader preferences
+# and the public announcement belong in the response. The others are operator state:
 # crawl mode and rotation cursors, the per-site circuit breakers, `archive_page:*`
 # and `listing_page:*` harvest watermarks, the admin panel's growth samples.
 #
@@ -111,12 +120,11 @@ def put_setting(db: Session, key: str, value: str) -> None:
 # key somebody adds is published by accident. An allowlist inverts that — a new
 # key is private until it is deliberately named here.
 #
-# These six are safe and necessary: they are the INSTANCE DEFAULTS a first-time
-# visitor's search and reader start from, they are chosen by the operator to be
-# seen, and every one of them is already visible in the UI they configure.
+# These public values are safe and necessary: reader defaults initialize search
+# and reading preferences, and the announcement is intentionally shown to everyone.
 PUBLIC_KEYS = {
     "default_sites", "default_sort", "results_per_page",
-    "show_explicit", "reader_font", "reader_width",
+    "show_explicit", "reader_font", "reader_width", "site_notice",
 }
 
 
@@ -169,6 +177,8 @@ def set_setting(
         raise HTTPException(400, f"Unknown setting '{key}'")
     if len(value) > 2000:
         raise HTTPException(400, "Setting value too long")
+    if key == "site_notice" and len(value) > 500:
+        raise HTTPException(400, "Site message must be 500 characters or fewer")
 
     _ensure_table(db)
     db.execute(text("""
@@ -177,3 +187,32 @@ def set_setting(
     """), {"k": key, "v": value})
     db.commit()
     return {"ok": True, "key": key, "value": value}
+
+
+@router.post("/bulk")
+def set_settings_bulk(payload: SettingsBatch = Body(...), db: Session = Depends(get_db),
+                      _admin=Depends(require_admin)):
+    """Save one operator edit as a single transaction, so a partial request
+    cannot leave crawler behavior and its displayed configuration out of sync."""
+    if not payload.values:
+        raise HTTPException(400, "No settings provided")
+    unknown = sorted(set(payload.values) - set(DEFAULTS))
+    if unknown:
+        raise HTTPException(400, f"Unknown setting '{unknown[0]}'")
+    for key, value in payload.values.items():
+        if len(value) > 2000:
+            raise HTTPException(400, f"Setting '{key}' is too long")
+        if key == "site_notice" and len(value) > 500:
+            raise HTTPException(400, "Site message must be 500 characters or fewer")
+
+    _ensure_table(db)
+    try:
+        db.execute(text("""
+            INSERT INTO app_settings (key, value) VALUES (:k, :v)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """), [{"k": key, "v": value} for key, value in payload.values.items()])
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {"ok": True, "keys": sorted(payload.values)}

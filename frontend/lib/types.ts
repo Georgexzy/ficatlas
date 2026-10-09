@@ -89,6 +89,8 @@ export interface SearchResponse {
 export interface Interpreted {
   /** The query to run instead. */
   query: string
+  /** Matches in the reader's original search, used to explain a thin-result fallback. */
+  source_total?: number
   /** What it understood, for showing the reader rather than making them guess. */
   terms: { kind: string; value: string; count: number; matched: string }[]
 }
@@ -133,6 +135,8 @@ export interface SearchParams {
    *  shows a stranger. Nothing that generates a link ever sets it. */
   include_underage?: boolean
   q?: string
+  /** Original prose for relevance ranking when q contains interpreted filters. */
+  describe?: string
   sites?: string             // "ao3,ffnet"
   /** FictionAlley sections, comma-separated. */
   sections?: string

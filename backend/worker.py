@@ -1538,6 +1538,7 @@ async def _rec_threads_loop() -> None:
 async def _disk_trend_loop() -> None:
     """Six-hourly disk and database size sample, for the admin panel's
     "when does this box fill up". See disk_trend.py."""
+    from db.session import db_session
     import disk_trend
 
     def once():

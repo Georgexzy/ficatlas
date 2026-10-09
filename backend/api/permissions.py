@@ -252,7 +252,7 @@ def my_works(site: str, author: str, limit: int = 200,
                delisted_at IS NOT NULL AS delisted,
                word_count, chapter_count
         FROM stories
-        WHERE site = :s AND lower(author) = :a
+        WHERE site = :s AND lower(author) = :a AND NOT private_only
         ORDER BY coalesce(updated_at, published_at) DESC NULLS LAST
         LIMIT :l
     """), {"s": site, "a": ap.normalise_author(author),

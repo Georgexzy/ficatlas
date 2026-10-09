@@ -15,8 +15,10 @@ Two behaviours carry most of that risk and are pinned here:
 """
 import os
 import sys
+import uuid
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -55,6 +57,27 @@ def _unread(db, user_id):
                 OR (s.updated_at IS NOT NULL AND f.seen_updated IS NOT NULL
                     AND s.updated_at > f.seen_updated))
     """), {"u": user_id}).scalar()
+
+
+def _session(db, user_id):
+    token = f"tok_{uuid.uuid4().hex}"
+    db.execute(text("""
+        INSERT INTO user_sessions (token, user_id, created_at, expires_at, last_used, user_agent, remember)
+        VALUES (:t, :u, now(), now() + interval '90 days', now(), 'test', true)
+    """), {"t": token, "u": user_id})
+    db.commit()
+    return token
+
+
+@pytest.fixture()
+def client(db):
+    from api.follows import router as follows_router
+    from fastapi import FastAPI
+    from db.session import get_db
+    app = FastAPI()
+    app.include_router(follows_router, prefix="/api/follows")
+    app.dependency_overrides[get_db] = lambda: db
+    return TestClient(app)
 
 
 class TestNewness:
@@ -146,3 +169,83 @@ class TestScope:
         db.commit()
         assert db.execute(text("SELECT count(*) FROM follows WHERE user_id = :u"),
                           {"u": u}).scalar() == 0
+
+
+class TestWelcomeBack:
+    def test_returns_follow_updates(self, db, client):
+        u = _user(db, "wb_user")
+        s = _story(db, chapters=3)
+        _follow(db, u, s)
+        db.execute(text("UPDATE stories SET chapter_count = 5 WHERE id = :s"), {"s": s})
+        db.commit()
+        db.execute(text("UPDATE follows SET seen_chapters = 3 WHERE user_id = :u"), {"u": u})
+        db.commit()
+        tok = _session(db, u)
+        r = client.get("/api/follows/welcome", cookies={"sat": tok})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["follow_unread"] == 1
+        assert len(data["follow_works"]) == 1
+        assert data["follow_works"][0]["id"] == str(s)
+
+    def test_returns_resume_progress(self, db, client):
+        u = _user(db, "wb_resume")
+        s = _story(db, chapters=3)
+        db.execute(text("""
+            INSERT INTO user_data (user_id, key, value)
+            VALUES (:u, 'progress', :v)
+        """), {"u": u, "v": '{"' + str(s) + '": {"chapter": 2, "at": "2026-01-01T00:00:00"}}'})
+        db.commit()
+        tok = _session(db, u)
+        r = client.get("/api/follows/welcome", cookies={"sat": tok})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["resume"] == {"story_id": str(s), "chapter": 2, "at": "2026-01-01T00:00:00"}
+
+    def test_empty_for_signed_out(self, db, client):
+        r = client.get("/api/follows/welcome")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["follow_unread"] == 0
+        assert data["follow_works"] == []
+        assert data["resume"] is None
+
+    def test_empty_when_not_returning(self, db, client):
+        """A user who visited the landing page recently should not see the banner
+        again — it fires on RETURN, not on every home page load."""
+        u = _user(db, "wb_recent")
+        s = _story(db, chapters=3)
+        _follow(db, u, s)
+        db.execute(text("UPDATE stories SET chapter_count = 5 WHERE id = :s"), {"s": s})
+        db.commit()
+        db.execute(text("UPDATE follows SET seen_chapters = 3 WHERE user_id = :u"), {"u": u})
+        db.commit()
+        tok = _session(db, u)
+        # First call — user is "returning" (no last_home_visit yet)
+        r1 = client.get("/api/follows/welcome", cookies={"sat": tok})
+        assert r1.json()["follow_unread"] == 1
+        # Second call within threshold — user is NOT returning, returns empty
+        r2 = client.get("/api/follows/welcome", cookies={"sat": tok})
+        data = r2.json()
+        assert data["follow_unread"] == 0
+        assert data["follow_works"] == []
+        assert data["resume"] is None
+
+    def test_shown_again_after_threshold(self, db, client, monkeypatch):
+        """After the threshold elapses, the banner fires again."""
+        from api import follows
+        monkeypatch.setattr(follows, "_RETURNING_THRESHOLD_MIN", 0)
+        u = _user(db, "wb_threshold")
+        s = _story(db, chapters=3)
+        _follow(db, u, s)
+        db.execute(text("UPDATE stories SET chapter_count = 5 WHERE id = :s"), {"s": s})
+        db.commit()
+        db.execute(text("UPDATE follows SET seen_chapters = 3 WHERE user_id = :u"), {"u": u})
+        db.commit()
+        tok = _session(db, u)
+        # First call — returning, banner fires
+        r1 = client.get("/api/follows/welcome", cookies={"sat": tok})
+        assert r1.json()["follow_unread"] == 1
+        # Second call — with threshold 0, even 1ms later counts as returning again
+        r2 = client.get("/api/follows/welcome", cookies={"sat": tok})
+        assert r2.json()["follow_unread"] == 1

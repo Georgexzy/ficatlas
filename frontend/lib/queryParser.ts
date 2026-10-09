@@ -224,7 +224,9 @@ export function needsQuoting(value: string): boolean {
 
 /** Render an operator value for the search bar, quoting only when it matters. */
 export function quoteValue(value: string): string {
-  return needsQuoting(value) ? `"${value}"` : value
+  return needsQuoting(value)
+    ? `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+    : value
 }
 
 
@@ -265,9 +267,23 @@ export function parseQuery(raw: string): ParsedQuery {
     let spanEnd: number
 
     if (available.startsWith('"')) {
-      const endQ = available.indexOf('"', 1)
-      if (endQ === -1) { value = available.slice(1).trim(); spanEnd = kend + available.length }
-      else { value = available.slice(1, endQ).trim(); spanEnd = kend + endQ + 1 }
+      let endQ = 1
+      while (endQ < available.length) {
+        if (available[endQ] === '"') {
+          let escapes = 0
+          for (let j = endQ - 1; j >= 0 && available[j] === "\\"; j--) escapes++
+          if (escapes % 2 === 0) break
+        }
+        endQ++
+      }
+      if (endQ >= available.length) {
+        value = available.slice(1).trim()
+        spanEnd = kend + available.length
+      } else {
+        try { value = String(JSON.parse(available.slice(0, endQ + 1))).trim() }
+        catch { value = available.slice(1, endQ).replace(/\\"/g, '"').trim() }
+        spanEnd = kend + endQ + 1
+      }
     } else if (SINGLE_TOKEN.has(canonical)) {
       // Exactly one word, so free text after the operator stays free text.
       // Without this `rating:M harry potter` took "M harry potter" as the

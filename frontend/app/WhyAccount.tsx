@@ -97,13 +97,16 @@ export default function WhyAccount({ compact = false }: { compact?: boolean }) {
           reader is right to be suspicious — so the limits are stated here
           rather than in a policy nobody opens. Every clause is enforced
           somewhere real: signup takes no email unless you offer one, there is
-          no analytics script in the bundle, and robots.txt refuses the AI
+          no third-party analytics script in the bundle, and robots.txt refuses the AI
           training crawlers. */}
       <p className="why-account__catch">
         No email needed — add one only if you want to be able to reset a
-        forgotten password, or to be told when a story you follow updates. Nothing is sold, no adverts, no tracking, and you
+        forgotten password, or to be told when a story you follow updates.
+        Nothing is sold, there are no adverts or third-party analytics, and you
         can export or delete everything from{" "}
-        <Link href="/settings">Settings</Link> whenever you like.
+        <Link href="/settings">Settings</Link> whenever you like. FicAtlas&apos;s
+        own traffic counts are explained in the{" "}
+        <Link href="/privacy">privacy policy</Link>.
       </p>
     </section>
   )

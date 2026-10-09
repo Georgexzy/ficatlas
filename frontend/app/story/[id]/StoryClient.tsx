@@ -45,7 +45,7 @@ const STATUS_LABEL: Record<string, string> = {
 export default function StoryClient({ initialStory }: { initialStory?: StoryDetail | null }) {
   const params = useParams()
   const id = params?.id as string
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   // Seeded from the server, which already fetched this exact story to build the
   // page's metadata. Without it the server rendered "Loading…" and nothing else:
   // measured on the live site, a story page arrived with 323 characters of
@@ -210,6 +210,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
     setImporting(true)
     try {
       const fd = new FormData(); fd.append("url", story.url)
+      fd.append("private", "true")
       const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const data = await r.json()
       if (data.id) {
@@ -469,7 +470,6 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
               </OfflineLink>
             )
           })()}
-          {/* Seed rows are excluded: there is no real page for FicHub to fetch. */}
           {!story.is_hosted && !isSeedUrl(story.url)
             && (story.site === "ao3" || story.site === "ffnet") && (() => {
               const { href, label } = storyLink(story, SITE_LABELS)
@@ -481,13 +481,27 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
                 // sending the reader there. For a search engine that is both the
                 // wrong emphasis and the wrong default: kudos, comments and
                 // subscriptions only work at the source.
+                //
+                // The copy is PRIVATE — added to the reader's own library, not
+                // the shared index. Only they can read it, which is the one way
+                // to offer an offline copy without republishing someone else's
+                // work. Signed-in readers get this button; a 401 on import
+                // means the private flag was not sent (see api/library.py).
                 <div className="btn-row">
                   <ArchiveLink href={href} className="btn btn--primary">
                     {label}
                   </ArchiveLink>
-                  <button className="btn btn--ghost" onClick={importAndRead} disabled={importing}>
-                    {importing ? "Importing…" : "Import & read here"}
-                  </button>
+                  {!authLoading && (user ? (
+                    <button className="btn btn--ghost" onClick={importAndRead} disabled={importing}
+                      title="Save a private copy to your library for offline reading">
+                      {importing ? "Saving…" : "Save to library"}
+                    </button>
+                  ) : (
+                    <Link className="btn btn--ghost"
+                      href={`/login?next=${encodeURIComponent(`/story/${story.id}`)}`}>
+                      Sign in to save
+                    </Link>
+                  ))}
                 </div>
               )
             })()}

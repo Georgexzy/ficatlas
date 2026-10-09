@@ -656,6 +656,7 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
     setImporting(true)
     try {
       const fd = new FormData(); fd.append("url", story.url)
+      fd.append("private", "true")
       const r = await fetchWithTimeout(`/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
       const data = await r.json()
       if (data.id) {
@@ -676,15 +677,15 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
     storyLink(story, SITE_LABELS)
   const copies = otherCopies(story, SITE_LABELS)
 
-  // Can we one-click import? Only sites FicHub handles, not already hosted, and
-  // not a metadata-only seed row — there is no real page for FicHub to fetch.
+  // Any signed-in user can save a private copy to their library. The import is
+  // private (private=true), so it does not republish the work — only the reader
+  // can access their personal copy. This changes the gate from "admin" to simply
+  // "is signed in": kudos, comments and subscriptions still live at the source,
+  // and a private offline copy is just convenience, not redistribution.
   //
-  // Also gated on the viewer's role. /api/library/import-url requires admin, so
-  // showing this to a logged-out visitor offered a button whose only possible
-  // outcome was a 401 alert. They get Details instead, which works for everyone.
-  const canImport = user?.can_import
-    && !story.is_hosted && !isSeedUrl(story.url)
-    && (story.site === "ao3" || story.site === "ffnet")
+  // FicHub handles AO3 and FF.net. FictionAlley works are already hosted.
+  const canImport = !!user && !story.is_hosted && !isSeedUrl(story.url)
+      && (story.site === "ao3" || story.site === "ffnet")
 
   return (
     // data-pos / data-story: read by recordResultClick on the results list.
@@ -929,8 +930,9 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
             )}
             <Link href={`/story/${story.id}`} className="card-btn">Details</Link>
             {canImport && (
-              <button className="card-btn" onClick={importToRead} disabled={importing}>
-                {importing ? "Importing…" : importedId ? "✓ Opening…" : "Import & Read"}
+              <button className="card-btn" onClick={importToRead} disabled={importing}
+                title="Save a private copy for offline reading">
+                {importing ? "Saving…" : importedId ? "✓ Opening…" : "Save to library"}
               </button>
             )}
           </>
@@ -1151,8 +1153,7 @@ function LandingIntro() {
           19.7M on the same screen — and it only ever grows, so any literal here
           starts going stale the moment the workers add a row. */}
       <p className="empty__sub">
-        <IndexTotal /> from AO3, FanFiction.net and FictionAlley — one search across
-        all three, instead of three searches that each miss two.
+        Search <IndexTotal /> stories from AO3, FanFiction.net and FictionAlley together.
       </p>
       {/* Says where reading happens, on the screen where someone decides whether
           to trust the site. FicAtlas is a way of finding work, not a place that
@@ -1162,8 +1163,8 @@ function LandingIntro() {
           subscriptions are. Saying so up front is both the honest framing and
           the reassuring one. */}
       <p className="empty__sub empty__sub--secondary">
-        Every result links straight to the archive that hosts it, so authors keep
-        their readers, their kudos and their comments.
+        Most results open on the archive where they were posted, so authors keep
+        their readers, kudos and comments there.
       </p>
       {/* The three archives as marks and counts, immediately under the sentence
           that names them. See ArchiveBadges. */}
@@ -1268,7 +1269,8 @@ function LandingPromises() {
 
           Every claim here is enforced somewhere real rather than asserted: the
           licence is PolyForm Noncommercial, robots.txt refuses the AI training
-          crawlers, and there is no analytics script in the bundle. */}
+          crawlers, and there is no third-party analytics script in the bundle;
+          FicAtlas's own traffic counts are explained in the privacy policy. */}
       {/* Reordered so the first item is the one that says what FicAtlas is,
           rather than the fourth. "Links out to the original archive" was buried
           between two promises about advertising; it is not really a promise
@@ -1276,14 +1278,80 @@ function LandingPromises() {
           the question an author or a wary reader asks first — what does this
           site do with the work it has found. */}
       <ul className="empty__promises">
-        <li>Always links out to the original archive</li>
+        <li>Most works open on their original archive</li>
         <li>No adverts, ever</li>
-        <li>No tracking, no analytics</li>
+        <li><a href="/privacy">No third-party analytics</a></li>
         <li>No AI trained on fic — <a href="/about#ai">what that means</a></li>
         <li>Non-commercial &amp; <a href="https://github.com/Georgexzy/ficatlas"
               target="_blank" rel="noopener noreferrer">open source</a></li>
       </ul>
     </>
+  )
+}
+
+function ReadingActivity() {
+  const { user } = useAuth()
+  const [data, setData] = useState<{
+    follow_unread: number;
+    follow_works: Array<{id: string; title: string; chapters: number}>;
+    resume: {story_id: string; chapter: number} | null;
+    has_email: boolean;
+    continue_reading?: Array<{id: string; title: string; author?: string; word_count?: number;
+      chapters: number; site?: string; is_hosted?: boolean; chapter: number; at: string}>
+  } | null>(null)
+  const [dismissed, setDismissed] = useState(false)
+  useEffect(() => {
+    if (!user) return
+    fetchWithTimeout("/api/follows/welcome", { credentials: "include" }, USER_TIMEOUT_MS)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d) setData(d) })
+      .catch(() => {})
+  }, [user])
+  if (!user || !data || dismissed) return null
+  const hasFollow = data.follow_unread > 0
+  const cr = data.continue_reading ?? []
+  const latest = data.resume
+    ? cr.find(s => s.id === data.resume!.story_id) ?? cr[0]
+    : cr[0]
+  const more = latest ? cr.filter(s => s.id !== latest.id) : cr
+  if (!hasFollow && cr.length === 0) return null
+  return (
+    <aside className="reading-activity" aria-label="Your reading activity">
+      {latest && (
+        <div className="reading-activity__resume-row">
+          <span className="reading-activity__label">Pick up where you left off</span>
+          <Link href={`/story/${latest.id}/chapter/${latest.chapter}`} className="reading-activity__resume">
+            <span className="reading-activity__work">{latest.title}</span>
+            <span className="reading-activity__chapter">
+              Chapter {latest.chapter}{latest.chapters ? ` of ${latest.chapters}` : ""}
+            </span>
+            <span className="reading-activity__arrow" aria-hidden="true">→</span>
+          </Link>
+        </div>
+      )}
+      {hasFollow && (
+        <Link href="/library?tab=following" className="reading-activity__updates">
+          {data.follow_unread} followed work{data.follow_unread === 1 ? " has" : "s have"} updates
+        </Link>
+      )}
+      {more.length > 0 && (
+        <details className="reading-activity__more">
+          <summary>More recently read <span>{more.length}</span></summary>
+          <ul>
+            {more.map(s => (
+              <li key={s.id}>
+                <Link href={`/story/${s.id}/chapter/${s.chapter}`}>
+                  <span>{s.title}</span>
+                  <small>Chapter {s.chapter}{s.chapters ? ` of ${s.chapters}` : ""}</small>
+                </Link>
+              </li>
+            ))}
+            <li><Link href="/library?tab=reading">View reading history</Link></li>
+          </ul>
+        </details>
+      )}
+      <button className="reading-activity__close" onClick={() => setDismissed(true)} aria-label="Hide reading activity">×</button>
+    </aside>
   )
 }
 
@@ -1295,9 +1363,9 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
           does it. Emitting it in both places would put two <h1>s on the page,
           which is the accessibility bug the heading was added to fix. */}
       <p className="empty__nudge">
-        Type a query, or press <kbd>?</kbd> in the search bar for the available filters.
+        Search by title, author, pairing, character or story details. Press <kbd>?</kbd> for filters.
       </p>
-      <button className="empty__surprise" onClick={onSurprise}>🎲 Surprise me</button>
+      <button className="empty__surprise" onClick={onSurprise}>Show me something random</button>
 
       {/* Somewhere to go for the reader who has no particular search in mind.
           The landing page previously offered exactly one action — type — and
@@ -1385,6 +1453,7 @@ function BrowseExplorer() {
           relationship, 6,165 hubs). Both are real pages with their own lists of
           works — the only routes a crawler can reach, since robots.txt blocks
           the `/?q=…` search space. */}
+      <h2 className="browse__heading">Browse fandoms and pairings</h2>
       <div className="browse__tabs" role="tablist" aria-label="Browse the index by">
         {BROWSE_TABS.map(t => {
           if (!(data?.[t.key] ?? []).length) return null
@@ -1415,9 +1484,7 @@ function BrowseExplorer() {
 
       <p className="browse__more">
         {current.more && <a href={current.more}>{current.moreLabel} →</a>}
-        <span className="browse__more-hint">
-          Every one of these has a page of its own.
-        </span>
+        <span className="browse__more-hint">Open any to explore its works.</span>
       </p>
     </div>
   )
@@ -1523,7 +1590,7 @@ function useExampleQuery(): string {
   }, [])
   return fandom
     ? `fandom: ${fandom}  >100k  complete`
-    : "try a fandom, a ship, or just words from the summary"
+    : "Try a title, pairing, character or a few words you remember"
 }
 
 
@@ -1762,13 +1829,17 @@ function SearchPageInner() {
     const u = rawParams
     const from = u.get("from")
     if (!from) return null
-    return { from, q: u.get("q") ?? "", fixed: u.get("fixed") === "1" }
+    const sourceTotal = Number(u.get("from_total") ?? 0)
+    return { from, q: u.get("q") ?? "", fixed: u.get("fixed") === "1",
+      sourceTotal: Number.isFinite(sourceTotal)
+        ? Math.min(5001, Math.max(0, Math.trunc(sourceTotal))) : 0 }
   })[0]
   const [readAs, setReadAs] = useState<
     { typed: string; terms: { kind: string; value: string; count: number }[];
       /** Set when the re-run was a spelling or operator correction, not a reading. */
-      corrected?: string } | null>(() => initialRewrite
+      corrected?: string; sourceTotal?: number } | null>(() => initialRewrite
         ? { typed: initialRewrite.from, terms: [],
+            sourceTotal: initialRewrite.sourceTotal,
             ...(initialRewrite.fixed ? { corrected: initialRewrite.q } : {}) }
         : null)
   // The text already re-read once. Re-running the reader's literal words must
@@ -1778,11 +1849,13 @@ function SearchPageInner() {
   // The words to write into `from=` on the next search, set when an
   // interpretation is about to be re-run.
   const pendingFromRef = useRef<string>("")
+  const pendingFromTotalRef = useRef<number | null>(null)
   // Mirrors `readAs.typed` for the URL writer, which runs inside a callback
   // that must not take `readAs` as a dependency — doing so rebuilds the
   // search function every time the banner changes, and the banner changes
   // because of a search.
   const readAsRef = useRef<string>(initialRewrite?.from ?? "")
+  const readAsTotalRef = useRef<number>(initialRewrite?.sourceTotal ?? 0)
   // The query the reader's words were REWRITTEN to (a reading or a correction).
   // The page remounts on every navigation and searches again; without this,
   // that second run of the rewritten query looked like "some other search"
@@ -2447,6 +2520,20 @@ function SearchPageInner() {
     // is about to become wrong, so drop it and show skeletons instead.
     if (resetPage) setStale(null)
     const p = buildParams(pg, explicitQuery)
+    // Keep the reader's original prose as a ranking signal after it has been
+    // interpreted into filters. The `from` URL annotation survives sharing;
+    // `describe` makes the results put the closest summaries first as well.
+    // An interpreted search is represented by filters in the URL, so p.q is
+    // empty both on the first rerun and after a shared link is reopened. Keep
+    // its original prose as a relevance hint for those structured searches.
+    const hasStructuredFilters = Boolean(
+      p.fandoms || p.characters || p.relationships || p.tags || p.status ||
+      p.word_count_min || p.word_count_max || p.author || p.language ||
+      p.exclude_fandoms || p.exclude_characters || p.exclude_relationships ||
+      p.exclude_tags || p.categories || p.warnings)
+    p.describe = !p.q && hasStructuredFilters
+      ? (readAsRef.current || rawParams.get("describe") || undefined)
+      : undefined
 
     // What goes in the ADDRESS. `p` still goes to the API in full, so nothing
     // about the request changes — see urlQueryString, which is also what the
@@ -2459,9 +2546,15 @@ function SearchPageInner() {
     if (pendingFromRef.current) {
       qs.set("from", pendingFromRef.current)
       pendingFromRef.current = ""
+      if (pendingFromTotalRef.current != null) {
+        readAsTotalRef.current = pendingFromTotalRef.current
+        pendingFromTotalRef.current = null
+      }
     } else if (readAsRef.current) {
       qs.set("from", readAsRef.current)
     }
+    if (qs.has("from") && readAsTotalRef.current > 0)
+      qs.set("from_total", String(readAsTotalRef.current))
     if (qs.has("from") && fixedRef.current) qs.set("fixed", "1")
     // Remember where to come back to. Recorded here rather than in an effect
     // watching the URL, because this is the one place a search is deliberately
@@ -2530,17 +2623,19 @@ function SearchPageInner() {
       } else {
         setSinceLast(null)
       }
-      // THEY TYPED A SENTENCE, NOT A SEARCH.
+      // THEY TYPED A SENTENCE; THE STRUCTURED SEARCH FITS BETTER.
       //
       // Re-run it as the search the vocabulary read out of it, and say so. The
-      // alternative — showing "No stories matched" with the interpretation
-      // offered underneath — leads with a dead end, and the measurement that
-      // prompted all this is that a reader's own words returned ZERO where the
-      // same words read properly return hundreds.
+      // backend only does this for zero matches or a thin long-form query when
+      // a filtered candidate probe finds a substantial gain. Drop the original
+      // rows before loading the new query; otherwise a thin search briefly
+      // shows results that do not belong to the interpreted terms.
       //
       // Guarded on the typed text, so "search for what I typed instead" runs
       // their words and stays there rather than bouncing back here.
       if (data.interpreted && interpretedRef.current !== effectiveQuery) {
+        setResults(null)
+        setStale(null)
         interpretedRef.current = effectiveQuery
         // The reader's own words go into the ADDRESS, not just into state.
         //
@@ -2550,7 +2645,9 @@ function SearchPageInner() {
         // `?q=ship:"..."+tag:"..."` lands somebody on a query language they
         // did not write, at the moment they are paying most attention.
         pendingFromRef.current = effectiveQuery
-        setReadAs({ typed: effectiveQuery, terms: data.interpreted.terms ?? [] })
+        pendingFromTotalRef.current = data.interpreted.source_total ?? 0
+        setReadAs({ typed: effectiveQuery, terms: data.interpreted.terms ?? [],
+                    sourceTotal: data.interpreted.source_total ?? 0 })
         readAsRef.current = effectiveQuery
         rewrittenRef.current = data.interpreted.query
         fixedRef.current = false
@@ -2583,7 +2680,7 @@ function SearchPageInner() {
         if (fix && fix.trim() !== effectiveQuery.trim()) {
           interpretedRef.current = effectiveQuery
           pendingFromRef.current = effectiveQuery
-          setReadAs({ typed: effectiveQuery, terms: [], corrected: fix })
+        setReadAs({ typed: effectiveQuery, terms: [], corrected: fix, sourceTotal: 0 })
           readAsRef.current = effectiveQuery
           rewrittenRef.current = fix
           fixedRef.current = true
@@ -2598,7 +2695,8 @@ function SearchPageInner() {
       if (rewrittenRef.current === "*") rewrittenRef.current = effectiveQuery
       if (!data.interpreted && interpretedRef.current !== effectiveQuery
           && !sameQuery(effectiveQuery, rewrittenRef.current)) {
-        setReadAs(null); readAsRef.current = ""; rewrittenRef.current = ""; fixedRef.current = false
+        setReadAs(null); readAsRef.current = ""; readAsTotalRef.current = 0
+        rewrittenRef.current = ""; fixedRef.current = false
       }
       setParsedTokens((data as any).parsed_tokens ?? [])
       lastSearchCache = { url: qs.toString(), data }
@@ -2620,7 +2718,7 @@ function SearchPageInner() {
     } finally {
       if (seq === searchSeqRef.current) setLoading(false)
     }
-  }, [buildParams, page, pathname, router, query, sites, filterSig])
+  }, [buildParams, page, pathname, router, query, sites, filterSig, rawParams])
 
   // Published for the self-call above, after every render so it is never the
   // stale closure from the render that started the search.
@@ -3324,9 +3422,6 @@ function SearchPageInner() {
           choosing. Now they queue and this says so. Sticky, because the sidebar
           is long and the control has to be reachable from wherever you are in
           it. */}
-      {/* One name for "the front door": nothing searched yet, nothing loading.
-          The same condition EmptyState renders on, so the hero above and the
-          browse list below cannot disagree about which state the page is in. */}
       {filtersDirty && (
         <div className="apply-bar" role="status">
           <span>Filters changed.</span>
@@ -3464,6 +3559,10 @@ function SearchPageInner() {
             <span className="filters-trigger__icon">⚙</span> Filters &amp; sort
             {activeFilterCount > 0 && <span className="filters-trigger__badge">{activeFilterCount}</span>}
           </button>
+
+          {/* Keep personal reading shortcuts below the search controls so they
+              never push the page's main task down the screen. */}
+          {landing && <ReadingActivity />}
 
           {error && (
             <div className="alert alert--error" role="alert">
@@ -3881,24 +3980,27 @@ function SearchPageInner() {
                   different question is how a search engine loses somebody the
                   first time it guesses wrong, and this one guesses. Their own
                   words are one click away and stay put when clicked. */}
-              {readAs && shown.results.length > 0 && (
+              {readAs && (
                 <div className="read-as">
                   {readAs.corrected ? (
                     <p className="read-as__lead">
-                      Showing results for <strong>{readAs.corrected}</strong> —
-                      what you typed, “{readAs.typed.length > 48
+                      {shown.results.length > 0 ? <>Showing results for</> : <>We tried</>} {" "}
+                      <strong>{readAs.corrected}</strong> — what you typed,
+                      “{readAs.typed.length > 48
                         ? readAs.typed.slice(0, 48) + "…" : readAs.typed}”,
-                      looked like a typo.
+                      {shown.results.length > 0 ? " looked like a typo." : " looked like a typo, but this search found no works."}
                     </p>
                   ) : (
                   <p className="read-as__lead">
-                    Nothing matched those words exactly, so they were read as a search:
+                    {readAs.sourceTotal
+                      ? <>Your search found {readAs.sourceTotal.toLocaleString()} {readAs.sourceTotal === 1 ? "work" : "works"}. We broadened it to these details:</>
+                      : <>Nothing matched those words exactly, so we read them as a search{shown.results.length === 0 ? ", but this search found no works" : ""}:</>}
                   </p>
                   )}
                   {!readAs.corrected && (
                   <p className="read-as__terms">
-                    {readAs.terms.slice(0, 6).map(t => (
-                      <span key={t.kind + t.value} className="read-as__chip">
+                    {(readAs.terms.length ? readAs.terms : parsedTokens).slice(0, 6).map(t => (
+                      <span key={("kind" in t ? t.kind : t.key) + t.value} className="read-as__chip">
                         {t.value}
                       </span>
                     ))}
@@ -3906,7 +4008,8 @@ function SearchPageInner() {
                   )}
                   <button className="read-as__undo"
                     onClick={() => { setQuery(readAs.typed); setReadAs(null)
-                                     readAsRef.current = ""; rewrittenRef.current = ""
+                                     readAsRef.current = ""; readAsTotalRef.current = 0
+                                     rewrittenRef.current = ""
                                      fixedRef.current = false
                                      doSearch(true, undefined, readAs.typed) }}>
                     Search for “{readAs.typed.length > 48
@@ -4015,9 +4118,8 @@ function SearchPageInner() {
                           {describe.length > 0 && (
                             <div className="dym">
                               <p className="dym__lead">
-                                That reads like a description rather than a
-                                title, and every word in it has to match. Here
-                                is what it seems to be asking for:
+                                This sounds like a story description. We read it as
+                                these details; adjust them to broaden your search:
                               </p>
                               <ul className="dym__list">
                                 {describe.map(sg => (
@@ -4068,15 +4170,15 @@ function SearchPageInner() {
                     {!includeUnknown && (incShips.length || incChars.length || incTags.length) ? (
                       <>
                         <p className="no-results__sub">
-                          No indexed story lists {incShips.length ? "that relationship"
-                            : incChars.length ? "that character" : "that tag"}.
-                          Most imported stories carry no {incShips.length ? "relationship"
-                            : incChars.length ? "character" : "tag"} data at all, so they are
-                          excluded from this filter.
+                          No indexed works match this {incShips.length ? "pairing"
+                            : incChars.length ? "character" : "tag"}. Many imported works have no
+                          {incShips.length ? " pairing" : incChars.length ? " character" : " tag"}
+                          {" "}data, so they are left out of this search.
                         </p>
                         <button className="btn btn--primary no-results__fetch"
                           onClick={() => setIncludeUnknown(true)}>
-                          Include stories with no ship or character data
+                          Include works with missing {incShips.length ? "pairing"
+                            : incChars.length ? "character" : "tag"} data
                         </button>
                       </>
                     ) : (
