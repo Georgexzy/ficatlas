@@ -347,6 +347,38 @@ def _describe_rank(entity, describe: str | None):
     words = _describe_words(describe or "")
     if len(words) < 2:
         return None
+    # A fic request often states its defining beat as an action, while archive
+    # summaries describe the same beat with a neighbouring verb. Keep the
+    # reader's original words, and add a small, directional vocabulary only
+    # when one of those words is present. This lets "Moody trains the
+    # Marauders" surface summaries that say Moody teaches or mentors them,
+    # without turning those synonyms into hard search requirements.
+    beat_synonyms = {
+        "train": ("teach", "mentor", "instruct"),
+        "trains": ("teach", "mentor", "instruct"),
+        "trained": ("teach", "mentor", "instruct"),
+        "training": ("teach", "mentor", "instruct"),
+        "teach": ("train", "mentor", "instruct"),
+        "teaches": ("train", "mentor", "instruct"),
+        "taught": ("train", "mentor", "instruct"),
+        "mentor": ("train", "teach", "instruct"),
+        "mentors": ("train", "teach", "instruct"),
+        "mentored": ("train", "teach", "instruct"),
+        "instruct": ("train", "teach", "mentor"),
+        "instructs": ("train", "teach", "mentor"),
+        "raise": ("adopt", "parent", "bring"),
+        "raises": ("adopt", "parent", "bring"),
+        "adopt": ("raise", "parent", "bring"),
+        "adopts": ("raise", "parent", "bring"),
+        "protect": ("guard", "defend", "shield"),
+        "protects": ("guard", "defend", "shield"),
+        "defend": ("protect", "guard", "shield"),
+        "defends": ("protect", "guard", "shield"),
+    }
+    expanded = list(words)
+    for word in words:
+        expanded.extend(beat_synonyms.get(word, ()))
+    words = list(dict.fromkeys(expanded))[:32]
     tsq = func.websearch_to_tsquery(_REGCONFIG, " or ".join(words))
     return func.ts_rank(_TSV_WEIGHTS_CATEGORY, _story_tsv_ranked(entity), tsq, 0)
 
