@@ -173,6 +173,26 @@ def test_last_indexed_is_carried_alongside_the_counts(rows):
     }
 
 
+def test_crawl_activity_is_carried_when_present(rows):
+    rows([{"site": "ao3", "count": 10, "last_indexed": "recent",
+           "last_crawled": "checked", "crawled_last_week": 7}])
+    out = stats._with_sites({"stories": 10})
+    assert out["sites_crawled_at"] == {"ao3": "checked"}
+    assert out["sites_crawled_last_week"] == {"ao3": 7}
+
+
+def test_missing_legacy_crawl_fields_are_not_reported_as_zero(rows):
+    """A pre-crawl cache has counts and indexed times, but no crawl fields.
+
+    Missing data must not become the stronger claim that no archive works were
+    checked, which is what made the live panel contradict its global counter.
+    """
+    rows([{"site": "ao3", "count": 10, "last_indexed": "recent"}])
+    out = stats._with_sites({"stories": 10})
+    assert "sites_crawled_at" not in out
+    assert "sites_crawled_last_week" not in out
+
+
 def test_an_archive_that_never_changed_omits_its_timestamp(rows):
     """FictionAlley closed in 2024 and has not been added to since. A null
     timestamp renders as "never" downstream, and inventing one would claim

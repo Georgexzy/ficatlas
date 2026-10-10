@@ -42,7 +42,11 @@ _sites_cached_at: float = 0.0
 # Persisting turns that into "serve the figures from before the restart, and
 # recompute behind the response". They are counts of a 20M-row index shown in a
 # widget; a few minutes stale is invisible, absent is not.
-_SITES_SETTING = "cached_sites_v1"
+# v2 adds archive-level crawl timestamps and counts. v1 remains a fallback so a
+# deploy can serve the old counts immediately while rebuilding the richer shape
+# in the background; v1's timestamp is intentionally not trusted as fresh.
+_SITES_SETTING = "cached_sites_v2"
+_SITES_LEGACY_SETTING = "cached_sites_v1"
 
 
 def _persist_sites(payload: list) -> None:
@@ -67,12 +71,27 @@ def _load_persisted_sites() -> list | None:
         import json
         with db_session() as db:
             raw = get_setting(db, _SITES_SETTING)
+            legacy = False
+            if not raw:
+                raw = get_setting(db, _SITES_LEGACY_SETTING)
+                legacy = bool(raw)
         stored = json.loads(raw) if raw else None
-        # Older rows are a bare list; newer ones are wrapped with a stamp.
         if isinstance(stored, dict):
-            _sites_persisted_at[0] = float(stored.get("_computed_at") or 0)
-            return stored.get("sites")
-        return stored
+            sites = stored.get("sites")
+            computed_at = float(stored.get("_computed_at") or 0)
+        else:
+            # Older rows were bare lists rather than timestamped envelopes.
+            sites = stored
+            computed_at = 0
+        # A v1 cache lacks per-archive crawl fields. Keep serving its counts,
+        # but mark it stale so the endpoint schedules a refresh. Never turn
+        # absent metrics into zeros that look like a real crawl result.
+        complete_shape = isinstance(sites, list) and all(
+            {"site", "count", "last_indexed", "last_crawled", "crawled_last_week"}
+            <= set(row) for row in sites if isinstance(row, dict)
+        ) and all(isinstance(row, dict) for row in sites)
+        _sites_persisted_at[0] = computed_at if complete_shape and not legacy else 0
+        return sites
     except Exception:
         return None
 
@@ -606,24 +625,29 @@ def _with_sites(payload: dict | None) -> dict | None:
     counts = {r["site"]: int(r["count"]) for r in rows if r.get("site")}
     if not counts:
         return payload
-    return {
+    out = {
         **payload,
         "sites": counts,
         "sites_updated_at": {
             r["site"]: r["last_indexed"] for r in rows
             if r.get("site") and r.get("last_indexed")
         },
-        "sites_crawled_at": {
-            r["site"]: r["last_crawled"] for r in rows
-            if r.get("site") and r.get("last_crawled")
-        },
-        "sites_crawled_last_week": {
-            r["site"]: int(r.get("crawled_last_week") or 0)
-            for r in rows if r.get("site")
-        },
         "stories_scanned": payload.get("stories"),
         "stories": sum(counts.values()),
     }
+    # Old persisted site rows predate crawler telemetry. Keep their counts
+    # useful while refresh runs, but leave the fields absent so callers do not
+    # mistake missing data for zero crawls.
+    if rows and all("crawled_last_week" in r and "last_crawled" in r for r in rows):
+        out["sites_crawled_at"] = {
+            r["site"]: r["last_crawled"] for r in rows
+            if r.get("site") and r.get("last_crawled")
+        }
+        out["sites_crawled_last_week"] = {
+            r["site"]: int(r["crawled_last_week"] or 0)
+            for r in rows if r.get("site")
+        }
+    return out
 
 
 @router.get("/totals")
