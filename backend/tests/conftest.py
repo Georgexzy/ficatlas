@@ -7,6 +7,16 @@ database would let a test create and delete rows in the live 19.7M-row table.
 """
 import os
 import sys
+from urllib.parse import urlsplit
+
+# Some modules create their own engine through db.session instead of using the
+# `db` fixture. Point those engines at the same isolated database before test
+# modules are imported. Previously the fixture was safe while module-level
+# SessionLocal instances still inherited DATABASE_URL and could write to live.
+_test_url = os.getenv("TEST_DATABASE_URL", "").strip()
+_test_name = urlsplit(_test_url).path.rsplit("/", 1)[-1]
+if _test_url and _test_name.endswith("_test"):
+    os.environ["DATABASE_URL"] = _test_url
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

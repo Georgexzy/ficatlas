@@ -77,6 +77,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
   // appearing and then failing — showing a control that 401s teaches people the
   // app is broken rather than that it is not theirs.
   const [following, setFollowing] = useState<boolean | null>(null)
+  const [followEmailHint, setFollowEmailHint] = useState(false)
   useEffect(() => {
     if (!id) return
     fetchWithTimeout(`${API_BASE}/api/follows/${id}`, {}, USER_TIMEOUT_MS)
@@ -95,6 +96,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
       const r = await fetchWithTimeout(`${API_BASE}/api/follows/${id}`,
                             { method: next ? "POST" : "DELETE" }, USER_TIMEOUT_MS)
       if (!r.ok) setFollowing(!next)
+      else setFollowEmailHint(next)
     } catch {
       setFollowing(!next)
     }
@@ -595,13 +597,21 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
             </a>
           )}
           {user && following !== null && (
-            <button className={`btn ${following ? "btn--on" : "btn--ghost"}`}
-              onClick={toggleFollow}
-              title={following
-                ? "You'll see new chapters in your Updates list — tap to stop"
-                : "Tell me when this work gets a new chapter"}>
-              {following ? "✓ Following" : "☆ Follow"}
-            </button>
+            <>
+              <button className={`btn ${following ? "btn--on" : "btn--ghost"}`}
+                onClick={toggleFollow}
+                title={following
+                  ? "You'll see new chapters in your Updates list — tap to stop"
+                  : "Tell me when this work gets a new chapter"}>
+                {following ? "✓ Following" : "☆ Follow"}
+              </button>
+              {followEmailHint && following && (
+                <span className="follow-email-hint" role="status">
+                  Want an email when it updates?{" "}
+                  <Link href="/library?tab=following">Turn on update emails</Link>
+                </span>
+              )}
+            </>
           )}
           {/* One Wayback link, not two.
               This rendered both a derived link (for hosted FictionAlley works) and

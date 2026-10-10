@@ -3920,6 +3920,11 @@ function SearchPageInner() {
                     </button>
                   )}
                 </span>
+                {shown.count_is_capped && (
+                  <span className="results-bar__narrow-hint">
+                    Too many to browse? Add a fandom, character, ship or trope to narrow the results.
+                  </span>
+                )}
                 <span className="results-bar__actions">
                   <span className="results-bar__page">Page {shown.page} of {totalPages}</span>
                 </span>

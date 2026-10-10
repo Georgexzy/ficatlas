@@ -3545,6 +3545,21 @@ html, body { overflow-x: clip; max-width: 100%; }
 
 /* Which slice of the results you're on — quieter than the total itself. */
 .results-bar__range { color: var(--text-faint); }
+.results-bar__narrow-hint {
+  flex: 1 1 100%;
+  margin-top: -3px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.follow-email-hint {
+  display: block;
+  flex-basis: 100%;
+  margin-top: 5px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.follow-email-hint a { color: var(--accent); text-underline-offset: 2px; }
+.follow-email-hint a:hover { color: var(--text); }
 /* The per-archive split. The counts carry the weight, so they inherit the bar's
    colour while the archive names stay quiet. */
 .results-bar__split { color: var(--text-faint); }
