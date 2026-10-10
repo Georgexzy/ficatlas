@@ -167,8 +167,13 @@ class _Budget:
         # wants us slower keeps us slower across recoveries.
         self._floor = BASE_INTERVAL
 
-    def wait(self) -> None:
-        """Block until this caller may make one request against self.host."""
+    def wait(self, max_wait_s: float | None = None) -> bool:
+        """Block until this caller may make one request against self.host.
+
+        A bounded caller can decline a slot that is too far in the future. This
+        is for interactive work: background crawls may wait out a cooldown, but
+        a reader import must not sit behind it indefinitely.
+        """
         # Shared queue first. Every process claims from the same row, so the
         # rate AO3 sees is the configured one no matter how many are running.
         shared_delay = _claim_shared_slot(self.host, self.interval)
@@ -185,8 +190,11 @@ class _Budget:
         # about until penalise() writes it.
         if shared_delay is not None:
             delay = max(delay, shared_delay)
+        if max_wait_s is not None and delay > max_wait_s:
+            return False
         if delay > 0:
             time.sleep(delay)
+        return True
 
     def penalise(self, retry_after: float | None = None) -> None:
         """AO3 refused someone. Everyone slows down, and past a point stops."""
@@ -269,8 +277,8 @@ class _Budget:
 BUDGET = _Budget()
 
 
-def wait() -> None:
-    BUDGET.wait()
+def wait(max_wait_s: float | None = None) -> bool:
+    return BUDGET.wait(max_wait_s=max_wait_s)
 
 
 async def await_slot() -> None:

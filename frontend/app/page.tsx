@@ -620,6 +620,7 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
     }
   }
   const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState("Starting import…")
   const [importedId, setImportedId] = useState<string | null>(null)
   // Characters and freeform tags are folded away by default.
   //
@@ -659,8 +660,9 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
     e.preventDefault(); e.stopPropagation()
     if (importing) return
     setImporting(true)
+    setImportProgress("Starting import…")
     try {
-      const data = await importToLibrary(story.url)
+      const data = await importToLibrary(story.url, setImportProgress)
       if (data.id) {
         setImportedId(data.id)
         // Auto-redirect to the reader after a brief success state
@@ -931,7 +933,7 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
             <Link href={`/story/${story.id}`} className="card-btn">Details</Link>
             {canImport && (
               <button className="card-btn" onClick={importToRead} disabled={importing}
-                title="Save a private copy for offline reading">
+                title={importing ? importProgress : "Save a private copy for offline reading"}>
                 {importing ? "Saving…" : importedId ? "✓ Opening…" : "Save to library"}
               </button>
             )}

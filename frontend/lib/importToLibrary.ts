@@ -9,7 +9,10 @@ export interface ImportedStory {
 
 /** Start a durable import job and wait for its result without holding the
  *  request to FicHub/AO3 open through the app's proxy chain. */
-export async function importToLibrary(url: string): Promise<ImportedStory> {
+export async function importToLibrary(
+  url: string,
+  onProgress?: (message: string) => void,
+): Promise<ImportedStory> {
   const form = new FormData()
   form.append("url", url)
   const started = await fetchWithTimeout("/api/library/import-url-job", {
@@ -30,6 +33,9 @@ export async function importToLibrary(url: string): Promise<ImportedStory> {
     endpoint: `/api/library/import-url-jobs/${encodeURIComponent(jobId)}`,
     timeoutMs: 10 * 60_000,
     intervalMs: 1500,
+    onProgress: (job) => {
+      if (typeof job.progress === "string") onProgress?.(job.progress)
+    },
   })
   if (state.status === "error") {
     throw new Error(typeof state.error === "string" && state.error

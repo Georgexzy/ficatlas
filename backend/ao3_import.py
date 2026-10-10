@@ -104,7 +104,11 @@ def fetch_ao3_full_work(url: str) -> dict | None:
     if not work_id:
         return None
 
-    ao3_budget.wait()
+    # Reader initiated imports are interactive. Do not leave their background
+    # job parked behind the crawler's shared cooldown for minutes or hours.
+    if not ao3_budget.wait(max_wait_s=20):
+        log.info("ao3 import: shared request budget is busy; declining interactive fetch")
+        return None
     with httpx.Client(headers=UA, follow_redirects=True, timeout=60.0) as client:
         try:
             r = client.get(

@@ -64,6 +64,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
   const [reloadKey, setReloadKey] = useState(0)
   const [bookmarked, setBookmarked] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState("Starting import…")
   const [similar, setSimilar] = useState<any[]>([])
   // Offline save state
   const [offlineSaved, setOfflineSaved] = useState(false)
@@ -211,8 +212,9 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
   const importAndRead = async () => {
     if (!story || importing) return
     setImporting(true)
+    setImportProgress("Starting import…")
     try {
-      const data = await importToLibrary(story.url)
+      const data = await importToLibrary(story.url, setImportProgress)
       if (data.id) {
         window.location.href = `/story/${data.id}/chapter/1`
       }
@@ -490,7 +492,7 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
                   </ArchiveLink>
                   {!authLoading && (user ? (
                     <button className="btn btn--ghost" onClick={importAndRead} disabled={importing}
-                      title="Save a private copy to your library for offline reading">
+                      title={importing ? importProgress : "Save a private copy to your library for offline reading"}>
                       {importing ? "Saving…" : "Save to library"}
                     </button>
                   ) : (

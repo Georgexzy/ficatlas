@@ -487,6 +487,11 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
     db: Session = Depends(get_db),
     viewer: Optional[User] = Depends(get_current_user),
 ):
+    return await _import_url_impl(url=url, private=private, db=db, viewer=viewer)
+
+
+async def _import_url_impl(url: str, private: bool, db: Session,
+                           viewer: Optional[User], progress_callback=None):
     """Fetch a story from AO3/FFnet via FicHub and import it.
 
     Two quite different operations behind one endpoint, separated by `private`:
@@ -566,6 +571,8 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
                     "chapters": ch_count, "already_hosted": True,
                     "private": True}
 
+    if progress_callback:
+        progress_callback("Contacting FicHub for the story file…")
     log.info(f"Fetching {url} via FicHub...")
     is_ao3 = "archiveofourown.org" in url
     try:
@@ -586,6 +593,8 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
         if not is_ao3:
             raise
         log.warning("FicHub import failed (%s); falling back to direct AO3 fetch", exc.detail)
+        if progress_callback:
+            progress_callback("FicHub is unavailable; trying AO3 directly…")
         from ao3_import import fetch_ao3_full_work
         parsed = await asyncio.to_thread(fetch_ao3_full_work, url)
         meta = {}
@@ -602,6 +611,8 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
         if not is_ao3:
             raise HTTPException(502, "FicHub could not fetch this work. Try again shortly.")
         log.warning("FicHub transport failed; trying direct AO3 import: %s", exc)
+        if progress_callback:
+            progress_callback("FicHub is unavailable; trying AO3 directly…")
         from ao3_import import fetch_ao3_full_work
         parsed = await asyncio.to_thread(fetch_ao3_full_work, url)
         meta = {}
@@ -717,13 +728,19 @@ async def import_url_job(url: str = Form(...),
     user_id = str(viewer.id)
 
     async def _run_import():
+        def _progress(message: str) -> None:
+            with db_session() as progress_db:
+                update(progress_db, job_id, progress=message,
+                       updated_at=time.time())
         try:
+            _progress("Preparing your library copy…")
             with db_session() as work_db:
                 user = work_db.query(User).filter(User.id == user_id).first()
                 if user is None:
                     raise HTTPException(401, "Sign in again to save this story.")
-                result = await import_url(url=url, private=True,
-                                          db=work_db, viewer=user)
+                result = await _import_url_impl(
+                    url=url, private=True, db=work_db, viewer=user,
+                    progress_callback=_progress)
             with db_session() as status_db:
                 update(status_db, job_id, status="done", progress="Saved to your library.",
                        result=result, finished_at=time.time())

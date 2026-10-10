@@ -15,6 +15,9 @@ from sqlalchemy import text
 
 PREFIX = "reader_import_job:"
 RETENTION_S = 24 * 60 * 60
+# Longer than a normal import plus a retry, but short enough that a worker
+# restart cannot leave the reader staring at a running job indefinitely.
+STALE_RUNNING_S = 12 * 60
 
 
 def _ensure(db) -> None:
@@ -76,4 +79,13 @@ def read(db, job_id: str, user_id: str) -> dict | None:
         return None
     if state.get("user_id") != str(user_id):
         return None
+    if (state.get("status") == "running"
+            and time.time() - float(state.get("updated_at", state.get("started_at", 0)))
+            > STALE_RUNNING_S):
+        state = update(
+            db, job_id, status="error",
+            progress="The import stopped responding.",
+            error="The source did not respond in time. Please try saving again.",
+            finished_at=time.time(),
+        ) or state
     return {k: v for k, v in state.items() if k != "user_id"}
