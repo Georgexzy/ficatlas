@@ -1648,3 +1648,35 @@ def test_the_article_does_not_hide_a_second_named_character(suffix_char_vocab):
     assert "Marauders (Harry Potter)" in parsed.characters
     assert "the Marauders" not in parsed.characters
     assert r'char:"Alastor \"Mad-Eye\" Moody"' in out.query
+
+
+def test_collective_character_probe_includes_individually_tagged_members(
+        suffix_char_vocab):
+    """A work may tag every Marauder separately without the collective facet.
+
+    Search expands the collective alias to its members, so the extractor's
+    probe must count that same work instead of rejecting its query as empty.
+    """
+    from api.search import ExtractedTerm, _probe_count
+    from character_aliases import character_variants
+
+    suffix_char_vocab.execute(text("""
+        INSERT INTO stories (site, site_id, url, title, author, fandoms,
+                             characters, tags)
+        VALUES ('ao3', 'hp_members_only', 'https://example.test/hp_members_only',
+                'Members only', 'y', ARRAY['Harry Potter - J. K. Rowling'],
+                ARRAY['Alastor "Mad-Eye" Moody', 'James Potter', 'Sirius Black',
+                      'Remus Lupin', 'Peter Pettigrew'],
+                ARRAY['First Wizarding War with Voldemort (Harry Potter)'])
+    """))
+    suffix_char_vocab.commit()
+    group = ExtractedTerm(kind="character", value="Marauders (Harry Potter)",
+                          count=2109, matched="marauders")
+    moody = ExtractedTerm(kind="character",
+                           value='Alastor "Mad-Eye" Moody', count=2800,
+                           matched="Alastor Moody")
+    war = ExtractedTerm(
+        kind="tag", value="First Wizarding War with Voldemort (Harry Potter)",
+        count=3385, matched="first wizarding war")
+    assert "James Potter" in character_variants(group.value)
+    assert _probe_count(suffix_char_vocab, [moody, group, war]) >= 1

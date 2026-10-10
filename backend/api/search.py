@@ -7282,7 +7282,17 @@ def _probe_count(db, terms: list, word_count_min: Optional[int] = None,
         if not col:
             continue
         clauses.append(f"{col} && CAST(:v{i} AS text[])")
-        params[f"v{i}"] = list(t.spellings or [t.value])
+        spellings = list(t.spellings or [t.value])
+        # The search endpoint expands character aliases before filtering. Keep
+        # the extractor's candidate counts on that same predicate: collective
+        # character facets such as `Marauders (Harry Potter)` can be stored as
+        # their members on ensemble works, even when the collective tag itself
+        # is absent. Otherwise the extractor can reject a useful query because
+        # its probe counted a stricter filter than the reader's search runs.
+        if t.kind == "character":
+            spellings = list(dict.fromkeys(
+                spellings + character_variants(t.value)))
+        params[f"v{i}"] = spellings
     if not clauses:
         return 1
     # The length constraint counts too. Without it the probe passed a pair of

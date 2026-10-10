@@ -47,6 +47,14 @@ CHARACTER_ALIASES: dict[str, list[str]] = {
     "Blaise Zabini":       ["BZ", "Blaise", "Blaise Zabini"],
     "Pansy Parkinson":     ["Pansy", "PP", "Pansy Parkinson"],
     "Peter Pettigrew":     ["Peter", "PP2", "Peter Pettigrew"],
+    # AO3 indexes the collective as `Marauders (Harry Potter)`, while ensemble
+    # works often tag only the four people. Treat the collective as a query
+    # alias for its members so searches for the group do not miss works such as
+    # `Tall Orders`, which carries all four individual character tags.
+    "Marauders (Harry Potter)": [
+        "Marauders (Harry Potter)", "the Marauders", "James Potter",
+        "Sirius Black", "Remus Lupin", "Peter Pettigrew",
+    ],
     "Bill Weasley":        ["BW", "Bill", "Bill Weasley"],
     "Charlie Weasley":     ["CW", "Charlie", "Charlie Weasley"],
     "Fred Weasley":        ["FW", "Fred", "Fred Weasley"],
