@@ -62,8 +62,8 @@ export default function WhatYouCanDo({ shown }: { shown: boolean }) {
           <li>
             <strong>Know when a WIP updates.</strong> One list covering AO3,
             FanFiction.net and FictionAlley — the thing no single archive can do,
-            because it only knows its own works. Nothing is emailed; updates are
-            shown when you come back.
+            because it only knows its own works. See updates when you come back,
+            or opt in to chapter update emails from Library → Following.
           </li>
           <li>
             <strong>Keep a search, not just a result.</strong> Save

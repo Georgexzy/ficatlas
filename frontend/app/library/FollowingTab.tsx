@@ -90,7 +90,18 @@ function FollowMail() {
 
   useEffect(() => {
     fetchWithTimeout("/api/follows/email", { credentials: "include" }, USER_TIMEOUT_MS)
-      .then(r => (r.ok ? r.json() : null)).then(setPrefs).catch(() => {})
+      .then(r => (r.ok ? r.json() : null)).then(data => {
+        if (!data) return
+        setPrefs(data)
+        // Introduce the opt-in once per browser session while it is off. The
+        // visible Off state remains after the reader closes it, without making
+        // them reopen a disclosure card every time they visit their shelf.
+        let introduced = false
+        try {
+          introduced = sessionStorage.getItem("ficatlas:update-email-introduced") === "1"
+        } catch { /* private browsing */ }
+        if (!data.enabled && !introduced) setOpen(true)
+      }).catch(() => {})
   }, [])
 
   // The server is not offering mail at all (no relay configured), so a switch
@@ -144,7 +155,14 @@ function FollowMail() {
     // and opened it pushed the list of followed stories — the reason for this
     // tab — most of a phone screen down. The line still says the state.
     <details className={`mail-card${prefs.enabled ? " mail-card--on" : ""}`}
-      open={open} onToggle={e => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      open={open} onToggle={e => {
+        const next = (e.currentTarget as HTMLDetailsElement).open
+        setOpen(next)
+        if (!next) {
+          try { sessionStorage.setItem("ficatlas:update-email-introduced", "1") }
+          catch { /* private browsing */ }
+        }
+      }}>
       <summary className="mail-card__summary">
         <span className="mail-card__summary-title">Update emails</span>
         <span className={`mail-card__pill${prefs.enabled ? " mail-card__pill--on" : ""}`}>
@@ -290,8 +308,9 @@ export default function FollowingTab() {
 
         {user && works !== null && works.length === 0 && (
           <p className="page-prose__muted">
-            You are not following anything yet. Open any story and use Follow to be
-            told when it gains chapters.
+            You are not following anything yet. Open a story and choose Follow to
+            add it here. Once you do, you can also opt in to chapter update emails
+            from this tab.
           </p>
         )}
 
