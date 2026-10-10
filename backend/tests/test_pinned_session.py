@@ -774,12 +774,42 @@ def test_the_description_ranks_and_never_filters():
     import inspect
     from api import search as S
     src = inspect.getsource(S._describe_rank)
+    relation_src = inspect.getsource(S._describe_relation_rank)
     assert '" or ".join(words)' in src, "the description must be OR'd, not ANDed"
     assert "ts_rank" in src
+    assert "ts_rank_cd" in relation_src and "entity.summary" in relation_src, (
+        "action intent should get a small proximity vote from the summary, "
+        "not be inferred from separate metadata tags"
+    )
     # And it must not appear in any filter predicate.
     full = inspect.getsource(S.search)
     assert "describe" in full
     assert "filter(describe" not in full
+
+
+def test_action_description_keeps_subject_and_target_together():
+    from api.search import (_canonical_fandom_hint, _describe_relation_phrases,
+                            _description_discovery_query)
+
+    phrases = _describe_relation_phrases(
+        "first wizarding war Alastor 'Mad Eye' Moody trains the Marauders")
+    assert "Moody trains the Marauders" in phrases
+    assert "Moody teaches the Marauders" in phrases
+    assert all("Wizarding War" not in phrase for phrase in phrases)
+    assert _canonical_fandom_hint([
+        "Marauders (Harry Potter)",
+        "First Wizarding War with Voldemort (Harry Potter)",
+    ]) == "Harry Potter"
+    assert _canonical_fandom_hint([
+        "Marauders (Harry Potter)", "Drarry (Harry Potter)",
+        "Characters (Doctor Who)",
+    ]) is None
+    assert _description_discovery_query([
+        'Alastor "Mad-Eye" Moody', "Marauders (Harry Potter)",
+    ]) == "Moody Marauders"
+    assert _description_discovery_query([
+        "James Potter", "Sirius Black", "Remus Lupin", "Peter Pettigrew",
+    ]) == "Potter Black Lupin"
 
 
 def test_the_vocabulary_of_asking_is_not_the_vocabulary_of_the_fic():

@@ -332,6 +332,97 @@ def _describe_words(text: str, cap: int = 24) -> list[str]:
     return out
 
 
+_RELATION_VERB_GROUPS = (
+    ("train", "trains", "trained", "training",
+     "teach", "teaches", "taught", "teaching",
+     "mentor", "mentors", "mentored", "mentoring",
+     "instruct", "instructs", "instructed", "instructing"),
+)
+
+
+def _describe_relation_phrases(text: str, cap: int = 8) -> list[str]:
+    """Build short, soft phrase queries around a described action.
+
+    A flat OR rank can confuse "Moody trains the Marauders" with a summary
+    about someone teaching a spell when Moody and the Marauders only occur in
+    the tags. Preserve the nearest named words and the wording between them so
+    the summary can get an extra vote when it actually connects the actor,
+    action and target. This is ranking evidence only; it never removes a work.
+    """
+    tokens = list(re.finditer(r"[A-Za-z][A-Za-z'-]*", text or ""))
+    if len(tokens) < 3:
+        return []
+    function_words = {
+        "a", "an", "the", "and", "or", "but", "if", "as", "of", "to",
+        "in", "on", "at", "for", "with", "from", "by", "is", "are",
+        "was", "were", "be", "been", "being", "do", "does", "did",
+        "have", "has", "had", "will", "would", "can", "could", "they",
+        "them", "he", "she", "we", "us", "you", "their", "his", "her",
+    }
+    verb_to_group = {
+        verb: group for group in _RELATION_VERB_GROUPS for verb in group
+    }
+    phrases: list[str] = []
+    for i, token in enumerate(tokens):
+        verb = token.group().lower()
+        group = verb_to_group.get(verb)
+        if not group:
+            continue
+        before = next((j for j in range(i - 1, max(-1, i - 5), -1)
+                       if tokens[j].group().lower() not in function_words), None)
+        after = next((j for j in range(i + 1, min(len(tokens), i + 5))
+                      if tokens[j].group().lower() not in function_words), None)
+        if before is None or after is None:
+            continue
+        start, end = tokens[before].start(), tokens[after].end()
+        original = (text or "")[start:end]
+        for replacement in group:
+            phrase = (original[:token.start() - start] + replacement
+                      + original[token.end() - start:])
+            if phrase not in phrases:
+                phrases.append(phrase)
+            if len(phrases) >= cap:
+                return phrases
+    return phrases
+
+
+def _describe_relation_rank(entity, describe: str | None):
+    """Small proximity bonus for an action connecting words in the summary."""
+    relation_phrases = _describe_relation_phrases(describe or "")
+    if not relation_phrases:
+        return None
+    relation_tsq = None
+    for phrase in relation_phrases:
+        phrase_tsq = func.phraseto_tsquery(_REGCONFIG, phrase)
+        relation_tsq = (phrase_tsq if relation_tsq is None else
+                        relation_tsq.op("||")(phrase_tsq))
+    summary_tsv = func.to_tsvector(
+        _REGCONFIG, func.coalesce(entity.summary, ""))
+    return func.ts_rank_cd(summary_tsv, relation_tsq, 32)
+
+
+def _canonical_fandom_hint(values: list[str]) -> str | None:
+    """Infer one AO3 fandom scope from canonical `Character (Fandom)` facets."""
+    hints = {m.group(1).strip() for value in values
+             for m in [re.search(r"\(([^()]+)\)\s*$", value)] if m}
+    return next(iter(hints)) if len(hints) == 1 else None
+
+
+def _description_discovery_query(characters: list[str]) -> str | None:
+    """Use compact actor/target names, not every word of the reader's prose."""
+    terms: list[str] = []
+    for value in characters:
+        name = re.sub(r"\s*\([^()]*\)\s*$", "", value)
+        words = re.findall(r"[A-Za-z][A-Za-z'-]{2,}", name)
+        if words:
+            term = words[-1]
+            if term.casefold() not in {x.casefold() for x in terms}:
+                terms.append(term)
+        if len(terms) == 3:
+            break
+    return " ".join(terms) or None
+
+
 def _describe_rank(entity, describe: str | None):
     """A ts_rank over the description, OR'd, or None if there is nothing to use.
 
@@ -380,7 +471,16 @@ def _describe_rank(entity, describe: str | None):
         expanded.extend(beat_synonyms.get(word, ()))
     words = list(dict.fromkeys(expanded))[:32]
     tsq = func.websearch_to_tsquery(_REGCONFIG, " or ".join(words))
-    return func.ts_rank(_TSV_WEIGHTS_CATEGORY, _story_tsv_ranked(entity), tsq, 0)
+    rank = func.ts_rank(_TSV_WEIGHTS_CATEGORY, _story_tsv_ranked(entity), tsq, 0)
+
+    # Keep actor/action/target together as a second, summary-only signal. A
+    # work's tags are excellent evidence for who and what it involves; they do
+    # not establish that one character performed an action on another. The
+    # phrase gets a small bonus beside the broad prose rank and cannot filter.
+    relation_rank = _describe_relation_rank(entity, describe)
+    if relation_rank is not None:
+        rank = rank + (0.25 * relation_rank)
+    return rank
 
 
 def fandom_base(value: str) -> str:
@@ -2739,7 +2839,13 @@ async def _fetch_and_persist_live(live_params: dict, want_ao3: bool) -> None:
         from live_fetch.persist import persist_live_results
         from db.session import db_session
 
-        results = await fetch_live_ao3(live_params, limit=60, pages=3)
+        # Search-triggered work runs after the request. Keep it on AO3's
+        # robots-permitted fandom tag endpoint; /works/search is disallowed for
+        # automated clients. Description discovery needs only the first page.
+        discovery = bool(live_params.get("description_discovery"))
+        results = await fetch_live_ao3(
+            live_params, limit=20 if discovery else 60,
+            pages=1 if discovery else 3, automated=True)
         if not results:
             return
         with db_session() as db:
@@ -5502,6 +5608,29 @@ def search(          # NOT async — see below
                     interpreted = Interpreted(query=_ex.query,
                                               terms=_ex.terms,
                                               source_total=total)
+                    # A thin keyword page can have a much larger, useful
+                    # structured candidate set. Give AO3 one polite, scoped
+                    # discovery pass for its summary text, then index those
+                    # results for the next visit. A single unambiguous
+                    # canonical fandom hint keeps this on AO3's allowed tag
+                    # listing endpoint and avoids broad archive-wide searches.
+                    _hint_values = (
+                        list(_pq_candidate.characters) + list(_pq_candidate.tags)
+                        if _pq_candidate else [])
+                    _hint_fandom = _canonical_fandom_hint(_hint_values)
+                    _discovery_query = _description_discovery_query(
+                        list(_pq_candidate.characters) if _pq_candidate else [])
+                    if (_hint_fandom and _discovery_query
+                            and "ao3" in active_sites and live
+                            and _should_fetch_live(sort, page, _typed)):
+                        _discovery_params = {
+                            "q": _discovery_query, "fandoms": _hint_fandom,
+                            "sort": "relevance", "description_discovery": True,
+                        }
+                        if _claim_live_fetch(_discovery_params):
+                            from live_fetch.jobs import run_in_background
+                            run_in_background(lambda: _fetch_and_persist_live(
+                                _discovery_params, True))
         except Exception:
             log.debug("interpretation failed", exc_info=True)
 

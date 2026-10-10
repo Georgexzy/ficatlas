@@ -16,6 +16,8 @@ being usable. So this asserts the shape of each directly.
 """
 import re
 
+from sqlalchemy import text
+
 from api.search import (
     _REGCONFIG,
     _story_tsv,
@@ -86,3 +88,39 @@ def test_regconfig_is_shared_by_both():
     assert "english" in str(_REGCONFIG)
     assert "english" in _sql(_story_tsv())
     assert "english" in _sql(_story_tsv_ranked())
+
+
+def test_description_action_bonus_requires_a_summary_relation(db):
+    """Separate Moody/Marauders tags plus an unrelated teaching line do not
+    count as a summary saying that Moody trains the group."""
+    from api.search import _describe_relation_rank
+    from models.story import Story
+
+    db.execute(text("""
+        INSERT INTO stories (site, site_id, url, title, author, summary,
+                             fandoms, characters, tags)
+        VALUES
+          ('ao3', 'relation_true', 'https://example.test/relation_true',
+           'Related', 'author',
+           'Moody trains the Marauders during the First Wizarding War.',
+           ARRAY['Harry Potter'],
+           ARRAY['Alastor "Mad-Eye" Moody', 'James Potter', 'Sirius Black',
+                 'Remus Lupin', 'Peter Pettigrew'],
+           ARRAY['First Wizarding War with Voldemort (Harry Potter)']),
+          ('ao3', 'relation_false', 'https://example.test/relation_false',
+           'Unrelated', 'author',
+           'Sirius asks James to teach him a spell. Moody briefs the Order; '
+           'the Marauders are elsewhere.',
+           ARRAY['Harry Potter'],
+           ARRAY['Alastor "Mad-Eye" Moody', 'James Potter', 'Sirius Black',
+                 'Remus Lupin', 'Peter Pettigrew'],
+           ARRAY['First Wizarding War with Voldemort (Harry Potter)'])
+    """))
+    db.commit()
+    rank = _describe_relation_rank(
+        Story, "First Wizarding War Alastor Moody trains the Marauders")
+    scores = dict(db.query(Story.site_id, rank).filter(
+        Story.site_id.in_(["relation_true", "relation_false"])).all())
+
+    assert scores["relation_true"] > 0
+    assert scores["relation_false"] == 0
