@@ -18,6 +18,10 @@ import { shortHubName } from "@/lib/hubNames"
 import { confidentSpelling, fixOperatorTypos } from "@/lib/autoCorrect"
 import SyntaxHelp from "./SyntaxHelp"
 import { rememberSearch } from "@/lib/lastSearch"
+import {
+  clearRecentSearches, loadRecentSearches, rememberRecentSearch,
+  removeRecentSearch,
+} from "@/lib/recentSearches"
 import { saveSearch, removeSaved, isSaved, noteRun, searchId, loadSaved,
          newSince, SAVED_CHANGED, type SavedSearch } from "@/lib/savedSearches"
 import { saveScroll, restoreScroll, clearScroll } from "@/lib/scrollMemory"
@@ -1020,17 +1024,18 @@ function RecentSearches(
 
   useEffect(() => {
     if (!open) return
-    try {
-      const raw = JSON.parse(localStorage.getItem("ficatlas:recent-searches") ?? "[]")
-      setRecents(Array.isArray(raw) ? raw.filter(x => typeof x === "string").slice(0, 8) : [])
-    } catch { setRecents([]) }
+    setRecents(loadRecentSearches(8))
     setSaved(loadSaved())
   }, [open])
 
   const clear = () => {
     setRecents([])
-    try { localStorage.setItem("ficatlas:recent-searches", "[]") } catch {}
+    clearRecentSearches()
     onDismiss()
+  }
+
+  const removeRecent = (q: string) => {
+    setRecents(removeRecentSearch(q).slice(0, 8))
   }
 
   // A recent search that is also saved is shown once, under Saved. Listing it
@@ -1041,7 +1046,7 @@ function RecentSearches(
 
   if (!open || (!unsavedRecents.length && !saved.length)) return null
   return (
-    <div className="recent-drop" role="listbox" aria-label="Your searches">
+    <div className="recent-drop" role="group" aria-label="Your searches">
       {saved.length > 0 && (
         <>
           <div className="recent-drop__head">
@@ -1051,7 +1056,7 @@ function RecentSearches(
             // A row, not a button, because it holds TWO actions — run it and
             // forget it — and a button inside a button is not valid HTML and does
             // not work with a keyboard.
-            <div key={s.id} className="recent-drop__row" role="option" aria-selected={false}>
+            <div key={s.id} className="recent-drop__row">
               <button
                 className="recent-drop__item recent-drop__item--grow"
                 // mousedown, not click: the input's blur fires first and would
@@ -1091,17 +1096,23 @@ function RecentSearches(
               onClick={clear}>Clear</button>
           </div>
           {unsavedRecents.map(q => (
-            <button
-              key={q}
-              role="option"
-              aria-selected={false}
-              className="recent-drop__item"
-              onMouseDown={e => { e.preventDefault(); onPick(q) }}
-              title={q}
-            >
-              <span className="recent-drop__icon" aria-hidden="true">↻</span>
-              <span className="recent-drop__text">{q}</span>
-            </button>
+            <div key={q} className="recent-drop__row">
+              <button
+                className="recent-drop__item recent-drop__item--grow"
+                onMouseDown={e => { e.preventDefault(); onPick(q) }}
+                title={q}
+              >
+                <span className="recent-drop__icon" aria-hidden="true">↻</span>
+                <span className="recent-drop__text">{q}</span>
+              </button>
+              <button
+                className="recent-drop__x"
+                aria-label={`Remove "${q}" from recent searches`}
+                title="Remove from recent searches"
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => removeRecent(q)}
+              >✕</button>
+            </div>
           ))}
         </>
       )}
@@ -2569,10 +2580,7 @@ function SearchPageInner() {
     // Save to recent searches
     const effectiveQuery = explicitQuery ?? query
     if (effectiveQuery.trim()) {
-      const recents = JSON.parse(localStorage.getItem("ficatlas:recent-searches") ?? "[]")
-      const next = [effectiveQuery.trim(),
-                    ...recents.filter((q: string) => q !== effectiveQuery.trim())].slice(0, 20)
-      localStorage.setItem("ficatlas:recent-searches", JSON.stringify(next))
+      rememberRecentSearch(effectiveQuery)
     }
 
     // Cancel whatever search this one replaces. Ignoring a superseded response
@@ -3489,7 +3497,14 @@ function SearchPageInner() {
             )}
             {importMsg && <div className="alert alert--success" style={{marginBottom:8}}>{importMsg}</div>}
             <div className="search-bar">
-              <div className="search-input-wrap">
+              <div className="search-input-wrap"
+                onBlurCapture={e => {
+                  // Keep the dropdown open while keyboard focus moves from the
+                  // input into a recent/saved row. Close it when focus leaves
+                  // the entire search control, not merely when the input blurs.
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+                    setSearchFocused(false)
+                }}>
                 {/* The site's most important input had no accessible name. Its
                     placeholder is `exampleQuery`, which is a rotating example
                     ("harry potter dumplings") and not a label — so a screen
@@ -3509,8 +3524,7 @@ function SearchPageInner() {
                     if (e.key === "Enter") { setSearchFocused(false); doSearch() }
                     if (e.key === "Escape") setSearchFocused(false)
                   }}
-                  onFocus={() => setSearchFocused(true)}
-                  onBlur={() => setSearchFocused(false)} />
+                  onFocus={() => setSearchFocused(true)} />
                 {query && (
                   <button className="search-clear" aria-label="Clear search text"
                     title="Clear the search box (keeps your filters)"
