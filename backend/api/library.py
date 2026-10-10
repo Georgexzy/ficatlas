@@ -535,11 +535,36 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
         existing = db.query(Story).filter(
             Story.cross_post_urls.any(url)  # type: ignore[arg-type]
         ).first()
+    # The same AO3/FF.net story commonly arrives with query strings, a
+    # chapter-specific URL, or a different scheme. Its archive ID is the stable
+    # identity; missing this row used to attempt a duplicate insert and surface
+    # as an opaque 500 instead of upgrading the indexed record.
+    source_key = _story_key_from_url(url)
+    if not existing and source_key:
+        existing = (db.query(Story)
+                    .filter(Story.site == SiteEnum(source_key[0]),
+                            Story.site_id == source_key[1])
+                    .first())
     if existing and existing.is_hosted:
         ch_count = db.query(Chapter).filter(Chapter.story_id == existing.id).count()
         return {"id": str(existing.id), "title": existing.title,
                 "chapters": ch_count, "already_hosted": True,
                 "matched_via": "cross_post" if existing.url != url else "url"}
+    # A previous private import may have completed after the browser timed out.
+    # Reuse its stored chapters and grant this reader access rather than
+    # downloading the whole work again (and replacing the chapters underneath
+    # any reader already using them).
+    if private and existing:
+        ch_count = db.query(Chapter).filter(Chapter.story_id == existing.id).count()
+        if ch_count:
+            db.execute(sql_text("""
+                INSERT INTO user_hosted (user_id, story_id) VALUES (:u, :s)
+                ON CONFLICT DO NOTHING
+            """), {"u": str(viewer.id), "s": str(existing.id)})
+            db.commit()
+            return {"id": str(existing.id), "title": existing.title,
+                    "chapters": ch_count, "already_hosted": True,
+                    "private": True}
 
     log.info(f"Fetching {url} via FicHub...")
     is_ao3 = "archiveofourown.org" in url
@@ -569,6 +594,22 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
                 502,
                 "FicHub is throttling us right now and the direct AO3 fetch also "
                 "failed. Try again in a few minutes.",
+            )
+    except httpx.HTTPError as exc:
+        # FicHub can fail at the transport layer (not just with an HTTP status).
+        # Treat its timeout/connection failures like a retryable upstream error
+        # so AO3 work imports still get the direct-source fallback.
+        if not is_ao3:
+            raise HTTPException(502, "FicHub could not fetch this work. Try again shortly.")
+        log.warning("FicHub transport failed; trying direct AO3 import: %s", exc)
+        from ao3_import import fetch_ao3_full_work
+        parsed = await asyncio.to_thread(fetch_ao3_full_work, url)
+        meta = {}
+        if not parsed:
+            raise HTTPException(
+                502,
+                "FicHub could not fetch this work and AO3 did not return a readable copy. "
+                "Try again in a few minutes.",
             )
 
     # Honour the author's opt-out: a public import republishes the work under
@@ -655,6 +696,64 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
     db.commit()
     return {"id": str(story.id), "title": story.title,
             "chapters": len(parsed["chapters"]), "private": bool(private)}
+
+
+@router.post("/import-url-job")
+async def import_url_job(url: str = Form(...),
+    db: Session = Depends(get_db),
+    viewer: Optional[User] = Depends(get_current_user),
+):
+    """Start a reader import without holding the browser/proxy request open."""
+    if viewer is None:
+        raise HTTPException(401, "Sign in to save a story to your library.")
+    if not _story_key_from_url(url):
+        raise HTTPException(400, "Use an AO3 or FanFiction.net story URL.")
+
+    from reader_import_jobs import create, update
+    from live_fetch.jobs import run_in_background
+    from db.session import db_session
+
+    job_id, _ = create(db, str(viewer.id))
+    user_id = str(viewer.id)
+
+    async def _run_import():
+        try:
+            with db_session() as work_db:
+                user = work_db.query(User).filter(User.id == user_id).first()
+                if user is None:
+                    raise HTTPException(401, "Sign in again to save this story.")
+                result = await import_url(url=url, private=True,
+                                          db=work_db, viewer=user)
+            with db_session() as status_db:
+                update(status_db, job_id, status="done", progress="Saved to your library.",
+                       result=result, finished_at=time.time())
+        except HTTPException as exc:
+            with db_session() as status_db:
+                update(status_db, job_id, status="error",
+                       error=str(exc.detail), finished_at=time.time())
+        except Exception as exc:
+            log.exception("reader import job %s failed", job_id)
+            with db_session() as status_db:
+                update(status_db, job_id, status="error",
+                       error="The import failed unexpectedly. Please try again.",
+                       finished_at=time.time())
+
+    run_in_background(_run_import)
+    return {"job_id": job_id}
+
+
+@router.get("/import-url-jobs/{job_id}")
+def import_url_job_status(job_id: str,
+    db: Session = Depends(get_db),
+    viewer: Optional[User] = Depends(get_current_user),
+):
+    if viewer is None:
+        raise HTTPException(401, "Sign in to check this import.")
+    from reader_import_jobs import read
+    state = read(db, job_id, str(viewer.id))
+    if state is None:
+        raise HTTPException(404, "Import not found or no longer available.")
+    return state
 
 
 # ── Refresh / discovery ──────────────────────────────────────────────────────

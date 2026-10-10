@@ -32,6 +32,8 @@ export interface PollOptions {
   timeoutMs?: number
   intervalMs?: number
   signal?: AbortSignal
+  /** Override the legacy in-memory job endpoint with a durable job resource. */
+  endpoint?: string
 }
 
 export class JobPollError extends Error {
@@ -42,7 +44,8 @@ export class JobPollError extends Error {
 
 export async function pollJob(
   jobId: string,
-  { onProgress, timeoutMs = 15 * 60_000, intervalMs = 1500, signal }: PollOptions = {},
+  { onProgress, timeoutMs = 15 * 60_000, intervalMs = 1500, signal,
+    endpoint = `/api/library/jobs/${jobId}` }: PollOptions = {},
 ): Promise<JobState> {
   const deadline = Date.now() + timeoutMs
   let lastProgress = ""
@@ -65,7 +68,7 @@ export async function pollJob(
       // USER_TIMEOUT_MS rather than a bare fetch: the loop already has a whole
       // deadline, but a single hung poll inside it waits forever, and this was
       // the last unguarded call on the page.
-      res = await fetchWithTimeout(`/api/library/jobs/${jobId}`,
+      res = await fetchWithTimeout(endpoint,
         { signal }, USER_TIMEOUT_MS)
     } catch (e: any) {
       if (signal?.aborted || e?.name === "AbortError") {

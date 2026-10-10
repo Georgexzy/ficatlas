@@ -40,12 +40,29 @@ def _text(el) -> str:
 
 
 def _chapter_content(us) -> str:
-    """Chapter body as readable text with paragraph breaks preserved."""
+    """Chapter body as HTML, preserving AO3 paragraphs and inline emphasis.
+
+    The chapter API returns sanitized HTML to a reader using
+    ``dangerouslySetInnerHTML``. Returning plain text with ``\n\n`` here looks
+    separated in logs, but HTML collapses those newlines into spaces and the
+    whole chapter becomes one block. Keep the archive's markup; the shared
+    chapter sanitizer is the security boundary when the content is served.
+    """
     for s in us.find_all(["script", "style"]):
         s.decompose()
-    lines = [p.get_text("\n", strip=True) for p in us.find_all(["p", "h1", "h2", "h3", "h4", "blockquote"])]
-    lines = [l for l in lines if l]
-    return "\n\n".join(lines)
+    body = us.decode_contents().strip()
+    if body and us.find(["p", "h1", "h2", "h3", "h4", "blockquote", "hr"]):
+        return body
+
+    # AO3 also permits unwrapped text in userstuff. Turn its source line breaks
+    # into paragraph markup so browsers do not collapse the prose into a block.
+    from html import escape
+    raw = us.get_text("\n", strip=True)
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n+", raw) if part.strip()]
+    if not paragraphs:
+        paragraphs = [line.strip() for line in raw.splitlines() if line.strip()]
+    return "".join(f"<p>{escape(part).replace(chr(10), '<br>')}</p>"
+                   for part in paragraphs)
 
 
 def _extract_chapters(soup) -> list[dict]:

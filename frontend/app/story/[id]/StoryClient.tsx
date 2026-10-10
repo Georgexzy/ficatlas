@@ -11,6 +11,7 @@ import { describeError, type Failure } from "@/lib/errors"
 import OfflineLink from "@/app/OfflineLink"
 import { storyLink, isSeedUrl, otherCopies } from "@/lib/storyLinks"
 import { resumePoint } from "@/lib/readingProgress"
+import { importToLibrary } from "@/lib/importToLibrary"
 import ArchiveLink from "./ArchiveLink"
 import SiteHeader from "@/app/SiteHeader"
 
@@ -211,15 +212,9 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
     if (!story || importing) return
     setImporting(true)
     try {
-      const fd = new FormData(); fd.append("url", story.url)
-      fd.append("private", "true")
-      const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
-      const data = await r.json()
+      const data = await importToLibrary(story.url)
       if (data.id) {
         window.location.href = `/story/${data.id}/chapter/1`
-      } else {
-        alert(`Import failed: ${data.error || data.detail || "unknown"}`)
-        setImporting(false)
       }
     } catch (e: any) {
       alert(`Import failed: ${e.message || e}`)

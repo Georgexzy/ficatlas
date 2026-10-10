@@ -26,6 +26,7 @@ import { saveSearch, removeSaved, isSaved, noteRun, searchId, loadSaved,
          newSince, SAVED_CHANGED, type SavedSearch } from "@/lib/savedSearches"
 import { saveScroll, restoreScroll, clearScroll } from "@/lib/scrollMemory"
 import { describeError, type Failure } from "@/lib/errors"
+import { importToLibrary } from "@/lib/importToLibrary"
 import { readAllPrefs, readPref, type Prefs } from "@/lib/prefs"
 import { urlQueryString } from "@/lib/searchUrl"
 import { clampQuery } from "@/lib/displayText"
@@ -659,16 +660,11 @@ function StoryCard({ story, pos }: { story: StoryCard; pos?: number }) {
     if (importing) return
     setImporting(true)
     try {
-      const fd = new FormData(); fd.append("url", story.url)
-      fd.append("private", "true")
-      const r = await fetchWithTimeout(`/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
-      const data = await r.json()
+      const data = await importToLibrary(story.url)
       if (data.id) {
         setImportedId(data.id)
         // Auto-redirect to the reader after a brief success state
         setTimeout(() => { window.location.href = `/story/${data.id}/chapter/1` }, 350)
-      } else {
-        alert(`Import failed: ${data.error || data.detail || "unknown"}`)
       }
     } catch (err: any) {
       alert(`Import failed: ${err.message || err}`)
@@ -1935,17 +1931,16 @@ function SearchPageInner() {
     if (!detectedUrl) return
     setImporting(true); setImportMsg(null)
     try {
-      const API_BASE = ""  // relative — handled by Next.js rewrite to backend
-      const fd = new FormData()
-      fd.append("url", detectedUrl.url)
-      // Readers import to their own shelf; only an operator can publish into
-      // the shared index. Sending private=false for everyone meant the button
-      // 403'd for every reader while the label promised them a library.
-      fd.append("private", String(!user?.can_manage))
-      const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`,
-                            { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
-      if (!r.ok) throw new Error(await r.text())
-      const data = await r.json()
+      let data
+      if (user?.can_manage) {
+        const fd = new FormData(); fd.append("url", detectedUrl.url); fd.append("private", "false")
+        const r = await fetchWithTimeout(`/api/library/import-url`,
+          { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
+        if (!r.ok) throw new Error(await r.text())
+        data = await r.json()
+      } else {
+        data = await importToLibrary(detectedUrl.url)
+      }
       setImportMsg(user?.can_manage
         ? `Added "${data.title}" to the index — ${data.chapters} chapters, searchable by everyone.`
         : `"${data.title}" is on your shelf — ${data.chapters} chapters. Find it in Library › My shelf.`)
