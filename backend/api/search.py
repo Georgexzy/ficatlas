@@ -1979,6 +1979,76 @@ def _describe_suggestion(db, typed: str, request=None) -> list[Suggestion]:
                        reason="describe", drops=None, query=built)]
 
 
+def _short_character_pair_suggestions(db, typed: str) -> list[Suggestion]:
+    """Offer a verified character search for short plot-like queries.
+
+    The prose extractor deliberately has a six-word floor for descriptions.
+    That leaves a common short shape such as "Moody drills Marauders" in the
+    ordinary full-text path, where the verb is ANDed with the names and a
+    zero-result page can only offer fuzzy tag spellings. For short, operatorless
+    queries, look up words that the character vocabulary actually recognises,
+    then probe pairs with at least one intervening word. This is suggestion
+    only: the reader keeps the action and decides whether the character-only
+    search is useful.
+
+    Each proposed pair is checked with the same array containment and character
+    spelling expansion as search. Low-count and one-word collisions are
+    discarded, and no general-purpose title or tag search is added here.
+    """
+    typed = (typed or "").strip()
+    words = list(re.finditer(r"[^\W_][\w'-]{2,}", typed, re.UNICODE))
+    if (_HAS_OPERATOR.search(typed) or not 3 <= len(words) <= 5):
+        return []
+
+    candidates: list[tuple[int, int, str, _Term]] = []
+    for i, match in enumerate(words):
+        value = match.group(0).strip("'-")
+        # Proper-name capitalization narrows these vocabulary lookups to the
+        # terms readers intended as entities; probing every ordinary verb and
+        # filler word on a zero-result request adds latency and can surface
+        # coincidences such as a character named "Drills".
+        if len(value) < 4 or not value[0].isupper():
+            continue
+        try:
+            spellings = _facet_variants(db, "characters", value)
+            if not spellings:
+                continue
+            counts = db.execute(sql_text("""
+                SELECT max(count) FROM facets
+                 WHERE kind='character' AND value = ANY(CAST(:values AS text[]))
+            """), {"values": spellings}).scalar()
+        except Exception:
+            log.debug("short character suggestion lookup failed", exc_info=True)
+            continue
+        if int(counts or 0) < 100:
+            continue
+        candidates.append((i, i, value,
+                           _Term("character", value, spellings=spellings)))
+
+    out: list[Suggestion] = []
+    for left in range(len(candidates)):
+        for right in range(left + 1, len(candidates)):
+            a, b = candidates[left], candidates[right]
+            if b[0] - a[1] < 2:
+                continue  # adjacent names are more likely one title/name
+            terms = [a[3], b[3]]
+            try:
+                n = _probe_count(db, terms, cap=_SUGGEST_CAP)
+            except Exception:
+                log.debug("short character pair probe failed", exc_info=True)
+                continue
+            if n < _DESCRIBE_MIN_WORKS:
+                continue
+            query = _as_query(terms)
+            omitted = " ".join(word.group(0) for word in words[a[1] + 1:b[0]])
+            out.append(Suggestion(
+                kind="character", value=f"{a[2]} + {b[2]}", count=n,
+                query=query, reason="relax", drops=omitted, works=n,
+            ))
+    out.sort(key=lambda suggestion: -(suggestion.works or 0))
+    return out[:2]
+
+
 def _names_one_work(db, typed: str) -> list[Suggestion]:
     """The reader named a specific work. Find it, or say nothing.
 
@@ -5512,6 +5582,19 @@ def search(          # NOT async — see below
         _suggestions = (_spelling_rescues(db, _typed)
                         or _misspelt_title(db, _typed)
                         or _describe_suggestion(db, _typed, request=request))
+        # A short natural-language request can have useful named characters
+        # even when its action word makes full-text search return nothing.
+        # Keep this alongside the spelling rescue rather than allowing an
+        # unrelated-but-similar tag to suppress it.
+        try:
+            _existing_queries = {suggestion.query for suggestion in _suggestions}
+            _suggestions.extend(
+                suggestion for suggestion in
+                _short_character_pair_suggestions(db, _typed)
+                if suggestion.query not in _existing_queries
+            )
+        except Exception:
+            log.debug("short character suggestions failed", exc_info=True)
     elif (_typed and 0 < total <= SUGGEST_MAX_RESULTS
             and len(_typed.split()) <= SUGGEST_MAX_WORDS):
         # A LOWER similarity floor than the zero-result path, and it is the
