@@ -52,6 +52,9 @@ const sameQuery = (a: string, b: string) =>
   === b.replace(/["“”]/g, "").replace(/\s+/g, " ").trim().toLowerCase()
 
 let lastSearchCache: { url: string; data: SearchResponse } | null = null
+// A deliberate page turn always opens the destination at the top, even if
+// scroll memory has a saved position for that page from an earlier visit.
+let pendingPaginationUrl: string | null = null
 
 // Results fetched before they were asked for.
 //
@@ -1607,6 +1610,8 @@ function SearchPageInner() {
   const router     = useRouter()
   const pathname   = usePathname()
   const rawParams  = useSearchParams()
+  const paginationArrival = useRef(false)
+  const currentSearchHref = `${pathname}?${rawParams.toString()}`
   const { user }   = useAuth()
   const exampleQuery = useExampleQuery()
 
@@ -1794,6 +1799,13 @@ function SearchPageInner() {
   // A search this instance is already mid-way through, not one it might start.
   const [loading,      setLoading]      = useState(
     () => !cachedFor(initialUrl) && isSearchUrl(initialUrl))
+  // Covers the router handoff before the destination component mounts, as well
+  // as the search request after it mounts. Without this, a slow RSC navigation
+  // leaves the old Next button looking inert before the normal loading state
+  // can render.
+  const [pageTurnLoading, setPageTurnLoading] = useState(
+    () => pendingPaginationUrl === `${pathname}?${initialUrl}`
+      && !cachedFor(initialUrl))
   // The page being left, held while the next one loads. Only ever the SAME
   // search on another page — see sameSearchOtherPage — and only when nothing
   // truer is available. Rendered dimmed and aria-busy, and dropped the moment
@@ -1809,7 +1821,7 @@ function SearchPageInner() {
   // render below asks these rather than `results`, so "there are results here"
   // and "they are the ones you just asked for" stay separate questions.
   const shown = results ?? stale
-  const pending = loading && !results && stale !== null
+  const pending = pageTurnLoading || (loading && !results && stale !== null)
   // The front door: nothing searched yet and nothing on the way. Named once so
   // the hero above the search bar and the browse list below it cannot disagree
   // about which state the page is in — they render on the same boolean.
@@ -2111,7 +2123,15 @@ function SearchPageInner() {
   // story/library back-nav still uses the browser default.
   useEffect(() => {
     history.scrollRestoration = "manual"
+    if (pendingPaginationUrl === currentSearchHref) {
+      paginationArrival.current = true
+      pendingPaginationUrl = null
+    }
     const restore = () => {
+      if (paginationArrival.current) {
+        window.scrollTo({ top: 0, behavior: "auto" })
+        return
+      }
       if (loading || !results) return
       restoreScroll(window.location.pathname + window.location.search)
     }
@@ -2123,7 +2143,7 @@ function SearchPageInner() {
       window.removeEventListener("popstate", onPop)
       history.scrollRestoration = "auto"
     }
-  }, [loading, results])
+  }, [loading, results, currentSearchHref])
 
   // Apply saved default sites / sort from settings on a fresh landing (no URL params)
   useEffect(() => {
@@ -2524,6 +2544,7 @@ function SearchPageInner() {
     const pg = explicitPage ?? (resetPage ? 1 : page)
     if (resetPage) setPage(1)
     else if (explicitPage) setPage(explicitPage)
+    if (resetPage) setPageTurnLoading(false)
     // A new search, not another page of this one: whatever is dimmed on screen
     // is about to become wrong, so drop it and show skeletons instead.
     if (resetPage) setStale(null)
@@ -2569,7 +2590,9 @@ function SearchPageInner() {
     // performed — the URL also changes on remount and on Back, and neither is a
     // new search worth overwriting the memory with.
     rememberSearch(qs.toString())
-    startTransition(() => router.push(`${pathname}?${qs.toString()}`, { scroll: false }))
+    const nextHref = `${pathname}?${qs.toString()}`
+    if (explicitPage !== undefined) pendingPaginationUrl = nextHref
+    startTransition(() => router.push(nextHref, { scroll: false }))
 
     setLoading(true)
     setError(null)
@@ -2610,6 +2633,7 @@ function SearchPageInner() {
         ?? await searchStories({ ...p, live: true } as any, { signal: ctl.signal })
       if (seq !== searchSeqRef.current) return   // a newer search superseded this one
       setResults(data)
+      setPageTurnLoading(false)
       setStale(null)
       // If this search is one the reader kept, work out what has appeared since
       // they last ran it, THEN record the new total. Order matters: noteRun
@@ -2719,11 +2743,14 @@ function SearchPageInner() {
       // The dimmed rows have to go with it. Leaving the previous page up under
       // an error alert reads as "here are your results, and also a problem",
       // when the results are the ones the reader has already seen.
-      if (seq === searchSeqRef.current) { setError(describeError(e, e?.status)); setStale(null) }
+      if (seq === searchSeqRef.current) {
+        setError(describeError(e, e?.status)); setStale(null); setPageTurnLoading(false)
+      }
     } finally {
       if (seq === searchSeqRef.current) setLoading(false)
     }
-  }, [buildParams, page, pathname, router, query, sites, filterSig, rawParams])
+  }, [buildParams, page, pathname, router, query, sites, filterSig, rawParams,
+      setPageTurnLoading])
 
   // Published for the self-call above, after every render so it is never the
   // stale closure from the render that started the search.
@@ -2782,19 +2809,13 @@ function SearchPageInner() {
       .catch(() => { prefetched.delete(key) })
   }, [buildParams])
 
-  // Turning the page: scroll first, then search.
-  //
-  // Deterministic, unlike the old scroll inside doSearch's success path, which
-  // depended on a fetch that the navigation itself frequently cancelled. The
-  // rows below stay where they are while this runs — that is the whole point of
-  // `stale` — so a smooth scroll has something stable to travel over instead of
-  // racing a column that is being rebuilt. Honours a stated preference not to
-  // animate, since this is a jump the reader did not ask to watch.
+  // Turn the page from the top and signal the transition immediately. Scrolling
+  // smoothly while the router is replacing the page made the destination look
+  // as if it had opened at the old page's position.
   const goToPage = useCallback((target: number) => {
     if (target < 1) return
-    const still = typeof window !== "undefined"
-      && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-    window.scrollTo({ top: 0, behavior: still ? "auto" : "smooth" })
+    window.scrollTo({ top: 0, behavior: "auto" })
+    setPageTurnLoading(true)
     doSearch(false, target)
   }, [doSearch])
 
@@ -3729,11 +3750,12 @@ function SearchPageInner() {
           {shown && (
             <div className={"results" + (pending ? " results--pending" : "")}
                  aria-busy={pending || undefined}>
-              {/* The only thing that moves while a page loads. A collapsing
-                  column and six shimmering skeletons were how this used to say
-                  "working"; a 2px bar over rows that stay put says the same
-                  thing without moving the reader's place on the screen. */}
-              {pending && <div className="results__progress" aria-hidden="true" />}
+              {pending && (
+                <div className="search-page-loading" role="status" aria-live="polite">
+                  <CompassDial mini className="search-page-loading__dial" />
+                  <span>Loading page {page}…</span>
+                </div>
+              )}
               <div className="results-bar">
                 {/* The sort, HERE rather than in the sidebar.
                     It was the first control in a panel of twenty filter
