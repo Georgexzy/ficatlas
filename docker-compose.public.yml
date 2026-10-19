@@ -349,7 +349,9 @@ services:
       DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:?required}@db:5432/ficatlas
       DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-6}
       DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-3}
-      RUN_SCHEDULER: "true"
+      # The dev worker owns the archive scheduler. Keep this off here; the
+      # follow mail and refresh loops below run independently of it.
+      RUN_SCHEDULER: "false"
       # Only these two loops — no crawling, no harvesting, no enrichment
       FOLLOW_EMAIL: "true"
       FOLLOW_REFRESH: "true"
