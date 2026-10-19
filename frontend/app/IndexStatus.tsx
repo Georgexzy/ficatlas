@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react"
 import { fetchWithTimeout } from "@/lib/net"
 
-import { SITE_LABELS, getIndexTotals, type IndexTotals } from "@/lib/api"
+import { SITE_LABELS, watchIndexTotals, type IndexTotals } from "@/lib/api"
 
 export default function IndexStatus() {
   const [open, setOpen] = useState(false)
@@ -10,7 +10,7 @@ export default function IndexStatus() {
   const [totals, setTotals] = useState<IndexTotals | null>(null)
 
   useEffect(() => {
-    getIndexTotals().then(d => { if (d) setTotals(d) })
+    return watchIndexTotals(setTotals)
   }, [])
 
   useEffect(() => {
@@ -57,8 +57,9 @@ export default function IndexStatus() {
   const siteTotal = sites.reduce((a, [, n]) => a + (n || 0), 0)
   const n = sites.length || 3
 
-  // The button has to say WHAT is indexed. "21.1M indexed" left a reader
-  // asking whether that was every archive or one, which is the whole pitch.
+  // The button has to say WHAT is indexed. A rounded live total makes the
+  // current index size clear without pinning the UI to a stale fixed figure.
+  // Asking which archives are covered is the whole pitch.
   const label = totals
     ? `${n} archives · ${fmt(totals.stories)}`
     : `${n} archives`

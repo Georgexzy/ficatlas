@@ -10,7 +10,7 @@ import { fetchWithTimeout, fetchBackground, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_
 import { recordResultClick } from "@/lib/resultClicks"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
-         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, getLandingBrowse, type LandingBrowse, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
+         DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, watchIndexTotals, getLandingBrowse, type LandingBrowse, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
 import { parseQuery, parsedToSearchParams, quoteValue, type ParsedToken } from "@/lib/queryParser"
 import SiteIcon from "./SiteIcon"
 import { storyLink, isSeedUrl, otherCopies } from "@/lib/storyLinks"
@@ -1192,7 +1192,7 @@ function LandingIntro() {
 function IndexTotal() {
   const [total, setTotal] = useState<number | null>(null)
   useEffect(() => {
-    getIndexTotals().then(d => { if (typeof d?.stories === "number") setTotal(d.stories) })
+    return watchIndexTotals(d => setTotal(d.stories))
   }, [])
   return total ? fmtCount(total) : <>Millions of works</>
 }
@@ -1203,7 +1203,7 @@ function IndexTotal() {
 // number for all of them, which asks a reader to take on trust the claim the
 // page is built on — that this searches somewhere other than AO3. Fanfiction
 // readers know these three by sight and have strong priors about them; a reader
-// who came looking for FanFiction.net wants to see FanFiction.net, and 6.5M is
+// who came looking for FanFiction.net wants to see FanFiction.net, and 7.1M is
 // a more convincing answer than the word "and".
 //
 // The marks are SiteIcon's, which is the component the result cards already use
@@ -1223,9 +1223,7 @@ const ARCHIVE_ORDER = ["ao3", "ffnet", "fictionalley"] as const
 function ArchiveBadges() {
   const [sites, setSites] = useState<Record<string, number> | null>(null)
   useEffect(() => {
-    getIndexTotals()
-      .then(d => { if (d?.sites) setSites(d.sites) })
-      .catch(() => {})
+    return watchIndexTotals(d => { if (d.sites) setSites(d.sites) })
   }, [])
   if (!sites) return null
   const rows = ARCHIVE_ORDER.filter(s => (sites[s] ?? 0) > 0)
@@ -1235,15 +1233,13 @@ function ArchiveBadges() {
   // These figures and that headline are the same measurement now — the server
   // derives `stories` from this breakdown rather than counting beside it (see
   // `_with_sites` in backend/api/stats.py) — but they are ROUNDED differently,
-  // and three independent roundings do not sum to a fourth. Measured: the parts
-  // read 14.2M + 6.6M + 30k, which is 20.83M, against a headline that rounds to
-  // 20.9M. The 0.07M is rounding slack, not a disagreement, and no amount of
-  // fixing the data source removes it — it is arithmetic about how many digits
-  // are shown.
+  // and three independent roundings do not sum to a fourth. At the 19 Oct 2026
+  // count, the parts read 14.4M + 7.1M + 30k (about 21.53M), while the headline
+  // rounds to 21.5M. That small gap is rounding slack, not a disagreement.
   //
   // So it is stated rather than fudged: the headline is a rounded magnitude, and
   // the exact figures are available on the breakdown itself. Fudging the
-  // headline down to 20.8M to make the addition land would trade a visible
+  // headline down to 21.4M to make the addition land would trade a visible
   // rounding artifact for a number that understates the index.
   const total = rows.reduce((a, s) => a + (sites[s] ?? 0), 0)
   return (

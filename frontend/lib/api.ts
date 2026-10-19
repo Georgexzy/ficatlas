@@ -416,6 +416,24 @@ export function getIndexTotals(): Promise<IndexTotals | null> {
   return c.inflight
 }
 
+/** Keep live index counts current in long-open tabs as well as on first load. */
+export function watchIndexTotals(onValue: (value: IndexTotals) => void): () => void {
+  let active = true
+  const load = () => {
+    if (document.visibilityState !== "visible") return
+    getIndexTotals().then(value => { if (active && value) onValue(value) })
+  }
+  const onVisibility = () => { if (document.visibilityState === "visible") load() }
+  load()
+  const timer = window.setInterval(load, 6 * 60_000)
+  document.addEventListener("visibilitychange", onVisibility)
+  return () => {
+    active = false
+    window.clearInterval(timer)
+    document.removeEventListener("visibilitychange", onVisibility)
+  }
+}
+
 
 export interface TopHub { slug: string; name: string; work_count: number }
 
