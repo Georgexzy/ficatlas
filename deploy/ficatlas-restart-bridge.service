@@ -6,6 +6,7 @@ After=local-fs.target
 Type=simple
 User=root
 Group=root
+SupplementaryGroups=1000
 ExecStart=/usr/bin/python3 /usr/local/libexec/ficatlas-restart-bridge.py
 ExecStartPre=/usr/bin/rm -f /var/lib/ficatlas-restart-bridge/bridge.ready
 Restart=always
