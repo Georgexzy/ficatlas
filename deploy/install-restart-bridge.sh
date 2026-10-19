@@ -16,5 +16,6 @@ install -o root -g root -m 0644 \
   "$ROOT/deploy/ficatlas-restart-bridge.service" \
   /etc/systemd/system/ficatlas-restart-bridge.service
 systemctl daemon-reload
-systemctl enable --now ficatlas-restart-bridge.service
+systemctl enable ficatlas-restart-bridge.service
+systemctl restart ficatlas-restart-bridge.service
 systemctl --no-pager --full status ficatlas-restart-bridge.service
