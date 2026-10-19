@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import SiteHeader from "../SiteHeader"
+import HubFilter from "../HubFilter"
 
 // The index of ship hubs — the second crawlable root, alongside /fandoms.
 //
@@ -28,7 +29,7 @@ interface HubSummary { slug: string; name: string; work_count: number; nicknames
 
 async function fetchShips(): Promise<HubSummary[]> {
   try {
-    const r = await fetch(`${INTERNAL_API}/api/ships?limit=10000`, {
+    const r = await fetch(`${INTERNAL_API}/api/ships?limit=50000`, {
       next: { revalidate: CACHE_S },
       headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
       signal: AbortSignal.timeout(15000),
@@ -43,29 +44,16 @@ async function fetchShips(): Promise<HubSummary[]> {
 export default async function ShipsIndex() {
   const ships = await fetchShips()
 
-  const top = ships.slice(0, 60)
-
-  // Grouped by the first letter of the pairing as displayed. The display name is
-  // the most-used spelling rather than the alphabetical one the slug is built
-  // from, so this groups by what a reader actually reads on the page.
-  const groups = new Map<string, HubSummary[]>()
-  for (const h of [...ships].sort((a, b) => a.name.localeCompare(b.name))) {
-    const first = h.name[0]?.toUpperCase() ?? "#"
-    const key = /[A-Z]/.test(first) ? first : "#"
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key)!.push(h)
-  }
-  const letters = [...groups.keys()].sort()
-
   return (
     <main id="main" className="hub-page hub">
-      {/* current="browse" so the header marks this as the browse section too —
-          /ships is the other half of it, not a page outside it. */}
       <SiteHeader current="browse" />
       <nav className="browse-switch" aria-label="Browse by">
         <Link href="/fandoms" className="browse-switch__item">Fandoms</Link>
         <span className="browse-switch__item browse-switch__item--current"
           aria-current="page">Pairings</span>
+        <Link href="/authors" className="browse-switch__item">Authors</Link>
+        <Link href="/tropes" className="browse-switch__item">Tropes</Link>
+        <Link href="/series" className="browse-switch__item">Series</Link>
       </nav>
       <h1>Browse pairings</h1>
       <p className="hub__lede">
@@ -76,54 +64,10 @@ export default async function ShipsIndex() {
 
       {ships.length === 0 ? (
         <p className="hub__empty">
-          Pairing pages aren’t built yet. <Link href="/">Search the index</Link> instead.
+          Pairing pages aren't built yet. <Link href="/">Search the index</Link> instead.
         </p>
       ) : (
-        <>
-          <h2 className="hub__heading">Pairings with the most works</h2>
-          <ul className="hub__grid">
-            {top.map(h => (
-              <li key={h.slug}>
-                <Link href={`/ship/${h.slug}`} className="hub__chip">
-                  <span className="hub__chip-name">
-                    {h.name}
-                    {/* The name readers actually use, on the index too — this
-                        page is how someone scans for their ship, and scanning
-                        for "Drarry" should not require knowing the tag. */}
-                    {h.nicknames?.[0] && (
-                      <span className="hub__chip-aka">{h.nicknames[0]}</span>
-                    )}
-                  </span>
-                  <span className="hub__chip-count">{h.work_count.toLocaleString()}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-
-          <h2 className="hub__heading">All pairings A–Z</h2>
-          {/* Jump links: the full list is thousands of entries, and a reader
-              looking for one pairing should not have to scroll past every other. */}
-          <p className="hub__alphabet">
-            {letters.map(l => <a key={l} href={`#letter-${l}`}>{l}</a>)}
-          </p>
-
-          {letters.map(l => (
-            <section key={l} className="hub__letter" id={`letter-${l}`}>
-              <h3>{l}</h3>
-              <ul className="hub__az">
-                {groups.get(l)!.map(h => (
-                  <li key={h.slug}>
-                    <Link href={`/ship/${h.slug}`}>{h.name}</Link>{" "}
-                    {h.nicknames?.[0] && (
-                      <span className="hub__az-aka">{h.nicknames[0]}</span>
-                    )}
-                    <span className="hub__az-count">{h.work_count.toLocaleString()}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </>
+        <HubFilter items={ships} basePath="/ship" label="pairing" />
       )}
     </main>
   )

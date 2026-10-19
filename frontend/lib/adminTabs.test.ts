@@ -9,6 +9,7 @@ describe("adminTabFor", () => {
     expect(adminTabFor("audience")).toBe("audience")
     expect(adminTabFor("outreach")).toBe("outreach")
     expect(adminTabFor("moderation")).toBe("moderation")
+    expect(adminTabFor("restart")).toBe("restart")
   })
 
   it("still resolves the names they had before the regrouping", () => {

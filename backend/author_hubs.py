@@ -56,9 +56,11 @@ from db.session import lift_statement_timeout
 from hub_build import RANK, content_at_sql
 from topic_hubs import _names
 
+import os
+
 log = logging.getLogger(__name__)
 
-LIMIT = 10000           # pages built (and listed in the sitemap)
+LIMIT = int(os.environ.get("AUTHOR_HUB_LIMIT", "10000"))  # pages built (and listed in the sitemap)
 MIN_WORKS = 3
 POP_FLOOR = 0.9         # one work in the top 10% of its archive
 WORKS_PER_SITE = 50
@@ -108,34 +110,42 @@ def usable_name(name: str, names: set[str]) -> bool:
     return bool(slugify(n))
 
 
-def candidates(db: Session, limit: int) -> list[tuple[str, str, int]]:
+def candidates(db: Session, limit: int) -> list[tuple[str, str, int, int]]:
     """(author_key, display name, works) for the most-read authors.
 
     One grouped scan of the table (~1 minute). The display name is the
     most-used casing of the key.
+
+    Ranked by total cross-archive engagement (sum of hits + kudos + bookmarks + comments)
+    rather than by raw work count, so a writer with fewer but more-read works
+    beats one with many unread works. Still requires at least one work in the
+    top 10% per archive (POP_FLOOR) so the list isn't dominated by a single hit.
     """
     rows = db.execute(text("""
         WITH a AS (
             SELECT lower(author) AS k, author, count(*) AS n,
                    count(*) FILTER (WHERE popularity >= :floor) AS good,
-                   max(popularity) AS best
+                   max(popularity) AS best,
+                   sum(COALESCE(hits, 0) + COALESCE(kudos, 0) +
+                       COALESCE(bookmarks, 0) + COALESCE(comments, 0)) AS total_engagement
               FROM stories
              WHERE author IS NOT NULL AND delisted_at IS NULL AND NOT private_only
              GROUP BY lower(author), author
         )
         SELECT k, (array_agg(author ORDER BY n DESC))[1] AS display,
-               sum(n)::int AS works, sum(good) AS good, max(best) AS best
+               sum(n)::int AS works, sum(good) AS good, max(best) AS best,
+               sum(total_engagement) AS total_engagement
           FROM a
          GROUP BY k
         HAVING sum(n) >= :min AND max(best) >= :floor
-         ORDER BY sum(good) DESC, max(best) DESC
+         ORDER BY sum(total_engagement) DESC NULLS LAST, max(best) DESC
          LIMIT :lim
     """), {"floor": POP_FLOOR, "min": MIN_WORKS, "lim": limit * 2}).fetchall()
     denied = {r[0] for r in db.execute(text("""
         SELECT lower(author) FROM author_permissions
          WHERE policy = 'deny' AND revoked_at IS NULL
     """)).fetchall()}
-    return [(k, d, int(w)) for k, d, w, _, _ in rows if k not in denied]
+    return [(k, d, int(w), int(te or 0)) for k, d, w, _, _, te in rows if k not in denied]
 
 
 def build(db: Session, limit: int = LIMIT, trial: int | None = None) -> int:
@@ -148,7 +158,7 @@ def build(db: Session, limit: int = LIMIT, trial: int | None = None) -> int:
     names = _names(db)
     taken: set[str] = set()
     written = 0
-    for key, display, _ in candidates(db, trial or limit):
+    for key, display, _, engagement in candidates(db, trial or limit):
         if written >= (trial or limit):
             break
         if not usable_name(display, names):
@@ -206,21 +216,21 @@ def build(db: Session, limit: int = LIMIT, trial: int | None = None) -> int:
         db.execute(text(f"""
             INSERT INTO author_hubs (slug, name, author_key, work_count, top_ids,
                                      top_by_site, site_counts, fandoms,
-                                     built_at, content_at)
+                                     built_at, content_at, engagement)
             VALUES (:slug, :name, :k, :wc, :top, CAST(:bs AS jsonb),
-                    CAST(:sc AS jsonb), :fandoms, now(), now())
+                    CAST(:sc AS jsonb), :fandoms, now(), now(), :eng)
             ON CONFLICT (slug) DO UPDATE SET
                 name = EXCLUDED.name, author_key = EXCLUDED.author_key,
                 work_count = EXCLUDED.work_count, top_ids = EXCLUDED.top_ids,
                 top_by_site = EXCLUDED.top_by_site,
                 site_counts = EXCLUDED.site_counts, fandoms = EXCLUDED.fandoms,
-                built_at = EXCLUDED.built_at,
+                built_at = EXCLUDED.built_at, engagement = EXCLUDED.engagement,
                 content_at = {content_at_sql('author_hubs')}
         """), {"slug": slug, "name": display, "k": key,
                "wc": sum(int(v) for v in counts.values()), "top": top,
                "bs": json.dumps(by_site),
                "sc": json.dumps({str(k): int(v) for k, v in counts.items()}),
-               "fandoms": fandoms})
+               "fandoms": fandoms, "eng": engagement})
         written += 1
         if written % 200 == 0:
             db.commit()

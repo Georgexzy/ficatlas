@@ -130,6 +130,10 @@ class Story(Base):
     updated_at = Column(DateTime(timezone=True), index=True)
     crawled_at = Column(DateTime(timezone=True), server_default=func.now())
     indexed_at = Column(DateTime(timezone=True), server_default=func.now())
+    # When a WORK PAGE last told us it had more chapters than we held. See
+    # ao3_title_repair.apply_work: the evidence follow_email.moved() needs to
+    # tell a new chapter from a repaired count.
+    chapters_bumped_at = Column(DateTime(timezone=True))
 
     # search_vector: NOT DECLARED, on purpose.
     #

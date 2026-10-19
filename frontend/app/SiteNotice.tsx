@@ -9,25 +9,56 @@ const DISMISSED_KEY = "ficatlas:site-notice:dismissed"
  * change. The message itself is public settings data; only admins can write it. */
 export default function SiteNotice() {
   const [message, setMessage] = useState("")
+  const [noticeToken, setNoticeToken] = useState("")
   const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
+    let expiryTimer: number | undefined
     const update = (raw: unknown) => {
-      const next = typeof raw === "string" ? raw.trim().slice(0, 500) : ""
+      const detail = raw && typeof raw === "object" ? raw as { message?: unknown; startsAt?: unknown; until?: unknown } : null
+      const source = detail ? detail.message : raw
+      let next = typeof source === "string" ? source.trim().slice(0, 500) : ""
+      const until = detail && typeof detail.until === "string" ? detail.until : ""
+      const startsAt = detail && typeof detail.startsAt === "string" ? detail.startsAt : ""
+      const starts = startsAt ? Date.parse(startsAt) : NaN
+      const expires = until ? Date.parse(until) : NaN
+      const token = `${next}|${startsAt}|${until}`
+      if (Number.isFinite(starts) && starts > Date.now()) next = ""
+      if (Number.isFinite(expires) && expires <= Date.now()) next = ""
       setMessage(next)
-      try { setDismissed(!!next && localStorage.getItem(DISMISSED_KEY) === next) } catch {}
+      setNoticeToken(token)
+      try { setDismissed(!!next && localStorage.getItem(DISMISSED_KEY) === token) } catch {}
+      if (expiryTimer) window.clearTimeout(expiryTimer)
+      if (next && Number.isFinite(expires) && expires > Date.now()) {
+        expiryTimer = window.setTimeout(() => setMessage(""), expires - Date.now())
+      }
+      if (!next && Number.isFinite(starts) && starts > Date.now()) {
+        expiryTimer = window.setTimeout(() => fetchNotice(), starts - Date.now() + 50)
+      }
     }
     let alive = true
-    fetch("/api/settings", { credentials: "include", cache: "no-store" })
+    const fetchNotice = () => fetch("/api/settings", { credentials: "include", cache: "no-store" })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!alive) return
-        update(data?.site_notice)
+        update({ message: data?.site_notice, startsAt: data?.site_notice_start_at, until: data?.site_notice_until })
       })
       .catch(() => {})
+    fetchNotice()
+    // An operator can publish maintenance notice while readers already have a
+    // chapter open. Poll gently so they see it before the restart without a
+    // hard refresh; background tabs skip the request.
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === "visible") fetchNotice()
+    }, 20_000)
     const changed = (e: Event) => update((e as CustomEvent).detail)
     window.addEventListener("ficatlas:site-notice-updated", changed)
-    return () => { alive = false; window.removeEventListener("ficatlas:site-notice-updated", changed) }
+    return () => {
+      alive = false
+      window.clearInterval(poll)
+      if (expiryTimer) window.clearTimeout(expiryTimer)
+      window.removeEventListener("ficatlas:site-notice-updated", changed)
+    }
   }, [])
 
   if (!message || dismissed) return null
@@ -36,7 +67,7 @@ export default function SiteNotice() {
       <span className="site-notice__message">{message}</span>
       <button type="button" className="site-notice__dismiss" aria-label="Dismiss announcement"
         onClick={() => {
-          try { localStorage.setItem(DISMISSED_KEY, message) } catch {}
+          try { localStorage.setItem(DISMISSED_KEY, noticeToken) } catch {}
           setDismissed(true)
         }}>Dismiss</button>
     </aside>

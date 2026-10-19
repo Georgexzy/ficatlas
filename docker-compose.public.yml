@@ -26,9 +26,14 @@
 # the public site the moment dev applies it, so DDL must stay additive — which
 # init_db.py already is, being idempotent CREATE ... IF NOT EXISTS.
 #
-# The WORKER is deliberately absent. All harvesting runs in the dev project, and
-# a second worker would double every crawl, race the same queues and get both
-# copies rate-limited by AO3. One worker, one database, either project.
+# The WORKER is split by function:
+# - Crawling/harvesting/enrichment runs only in the dev project (one worker,
+#   one database). A second crawler would double every crawl, race the same
+#   queues and get both copies rate-limited by AO3.
+# - Follow emails + followed-works refresh runs in BOTH projects. The
+#   production worker (see below) has only FOLLOW_EMAIL and FOLLOW_REFRESH
+#   enabled; all crawling flags are explicitly disabled. This keeps opt-in
+#   update digests working on ficatlas.com without duplicating any harvest work.
 #
 # Colours
 # -------
@@ -147,6 +152,7 @@ services:
       # Through nginx, so the API can be swapped without restarting the web tier.
       INTERNAL_API_URL: "http://nginx:8081"
       INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
+      GOOGLE_SITE_VERIFICATION: ${GOOGLE_SITE_VERIFICATION:-}
       NODE_ENV: "production"
     mem_limit: 768m
     cpus: 2.0
@@ -178,6 +184,7 @@ services:
       # FORCE_HTTPS is a build arg, not a runtime variable — see web-blue.
       INTERNAL_API_URL: "http://nginx:8081"
       INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
+      GOOGLE_SITE_VERIFICATION: ${GOOGLE_SITE_VERIFICATION:-}
       NODE_ENV: "production"
     mem_limit: 768m
     cpus: 2.0
@@ -260,21 +267,22 @@ services:
       # new identity per request and bypass rate limiting entirely.
       TRUST_PROXY_HEADER: "true"
       RATE_LIMIT: "true"
-      # Searching 19.9M works is public — that is what the site is for. Serving
-      # the complete text of the rehosted stories to anonymous visitors is the
-      # part with real exposure, so reading (and EPUB export, the same text in
-      # one file) needs an account.
-      REQUIRE_LOGIN_TO_READ: "true"
+      # Searching 20M+ works is public — that is what the site is for.
+      # Reading no longer requires an account; EPUB export still does.
+      REQUIRE_LOGIN_TO_READ: "false"
       SIGNUP_MODE: ${SIGNUP_MODE:-invite}
       SIGNUP_CODE: ${SIGNUP_CODE:-}
       CLOUDFLARE_API_TOKEN: ${FICATLAS_CF_API_TOKEN:-}
       CLOUDFLARE_ZONE_ID: ${FICATLAS_CF_ZONE_ID:-}
       INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
+      FICATLAS_RESTART_DIR: /run/ficatlas-restart
       # The scheduler belongs to the dev project's worker. Set explicitly rather
       # than left to a default, because two schedulers on one database is the
       # kind of thing that looks fine until both crawl AO3 at once.
       RUN_SCHEDULER: "false"
     networks: [default, ficatlas]
+    volumes:
+      - /var/lib/ficatlas-restart-bridge:/run/ficatlas-restart:rw
     mem_limit: 2g
     cpus: 3.0
     user: "1000:1000"
@@ -313,6 +321,8 @@ services:
     command: ["sh", "/app/start.sh"]
     environment: *api_env
     networks: [default, ficatlas]
+    volumes:
+      - /var/lib/ficatlas-restart-bridge:/run/ficatlas-restart:rw
     mem_limit: 2g
     cpus: 3.0
     user: "1000:1000"
@@ -326,6 +336,68 @@ services:
       timeout: 6s
       retries: 6
       start_period: 30s
+
+# ── Background worker (follow emails + followed-works refresh ONLY) ────────────
+  # The dev worker does all crawling; this one ONLY sends follow digests and
+  # refreshes followed works so the digests are accurate. No crawling flags set.
+  worker:
+    logging: *logging
+    image: ficatlas-backend:${DEPLOY_TAG:-latest}
+    restart: unless-stopped
+    command: python worker.py
+    environment:
+      DATABASE_URL: postgresql://ficatlas:${POSTGRES_PASSWORD:?required}@db:5432/ficatlas
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-6}
+      DB_MAX_OVERFLOW: ${WORKER_DB_MAX_OVERFLOW:-3}
+      RUN_SCHEDULER: "true"
+      # Only these two loops — no crawling, no harvesting, no enrichment
+      FOLLOW_EMAIL: "true"
+      FOLLOW_REFRESH: "true"
+      # Explicitly disable EVERYTHING else that defaults to true in worker.py
+      RECENT_WORKS: "false"
+      TITLE_REPAIR: "false"
+      RUN_ANALYZE: "false"
+      REFRESH_STATS: "false"
+      RUN_REDDIT_QUEUE: "false"
+      RUN_SERIES_WORDCOUNT: "false"
+      RUN_FACETS: "false"
+      DETECT_SERIES: "false"
+      LISTING_HARVEST: "false"
+      CACHE_WARM: "false"
+      FANDOM_GAPS: "false"
+      AO3_STUB_ENRICH: "false"
+      WITHDRAW_DELETED: "false"
+      REBUILD_HUBS: "false"
+      REBUILD_POPULARITY: "false"
+      RUN_CURATION: "false"
+      RUN_SERIES_FILL: "false"
+      RUN_INDEXNOW: "false"
+      FFNET_LISTING_APPLY: "false"
+      FFNET_WAYBACK: "false"
+      WAYBACK_HARVEST: "false"
+      RUN_ADMIN_JOBS: "false"
+      ARCHIVES_IMPORT: "false"
+      REBUILD_SHIP_ALIASES: "false"
+      CF_ANALYTICS: "true"
+      ENGAGEMENT_REFRESH: "true"
+      AUTHOR_HUB_LIMIT: "20000"
+      # SMTP for sending the digests
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://ficatlas.com}
+      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-https://ficatlas.com}
+      INDEXNOW_KEY: ${INDEXNOW_KEY:-}
+    networks: [default, ficatlas]
+    mem_limit: 512m
+    cpus: 0.5
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=64m
 
 networks:
   # This project's own network: nginx, cloudflared and the colours talk here.

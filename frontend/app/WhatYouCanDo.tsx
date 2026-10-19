@@ -77,7 +77,7 @@ export default function WhatYouCanDo({ shown }: { shown: boolean }) {
           </li>
         </ul>
         <p className="tips__foot">
-          <Link href="/login" className="tips__cta">Make an account</Link>
+          <Link href="/signup" className="tips__cta">Create an account</Link>
           <span className="tips__note">
             No email needed. Nothing is sold, and there are no adverts.
           </span>

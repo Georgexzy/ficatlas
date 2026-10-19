@@ -239,6 +239,7 @@ app.include_router(hubs.router, prefix="/api/hubs", tags=["hubs"])
 # `/{slug}` route above the moment a fandom slugged to "ships".
 app.include_router(hubs.ships_router, prefix="/api/ships", tags=["hubs"])
 app.include_router(hubs.authors_router, prefix="/api/authors", tags=["hubs"])
+app.include_router(hubs.tropes_router, prefix="/api/tropes", tags=["hubs"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(takedown.router, prefix="/api/takedown", tags=["takedown"])

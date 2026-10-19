@@ -92,6 +92,12 @@ One search bar over a single index spanning multiple sites, with AO3-parity filt
   travels as one string — filters, status, word count and sort are all bar
   syntax — so a saved search is shareable and survives a paste
 
+### Site operations
+- **Scheduled reader notices** — admins can publish an announcement now or
+  schedule its start and optional end time from Site configuration. A separately
+  installed host bridge lets an admin schedule a full server reboot with a
+  notice five minutes beforehand; see [deployment instructions](deploy/README.md#announced-host-restart).
+
 ### Reading & library
 - **One-click "Import & Read"** — every search result for AO3/FFN with `is_hosted=false` shows an "Import & Read" button that fetches the full EPUB via FicHub and drops you into the reader
 - **Result cards** — labelled dates (`Updated 3 days ago`, falling back to

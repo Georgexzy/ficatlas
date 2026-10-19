@@ -913,10 +913,27 @@ def rebuild_facets(db: Session, min_count: int = 1) -> dict:
     """
     built = {}
     db.execute(text("DROP TABLE IF EXISTS facets_rebuild"))
+    # `norm` IS PART OF THE STAGING TABLE, and its absence here is the second
+    # half of the same bug as the vanished indexes below.
+    #
+    # The live `facets` gained a `norm` column (init_db.py:678) so that
+    # searching "Hurt/Comfort" also reaches hurt-comfort, hurt comfort, hurt &
+    # comfort and hurt|comfort — same letters and digits, any punctuation. But
+    # this CREATE did not carry it, so every rebuild swapped in a table with no
+    # `norm` at all, and `_VARIANT_SQL` (api/search.py:586) then failed with
+    # UndefinedColumn on every call. That exception is swallowed at the call
+    # site, so the normalised arm was not merely slow, it was silently DEAD:
+    # the fallback is the trigram pass, which is the behaviour the normalised
+    # column existed to replace.
+    #
+    # Populated here rather than left for init_db to backfill, because a column
+    # that exists but is NULL matches nothing either — the rebuild is the one
+    # place that both knows every value and is already rewriting the table.
     db.execute(text(
         "CREATE TABLE facets_rebuild ("
         "  kind VARCHAR(20) NOT NULL, value TEXT NOT NULL,"
-        "  count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (kind, value))"
+        "  count INTEGER NOT NULL DEFAULT 0,"
+        "  norm TEXT, PRIMARY KEY (kind, value))"
     ))
     try:
         for kind, col in _FACET_COLUMNS.items():
@@ -1008,6 +1025,37 @@ def rebuild_facets(db: Session, min_count: int = 1) -> dict:
         # Built on the staging table, they arrive already named and attached: an
         # index follows its table, so the rename needs no further thought and
         # there is no window in which the live table lacks them.
+        #
+        # DROP FIRST, THEN CREATE — and this is the whole bug. The note above
+        # says `IF NOT EXISTS` matches the NAME IN THE SCHEMA rather than the
+        # table it is attached to, and the first version of this fix moved the
+        # CREATE before the swap but KEPT the `IF NOT EXISTS`. On a rebuild
+        # where the live `facets` still carries `ix_facets_kind_value_trgm`,
+        # that name is already in the schema, so the CREATE is skipped exactly
+        # as before — the staging table gets nothing, the swap drops the old
+        # table, and the index goes with it. The failure the comment describes
+        # was never actually fixed; it just moved.
+        #
+        # Dropping the name off the old table first makes the CREATE see a free
+        # name and run. It costs an ACCESS EXCLUSIVE on the live `facets` for
+        # the length of a catalog update, which is milliseconds, and this whole
+        # function is an admin rebuild that swaps the table out anyway. Verified
+        # against the live index: this sequence is what put
+        # `ix_facets_kind_value_trgm` back after the 2026-10-01 rebuild lost it.
+        # `norm` is populated HERE, after the INSERTs that fill the table and
+        # before the indexes that serve it. Anywhere earlier and it normalises
+        # an empty table; anywhere later and `ix_facets_kind_norm` would be
+        # built over a column of NULLs, which matches nothing at query time
+        # while looking entirely healthy in pg_indexes.
+        db.execute(text(
+            "UPDATE facets_rebuild SET norm = regexp_replace(lower(value),"
+            " '[^a-z0-9]+', '', 'g')"
+        ))
+        db.execute(text("DROP INDEX IF EXISTS ix_facets_kind_value_trgm"))
+        db.execute(text("DROP INDEX IF EXISTS ix_facets_kind_count"))
+        db.execute(text("DROP INDEX IF EXISTS ix_facets_kind_norm"))
+        db.execute(text("DROP INDEX IF EXISTS ix_facets_value_lower"))
+        db.execute(text("DROP INDEX IF EXISTS ix_facets_squash"))
         db.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_facets_kind_value_trgm "
             "ON facets_rebuild USING gin (value gin_trgm_ops)"
@@ -1015,6 +1063,19 @@ def rebuild_facets(db: Session, min_count: int = 1) -> dict:
         db.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_facets_kind_count "
             "ON facets_rebuild (kind, count DESC)"
+        ))
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_facets_kind_norm "
+            "ON facets_rebuild (kind, norm, count DESC)"
+        ))
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_facets_value_lower "
+            "ON facets_rebuild (lower(value), count DESC)"
+        ))
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_facets_squash ON facets_rebuild "
+            "(regexp_replace(lower(split_part(split_part(value, ' - ', 1),"
+            " ' (', 1)), '[^a-z0-9]+', '', 'g')) WHERE count >= 50"
         ))
 
         # Swap. Readers see the old table right up until this commit.

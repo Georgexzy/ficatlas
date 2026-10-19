@@ -789,7 +789,8 @@ def test_the_description_ranks_and_never_filters():
 
 def test_action_description_keeps_subject_and_target_together():
     from api.search import (_canonical_fandom_hint, _describe_relation_phrases,
-                            _description_discovery_query)
+                            _description_discovery_query,
+                            _description_discovery_queries)
 
     phrases = _describe_relation_phrases(
         "first wizarding war Alastor 'Mad Eye' Moody trains the Marauders")
@@ -807,6 +808,11 @@ def test_action_description_keeps_subject_and_target_together():
     assert _description_discovery_query([
         'Alastor "Mad-Eye" Moody', "Marauders (Harry Potter)",
     ]) == "Moody Marauders"
+    assert _description_discovery_queries([
+        'Alastor "Mad-Eye" Moody', "Marauders (Harry Potter)",
+    ], "First Wizarding War Alastor Moody trains the Marauders") == [
+        "Moody Marauders", "Moody Marauders training",
+    ]
     assert _description_discovery_query([
         "James Potter", "Sirius Black", "Remus Lupin", "Peter Pettigrew",
     ]) == "Potter Black Lupin"

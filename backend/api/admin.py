@@ -22,11 +22,16 @@ import logging
 import os
 import re
 import time
+import fcntl
+import tempfile
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi import APIRouter, Body, Depends, Form, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
@@ -37,6 +42,69 @@ from api.settings import get_setting, put_setting
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+
+_RESTART_ANNOUNCEMENT = (
+    "FicAtlas will restart in five minutes. Please save your place; we'll be back soon."
+)
+
+
+class RestartRequest(BaseModel):
+    confirm: bool
+    restart_at: float | None = None
+
+
+def _restart_dir() -> Path:
+    return Path(os.environ.get("FICATLAS_RESTART_DIR", "/run/ficatlas-restart"))
+
+
+def _restart_lock(directory: Path):
+    """Lock shared with the host bridge so cancel cannot race a reboot."""
+    directory.mkdir(parents=True, exist_ok=True)
+    handle = (directory / "bridge.lock").open("a+")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    return handle
+
+
+def _read_restart(directory: Path) -> dict | None:
+    try:
+        data = json.loads((directory / "restart.json").read_text())
+        if isinstance(data, dict) and isinstance(data.get("restart_at"), (int, float)):
+            return data
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _write_restart(directory: Path, data: dict) -> None:
+    fd, name = tempfile.mkstemp(prefix="restart-", dir=directory)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(name, directory / "restart.json")
+    finally:
+        try:
+            os.unlink(name)
+        except FileNotFoundError:
+            pass
+
+
+def _restore_restart_notice(db: Session, request: dict) -> None:
+    if get_setting(db, "site_notice") != request.get("announcement"):
+        return
+    if get_setting(db, "site_notice_start_at") != request.get("announcement_start_at"):
+        return
+    if get_setting(db, "site_notice_until") != request.get("announcement_until"):
+        return
+    for key, value in (("site_notice", request.get("previous_notice", "")),
+                       ("site_notice_start_at", request.get("previous_notice_start_at", "")),
+                       ("site_notice_until", request.get("previous_notice_until", ""))):
+        db.execute(sql_text("""
+            INSERT INTO app_settings (key, value) VALUES (:k, :v)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """), {"k": key, "v": value})
+    db.commit()
 
 # Sampled rather than counted. An exact answer to "how many AO3 rows are stubs"
 # means a filtered scan of 13.1M rows; a sample answers it to within a fraction
@@ -329,6 +397,11 @@ _JOB_EVIDENCE = [
      "follow_email.py.", 2,
      "SELECT to_timestamp(NULLIF(value,'')::bigint) FROM app_settings "
      " WHERE key = 'follow_email_ran_at'"),
+    ("follow_email_fail", "Follow email failures",
+     "Counts consecutive follow_email loop failures. A non-zero count means "
+     "the loop is failing and needs investigation. Reset to 0 when a pass succeeds.",
+     1,
+     "SELECT value::int FROM app_settings WHERE key = 'follow_email_failed_count'"),
     # What a fandom is recommending LATELY, which is the one recommendation
     # question no archive can answer — and which has produced nothing at all.
     #
@@ -758,6 +831,129 @@ def overview(refresh: bool = False,
 
     _CACHE, _CACHED_AT = out, time.time()
     return {**out, "cached": False, "age_s": 0}
+
+
+@router.get("/cloudflare-analytics")
+def cloudflare_analytics(db: Session = Depends(get_db),
+                         _admin: User = Depends(require_admin)):
+    """Cloudflare analytics snapshot — requests, bandwidth, threats, unique visitors.
+    Reads from the cached snapshot stored by the worker's cf_analytics_loop."""
+    from api.settings import get_setting
+    data = get_setting(db, "cf_analytics_data")
+    fetched_at = get_setting(db, "cf_analytics_fetched_at")
+    if not data:
+        return {"available": False, "message": "No data yet — worker loop has not run or CF_ANALYTICS not enabled"}
+    try:
+        import json
+        parsed = json.loads(data)
+        return {
+            "available": True,
+            "fetched_at": fetched_at,
+            "series": parsed.get("series", []),
+        }
+    except Exception as e:
+        return {"available": False, "message": f"Failed to parse: {e}"}
+
+
+@router.get("/restart")
+def restart_status(_admin: User = Depends(require_admin)):
+    directory = _restart_dir()
+    if not (directory / "bridge.ready").is_file():
+        return {"available": False, "pending": None}
+    lock = _restart_lock(directory)
+    try:
+        request = _read_restart(directory)
+        try:
+            bridge_status = json.loads((directory / "bridge-status.json").read_text())
+        except (OSError, ValueError, TypeError):
+            bridge_status = None
+        return {"available": True, "pending": request, "bridge_status": bridge_status}
+    finally:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
+
+
+@router.post("/restart")
+def schedule_restart(payload: RestartRequest = Body(...),
+                     db: Session = Depends(get_db),
+                     _admin: User = Depends(require_admin)):
+    if not payload.confirm:
+        raise HTTPException(400, "Confirm the scheduled restart.")
+    directory = _restart_dir()
+    if not (directory / "bridge.ready").is_file():
+        raise HTTPException(503, "Host restart service is not available.")
+    lock = _restart_lock(directory)
+    try:
+        if _read_restart(directory):
+            raise HTTPException(409, "A restart is already scheduled.")
+        now = datetime.now(timezone.utc)
+        requested_ts = payload.restart_at
+        if requested_ts is not None and not (now.timestamp() + 300 <= requested_ts <= now.timestamp() + 30 * 86400):
+            raise HTTPException(400, "Schedule the restart 5 minutes to 30 days from now.")
+        requested_at = (datetime.fromtimestamp(requested_ts, timezone.utc)
+                        if requested_ts is not None else now + timedelta(minutes=5))
+        if requested_at < now + timedelta(minutes=5):
+            raise HTTPException(400, "Schedule the restart at least five minutes from now.")
+        if requested_at > now + timedelta(days=30):
+            raise HTTPException(400, "Schedule the restart within the next 30 days.")
+        announcement_start = requested_at - timedelta(minutes=5)
+        expiry = requested_at + timedelta(minutes=20)
+        request = {
+            "id": str(uuid.uuid4()),
+            "created_at": now.isoformat(),
+            "restart_at": requested_at.timestamp(),
+            "announcement": _RESTART_ANNOUNCEMENT,
+            "announcement_start_at": announcement_start.isoformat(),
+            "announcement_until": expiry.isoformat(),
+            "previous_notice": get_setting(db, "site_notice"),
+            "previous_notice_start_at": get_setting(db, "site_notice_start_at"),
+            "previous_notice_until": get_setting(db, "site_notice_until"),
+        }
+        db.execute(sql_text("""
+            INSERT INTO app_settings (key, value) VALUES ('site_notice', :notice)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """), {"notice": _RESTART_ANNOUNCEMENT})
+        db.execute(sql_text("""
+            INSERT INTO app_settings (key, value) VALUES ('site_notice_start_at', :start_at)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """), {"start_at": announcement_start.isoformat()})
+        db.execute(sql_text("""
+            INSERT INTO app_settings (key, value) VALUES ('site_notice_until', :until)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """), {"until": expiry.isoformat()})
+        db.commit()
+        try:
+            _write_restart(directory, request)
+        except OSError as exc:
+            _restore_restart_notice(db, request)
+            raise HTTPException(503, "Could not schedule the host restart.") from exc
+        return {"ok": True, "pending": request}
+    finally:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
+
+
+@router.post("/restart/cancel")
+def cancel_restart(db: Session = Depends(get_db),
+                   _admin: User = Depends(require_admin)):
+    directory = _restart_dir()
+    if not (directory / "bridge.ready").is_file():
+        raise HTTPException(503, "Host restart service is not available.")
+    lock = _restart_lock(directory)
+    try:
+        request = _read_restart(directory)
+        if not request:
+            raise HTTPException(404, "No restart is scheduled.")
+        if request["restart_at"] <= time.time():
+            raise HTTPException(409, "The host restart is already starting.")
+        (directory / "restart.json").unlink(missing_ok=True)
+        _restore_restart_notice(db, request)
+        return {"ok": True, "site_notice": get_setting(db, "site_notice"),
+                "site_notice_start_at": get_setting(db, "site_notice_start_at"),
+                "site_notice_until": get_setting(db, "site_notice_until")}
+    finally:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
 
 
 # ── the passes an operator can start by hand ────────────────────────────────

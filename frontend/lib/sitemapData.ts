@@ -13,7 +13,7 @@ export interface Hub { slug: string; content_at?: string }
 
 async function listing(path: string): Promise<Hub[]> {
   try {
-    const r = await fetch(`${INTERNAL_API}${path}?limit=10000`, {
+    const r = await fetch(`${INTERNAL_API}${path}?limit=50000`, {
       next: { revalidate: CACHE_S },
       headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
       signal: AbortSignal.timeout(15000),
@@ -27,14 +27,16 @@ async function listing(path: string): Promise<Hub[]> {
 
 export const loadHubs = () =>
   Promise.all([listing("/api/hubs"), listing("/api/ships"), listing("/api/hubs/topics/all"),
-               listing("/api/authors")])
-    .then(([fandoms, ships, topics, authors]) => ({
+               listing("/api/authors"), listing("/api/stories/series")])
+    .then(([fandoms, ships, topics, authors, series]) => ({
       fandoms, ships,
       // Trope pages (backend/topic_hubs.py), already in slug order. Their own
       // files, so their churn never rewrites the fandom or pairing files.
       topics: [...topics].sort((a, b) => a.slug.localeCompare(b.slug)),
       // Author pages (backend/author_hubs.py), in slug order for the same reason.
       authors: [...authors].sort((a, b) => a.slug.localeCompare(b.slug)),
+      // Series pages (backend/stories.py), in slug order.
+      series: [...series].sort((a, b) => a.slug.localeCompare(b.slug)),
     }))
 
 // How many URLs go in one child file.
@@ -85,12 +87,13 @@ export const chunk = (bulk: Hub[], n: number) =>
  * URL appears in two files. Overlap would be legal (crawlers dedupe) but it
  * would make Search Console's per-file coverage double-count the top 500, and
  * being able to read those numbers is most of why the index exists. */
-export function childNames(n: { fandoms: number; ships: number; topics?: number; authors?: number }): string[] {
+export function childNames(n: { fandoms: number; ships: number; topics?: number; authors?: number; series?: number }): string[] {
   const names = ["core"]
   for (let i = 0; i * CHUNK < n.ships; i++)   names.push(`ships-${i + 1}`)
   for (let i = 0; i * CHUNK < n.fandoms; i++) names.push(`fandoms-${i + 1}`)
   for (let i = 0; i * CHUNK < (n.topics ?? 0); i++) names.push(`topics-${i + 1}`)
   for (let i = 0; i * CHUNK < (n.authors ?? 0); i++) names.push(`authors-${i + 1}`)
+  for (let i = 0; i * CHUNK < (n.series ?? 0); i++) names.push(`series-${i + 1}`)
   return names
 }
 

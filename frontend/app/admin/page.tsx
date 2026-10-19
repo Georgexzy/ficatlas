@@ -7,6 +7,8 @@ import OutreachTab from "./OutreachTab"
 import ToolsView, { DbActivity } from "./ToolsView"
 import PassesView from "./PassesView"
 import ConfigView from "./ConfigView"
+import CloudflarePanel from "./CloudflarePanel"
+import RestartPanel from "./RestartPanel"
 import "./admin.css"
 import { ADMIN_GROUPS, adminTabFor, type AdminTab } from "@/lib/adminTabs"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
@@ -447,6 +449,20 @@ export default function AdminPage() {
             <>
               <ViewHead title="Passes" sub="Start a maintenance pass now instead of waiting for its timer. Preview first; it writes nothing." />
               <PassesView onCounts={setActivePasses} />
+            </>
+          )}
+
+          {tab === "cloudflare" && (
+            <>
+              <ViewHead title="Cloudflare Analytics" sub="Edge requests, bandwidth, threats, and unique visitors from Cloudflare's analytics." />
+              <CloudflarePanel />
+            </>
+          )}
+
+          {tab === "restart" && (
+            <>
+              <ViewHead title="Restart" sub="Give readers a warning, then restart the computer hosting FicAtlas." />
+              <RestartPanel />
             </>
           )}
 

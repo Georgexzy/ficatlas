@@ -409,7 +409,7 @@ def _canonical_fandom_hint(values: list[str]) -> str | None:
 
 
 def _description_discovery_query(characters: list[str]) -> str | None:
-    """Use compact actor/target names, not every word of the reader's prose."""
+    """Use compact actor and target names instead of all the reader's prose."""
     terms: list[str] = []
     for value in characters:
         name = re.sub(r"\s*\([^()]*\)\s*$", "", value)
@@ -421,6 +421,31 @@ def _description_discovery_query(characters: list[str]) -> str | None:
         if len(terms) == 3:
             break
     return " ".join(terms) or None
+
+
+def _description_discovery_queries(characters: list[str],
+                                   description: str | None = None
+                                   ) -> list[str]:
+    """Build broad and action-focused AO3 queries for a thin interpreted search.
+
+    AO3 ANDs free-text query terms. Requiring names and an action in one query
+    dropped useful works when the summary used a synonym or another verb form.
+    Keep the names-only pass, then try one gerund-form action pass and merge.
+    """
+    base = _description_discovery_query(characters)
+    if not base:
+        return []
+    queries = [base]
+    verbs = {verb: group for group in _RELATION_VERB_GROUPS for verb in group}
+    for word in re.findall(r"[A-Za-z][A-Za-z'-]*", description or ""):
+        group = verbs.get(word.casefold())
+        if not group:
+            continue
+        action = next((form for form in group if form.endswith("ing")), None)
+        if action and action.casefold() not in base.casefold().split():
+            queries.append(f"{base} {action}")
+        break
+    return queries
 
 
 def _describe_rank(entity, describe: str | None):
@@ -1111,11 +1136,51 @@ def _author_is_known(db, name: str) -> bool:
         return False
     try:
         with db.begin_nested():
+            # Case-INSENSITIVE, for the same reason the author FILTER is: it
+            # compares `lower(Story.author)`, so `author:white_squirrel` finds
+            # a stored `White_Squirrel` on its own. Matching the vocabulary
+            # case-sensitively here meant the split silently did not fire for
+            # lowercase — which is how people type, and how every failing query
+            # in the logs was written. `ix_author_facets_lower` serves it; the
+            # primary key is case-sensitive and would miss.
             return bool(db.execute(
-                sql_text("SELECT 1 FROM author_facets WHERE value = :v LIMIT 1"),
-                {"v": name}).first())
+                sql_text("SELECT 1 FROM author_facets"
+                         " WHERE lower(value) = :v LIMIT 1"),
+                {"v": name.lower()}).first())
     except Exception:
         log.debug("author split lookup failed", exc_info=True)
+        return False
+
+
+def _ship_alias_known(db, name: str) -> bool:
+    """Is this one of the fandom's own names for a pairing?
+
+    The question `_facet_exact` asks for relationships, asked of the table that
+    actually answers it. `facets` holds pairings as the archives file them —
+    `Draco Malfoy/Harry Potter` — and fandom does not type that. It types
+    `drarry`, `wolfstar`, `taejin`, and those live in `ship_aliases`, which is
+    mined from the works rather than listed by anyone.
+
+    All 676 of them are single words, so every one is exactly the shape a split
+    cuts to and none of them can ever be found through `facets`. The filter
+    itself already resolves them — `ship:drarry` returns 315 works — but the
+    SPLIT did not, so `ship:drarry angst` looked for one relationship named
+    "drarry angst" and returned nothing while `relationships=drarry&q=angst`
+    beside it returned 25. Same query, one of them typed into the bar.
+
+    `_alias_table` is cached and already loads this; the kill switch is
+    `_SHIP_ALIASES_ON`, so a slow ship query can be switched off without a
+    deploy and this goes with it.
+    """
+    if not _SHIP_ALIASES_ON:
+        return False
+    name = (name or "").strip().lower()
+    if not name:
+        return False
+    try:
+        return name in {k.lower() for k in _alias_table(db)}
+    except Exception:
+        log.debug("ship alias lookup failed", exc_info=True)
         return False
 
 
@@ -1205,7 +1270,14 @@ def _resolve_or_split(db, col_name: str, csv_val):
             continue
         for n in range(len(words) - 1, 0, -1):
             head = " ".join(words[:n])
-            if _facet_exact(db, col_name, head):
+            # Relationships get a SECOND vocabulary. `facets` knows pairings by
+            # their archive spelling only, so a fandom-shorthand nickname could
+            # never end a value no matter how many words followed it —
+            # `ship:drarry angst` stayed one relationship named "drarry angst"
+            # and returned nothing. See `_ship_alias_known`.
+            if (_facet_exact(db, col_name, head)
+                    or (col_name == "relationships"
+                        and _ship_alias_known(db, head))):
                 kept.append(head)
                 leftover.append(" ".join(words[n:]))
                 break
@@ -2689,6 +2761,12 @@ class SearchResponse(BaseModel):
     # results page offers it as a link: a search for a writer is usually a
     # request for "everything they wrote", which is exactly that page.
     author_page: Optional[dict] = None
+    # The fandom hub this search filters on, when there is exactly one and it
+    # has a hub page. Results link to it so a search for "harry potter draco"
+    # offers /fandom/harry-potter rather than only a re-search URL.
+    fandom_page: Optional[dict] = None
+    # The ship hub this search filters on, same logic.
+    ship_page: Optional[dict] = None
 
 
 def _author_page(db, author: Optional[str], q: Optional[str]) -> Optional[dict]:
@@ -2712,6 +2790,43 @@ def _author_page(db, author: Optional[str], q: Optional[str]) -> Optional[dict]:
             row = db.execute(sql_text(
                 "SELECT slug, name FROM author_hubs WHERE author_key = ANY(:k) LIMIT 1"
             ), {"k": cands}).fetchone()
+    except Exception:
+        return None
+    return {"slug": row[0], "name": row[1]} if row else None
+
+
+def _fandom_page(db, fandoms: Optional[str]) -> Optional[dict]:
+    """{slug, name} when the search filters on exactly one fandom with a hub."""
+    parts = [f.strip() for f in (fandoms or "").split(",") if f.strip()]
+    if len(parts) != 1:
+        return None
+    try:
+        from api.search import fandom_base
+        from fandom_hubs import slugify
+        s = slugify(fandom_base(parts[0]))
+        with db.begin_nested():
+            row = db.execute(sql_text(
+                "SELECT slug, name FROM fandom_hubs WHERE slug = :s LIMIT 1"
+            ), {"s": s}).fetchone()
+    except Exception:
+        return None
+    return {"slug": row[0], "name": row[1]} if row else None
+
+
+def _ship_page(db, relationships: Optional[str]) -> Optional[dict]:
+    """{slug, name} when the search filters on exactly one ship with a hub."""
+    parts = [r.strip() for r in (relationships or "").split(",") if r.strip()]
+    if len(parts) != 1:
+        return None
+    try:
+        from ship_hubs import ship_key
+        k = ship_key(parts[0])
+        if not k:
+            return None
+        with db.begin_nested():
+            row = db.execute(sql_text(
+                "SELECT slug, name FROM ship_hubs WHERE slug = :s LIMIT 1"
+            ), {"s": k}).fetchone()
     except Exception:
         return None
     return {"slug": row[0], "name": row[1]} if row else None
@@ -2911,12 +3026,23 @@ async def _fetch_and_persist_live(live_params: dict, want_ao3: bool) -> None:
 
         # Search-triggered work runs after the request. Keep it on AO3's
         # robots-permitted fandom tag endpoint; /works/search is disallowed for
-        # automated clients. Description discovery needs only the first page.
+        # automated clients. Each description query gets one page.
         discovery = bool(live_params.get("description_discovery"))
-        results = await fetch_live_ao3(
-            live_params, limit=20 if discovery else 60,
-            pages=1 if discovery else 3, automated=True)
+        queries = live_params.get("description_discovery_queries") or [live_params.get("q")]
+        results = []
+        seen_urls = set()
+        for discovery_query in queries if discovery else [live_params.get("q")]:
+            params = {**live_params, "q": discovery_query}
+            batch = await fetch_live_ao3(
+                params, limit=20 if discovery else 60,
+                pages=1 if discovery else 3, automated=True)
+            for result in batch:
+                url = result.get("url")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    results.append(result)
         if not results:
+            log.info("live AO3: no results for q=%r", live_params.get("q"))
             return
         with db_session() as db:
             persist_live_results(db, results)
@@ -3286,6 +3412,9 @@ def search(          # NOT async — see below
     # ── Build DB query ────────────────────────────────────────────────────────
     db_query = db.query(Story)
     filters  = []
+    # The free-text predicate on its own, so the near-miss title arm can apply
+    # every other filter and skip only this one. See where it is assigned.
+    _text_filter = None
 
     # Delisted works are hidden from the public, not from the operator.
     #
@@ -3598,8 +3727,23 @@ def search(          # NOT async — see below
     # anything reads `q` — ship resolution, the category test and the FTS
     # predicate all have to see the recovered text. Cache keys are built from the
     # raw URL above and stay correct: the same input always splits the same way.
+    # `author` BELONGS IN THIS LIST and was missing from it. `_resolve_or_split`
+    # grew author support — its own branch, its own exact-vocabulary probe in
+    # `_author_is_known`, and a comment saying the same failure "survived
+    # because nobody checked a second column" — and then the one call site that
+    # would have invoked it was never updated, so the branch was dead code and
+    # the author's half of every query stayed unsplit.
+    #
+    # Measured live, before: `author:Lomonaaeren time travel` and
+    # `author:white_squirrel arithmancer` both returned 0, while
+    # `author:Lomonaaeren` alone returned 970 works and `time travel` alone
+    # thousands. The parser had consumed the trailing words as part of the name,
+    # so not only did the filter match nobody, `clean_text` was empty and the
+    # free-text arm of the same query never ran either. Two halves that each
+    # work, ANDing to nothing, silently.
     for _col, _raw in (("fandoms", fandoms), ("characters", characters),
-                       ("relationships", relationships), ("tags", tags)):
+                       ("relationships", relationships), ("tags", tags),
+                       ("author", author)):
         _fixed, _spill = _resolve_or_split(db, _col, _raw)
         if not _spill:
             continue
@@ -3609,6 +3753,8 @@ def search(          # NOT async — see below
             characters = _fixed
         elif _col == "relationships":
             relationships = _fixed
+        elif _col == "author":
+            author = _fixed
         else:
             tags = _fixed
         q = " ".join(x for x in ([q] if q else []) + _spill).strip() or None
@@ -3815,10 +3961,16 @@ def search(          # NOT async — see below
         #
         # Narrow on purpose — the whole query, nothing left over, and only when
         # the tag is too large for the ordinary branch.
+        # Kept as a NAMED predicate, not just appended, because the near-miss
+        # title arm below has to apply everything the reader stated EXCEPT this
+        # — and it cannot subtract a predicate from an SQLAlchemy query once the
+        # filter() call has been made.
+        _text_filter = None
         if _trope_browse:
-            filters.append(Story.tags.op("&&")(cast(trope_tags, PG_ARRAY(Text))))
+            _text_filter = Story.tags.op("&&")(cast(trope_tags, PG_ARRAY(Text)))
         else:
-            filters.append(or_(*branches) if len(branches) > 1 else text_pred)
+            _text_filter = or_(*branches) if len(branches) > 1 else text_pred
+        filters.append(_text_filter)
 
     if exclude_ids:
         # Parsed as UUIDs, not interpolated. A malformed id is dropped rather
@@ -4466,15 +4618,32 @@ def search(          # NOT async — see below
             db_query.order_by(None).limit(COUNT_CEILING + 1),
         ]
         if fuzzy_pred is not None:
-            # Structural filters only — same site/explicit/delisted gate as the
-            # main query, but no FTS, so a near-miss title is allowed in.
-            # Its own query, so it needs the gate again — this arm bypasses
-            # `filters` entirely and would otherwise be a hole straight through
-            # the exclusions above.
+            # Everything the reader STATED applies here. Only the FTS predicate
+            # is skipped, because letting a near-miss title through it is the
+            # entire reason this arm exists.
+            #
+            # It used to apply the structural gate alone, on the theory that a
+            # rescue should not be constrained. That made the rescue override
+            # the reader: `?author=White_Squirrel&q=animagus` returned works by
+            # nineteen other authors, because "animagus" is a common TITLE and
+            # this arm admits works whose title matches regardless of who wrote
+            # them. A reader who named an author was shown works by everybody
+            # else, ranked plausibly, with no signal that their filter had been
+            # dropped — and it only surfaced when the free text happened to be
+            # a common title word, so `&q=angst` looked correct and hid it.
+            #
+            # A stated filter is not a preference to be outvoted by a rescue.
+            # The gate below is re-applied because this is its own query; the
+            # rest comes from `filters`, which by this point holds every
+            # inclusion and exclusion the request carried.
             fuzzy_q = db.query(Story).filter(Story.delisted_at.is_(None),
                                              Story.private_only.is_(False))
             for _g in _gate_all:
                 fuzzy_q = fuzzy_q.filter(_g)
+            for _f in filters:
+                if _f is _text_filter:
+                    continue          # the one thing this arm bypasses
+                fuzzy_q = fuzzy_q.filter(_f)
             if site_enums:
                 fuzzy_q = fuzzy_q.filter(_site_pred(site_enums))
             if not explicit:
@@ -5701,13 +5870,16 @@ def search(          # NOT async — see below
                         list(_pq_candidate.characters) + list(_pq_candidate.tags)
                         if _pq_candidate else [])
                     _hint_fandom = _canonical_fandom_hint(_hint_values)
-                    _discovery_query = _description_discovery_query(
-                        list(_pq_candidate.characters) if _pq_candidate else [])
-                    if (_hint_fandom and _discovery_query
+                    _discovery_queries = _description_discovery_queries(
+                        list(_pq_candidate.characters) if _pq_candidate else [],
+                        _typed)
+                    if (_hint_fandom and _discovery_queries
                             and "ao3" in active_sites and live
                             and _should_fetch_live(sort, page, _typed)):
                         _discovery_params = {
-                            "q": _discovery_query, "fandoms": _hint_fandom,
+                            "q": _discovery_queries[0],
+                            "description_discovery_queries": _discovery_queries,
+                            "fandoms": _hint_fandom,
                             "sort": "relevance", "description_discovery": True,
                         }
                         if _claim_live_fetch(_discovery_params):
@@ -5774,6 +5946,8 @@ def search(          # NOT async — see below
         suggestions=_suggestions,
         interpreted=interpreted,
         author_page=_author_page(db, author, q),
+        fandom_page=_fandom_page(db, fandoms),
+        ship_page=_ship_page(db, relationships),
     )
     # What it cost, and therefore what it has earned. Computed before the cache
     # writes below so the in-process copy, the shared row and the edge all agree.
@@ -7443,22 +7617,63 @@ def _biggest_spelling(db, tags: list[str]) -> Optional[tuple[str, int]]:
     """
     if not tags:
         return None
-    row = db.execute(sql_text("""
-        SELECT value, count FROM facets
-         WHERE kind = 'tag'
-           AND (value = ANY(CAST(:t AS text[]))
-                -- A prefix of the word SEQUENCE, not of a word. `LIKE a || '%'`
-                -- matched `Thanks` to `Thanksgiving` and `Close` to
-                -- `Closeted Character`, so a sign-off ("Thanks a lot!") and a
-                -- verb ("he becomes close with them") became the subject of
-                -- the search. Requiring a space after the prefix keeps the
-                -- case this rule exists for — `Magically Powerful Harry` ->
-                -- `Magically Powerful Harry Potter` — and drops the rest.
-                OR EXISTS (SELECT 1 FROM unnest(CAST(:t AS text[])) a
-                            WHERE lower(value) LIKE lower(a) || ' %'))
-         ORDER BY count DESC LIMIT 1
-    """), {"t": tags}).first()
-    return (row[0], int(row[1])) if row else None
+    # TWO INDEX-SERVED LOOKUPS, NOT ONE ORed TOGETHER — and the difference is
+    # the whole query's cost.
+    #
+    # The single statement ORed `value = ANY(...)` with a prefix match. Neither
+    # arm can use an index under an OR that the other arm cannot also serve, so
+    # the planner fell back to walking `ix_facets_kind_count` in count order and
+    # FILTERING — which stops at the first match and is sub-millisecond when one
+    # exists, and scans the entire tag vocabulary when none does. Measured on a
+    # pair of tags the index does not hold: 2,019,784 rows removed by filter,
+    # the unnest subplan evaluated twice per row, 2,892ms. This runs for every
+    # empty search that reaches the extractor, so the misses — which are every
+    # search that needs it — were paying the maximum.
+    #
+    # Split, both arms are served: equality by the (kind, value) primary key
+    # (1.0ms), prefix by ix_facets_value_lower via an explicit range (0.7ms).
+    best: Optional[tuple[str, int]] = None
+    try:
+        row = db.execute(sql_text("""
+            SELECT value, count FROM facets
+             WHERE kind = 'tag' AND value = ANY(CAST(:t AS text[]))
+             ORDER BY count DESC LIMIT 1
+        """), {"t": tags}).first()
+        if row:
+            best = (row[0], int(row[1]))
+    except Exception:
+        log.debug("biggest_spelling equality lookup failed", exc_info=True)
+
+    # A prefix of the word SEQUENCE, not of a word. `LIKE a || '%'` matched
+    # `Thanks` to `Thanksgiving` and `Close` to `Closeted Character`, so a
+    # sign-off ("Thanks a lot!") and a verb ("he becomes close with them")
+    # became the subject of the search. Requiring a space after the prefix
+    # keeps the case this rule exists for — `Magically Powerful Harry` ->
+    # `Magically Powerful Harry Potter` — and drops the rest.
+    #
+    # Written as a RANGE rather than LIKE, because `lower(value) LIKE lower(a)
+    # || ' %'` has a non-constant prefix and no index can serve it: the
+    # expression index on lower(value) is a btree, and a btree answers `>=` and
+    # `<` where it cannot answer a LIKE whose pattern it only learns at
+    # execution. chr(127) is the successor bound — everything strictly below
+    # `prefix + DEL` and at or above `prefix` is exactly the strings beginning
+    # with `prefix`.
+    try:
+        for tag in tags:
+            if not tag or not tag.strip():
+                continue
+            row = db.execute(sql_text("""
+                SELECT value, count FROM facets
+                 WHERE kind = 'tag'
+                   AND lower(value) >= lower(:t)
+                   AND lower(value) <  lower(:t) || chr(127)
+                 ORDER BY count DESC LIMIT 1
+            """), {"t": tag}).first()
+            if row and (best is None or int(row[1]) > best[1]):
+                best = (row[0], int(row[1]))
+    except Exception:
+        log.debug("biggest_spelling prefix lookup failed", exc_info=True)
+    return best
 
 
 def _k(n: Optional[int]) -> str:

@@ -35,6 +35,7 @@ interface Hub {
   works: Work[]
   sections?: SiteSection[]
   related?: RelatedHub[]
+  profile_urls?: Record<string, string>
 }
 
 const SITE_LABELS: Record<string, string> = {
@@ -152,6 +153,12 @@ export default async function AuthorPage(
           href={`/?q=${encodeURIComponent(`author:"${hub.name}"`)}`}>
           Search all {hub.work_count.toLocaleString()} works by {hub.name}
         </Link>
+        {Object.entries(hub.profile_urls ?? {}).map(([site, url]) => (
+          <a key={site} href={url} target="_blank" rel="noopener noreferrer"
+            className="topic-btn">
+            {SITE_LABELS[site] ?? site} ↗
+          </a>
+        ))}
       </p>
 
       {sections.map(section => (

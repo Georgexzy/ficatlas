@@ -456,13 +456,21 @@ def queue_ids(db, pairs: list[tuple[int, str]]) -> int:
     """Add discovered work IDs to the queue. Returns how many were new."""
     if not pairs:
         return 0
-    values = ",".join(f"({w},'{t}')" for w, t in pairs if t.isdigit())
-    if not values:
+    # Filter valid pairs and prepare batch
+    valid = [(w, t) for w, t in pairs if t.isdigit()]
+    if not valid:
         return 0
+    # Use parameterized query with ON CONFLICT DO NOTHING
+    # Build placeholders: (:w0, :t0), (:w1, :t1), ...
+    placeholders = ",".join(f"(:w{i}, :t{i})" for i in range(len(valid)))
+    params = {}
+    for i, (w, t) in enumerate(valid):
+        params[f"w{i}"] = w
+        params[f"t{i}"] = t
     res = db.execute(sql_text(f"""
-        INSERT INTO wayback_queue (work_id, snapshot_ts) VALUES {values}
+        INSERT INTO wayback_queue (work_id, snapshot_ts) VALUES {placeholders}
         ON CONFLICT (work_id) DO NOTHING
-    """))
+    """), params)
     return res.rowcount or 0
 
 

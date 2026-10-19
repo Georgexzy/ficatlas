@@ -76,6 +76,10 @@ Allow: /ship/
 # Author pages, one per well-read writer, bounded the same way. See
 # backend/author_hubs.py.
 Allow: /author/
+# Series pages, one per multi-work series (347k). Unlike the hub tables these
+# are not bounded by a size threshold — every series with >1 work has one — but
+# each page is a fixed list of works in reading order, not a query surface.
+Allow: /series/
 # The sitemap is an index now; its children live under /sitemaps/ and a crawler
 # that can read the index but not what it points at is worse off than before.
 Allow: /sitemap.xml
@@ -164,6 +168,7 @@ Allow: /fandom/
 Allow: /ships
 Allow: /ship/
 Allow: /author/
+Allow: /series/
 Allow: /sitemap.xml
 Allow: /sitemaps/
 Crawl-delay: 10
@@ -183,6 +188,7 @@ Allow: /fandom/
 Allow: /ships
 Allow: /ship/
 Allow: /author/
+Allow: /series/
 Allow: /sitemap.xml
 Allow: /sitemaps/
 Crawl-delay: 10

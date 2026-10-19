@@ -38,6 +38,7 @@ days, not to saturate the database or hammer archive.org:
 
 import asyncio
 from datetime import datetime, timezone
+import json
 import logging
 import os
 import sys
@@ -1835,6 +1836,28 @@ async def _curation_loop() -> None:
             await asyncio.sleep(interval)
 
 
+async def _cf_analytics_loop() -> None:
+    """Daily snapshot of Cloudflare analytics (requests, bandwidth, threats, etc).
+    Stores the last 30 days in app_settings for the admin panel chart.
+    """
+    import cloudflare_analytics
+
+    interval = 24 * 3600
+    await asyncio.sleep(_num("CF_ANALYTICS_START_DELAY_SEC", 1200))
+    while True:
+        try:
+            data = await asyncio.to_thread(cloudflare_analytics.fetch, days=30)
+            if data and data.get("series"):
+                from api.settings import put_setting
+                with db_session() as db:
+                    put_setting(db, "cf_analytics_data", json.dumps(data))
+                    put_setting(db, "cf_analytics_fetched_at", str(int(time.time())))
+                log.info(f"cloudflare analytics: fetched {len(data['series'])} data points")
+        except Exception as e:
+            log.warning(f"cloudflare analytics fetch failed: {type(e).__name__}: {e}")
+        await asyncio.sleep(interval)
+
+
 async def _indexnow_loop() -> None:
     """Submit changed hub pages to the IndexNow engines.
 
@@ -2386,6 +2409,7 @@ async def _follow_email_loop() -> None:
     """
     import follow_email
     from db.session import db_session
+    from sqlalchemy import text as sql_text
 
     interval = _num("FOLLOW_EMAIL_SEC", 900)
     await asyncio.sleep(_num("FOLLOW_EMAIL_DELAY_SEC", 300))
@@ -2399,8 +2423,77 @@ async def _follow_email_loop() -> None:
             stats = await asyncio.to_thread(_pass)
             if stats["sent"] or stats["failed"]:
                 log.info(f"follow email: {stats}")
+                # Reset failure count on success
+                from api.settings import put_setting
+                with db_session() as db:
+                    put_setting(db, "follow_email_failed_count", "0")
         except Exception as e:
             log.warning(f"follow email failed: {type(e).__name__}: {e}")
+            from api.settings import put_setting
+            with db_session() as db:
+                put_setting(db, "follow_email_failed_at", str(int(time.time())))
+                # `sql_text`, because `text` was never imported into this module
+                # — and this line sits INSIDE the except block. A failure in
+                # follow_email.run() raised NameError here, which escapes the
+                # except entirely (an exception raised in a handler is not
+                # caught by that handler), propagates out of the while loop and
+                # KILLS the coroutine. So one bad digest silently stopped all
+                # future digests until the worker restarted, and the failure
+                # counter meant to notice it could never increment — the one
+                # mechanism for recording the outage was the thing the outage
+                # broke.
+                current = int(db.execute(sql_text("SELECT COALESCE(value, '0') FROM app_settings WHERE key='follow_email_failed_count'")).scalar() or 0)
+                put_setting(db, "follow_email_failed_count", str(current + 1))
+        await asyncio.sleep(interval)
+
+
+async def _engagement_refresh_loop() -> None:
+    """Keep author_hubs.engagement current as the index grows.
+
+    The engagement column (sum of hits+kudos+bookmarks+comments per author)
+    drives the /authors page ranking and the landing browse tab. It is
+    recomputed from stories periodically so new works and updated stats flow
+    through without a full hub rebuild.
+    """
+    # `text` WAS NEVER IMPORTED HERE, and the except block swallowed it as a
+    # warning every six hours: every pass raised NameError before touching the
+    # database, so author_hubs.engagement was never recomputed after the initial
+    # build and the /authors ranking and landing browse tab drifted as the index
+    # grew. The loop looked healthy from the outside — it logged, it retried, it
+    # never raised out of its own task. Only its warning line showed the fault,
+    # and "engagement refresh failed: NameError" reads like a transient error
+    # rather than code that could never have worked.
+    #
+    # Importing it locally as `sql_text` to match how the other worker loops in
+    # this file do it, so this does not add a module-level sqlalchemy name that
+    # the file deliberately avoids.
+    from db.session import db_session
+    from sqlalchemy import text as sql_text
+
+    interval = _num("ENGAGEMENT_REFRESH_SEC", 21600)  # every 6 hours
+    await asyncio.sleep(_num("ENGAGEMENT_REFRESH_DELAY_SEC", 600))
+    while True:
+        try:
+            def _pass():
+                with db_session() as db:
+                    db.execute(sql_text("SET statement_timeout = 120000"))
+                    db.execute(sql_text("""
+                        UPDATE author_hubs ah SET engagement = sub.te
+                        FROM (
+                            SELECT lower(author) AS k,
+                                   sum(COALESCE(hits,0)+COALESCE(kudos,0)+
+                                       COALESCE(bookmarks,0)+COALESCE(comments,0)) AS te
+                            FROM stories
+                           WHERE author IS NOT NULL AND delisted_at IS NULL AND NOT private_only
+                           GROUP BY lower(author)
+                        ) sub
+                        WHERE sub.k = lower(ah.author_key)
+                    """))
+                    db.commit()
+            await asyncio.to_thread(_pass)
+            log.info("author engagement refreshed")
+        except Exception as e:
+            log.warning(f"engagement refresh failed: {type(e).__name__}: {e}")
         await asyncio.sleep(interval)
 
 
@@ -2644,6 +2737,16 @@ async def main() -> None:
     if _flag("FOLLOW_EMAIL", "true"):
         tasks.append(asyncio.create_task(_supervised("follow_email_loop", _follow_email_loop)))
         log.info("follow update mail enabled (opt-in readers only)")
+
+    # Cloudflare analytics snapshot — daily, stores in app_settings for admin panel
+    if _flag("CF_ANALYTICS", "true"):
+        tasks.append(asyncio.create_task(_supervised("cf_analytics_loop", _cf_analytics_loop)))
+        log.info("Cloudflare analytics snapshot enabled (daily)")
+
+    # Author engagement refresh — keeps the /authors ranking current as the index grows
+    if _flag("ENGAGEMENT_REFRESH", "true"):
+        tasks.append(asyncio.create_task(_supervised("engagement_refresh_loop", _engagement_refresh_loop)))
+        log.info("Author engagement refresh enabled (every 6 hours)")
 
     if _flag("FFNET_LISTING_APPLY", "true"):
         tasks.append(asyncio.create_task(_supervised("ffnet_listing_apply_loop", _ffnet_listing_apply_loop)))

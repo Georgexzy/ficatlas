@@ -250,6 +250,7 @@ services:
       # See backend/ratelimit.py — marks our own SSR traffic so it is not
       # counted as one very busy client. Same value in both services.
       INTERNAL_RENDER_TOKEN: ${INTERNAL_RENDER_TOKEN:-}
+      FICATLAS_RESTART_DIR: /run/ficatlas-restart
       # Worker count, pool budget divisor and rate-limit divisor — see the
       # command above.
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
@@ -294,6 +295,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - /var/lib/ficatlas-restart-bridge:/run/ficatlas-restart:rw
     mem_limit: 1500m
     # 0.75 of a core was the hard ceiling on how many readers could be served at
     # once, regardless of how fast the database answered. Handlers are blocking

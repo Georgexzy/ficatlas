@@ -72,12 +72,23 @@ def test_the_exactness_of_the_lookup_is_what_makes_this_safe():
     """The job is to find where the author's name ends. A FUZZY match invents
     boundaries that are not there: `Ionibal fluff` trigram-matches the author
     `Ionibal` at 0.71 without any lookup being consulted at all. So the helper
-    must be an equality test, and this asserts it stays one."""
+    must be an equality test, and this asserts it stays one.
+
+    `lower(value) = :v` is the same equality, case-folded — and has to be. The
+    author FILTER compares `lower(Story.author)`, so `author:white_squirrel`
+    finds a stored `White_Squirrel` on its own; a case-sensitive vocabulary
+    probe meant the split silently did not fire for lowercase, which is how
+    people type and how every failing query in the logs was written. Folding
+    the case changes which spellings of the SAME name compare equal. It does
+    not make the comparison fuzzy, which is the property being protected."""
     import inspect
+    import re
 
     from api.search import _author_is_known
     src = inspect.getsource(_author_is_known)
-    assert "WHERE value = :v" in src, "the author split must be an EXACT lookup"
+    assert re.search(r"WHERE\s+lower\(value\)\s*=\s*:v", src), (
+        "the author split must be an EXACT lookup, case-folded"
+    )
     assert "similarity(" not in src and "% :v" not in src, (
         "a fuzzy author lookup would invent a boundary the reader never wrote"
     )

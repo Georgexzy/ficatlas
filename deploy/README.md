@@ -43,6 +43,48 @@ single visitor reaches it.
 The previous colour stays up for `GRACE_SECONDS` (default 120) afterwards. That
 window is the entire reason rollback is instant rather than a rebuild.
 
+## Announced host restart
+
+Admin → Site → Restart publishes a notice, waits five minutes, then reboots the
+host. Readers already on the site see the notice within about twenty seconds;
+the admin panel shows a countdown and can cancel it before it starts. The notice
+expires automatically after the expected return window. Other public notices
+are managed in Admin → Site → Configuration → Reader communication. Set a local
+start time to schedule one, optionally set when it should disappear, then save;
+leave the start blank to publish immediately. Clear the message and save to
+remove it.
+
+The API container never gets the Docker socket or general host command access.
+A small root-owned systemd bridge accepts only a timestamped restart request in
+`/var/lib/ficatlas-restart-bridge` and invokes the fixed `systemctl reboot`
+command when it is due. Install that bridge once on the host:
+
+```bash
+sudo bash deploy/install-restart-bridge.sh
+```
+
+Run this from the FicAtlas checkout on the **Linux computer that runs Docker**.
+It installs and starts `ficatlas-restart-bridge.service` as a root-owned,
+restricted system service. Check that it says `active (running)`:
+
+```bash
+sudo systemctl status ficatlas-restart-bridge.service
+```
+
+Then open Admin → Site → Restart. The page must report that the host restart
+service is available before scheduling anything. If it is unavailable, check
+the service status and `sudo journalctl -u ficatlas-restart-bridge.service -n 50`.
+Docker must start at boot (`sudo systemctl enable --now docker`); the existing
+compose services use `restart: unless-stopped` and come back after the host
+boots. A restart scheduled in Admin runs `systemctl reboot` on the physical
+host after five minutes. It does not restart only the container, deployment, or
+Cloudflare tunnel. Do not test the button unless a full computer reboot is safe.
+
+The public compose file mounts only that dedicated state directory into the two
+API colours. The restart control remains disabled until the bridge is running.
+This restarts the computer, so use it only when a full host reboot is intended;
+it is separate from blue/green code deployment.
+
 **Rollback is only possible during that window.** After it, the old colour is
 stopped and rolling back means deploying an older SHA.
 

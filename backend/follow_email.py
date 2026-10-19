@@ -22,7 +22,11 @@ Shape
   chapter count can rise without the work changing — a metadata correction, a
   listing that finally reports a count the bulk dump got wrong — and mailing a
   reader "new chapter!" about a repair is how a feature like this gets turned
-  off. The badge stays generous; mail is held to the stricter test.
+  off. The badge stays generous; mail is held to the stricter test. That date
+  is day-granular, so a second chapter on the SAME day as the first could not
+  move it and went unmailed; a re-read of the work page that found more
+  chapters (chapters_bumped_at) satisfies the test instead, at wall-clock
+  precision, and only for the paths that read the work page itself.
 * Links go to the story page HERE, not to the archive. The point is the
   return visit, and the story page is one click from the archive anyway.
 """
@@ -67,7 +71,26 @@ def moved(db, user_id: str) -> list:
            AND s.delisted_at IS NULL
            AND s.chapter_count > GREATEST(f.seen_chapters, coalesce(f.mailed_chapters, 0))
            AND (s.updated_at IS NULL OR f.seen_updated IS NULL
-                OR s.updated_at > f.seen_updated)
+                OR s.updated_at > f.seen_updated
+                -- The archive's own date is DAY-granular, so a second chapter
+                -- on the same day as the first cannot move it: "Mental
+                -- Gymnastics" (54) and "Intimate Relations" (55) were both
+                -- 2026-10-14, and the reader who marked the first seen never
+                -- got mail about the second. chapters_bumped_at is the same
+                -- claim at wall-clock precision, set when a re-read of the
+                -- WORK PAGE found more chapters than we held.
+                --
+                -- Pinned to the work's own date as well, because
+                -- apply_work also serves the title-repair backfill, where a
+                -- dump reporting 12 for a work that really has 40 is a
+                -- CORRECTION and not news — the count rises while the work's
+                -- date stays years old. A real new chapter moves both: the
+                -- archive dates it the day it posted, so within a few days of
+                -- our having seen the count rise. Outside that window the old
+                -- date test decides, exactly as before.
+                OR (s.chapters_bumped_at IS NOT NULL
+                    AND s.updated_at IS NOT NULL
+                    AND s.updated_at >= s.chapters_bumped_at - interval '3 days'))
          ORDER BY s.updated_at DESC NULLS LAST
     """), {"u": user_id}).fetchall()
 

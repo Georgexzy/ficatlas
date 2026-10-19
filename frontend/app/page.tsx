@@ -1367,6 +1367,64 @@ function ReadingActivity() {
   )
 }
 
+// Landing page feature highlights — shown once per device to signed-out visitors.
+// Shares the dismissal key with WhatYouCanDo so answering it once dismisses it everywhere.
+const TIPS_KEY = "ficatlas:tips-dismissed"
+
+function LandingFeatureHighlights() {
+  const { user } = useAuth()
+  const [ready, setReady] = useState(false)
+  const [hidden, setHidden] = useState(false)
+
+  useEffect(() => {
+    try { setHidden(localStorage.getItem(TIPS_KEY) === "1") } catch { /* private mode */ }
+    setReady(true)
+  }, [])
+
+  if (!ready || hidden || user) return null
+
+  const dismiss = () => {
+    setHidden(true)
+    try { localStorage.setItem(TIPS_KEY, "1") } catch { /* fine — it asks once more */ }
+  }
+
+  return (
+    <aside className="tips" role="note" aria-label="What an account adds">
+      <div className="tips__body">
+        <p className="tips__lead">
+          You can use all of this without an account. With one, it follows you:
+        </p>
+        <ul className="tips__list">
+          <li>
+            <strong>Know when a WIP updates.</strong> One list covering AO3,
+            FanFiction.net and FictionAlley — the thing no single archive can do,
+            because it only knows its own works. See updates when you come back,
+            or opt in to chapter update emails from Library → Following.
+          </li>
+          <li>
+            <strong>Keep a search, not just a result.</strong> Save
+            &ldquo;complete Drarry over 100k&rdquo; and re-run it whenever you
+            like; it tells you what has appeared since you last looked.
+          </li>
+          <li>
+            <strong>Your shelf and your place survive.</strong> Bookmarks and
+            where you had got to in each story move between devices instead of
+            living in one browser until you clear it.
+          </li>
+        </ul>
+        <p className="tips__foot">
+          <a href="/signup" className="tips__cta">Create an account</a>
+          <span className="tips__note">
+            No email needed. Nothing is sold, and there are no adverts.
+          </span>
+        </p>
+      </div>
+      <button type="button" className="tips__x" onClick={dismiss}
+        aria-label="Dismiss, and do not show this again">✕</button>
+    </aside>
+  )
+}
+
 function EmptyState({ onSurprise }: { onSurprise: () => void }) {
   return (
     <div className="empty">
@@ -1378,6 +1436,13 @@ function EmptyState({ onSurprise }: { onSurprise: () => void }) {
         Search by title, author, pairing, character or story details. Press <kbd>?</kbd> for filters.
       </p>
       <button className="empty__surprise" onClick={onSurprise}>Show me something random</button>
+
+      {/* What an account adds — shown once per device to signed-out visitors.
+          This is the same content as WhatYouCanDo (shown after a search) but
+          placed on the landing page so first-time visitors see the retention
+          features before they search. The dismissal key is shared so answering
+          it once dismisses it everywhere. */}
+      <LandingFeatureHighlights />
 
       {/* Somewhere to go for the reader who has no particular search in mind.
           The landing page previously offered exactly one action — type — and
@@ -1446,6 +1511,10 @@ const BROWSE_TABS = [
     more: "/fandoms", moreLabel: "Every fandom" },
   { key: "ship", label: "Pairings", hub: "ship" as const,
     more: "/ships", moreLabel: "Every pairing" },
+  { key: "author", label: "Authors", hub: "author" as const,
+    more: "/authors", moreLabel: "Every author" },
+  { key: "topic", label: "Tropes", hub: "fandom" as const,
+    more: "/tropes", moreLabel: "Every trope" },
 ] as const
 
 function BrowseExplorer() {
@@ -3971,6 +4040,22 @@ function SearchPageInner() {
                   <span className="author-jump__label">Author</span>
                   <span className="author-jump__name">{shown.author_page.name}</span>
                   <span className="author-jump__go">Everything they’ve written, by archive →</span>
+                </Link>
+              )}
+              {/* Same for a single-fandom or single-pairing filter: the hub
+                  page is a better destination than another search URL. */}
+              {shown.fandom_page && (
+                <Link href={`/fandom/${shown.fandom_page.slug}`} className="author-jump">
+                  <span className="author-jump__label">Fandom</span>
+                  <span className="author-jump__name">{shown.fandom_page.name}</span>
+                  <span className="author-jump__go">Browse the hub page →</span>
+                </Link>
+              )}
+              {shown.ship_page && (
+                <Link href={`/ship/${shown.ship_page.slug}`} className="author-jump">
+                  <span className="author-jump__label">Pairing</span>
+                  <span className="author-jump__name">{shown.ship_page.name}</span>
+                  <span className="author-jump__go">Browse the hub page →</span>
                 </Link>
               )}
               {/* On its own line under the results bar, not tucked inside it.

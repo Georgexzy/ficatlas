@@ -74,3 +74,20 @@ def test_nothing_credential_shaped_is_public(db):
     import re
     for k in PUBLIC_KEYS:
         assert not re.search(r"token|secret|password|cursor|watermark", k, re.I), k
+
+
+def test_scheduled_notice_is_hidden_from_readers_but_kept_for_admin(db):
+    from datetime import datetime, timedelta, timezone
+    from api.settings import put_setting
+    starts = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    put_setting(db, "site_notice", "A scheduled update")
+    put_setting(db, "site_notice_start_at", starts)
+    _seed(db)
+
+    public = all_settings(db=db, user=None)
+    admin = User(username="noticeadmin", password_hash="x", role=ROLE_ADMIN)
+    db.add(admin); db.commit()
+    operator = all_settings(db=db, user=admin)
+    assert public["site_notice"] == ""
+    assert public["site_notice_start_at"] == starts
+    assert operator["site_notice"] == "A scheduled update"

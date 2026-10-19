@@ -529,6 +529,74 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
                 </ArchiveLink>
               )
             })()}
+          {/* FOLLOW MOVED HERE — up from the very end of this list, and renamed
+              to say what the reader gets.
+
+              It used to be the LAST control on the page, behind Bookmark, EPUB
+              and Save offline, and it was labelled "Follow". Three things
+              stacked against it:
+
+                * Placement — Save to library sat in the first `.btn-row` beside
+                  the primary CTA; Follow was dead last. The one feature built
+                  to bring people back was the last thing in the list.
+                * The word — AO3 has no "Follow". Updates there are
+                  *Subscribe*; saving is *Bookmark*. So the archive's readers
+                  arrive with muscle memory for the one button that competes
+                  with this one, and no word for this one. "Follow" also reads
+                  as following a person, which is not what it does.
+                * The explanation — the only copy that says what following buys
+                  lives in WhatYouCanDo (home page, after a search) and
+                  WhyAccount (signup/login). Neither is ever on this page, so
+                  the button explained itself through a hover tooltip alone.
+
+              Measured: 1 follow in the whole table, 0 from anyone but this
+              site's author. Save, by contrast, is used repeatedly. Neither
+              number is big enough to reason from statistically — the placement
+              and the wording are the parts that are checkable.
+
+              Save pays off on the click; follow pays off only if the work later
+              updates. That asymmetry is real and cannot be designed away. What
+              can be fixed is burying it last and explaining it nowhere — so it
+              sits here, states the deliverable, and carries its own one-line
+              explanation for as long as it has not been clicked.
+
+              Hidden when the check FAILED while signed in (`null` with a
+              user): a control that appears and then 401s teaches people the
+              app is broken rather than that it is not theirs. */}
+          {!user && (
+            <a className="btn btn--ghost" href={`/login?next=/story/${story.id}`}
+              title="Sign in and you'll be told when this work gets a new chapter — across AO3, FanFiction.net and FictionAlley">
+              ☆ Get updates
+            </a>
+          )}
+          {user && following !== null && (
+            <button className={`btn ${following ? "btn--on" : "btn--ghost"}`}
+              onClick={toggleFollow}
+              title={following
+                ? "You'll see new chapters in your Updates list — tap to stop"
+                : "Tell me when this work gets a new chapter"}>
+              {following ? "✓ Following" : "☆ Get updates"}
+            </button>
+          )}
+          {/* The explanation, shown only while the button is still unclicked —
+              which is the only moment it needs making. Once followed it would be
+              redundant, and the email hook below takes its place. `!user` covers
+              the signed-out reader (following is null for them); `following ===
+              false` covers the signed-in reader whose check succeeded. A signed-in
+              reader whose check FAILED is neither, and gets no caption without a
+              button to attach it to. */}
+          {(!user || following === false) && (
+            <span className="follow-email-hint">
+              Get told when new chapters land — one list across AO3, FF.net and
+              FictionAlley.
+            </span>
+          )}
+          {followEmailHint && following && (
+            <span className="follow-email-hint" role="status">
+              Want an email when it updates?{" "}
+              <Link href="/library?tab=following">Turn on update emails</Link>
+            </span>
+          )}
           <button className={`btn ${bookmarked ? "btn--on" : ""}`} onClick={toggleBookmark}>
             {bookmarked ? "★ Bookmarked" : "☆ Bookmark"}
           </button>
@@ -571,45 +639,6 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
             )
           )}
 
-          {/* FOLLOW IS SHOWN TO EVERYONE, and that is a change.
-              It used to render only when `following !== null`, which is null
-              for a signed-out reader — so the one feature built to bring people
-              back was invisible to every first-time visitor. Measured over two
-              weeks: 162 first-time readers, 25 back within a week, and 3
-              accounts. Nobody can want a feature they have never seen.
-
-              The old reasoning — "a Follow button that cannot follow is worse
-              than none" — is right about a button that silently fails and wrong
-              about this one. The offline control three blocks up already solves
-              it the honest way: say what it needs, and link to it. Same shape
-              here, and `?next=` brings them back to this story rather than the
-              home page, so following is one tap after signing in.
-
-              Still hidden when the check FAILED while signed in (`null` with a
-              user), which is the case the old comment was really about. */}
-          {!user && (
-            <a className="btn btn--ghost" href={`/login?next=/story/${story.id}`}
-              title="Follow this work and new chapters show up in your list — across AO3, FanFiction.net and FictionAlley">
-              ☆ Follow for updates
-            </a>
-          )}
-          {user && following !== null && (
-            <>
-              <button className={`btn ${following ? "btn--on" : "btn--ghost"}`}
-                onClick={toggleFollow}
-                title={following
-                  ? "You'll see new chapters in your Updates list — tap to stop"
-                  : "Tell me when this work gets a new chapter"}>
-                {following ? "✓ Following" : "☆ Follow"}
-              </button>
-              {followEmailHint && following && (
-                <span className="follow-email-hint" role="status">
-                  Want an email when it updates?{" "}
-                  <Link href="/library?tab=following">Turn on update emails</Link>
-                </span>
-              )}
-            </>
-          )}
           {/* One Wayback link, not two.
               This rendered both a derived link (for hosted FictionAlley works) and
               a stored `wayback_url` when there was one — so a FictionAlley story
@@ -734,12 +763,26 @@ export default function StoryClient({ initialStory }: { initialStory?: StoryDeta
                 to be the problem. */}
             <h3 className="chapter-list__head">
               Chapters
-              {story.chapters.length > 4 && (
-                <OfflineLink className="chapter-list__latest"
-                  href={`/story/${story.id}/chapter/${story.chapters[story.chapters.length - 1].number}`}>
-                  Latest chapter →
-                </OfflineLink>
-              )}
+              {/* Both doors out of the list on one line: the newest chapter,
+                  and the whole work at once — AO3's "Entire Work". The second
+                  is offered only when there is more than one chapter to join
+                  up: 21,310 of the 29,785 hosted works here are a single
+                  chapter, where this link would be a second door onto the same
+                  screen. */}
+              <span className="chapter-list__jumps">
+                {story.chapters.length > 1 && (
+                  <OfflineLink className="chapter-list__entire"
+                    href={`/story/${story.id}/entire`}>
+                    Entire work →
+                  </OfflineLink>
+                )}
+                {story.chapters.length > 4 && (
+                  <OfflineLink className="chapter-list__latest"
+                    href={`/story/${story.id}/chapter/${story.chapters[story.chapters.length - 1].number}`}>
+                    Latest chapter →
+                  </OfflineLink>
+                )}
+              </span>
             </h3>
             <ol>
               {story.chapters.map(ch => (

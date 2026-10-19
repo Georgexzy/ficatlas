@@ -92,11 +92,23 @@ def parse_series(html: str) -> list[dict]:
 
 
 def record(db, story_id: str, author: str | None, entries: list[dict]) -> int:
-    """Store what a work page declared. Returns how many series it joined.
+    """Store what a work page declared. Returns how many series it JOINED.
+
+    Joined counts a membership that was NOT already there, which is what lets
+    a caller tell an enrichment that changed something from one that re-read
+    what it already held — see `_enrich_existing`, whose `enriched`/`skipped`
+    counts would otherwise claim work on every blurb that merely repeats a
+    series. The upsert still runs either way: the author may have MOVED the
+    work to a different part number or renamed the series, and both are
+    corrections worth taking on the next read.
 
     Keyed on the AO3 series id rather than the name, so two different series
     that happen to share a title stay separate — and so a series renamed by its
     author updates in place instead of forking.
+
+    An explicit membership never deletes a guessed one: `supersede_weaker` in
+    series_detect is the global form of that rule and runs it for every work
+    every three hours.
 
     The unique index on ao3_id is PARTIAL (`WHERE ao3_id IS NOT NULL`), because
     inferred/stated series have no AO3 id and many rows share NULL. Postgres
@@ -154,6 +166,9 @@ def record(db, story_id: str, author: str | None, entries: list[dict]) -> int:
                 RETURNING id
             """), {"n": e["name"], "a": author, "k": key}).scalar()
 
+        joined = db.execute(sql_text("""
+            SELECT 1 FROM series_works WHERE series_id = :s AND story_id = :w
+        """), {"s": sid, "w": story_id}).scalar() is None
         db.execute(sql_text("""
             INSERT INTO series_works (series_id, story_id, position, role)
             VALUES (:s, :w, :p, :r)
@@ -170,5 +185,6 @@ def record(db, story_id: str, author: str | None, entries: list[dict]) -> int:
         db.execute(sql_text("""
             UPDATE stories SET has_series = true WHERE id = :w AND NOT has_series
         """), {"w": story_id})
-        n += 1
+        if joined:
+            n += 1
     return n

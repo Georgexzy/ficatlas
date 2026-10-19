@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
-import { shortHubName } from "@/lib/hubNames"
 import Link from "next/link"
 import SiteHeader from "../SiteHeader"
+import HubFilter from "../HubFilter"
 
 // The index of fandom hubs — one crawlable page that reaches every hub, which
 // in turn reaches the story pages. This is the root of the only path a search
@@ -40,7 +40,7 @@ interface HubSummary { slug: string; name: string; work_count: number }
 
 async function fetchHubs(): Promise<HubSummary[]> {
   try {
-    const r = await fetch(`${INTERNAL_API}/api/hubs?limit=10000`, {
+    const r = await fetch(`${INTERNAL_API}/api/hubs?limit=50000`, {
       next: { revalidate: CACHE_S },
       headers: { "x-internal-render": process.env.INTERNAL_RENDER_TOKEN || "" },
       signal: AbortSignal.timeout(15000),
@@ -55,32 +55,16 @@ async function fetchHubs(): Promise<HubSummary[]> {
 export default async function FandomsIndex() {
   const hubs = await fetchHubs()
 
-  // Largest first is how the API returns them and how the page opens, because
-  // that is what most visitors want. The alphabetical grouping below is for
-  // finding a specific fandom, which is the other half of why anyone is here.
-  const top = hubs.slice(0, 60)
-
-  const groups = new Map<string, HubSummary[]>()
-  for (const h of [...hubs].sort((a, b) => a.name.localeCompare(b.name))) {
-    const first = h.name[0]?.toUpperCase() ?? "#"
-    const key = /[A-Z]/.test(first) ? first : "#"
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key)!.push(h)
-  }
-  const letters = [...groups.keys()].sort()
-
   return (
     <main id="main" className="hub-page hub">
       <SiteHeader current="browse" />
-      {/* The two browse axes, as one control. The phone tab bar cannot grow a
-          fifth item (six overflow a 375px screen — see SiteHeader), so this is
-          how /ships is reachable on a phone at all, and on desktop it is a
-          clearer statement than two separate header links that there are
-          exactly two ways to browse. */}
       <nav className="browse-switch" aria-label="Browse by">
         <span className="browse-switch__item browse-switch__item--current"
           aria-current="page">Fandoms</span>
         <Link href="/ships" className="browse-switch__item">Pairings</Link>
+        <Link href="/authors" className="browse-switch__item">Authors</Link>
+        <Link href="/tropes" className="browse-switch__item">Tropes</Link>
+        <Link href="/series" className="browse-switch__item">Series</Link>
       </nav>
       <h1>Browse fandoms</h1>
       <p className="hub__lede">
@@ -91,43 +75,10 @@ export default async function FandomsIndex() {
 
       {hubs.length === 0 ? (
         <p className="hub__empty">
-          Fandom pages aren’t built yet. <Link href="/">Search the index</Link> instead.
+          Fandom pages aren't built yet. <Link href="/">Search the index</Link> instead.
         </p>
       ) : (
-        <>
-          <h2 className="hub__heading">Fandoms with the most works</h2>
-          <ul className="hub__grid">
-            {top.map(h => (
-              <li key={h.slug}>
-                <Link href={`/fandom/${h.slug}`} className="hub__chip">
-                  <span className="hub__chip-name" title={h.name}>{shortHubName(h.name)}</span>
-                  <span className="hub__chip-count">{h.work_count.toLocaleString()}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-
-          <h2 className="hub__heading">All fandoms A–Z</h2>
-          {/* Jump links: the full list is thousands of entries, and a reader
-              looking for one fandom should not have to scroll past every other. */}
-          <p className="hub__alphabet">
-            {letters.map(l => <a key={l} href={`#letter-${l}`}>{l}</a>)}
-          </p>
-
-          {letters.map(l => (
-            <section key={l} className="hub__letter" id={`letter-${l}`}>
-              <h3>{l}</h3>
-              <ul className="hub__az">
-                {groups.get(l)!.map(h => (
-                  <li key={h.slug}>
-                    <Link href={`/fandom/${h.slug}`}>{h.name}</Link>{" "}
-                    <span className="hub__az-count">{h.work_count.toLocaleString()}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </>
+        <HubFilter items={hubs} basePath="/fandom" label="fandom" />
       )}
     </main>
   )

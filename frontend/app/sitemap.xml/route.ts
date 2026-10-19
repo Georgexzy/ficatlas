@@ -35,7 +35,7 @@ import { loadHubs, childNames, newest, sitemapindex, xml, SITE, split, chunk, CO
 export const dynamic = "force-dynamic"
 
 export async function GET() {
-  const { fandoms, ships, topics, authors } = await loadHubs()
+  const { fandoms, ships, topics, authors, series } = await loadHubs()
   const s = split(ships), f = split(fandoms)
 
   // Each child's lastmod is the newest content_at it actually contains, so the
@@ -49,12 +49,14 @@ export async function GET() {
     const a = /^authors-(\d+)$/.exec(name)
     if (a) return newest(chunk(authors, Number(a[1])))
     const m = /^(ships|fandoms)-(\d+)$/.exec(name)
-    if (!m) return undefined
-    return newest(chunk(m[1] === "ships" ? s.bulk : f.bulk, Number(m[2])))
+    if (m) return newest(chunk(m[1] === "ships" ? s.bulk : f.bulk, Number(m[2])))
+    const se = /^series-(\d+)$/.exec(name)
+    if (se) return newest(chunk(series, Number(se[1])))
+    return undefined
   }
 
   return xml(sitemapindex(
-    childNames({ ships: s.bulk.length, fandoms: f.bulk.length, topics: topics.length, authors: authors.length }).map(name => ({
+    childNames({ ships: s.bulk.length, fandoms: f.bulk.length, topics: topics.length, authors: authors.length, series: series.length }).map(name => ({
       loc: `${SITE}/sitemaps/${name}.xml`,
       lastmod: stamp(name),
     })),

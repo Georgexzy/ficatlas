@@ -78,6 +78,47 @@ def delisted_as_gone(story: "Story | None", viewer) -> bool:
     return True
 
 
+# What the author and the deployment say before any text is handed over. One
+# copy of each, because they are the GATE and a gate written out at each call
+# site is a gate that drifts: `delisted_as_gone` was extracted for exactly this
+# reason, and `may_read_text` before it ("a login wall on one and an open door
+# on the other. That has already happened once here"), while the 451, the sign-in
+# demand and the private-import 404 were still spelled out in three places.
+_TEXT_WITHDRAWN = (
+    "The author of this story asked for it not to be hosted here. "
+    "It is still listed, and you can read it at the original archive."
+)
+_SIGN_IN_TO_READ = ("Please sign in to read stories here. "
+                    "Searching does not need an account.")
+_SIGN_IN_TO_DOWNLOAD = "Please sign in to download stories."
+
+
+def permit_text_read(db: Session, story: "Story | None", viewer, *,
+                     signin: str, missing: str) -> None:
+    """Raise unless `viewer` may be given this story's full text.
+
+    Every endpoint that hands over text calls this first — the chapter reader,
+    the entire-work reader and the EPUB exporter. They differ ONLY in wording:
+    `signin` is what a logged-out reader is told (the export is a download, the
+    reader is a page) and `missing` is the 404 the URL deserves when the work
+    is not the caller's to see, which is 404 rather than 403 because whether a
+    private import exists is itself the importing reader's business.
+
+    Order matters and is the order the chapter reader has always used:
+    delisting outranks withdrawal (an author who asked for the entry GONE gets
+    404, not a 451 that still names their work), and both outrank the login
+    demand (a work nobody may read is not answered by asking who you are).
+    """
+    if delisted_as_gone(story, viewer):
+        raise HTTPException(404, "Story not found")
+    if story is not None and story.text_withdrawn_at is not None:
+        raise HTTPException(451, _TEXT_WITHDRAWN)
+    if REQUIRE_LOGIN_TO_READ and viewer is None:
+        raise HTTPException(401, signin)
+    if story is not None and not may_read_text(db, story, viewer):
+        raise HTTPException(404, missing)
+
+
 def valid_story_id(story_id: str) -> str:
     """404 on a story id that is not a UUID, rather than letting Postgres raise.
 
@@ -112,6 +153,44 @@ class ChapterFull(BaseModel):
     posted_at: Optional[str]
     start_note: Optional[str]
     end_note: Optional[str]
+
+
+def _chapter_full(chapter: Chapter, story: "Story | None") -> ChapterFull:
+    """Sanitise one stored chapter and put it in the shape the reader renders.
+
+    The only way chapter text leaves this process. Sanitised on the way OUT
+    rather than at import: chapter bodies are scraped from four sites and
+    accepted from EPUB uploads, and the reader injects all three of these
+    fields with dangerouslySetInnerHTML — so this is the single choke point
+    every one of them passes through. Doing it here also cleans the 82k
+    chapters already stored, which sanitising at ingest would not.
+    Sanitise, then tidy, then drop a heading the reader is about to print
+    anyway. All at serve time, so every one of the 82,161 stored chapters is
+    cleaned without a migration and a re-import cannot undo it.
+
+    One function rather than the pipeline written out in each reader, because
+    the single-chapter view and the entire-work view hand over the same bytes
+    and a divergence there would be an unsanitised field on one path.
+    """
+    body = tidy_chapter_html(sanitize_html(chapter.content))
+    # The story title is passed in because chapters routinely repeat it as the
+    # first line of the body; without it that line is indistinguishable from a
+    # chapter title and would be promoted into the heading.
+    body, better_title = strip_chapter_heading(body, chapter.title,
+                                               story.title if story else None)
+    return ChapterFull(
+        id=str(chapter.id),
+        number=chapter.number,
+        # The body's own heading usually carries the real chapter name while the
+        # stored title is just "Chapter 01", so promote it when that is the case.
+        title=better_title or chapter.title,
+        summary=chapter.summary,
+        content=body,
+        word_count=chapter.word_count or 0,
+        posted_at=chapter.posted_at.isoformat() if chapter.posted_at else None,
+        start_note=sanitize_html(chapter.start_note),
+        end_note=sanitize_html(chapter.end_note),
+    )
 
 
 class StoryDetail(BaseModel):
@@ -302,6 +381,42 @@ def story_series(story_id: str = Depends(valid_story_id),
     return {"series": out}
 
 
+@router.get("/series")
+def list_series(
+    db: Session = Depends(get_db),
+    limit: Optional[int] = Query(None, ge=1, le=50000),
+    offset: int = Query(0, ge=0),
+    with_names: bool = Query(False),
+):
+    """All series for the sitemap — id (used as slug) and created_at (when created).
+
+    When with_names=true and limit is set, returns series with name, author and
+    work_count ordered by work_count DESC — the payload for the /series browse
+    page. Without those params, returns the full flat list for the sitemap."""
+    if with_names and limit:
+        rows = db.execute(sql_text("""
+            SELECT id, name, author, work_count, total_words, created_at
+              FROM series
+             WHERE work_count > 1
+             ORDER BY work_count DESC, name ASC
+             LIMIT :lim OFFSET :off
+        """), {"lim": limit, "off": offset}).fetchall()
+        return [{
+            "slug": str(r[0]),
+            "name": r[1],
+            "author": r[2],
+            "work_count": r[3],
+            "total_words": r[4],
+            "content_at": r[5].isoformat() if r[5] else None,
+        } for r in rows]
+    rows = db.execute(sql_text("""
+        SELECT id as slug, created_at as content_at
+        FROM series
+        ORDER BY slug
+    """)).fetchall()
+    return [{"slug": str(r[0]), "content_at": r[1].isoformat() if r[1] else None} for r in rows]
+
+
 def _hub_links(db: Session, story) -> list[dict]:
     """The fandom and ship hubs this work belongs to, as {kind, slug, name}.
 
@@ -432,7 +547,9 @@ def get_chapter(number: int, story_id: str = Depends(valid_story_id),
                       viewer: Optional[User] = Depends(get_current_user)):
     """Serve one chapter's text.
 
-    Two gates here, and they guard different things.
+    The gate itself lives in `permit_text_read` and is shared with the
+    entire-work reader and the EPUB exporter, because all three hand over the
+    same bytes and a gate written out three times is a gate that drifts.
 
     text_withdrawn_at is the takedown flag: an author asked for their story not
     to be readable here. That is absolute — 451 regardless of who is asking,
@@ -447,30 +564,8 @@ def get_chapter(number: int, story_id: str = Depends(valid_story_id),
     against it.
     """
     story = db.query(Story).filter(Story.id == story_id).first()
-    # Delisting is the strongest action, so it outranks the text-withdrawal
-    # status: an author who asked for the entry gone gets a 404, not a 451 that
-    # still names their work.
-    if delisted_as_gone(story, viewer):
-        raise HTTPException(404, "Story not found")
-    if story is not None and story.text_withdrawn_at is not None:
-        raise HTTPException(
-            451,
-            "The author of this story asked for it not to be hosted here. "
-            "It is still listed, and you can read it at the original archive.",
-        )
-
-    if REQUIRE_LOGIN_TO_READ and viewer is None:
-        raise HTTPException(
-            401,
-            "Please sign in to read stories here. Searching does not need an account.",
-        )
-
-    # A story that is not on the public shelf is readable only by whoever
-    # privately imported it.
-    if story is not None and not story.is_hosted and not may_read_text(db, story, viewer):
-        raise HTTPException(
-            404, "Chapter not found",
-        )
+    permit_text_read(db, story, viewer,
+                     signin=_SIGN_IN_TO_READ, missing="Chapter not found")
 
     chapter = (db.query(Chapter)
                .filter(Chapter.story_id == story_id, Chapter.number == number)
@@ -478,34 +573,97 @@ def get_chapter(number: int, story_id: str = Depends(valid_story_id),
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
-    # Sanitised on the way OUT rather than at import. Chapter bodies are scraped
-    # from four sites and accepted from EPUB uploads, and the reader injects all
-    # three of these fields with dangerouslySetInnerHTML — so this is the single
-    # choke point every one of them passes through. Doing it here also cleans the
-    # 82k chapters already stored, which sanitising at ingest would not.
-    # Sanitise, then tidy, then drop a heading the reader is about to print
-    # anyway. All at serve time, so every one of the 82,161 stored chapters is
-    # cleaned without a migration and a re-import cannot undo it.
-    body = tidy_chapter_html(sanitize_html(chapter.content))
-    # The story title is passed in because chapters routinely repeat it as the
-    # first line of the body; without it that line is indistinguishable from a
-    # chapter title and would be promoted into the heading.
-    body, better_title = strip_chapter_heading(body, chapter.title,
-                                               story.title if story else None)
+    return _chapter_full(chapter, story)
 
-    return ChapterFull(
-        id=str(chapter.id),
-        number=chapter.number,
-        # The body's own heading usually carries the real chapter name while the
-        # stored title is just "Chapter 01", so promote it when that is the case.
-        title=better_title or chapter.title,
-        summary=chapter.summary,
-        content=body,
-        word_count=chapter.word_count or 0,
-        posted_at=chapter.posted_at.isoformat() if chapter.posted_at else None,
-        start_note=sanitize_html(chapter.start_note),
-        end_note=sanitize_html(chapter.end_note),
-    )
+
+# ── The whole work as one page ───────────────────────────────────────────────
+#
+# How much of a work a single response may carry, measured on stored bodies
+# rather than on chapter count, because the two do not track each other:
+#
+#     21,310 of 29,785 hosted works are a SINGLE chapter
+#     whole-work bytes  p50 16KB   p90 133KB   p99 939KB   max 10.4MB (199 ch.)
+#
+# So a chapter limit alone would let the tail through as one enormous response
+# — and a byte limit alone would admit one chapter in every case, since the
+# first chapter is always taken whole. Both are needed, and the first chapter
+# is exempt from the byte test so that a single oversized chapter still opens
+# rather than returning an empty page.
+#
+# 900KB of HTML is ~250-300KB on the wire after gzip (GZipMiddleware, min 800
+# bytes) — one round trip for nine works in ten, and the long tail arrives as
+# a few pages the reader watches fill in below them.
+ENTIRE_MAX_BYTES = 900_000
+ENTIRE_MAX_CHAPTERS = 60
+
+
+class EntirePage(BaseModel):
+    chapters: List[ChapterFull]
+    # The number to pass as `after` for the next page, or null when this work
+    # is fully here. Deliberately a chapter NUMBER and not an offset: stored
+    # chapter numbers are not guaranteed contiguous (the exporter and the
+    # offline saver both rely on that), so an offset would silently skip the
+    # gaps.
+    next_after: Optional[int]
+
+
+@router.get("/{story_id}/entire", response_model=EntirePage)
+def get_entire_work(after: int = Query(0, ge=0),
+                    story_id: str = Depends(valid_story_id),
+                    db: Session = Depends(get_db),
+                    viewer: Optional[User] = Depends(get_current_user)):
+    """The work as one continuous scroll — AO3's "Entire Work".
+
+    Gated by exactly the same `permit_text_read` as the single-chapter reader,
+    with the same arguments but for the two wording differences, because this
+    hands over the same bytes and a new endpoint is precisely where a login
+    wall or a 451 would be forgotten. Same sanitisation path, via
+    `_chapter_full`: one choke point for the fields the reader injects.
+
+    Paged rather than complete-on-first-request for the reason written on the
+    constants above. The reader asks for page one and keeps asking while
+    `next_after` is a number, appending each batch as it lands, so a 10MB work
+    shows its first chapter as fast as a one-shot response would have and the
+    rest streams in under the reader instead of ahead of them.
+    """
+    story = db.query(Story).filter(Story.id == story_id).first()
+    permit_text_read(db, story, viewer,
+                     signin=_SIGN_IN_TO_READ, missing="Story not found")
+    if story is None:
+        raise HTTPException(404, "Story not found")
+
+    rows = (db.query(Chapter)
+            .filter(Chapter.story_id == story.id, Chapter.number > after)
+            .order_by(Chapter.number.asc())
+            .limit(ENTIRE_MAX_CHAPTERS + 1).all())
+    if not rows:
+        if after > 0:
+            # Nothing beyond this point, which for a PAGING reader is the answer
+            # "you have all of it" — an empty page and `next_after = null`. A
+            # 404 here would be read as a failed page, and retried, over work
+            # that is already sitting on the screen in full.
+            return EntirePage(chapters=[], next_after=None)
+        # A work listed but never stored — a metadata-only row, or a takedown
+        # that emptied it. The story page offers "entire work" from the OUTLINE,
+        # so this is reachable and must say why rather than 500.
+        raise HTTPException(
+            404,
+            "This work's full text isn't stored locally, so it can't be "
+            "opened as one piece.",
+        )
+
+    picked, used = [], 0
+    next_after = None
+    for i, ch in enumerate(rows):
+        size = len(ch.content or "")
+        if i >= ENTIRE_MAX_CHAPTERS or (picked and used + size > ENTIRE_MAX_BYTES):
+            next_after = picked[-1].number
+            break
+        picked.append(ch)
+        used += size
+
+    return EntirePage(chapters=[_chapter_full(c, story) for c in picked],
+                      next_after=next_after)
 
 
 # ── Recommendations ──────────────────────────────────────────────────────────
@@ -710,19 +868,13 @@ def export_epub(story_id: str = Depends(valid_story_id), db: Session = Depends(g
     login wall with the door propped open beside it.
     """
     story = db.query(Story).filter(Story.id == story_id).first()
-    # Same delisted gate as the chapter reader: the exporter hands over the
-    # ENTIRE story in one file, so it has to respect the strongest action even
-    # more than the single-chapter view does.
-    if delisted_as_gone(story, viewer):
-        raise HTTPException(404, "Story not found")
-    if story is not None and story.text_withdrawn_at is not None:
-        raise HTTPException(451, "The author of this story asked for it not to be hosted here.")
-    if REQUIRE_LOGIN_TO_READ and viewer is None:
-        raise HTTPException(401, "Please sign in to download stories.")
-    if story is not None and not may_read_text(db, story, viewer):
-        # 404 rather than 403: whether a private import exists is itself the
-        # user's business, and a 403 would confirm the story is hosted here.
-        raise HTTPException(404, "Story not found")
+    # The same gate the chapter reader uses, via the same helper, because the
+    # exporter hands over the ENTIRE story in one file and has to respect the
+    # strongest action even more than the single-chapter view does. Three copies
+    # of this order existed; there is now one, and `delisted_as_gone` and
+    # `may_read_text` were extracted for the same reason.
+    permit_text_read(db, story, viewer,
+                     signin=_SIGN_IN_TO_DOWNLOAD, missing="Story not found")
     if not story:
         raise HTTPException(404, "Story not found")
 

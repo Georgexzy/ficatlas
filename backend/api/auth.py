@@ -544,6 +544,8 @@ def signup(
     # page posts username/password/invite and always has.
     email: str = Form(""),
     remember: bool = Form(True),
+    # Optional fandom interests selected at signup. Stored in user_data.
+    fandoms: str = Form(""),
     db: Session = Depends(get_db),
 ):
     if SIGNUP_MODE == "closed":
@@ -577,6 +579,11 @@ def signup(
                 email=email or None,
                 last_login=datetime.utcnow())
     db.add(user); db.commit(); db.refresh(user)
+    # Store selected fandoms in user_data
+    if fandoms.strip():
+        from models.user import UserData
+        db.add(UserData(user_id=user.id, key="signup_fandoms", value=fandoms.strip()))
+        db.commit()
     token = _create_session(db, user, request.headers.get("user-agent"), remember)
     _set_session_cookie(response, token, remember)
     # The SAME shape /me returns — see user_payload for what went wrong

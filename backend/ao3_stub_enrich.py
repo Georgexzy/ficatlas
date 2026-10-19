@@ -70,6 +70,7 @@ from sqlalchemy import text as sql_text
 from field_priority import FIELD_PRIORITY
 
 import ao3_budget
+import ao3_series
 from db.session import db_session
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -100,7 +101,7 @@ _CHAPTERS_RE = re.compile(r'<dd class="chapters">(\d+)\s*/\s*(\d+|\?)</dd>')
 # number that appears in three files is a number that is wrong in at least one
 # of them. See field_priority for the single scale and the argument.
 _CANDIDATES = sql_text("""
-    SELECT id, url,
+    SELECT id, url, author,
            (CASE WHEN nullif(summary,'') IS NULL          THEN {summary} ELSE 0 END
           + CASE WHEN published_at IS NULL                THEN {published_at} ELSE 0 END
           + CASE WHEN COALESCE(word_count,0) = 0          THEN {word_count} ELSE 0 END
@@ -170,6 +171,12 @@ def parse_work(html: str) -> dict:
         text = re.sub(r"\s+", " ", text).strip()
         if text:
             out["summary"] = text[:5000]
+    # The series, stated by the archive on this page. These rows are the ones
+    # LEAST likely to have one already — indexed from bulk sources that carried
+    # no series field — and a listing blurb only reaches a work that happens to
+    # sit on a tag page we are harvesting. The block costs three regexes over
+    # HTML already being searched for everything else.
+    out["series"] = ao3_series.parse_series(html)
     return out
 
 
@@ -181,7 +188,7 @@ async def enrich(limit: int, dry_run: bool, maxlen: int = 60,
             # background drain, and when a specific search is visibly wrong the
             # fix should not have to wait for it to come round.
             rows = db.execute(sql_text(
-                "SELECT id, url, 0 AS gap_score FROM stories WHERE url = :u"),
+                "SELECT id, url, author, 0 AS gap_score FROM stories WHERE url = :u"),
                 {"u": only_url}).fetchall()
             if not rows:
                 log.error(f"no row with url {only_url}")
@@ -193,9 +200,9 @@ async def enrich(limit: int, dry_run: bool, maxlen: int = 60,
         return 0
 
     log.info(f"{len(rows):,} queued" if only_url else
-             f"{len(rows):,} fandom-less stubs queued (top gap score {rows[0][2]})")
+             f"{len(rows):,} fandom-less stubs queued (top gap score {rows[0][3]})")
     if dry_run:
-        for sid, url, _tl in rows[:10]:
+        for sid, url, _author, _tl in rows[:10]:
             log.info(f"    would fetch {url}")
         return 0
 
@@ -207,7 +214,7 @@ async def enrich(limit: int, dry_run: bool, maxlen: int = 60,
     # were login pages -- 31% of the allowance that bounds every AO3 job here.
     async with httpx.AsyncClient(timeout=60, follow_redirects=False,
                                  headers={"User-Agent": UA}) as client:
-        for sid, url, _tl in rows:
+        for sid, url, author, _tl in rows:
             await ao3_budget.await_slot()
             try:
                 r = await client.get(f"{url}?view_adult=true")
@@ -292,14 +299,34 @@ async def enrich(limit: int, dry_run: bool, maxlen: int = 60,
             if "summary" in data:
                 sets.append("summary = COALESCE(NULLIF(summary, ''), :summary)")
                 params["summary"] = data["summary"]
-            if not sets:
+            series = data.get("series") or []
+            if not sets and not series:
                 failed += 1
                 continue
 
             with db_session() as db:
-                db.execute(sql_text(
-                    f"UPDATE stories SET {', '.join(sets)} WHERE id = :i"), params)
+                joined = 0
+                if series:
+                    # The archive's own series, recorded even when no other
+                    # field needed filling: a row whose stats are already
+                    # complete can still be missing the one thing only this
+                    # page states. `author` comes from the queue SELECT —
+                    # record() needs it to tell two series that share a name
+                    # apart from an unrelated one.
+                    try:
+                        joined = ao3_series.record(db, sid, author, series)
+                    except Exception as e:
+                        log.warning(f"series save failed for {sid}: "
+                                    f"{type(e).__name__}: {e}")
+                if sets:
+                    db.execute(sql_text(
+                        f"UPDATE stories SET {', '.join(sets)} WHERE id = :i"), params)
                 db.commit()
+            if not sets and not joined:
+                # Re-read a row that had nothing left to give, series included:
+                # counted as a skip, because nothing was learned.
+                failed += 1
+                continue
             done += 1
             if done % 25 == 0:
                 log.info(f"  {done:,} enriched, {failed:,} skipped")

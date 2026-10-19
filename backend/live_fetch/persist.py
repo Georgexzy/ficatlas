@@ -336,25 +336,31 @@ def persist_live_results(db: Session, live_results: list[dict],
     return saved
 
 
-def _save_series(db: Session, story_id: str, author: str | None, d: dict) -> None:
-    """Record AO3's own series for a work the importer just saw.
+def _save_series(db: Session, story_id: str, author: str | None, d: dict) -> int:
+    """Record AO3's own series for a work the importer just saw. New joins.
 
     Every import route funnels through here, so a series stated on a listing
     page is captured by the bulk harvest at twenty works a request — not left
     for the one-at-a-time work-page pass to find later. Explicit AO3 data always
     wins over anything series_detect infers from titles.
+
+    Returns what `ao3_series.record` returns — how many series the work was NOT
+    already in — because `_enrich_existing` reports a row as enriched only when
+    something about it actually changed, and a blurb repeating a series we
+    already hold is not that.
     """
     entries = d.get("series") or []
     if not entries:
-        return
+        return 0
     try:
         import ao3_series
-        ao3_series.record(db, str(story_id), author, entries)
+        return ao3_series.record(db, str(story_id), author, entries)
     except Exception as e:
         # Was debug — every AO3 series save was failing on a bad ON CONFLICT
         # target and nobody saw it, which is how the index held zero explicit
         # series despite blurbs carrying them on every listing page.
         log.warning(f"series save failed for {story_id}: {type(e).__name__}: {e}")
+        return 0
 
 
 def _enrich_existing(db: Session, url: str, d: dict) -> bool:
@@ -483,8 +489,13 @@ def _enrich_existing(db: Session, url: str, d: dict) -> bool:
         story.crawled_at = datetime.now(timezone.utc)
 
         # A work we already had, re-seen with its series stated. Same helper,
-        # so a series arrives whether the work is new to us or not.
-        _save_series(db, story.id, story.author, d)
+        # so a series arrives whether the work is new to us or not — and its
+        # answer decides whether this read changed anything: a blurb that
+        # merely repeats the series we hold has enriched nothing, and counting
+        # it as enrichment would inflate the stat until it meant "we fetched
+        # this row", not "we learned from it".
+        if _save_series(db, story.id, story.author, d):
+            changed = True
         db.commit()
         return changed
     except Exception as e:

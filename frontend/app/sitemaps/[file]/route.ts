@@ -26,7 +26,7 @@ export async function GET(
 ) {
   const { file } = await params
   const name = file.replace(/\.xml$/, "")
-  const { fandoms, ships, topics, authors } = await loadHubs()
+  const { fandoms, ships, topics, authors, series } = await loadHubs()
   const s = split(ships), f = split(fandoms)
 
   if (name === "core") {
@@ -64,6 +64,13 @@ export async function GET(
     // worse answer than "this is not one of my sitemaps".
     if (slice.length === 0) return new Response("Not found", { status: 404 })
     return xml(urlset(slice.map(entry(isShips ? "/ship" : "/fandom"))))
+  }
+
+  const se = /^series-(\d+)$/.exec(name)
+  if (se) {
+    const slice = chunk(series, Number(se[1]))
+    if (slice.length === 0) return new Response("Not found", { status: 404 })
+    return xml(urlset(slice.map(entry("/series"))))
   }
 
   return new Response("Not found", { status: 404 })

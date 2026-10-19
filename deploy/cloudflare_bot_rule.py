@@ -59,42 +59,10 @@ PHASE = "http_request_firewall_custom"
 # defence is that adding one here and running this is the whole procedure.
 RULES = [
     {
-        "description": "Block Lightpanda (agent browser; 98.3% of origin traffic)",
-        # An AGENT BROWSER — a real engine built to be driven by scrapers and
-        # AI agents. Measured over 24 hours of origin logs:
-        #
-        #     Lightpanda/1.0   87,330 of 88,860 requests   98.3%
-        #     peak hour                43,645 requests     ~12/second
-        #     distinct IPv6 addresses   5,863, across five /32 allocations
-        #     robots.txt fetches               0
-        #
-        # It walks the whole site — /, /fandoms, /ships, /about, /permissions —
-        # and follows the author link on every result card, which is how it
-        # produced 11,632 requests into `/api/search`, each one a query over
-        # 20.5M rows on a home connection.
-        #
-        # It EXECUTES JAVASCRIPT, which is what made it invisible: it fires the
-        # pageview beacon, so it recorded 23,993 searches and 23,984
-        # "visitors" — one search each — and every one counted as a reader in
-        # the traffic panel. The `_NOT_A_BROWSER` heuristic cannot see it,
-        # because that looks for "searched and never rendered a page".
-        #
-        # At the edge and not in robots.txt for the reason the meta-webindexer
-        # rule gives: it has never fetched robots.txt, and you cannot decline a
-        # request that is never preceded by asking. Not in nginx either,
-        # because 87,000 requests would still come down the tunnel first.
-        #
-        # The product token only. Rotating 5,863 addresses across five
-        # allocations is exactly what an IP rule cannot answer, and the agent
-        # names itself honestly — which is worth keeping true by not making
-        # the name the thing that gets it blocked in a way that rewards lying.
-        "expression": '(http.user_agent contains "Lightpanda")',
-    },
-    {
         # THE AGENT BROWSERS AS A CLASS, not one product at a time.
         #
-        # The Lightpanda rule above was written for one name, and the name is
-        # the cheapest thing about a scraper to change. Eleven days later the
+        # This started as Lightpanda alone, written for one name, and the name
+        # is the cheapest thing about a scraper to change. Eleven days later the
         # traffic panel's new scraper flag went off on this:
         #
         #     19:30:39  /ship/byun-baekhyun-do-kyungsoo-d-o
@@ -133,6 +101,15 @@ RULES = [
         # starts failing, that is why, and `--remove` reverses the lot.
         "description": "Block agent browsers and scraping services (rotating pools)",
         "expression": '(not cf.client.bot) and ('
+                      # Lightpanda, folded in from a rule of its own. Same
+                      # product-token match it had alone; the only difference is
+                      # that it now sits behind `not cf.client.bot`, which
+                      # exempts Cloudflare-VERIFIED crawlers. Lightpanda is not
+                      # in that set and cannot join it by naming itself, so the
+                      # block is unchanged in practice — and folding it is what
+                      # freed the fifth slot for the Tencent fleet below. Its
+                      # measurement is kept in the git history of this file.
+                      'http.user_agent contains "Lightpanda" or '
                       'http.user_agent contains "Headless" or '
                       'http.user_agent contains "Playwright" or '
                       'http.user_agent contains "Puppeteer" or '
@@ -194,7 +171,61 @@ RULES = [
                       # they add a slash. Worth having regardless: zero false
                       # positives against a full day of real traffic, and
                       # --remove reverses it.
-                      'http.referer eq "https://ficatlas.com")',
+                      'http.referer eq "https://ficatlas.com" or '
+                      # THE TENCENT CLOUD FLEET. Folded in for the same reason
+                      # the forged referer above is: this phase is capped at
+                      # five and a sixth rule is refused outright, and a
+                      # rotating address pool is already what this rule is for.
+                      #
+                      # Measured 2026-10-16 over ~27h of nginx log:
+                      #
+                      #     requests from 43.172/43.173        30,091   56% of all
+                      #     distinct addresses                 1,603
+                      #     requests per address               18.8
+                      #     robots.txt fetches by it                0
+                      #
+                      # It began at 04:00 UTC and ran a flat 1,500-2,400
+                      # requests/hour for the next seventeen hours; before that
+                      # the range was absent from the logs entirely. It takes
+                      # 20,052 requests into /story/<uuid>, and probes
+                      # /api/auth/me, /api/settings, /permissions and /login on
+                      # the way past — reconnaissance, not reading.
+                      #
+                      # WHAT MADE IT INVISIBLE IN THE PANEL. It EXECUTES
+                      # JAVASCRIPT, so it fires the pageview beacon: 578
+                      # "visitors" who each viewed exactly one /fandom/ page and
+                      # nothing else, at a median of 61.7 seconds apart, walking
+                      # bon-jovi-band -> boy-meets-world -> 15th-century-ce-rpf
+                      # -> peter-pan-related-fandoms. Those 578 were 91% of the
+                      # day's visitors. Real traffic never moved — it was ~208
+                      # pageviews, in line with the 173-284 of the days either
+                      # side. Only the crawl spiked.
+                      #
+                      # WHY THE ADDRESSES AND NOT THE AGENT, against this file's
+                      # own preference for names. It rotated 65 ordinary Chrome
+                      # strings in round robin, so there is no token to match —
+                      # this is the exact case the file already calls out as one
+                      # an agent rule cannot answer. But the addresses are NOT
+                      # the usual objection: they are not a residential proxy
+                      # pool of one-request-each, they are 1,603 addresses
+                      # inside TWO consecutive /16s of one cloud provider, at
+                      # 18.8 requests apiece. That is a block an IP rule can
+                      # answer, and it is scoped to the two /16s actually
+                      # observed rather than the whole /14, so the rest of the
+                      # provider's space stays open.
+                      #
+                      # `not cf.client.bot` keeps the verified crawlers out of
+                      # it, as everywhere else here. Zero real readers were on
+                      # these addresses in the window: the only other traffic
+                      # from the range was one crawler on 165.22, and the fleet
+                      # fetched no assets, no /sw.js and no beacons other than
+                      # the one per fandom document.
+                      #
+                      # If it moves to a third /16 the rule stops matching and
+                      # the traffic panel's scraper flag is the alarm — the
+                      # single-page /fandom/ visitor is the signature to look
+                      # for.
+                      'ip.src in {43.172.0.0/16 43.173.0.0/16})',
     },
     {
         "description": "Block ShapBot (Parallel Web Systems; ignores robots.txt; ~93% of origin)",

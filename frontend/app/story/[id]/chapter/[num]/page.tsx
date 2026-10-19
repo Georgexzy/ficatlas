@@ -1,5 +1,5 @@
 "use client"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
 import { describeError, type Failure } from "@/lib/errors"
@@ -20,7 +20,7 @@ import { fetchWithTimeout, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/
 //
 // Nothing on the offline path may be lazily loaded. The saving here was one
 // small chunk on a route that is the reason the chunk exists.
-import { getOfflineStory } from "@/lib/offline"
+import { getOfflineStory, type OfflineStory } from "@/lib/offline"
 import ReadAloud from "./ReadAloud"
 
 const API_BASE = ""  // relative — handled by Next.js rewrite to backend
@@ -105,10 +105,161 @@ function cachePut(key: string, value: any) {
   }
 }
 
+// The story record behind a chapter this device already holds, built in ONE
+// place.
+//
+// It was inlined in the chapter load, and the entire-work reader needs exactly
+// the same object. Two copies of this mapping would be two chances to drop a
+// field again — `language` and `chapter_count_total` were both once missing
+// here, which typeset every offline chapter of a non-English work as English
+// and printed "Chapter 3 of 4" on a 199-chapter novel.
+function offlineStoryMin(saved: OfflineStory): StoryMin {
+  return {
+    id: saved.id, title: saved.title, author: saved.author,
+    // How many this device HOLDS, which is not how long the work is. Both of
+    // these fields were already on the record and neither was read, so an
+    // offline chapter of a 199-chapter novel carried the breadcrumb
+    // "Chapter 3 of 4" — a number that is not merely wrong but reads as a
+    // complete four-chapter work, and sends a reader looking for chapter 5.
+    chapter_count: saved.chapters.length,
+    chapter_count_total: saved.chapter_count_total ?? saved.chapters.length,
+    // Dropped here before, so every offline chapter of a non-English work
+    // was announced and typeset as English. It is stored; it was simply
+    // never carried across.
+    language: saved.language,
+    // The cast and pairings are server-rendered into the story page, not the
+    // chapter page, so nothing here needs them — but the record has them and
+    // passing them through costs nothing.
+    characters: saved.characters,
+    relationships: saved.relationships,
+    tags: saved.tags,
+    warnings: saved.warnings,
+    site: saved.site,
+    url: saved.url,
+    summary: saved.summary,
+    word_count: saved.word_count,
+    chapters: saved.chapters.map(c => ({ number: c.number, title: c.title })),
+  } as any
+}
+
+// One chapter of the entire-work view, and it is memoised on purpose.
+//
+// The reader re-renders on every scrolled frame — it owns the progress bar —
+// and a long work is 199 of these sections, each carrying a chapter's whole
+// HTML. Mapping them inline would have React reconcile that subtree at frame
+// rate on a phone. Memo makes a scroll pass find the same chapter object and
+// stop there; `onRef` has to be a stable callback for that to hold, which is
+// what `setSectionRef` below is.
+const ReaderPart = memo(function ReaderPart({
+  ch, totalLabel, onRef,
+}: {
+  ch: ChapterFull
+  totalLabel: string | number
+  onRef: (n: number, el: HTMLElement | null) => void
+}) {
+  return (
+    <section className="reader__part" id={`ch-${ch.number}`}
+      ref={el => onRef(ch.number, el)}>
+      <h2 className="reader__part-title" tabIndex={-1}>
+        <span className="reader__part-num">Chapter {ch.number} of {totalLabel}</span>
+        {/* Only when there is a real one: the num line above already says
+            "Chapter 3 of 199", and repeating it as the title too is how an
+            unlabelled chapter reads. */}
+        {ch.title && <span className="reader__part-name">{ch.title}</span>}
+      </h2>
+      {ch.summary && <p className="reader__summary">{ch.summary}</p>}
+      {ch.start_note && (
+        <aside className="reader__note">
+          <p className="reader__note-label">Author's Note</p>
+          <div dangerouslySetInnerHTML={{ __html: ch.start_note }} />
+        </aside>
+      )}
+      <div className="reader__body reader__content"
+        dangerouslySetInnerHTML={{ __html: ch.content }} />
+      {ch.end_note && (
+        <aside className="reader__note">
+          <p className="reader__note-label">End Note</p>
+          <div dangerouslySetInnerHTML={{ __html: ch.end_note }} />
+        </aside>
+      )}
+    </section>
+  )
+})
+
+
+// Which chapter the viewport is in, and how far through it — asked of the
+// section map rather than of the scroll percentage.
+//
+// A percentage of the whole document cannot answer this on the entire-work
+// view: the document grows as pages arrive, so 12% is twelve percent of one
+// page before the rest land and twelve percent of the whole work after. The
+// section under the top bar does not move when something is appended below it,
+// which is the property every consumer here needs.
+function whereWeAre(sections: Map<number, HTMLElement>):
+    { ch: number; frac: number } | null {
+  // SORTED, not insertion order: a ref callback re-registering a section moves
+  // it to the end of the Map, and this reads order.
+  const seen = [...sections.keys()].sort((a, b) => a - b)
+  let ch: number | null = null
+  for (const n of seen) {
+    const el = sections.get(n)
+    if (el && el.getBoundingClientRect().top <= READ_LINE) ch = n
+    else break
+  }
+  // Above the first heading, in the title block: name the first chapter rather
+  // than returning nothing.
+  if (ch == null) {
+    if (!seen.length) return null
+    ch = seen[0]
+  }
+  const r = sections.get(ch)!.getBoundingClientRect()
+  // Measured to the reading line, not to the viewport edge: at a section's own
+  // start the reader is AT its heading, which is frac 0 — a fraction taken from
+  // y=0 would start them one toolbar-height into the chapter instead.
+  return { ch, frac: r.height > 0
+    ? Math.min(1, Math.max(0, (READ_LINE - r.top) / r.height))
+    : 0 }
+}
+
+// Where the reading line is, in pixels from the top of the viewport — just
+// under the sticky toolbar, which is a wrapped two-line back-link plus its
+// 20px margin on a phone and a single line on a desktop.
+//
+// Every question the entire-work view asks about position uses this one number:
+// which chapter is current (a section counts when its heading is at or above
+// it), how far through a chapter the reader is (measured to it, not to the raw
+// viewport edge, so the heading and the first line of text are treated alike),
+// and where a jump or a restore leaves the page (its heading lands on it).
+// Three constants would drift, and the symptom would be a breadcrumb naming a
+// different chapter from the one the heading is sitting under.
+//
+// The position itself is NOT stored separately: `writeProgress` already keeps a
+// percentage keyed by chapter under `ficatlas:progress`, which is what the story
+// page and the library read, and an entire-work reading position is the same
+// thing — a chapter, and how far through it. A second record would be a second
+// place for "Continue" to disagree with.
+const READ_LINE = 64
+
+
 export default function ChapterPage() {
   const params = useParams()
   const router = useRouter()
   const storyId = params?.id as string
+  // Which view this is, taken from the SHAPE of the URL rather than from a
+  // prop: `/story/[id]/chapter/[num]` always has a number, `/story/[id]/entire`
+  // never does, and both render this component (entire/page.tsx imports it, so
+  // the two readers cannot drift apart).
+  //
+  // Not a prop because Next.js generates a `PageProps` constraint over each
+  // route file's default export and refuses any bespoke props type on it —
+  // a page component takes the framework's props or none. Gated on `storyId`
+  // because `useParams()` can hand back nothing during a navigation: without
+  // that, a chapter route would briefly read as an entire work and fetch one.
+  const entire = Boolean(storyId) && params?.num === undefined
+  // NaN in entire-work mode, where there is no chapter number in the URL — and
+  // every consumer below already guards on `!num`, so the single-chapter
+  // effects simply stand down rather than needing an `if (entire)` each. The
+  // one place it is READ is the breadcrumb, which whole mode replaces.
   const num = Number(params?.num)
   // Only for the error screen: whether to offer a sign-in when a chapter is
   // refused. Nothing else here depends on who is reading.
@@ -155,8 +306,47 @@ export default function ChapterPage() {
   // True while the reader is being placed at the start of a chapter, so the
   // position-saving listener ignores the scrolls that placement causes.
   const restoringRef = useRef(false)
+  // Which story the entire-work view has already placed itself for, so the
+  // restore below runs once rather than on every page that appends to it.
+  const restoredRef = useRef<string | null>(null)
   const [similar, setSimilar] = useState<SimilarCard[]>([])
   const [similarFor, setSimilarFor] = useState<string | null>(null)
+
+  // ── Entire-work mode (AO3's "Entire Work") ────────────────────────────────
+  //
+  // One continuous page instead of one chapter per navigation. The text arrives
+  // in pages — the endpoint cannot hand a 10.4MB work over in one response —
+  // so `entireChapters` grows while it loads and `entireNext` says whether there
+  // is another page.
+  //
+  // `entireNext` is deliberately tri-state: `undefined` is "we have not asked
+  // yet", a number is "there is a page after this one, start at that chapter",
+  // `null` is "that is the whole work". A boolean could not tell "not started"
+  // from "finished", and both look like "do not fetch".
+  const [entireChapters, setEntireChapters] = useState<ChapterFull[]>([])
+  const [entireNext, setEntireNext] = useState<number | null | undefined>(undefined)
+  // Which chapter the viewport is sitting in, so the breadcrumb, the jump list
+  // and ← → all know where the reader is on a page that holds the whole work.
+  const [currentCh, setCurrentCh] = useState<number | null>(null)
+  // Set when a LATER page of the work fails to arrive. Deliberately not
+  // `loadError`: that one takes over the screen, and blanking a work already
+  // showing three hundred kilobytes of text because page four timed out would
+  // be the reader failing in the moment it is most in use.
+  const [entireStalled, setEntireStalled] = useState(false)
+  // Bumped by "Load the rest" so the fetch effect below re-runs without the
+  // page number having to change.
+  const [entireRetry, setEntireRetry] = useState(0)
+  // number -> its <section>, for jumping and for the position restore. A Map
+  // rather than an array of refs because it stays correct when chapters append
+  // in any order and when one unmounts.
+  const sectionsRef = useRef<Map<number, HTMLElement>>(new Map())
+  // Each chapter gets the same callback identity for its whole life, which is
+  // what lets `ReaderPart` be memoised and what keeps React from calling
+  // ref(null)/ref(el) on every frame of a scroll.
+  const setSectionRef = useCallback((n: number, el: HTMLElement | null) => {
+    if (el) sectionsRef.current.set(n, el)
+    else sectionsRef.current.delete(n)
+  }, [])
 
   useEffect(() => {
     const savedSize = localStorage.getItem("ficatlas:reader-fontsize")
@@ -204,16 +394,38 @@ export default function ChapterPage() {
     localStorage.setItem("ficatlas:reader_theme", theme)
   }, [theme])
 
-  // Reading progress bar
+  // Reading progress bar, and — in entire-work mode — which chapter the
+  // viewport is sitting in.
+  //
+  // Throttled to one update per animation frame. `scroll` fires more often than
+  // frames get painted and each of these is a React render: on the
+  // single-chapter reader that was a handful of nodes being reconciled, and on
+  // a whole work it is every section in it, which measured as a visible stutter
+  // on a phone before the throttle went in.
   useEffect(() => {
+    let raf = 0
     const onScroll = () => {
-      const h = document.documentElement
-      const scrolled = h.scrollTop / (h.scrollHeight - h.clientHeight)
-      setScrollPct(Math.min(100, Math.max(0, scrolled * 100)))
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        const h = document.documentElement
+        const denom = h.scrollHeight - h.clientHeight
+        setScrollPct(Math.min(100, Math.max(0, denom > 0 ? (h.scrollTop / denom) * 100 : 0)))
+
+        if (!entire || !sectionsRef.current.size) return
+        // One question, one implementation: the save and the restore below ask
+        // this same helper where the reader is, and a second copy of the rule
+        // would eventually disagree with this one.
+        const found = whereWeAre(sectionsRef.current)?.ch ?? null
+        setCurrentCh(c => (c === found ? c : found))
+      })
     }
     window.addEventListener("scroll", onScroll, { passive: true })
-    return () => window.removeEventListener("scroll", onScroll)
-  }, [])
+    return () => {
+      window.removeEventListener("scroll", onScroll)
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [entire])
 
   // Loading a chapter.
   //
@@ -264,32 +476,7 @@ export default function ChapterPage() {
       const saved = await getOfflineStory(storyId)
       if (!saved || cancelled) return null
       const ch = saved.chapters.find(c => c.number === Number(num))
-      setStory({
-        id: saved.id, title: saved.title, author: saved.author,
-        // How many this device HOLDS, which is not how long the work is. Both of
-        // these fields were already on the record and neither was read, so an
-        // offline chapter of a 199-chapter novel carried the breadcrumb
-        // "Chapter 3 of 4" — a number that is not merely wrong but reads as a
-        // complete four-chapter work, and sends a reader looking for chapter 5.
-        chapter_count: saved.chapters.length,
-        chapter_count_total: saved.chapter_count_total ?? saved.chapters.length,
-        // Dropped here before, so every offline chapter of a non-English work
-        // was announced and typeset as English. It is stored; it was simply
-        // never carried across.
-        language: saved.language,
-        // The cast and pairings are server-rendered into the story page, not the
-        // chapter page, so nothing here needs them — but the record has them and
-        // passing them through costs nothing.
-        characters: saved.characters,
-        relationships: saved.relationships,
-        tags: saved.tags,
-        warnings: saved.warnings,
-        site: saved.site,
-        url: saved.url,
-        summary: saved.summary,
-        word_count: saved.word_count,
-        chapters: saved.chapters.map(c => ({ number: c.number, title: c.title })),
-      } as any)
+      setStory(offlineStoryMin(saved))
       if (!ch) return null
       return {
         story: null,
@@ -330,6 +517,116 @@ export default function ChapterPage() {
 
     return () => { cancelled = true }
   }, [storyId, num, reloadKey])
+
+  // Loading the WHOLE work. Same shape as the chapter load above — abortable,
+  // timed out, LOCAL FIRST, failure classified — for the same reasons, and it
+  // stands down when `entire` is false so a single-chapter read never pays for
+  // it.
+  useEffect(() => {
+    if (!entire || !storyId) return
+    let cancelled = false
+
+    setEntireChapters([])
+    setEntireNext(undefined)
+    setEntireStalled(false)
+    setCurrentCh(null)
+    setLoadError(null)
+    sectionsRef.current.clear()
+    // A retry has to be able to place the reader again, or "Try again" would
+    // re-fetch the work and leave it at the top of chapter one.
+    restoredRef.current = null
+
+    // The saved copy IS the whole work on this path, which is what makes "save
+    // offline" and "read the entire thing" one feature rather than two: every
+    // chapter the download finished with comes back at once, no paging to ask
+    // for, in single-digit milliseconds from IndexedDB.
+    const readSaved = async () => {
+      const saved = await getOfflineStory(storyId)
+      if (!saved || cancelled) return null
+      setStory(offlineStoryMin(saved))
+      const chs = [...saved.chapters].sort((a, b) => a.number - b.number)
+      if (!chs.length) return null
+      return {
+        story: null,
+        chapters: chs.map(c => ({
+          number: c.number, title: c.title, content: c.content,
+          start_note: c.start_note, end_note: c.end_note, summary: c.summary,
+        } as ChapterFull)),
+        // A saved copy is complete by construction: `downloadStoryForOffline`
+        // downloads every chapter or throws, and the partial case is reported
+        // by the story page as holes rather than served here as a short work.
+        next: null as number | null,
+      }
+    }
+
+    localFirst<{ story: StoryMin | null; chapters: ChapterFull[]; next: number | null }>({
+      local: readSaved,
+      remote: async (signal) => {
+        // Metadata and page one together: the outline drives the jump list and
+        // the breadcrumb, so waiting for it separately would render a work with
+        // no idea how long it is.
+        const [storyRes, pageRes] = await Promise.all([
+          fetchWithTimeout(`${API_BASE}/api/stories/${storyId}`,
+            { signal }, USER_TIMEOUT_MS),
+          fetchWithTimeout(`${API_BASE}/api/stories/${storyId}/entire?after=0`,
+            { signal }, USER_TIMEOUT_MS),
+        ])
+        if (!storyRes.ok) throw describeError(null, storyRes.status)
+        if (!pageRes.ok) throw describeError(null, pageRes.status)
+        const [story, page] = await Promise.all([storyRes.json(), pageRes.json()])
+        return { story, chapters: page.chapters ?? [], next: page.next_after ?? null }
+      },
+      onLocal: ({ chapters, next }) => {
+        setEntireChapters(chapters)
+        setEntireNext(next)
+      },
+      // Replaces the saved copy wholesale — the network knows which chapters
+      // exist and how they read today, and the continuation effect takes it
+      // from the number this page ends at.
+      onRemote: ({ story, chapters, next }) => {
+        setNetworkAlive(true)
+        if (story) setStory(story)
+        setEntireChapters(chapters)
+        setEntireNext(next)
+        setEntireStalled(false)
+      },
+      onFailure: (e: any) => { setNetworkAlive(false); setLoadError(e?.kind ? e : describeError(e)) },
+      isCancelled: () => cancelled,
+    })
+
+    return () => { cancelled = true }
+  }, [entire, storyId, reloadKey])
+
+  // The next page, fetched on its own and appended as it lands.
+  //
+  // Sequential rather than fanned out, and that is not a limitation to work
+  // around: the endpoint picks page boundaries by BYTES rather than by chapter
+  // count (a chapter can be half a megabyte; sixty can be 6.7MB), so the next
+  // `after` is not knowable until the current page answers. Meanwhile the
+  // reader is already reading page one — the alternative, one request for the
+  // whole 10.4MB work, is a spinner over text that could have been on screen
+  // seconds earlier.
+  //
+  // A page that will not arrive does NOT fail the view: `entireStalled` is set
+  // and the reader is offered the rest again, with the work already showing
+  // left exactly where it was.
+  useEffect(() => {
+    if (!entire || !storyId || typeof entireNext !== "number") return
+    const from = entireNext
+    const ac = new AbortController()
+    let active = true
+    fetchWithTimeout(`${API_BASE}/api/stories/${storyId}/entire?after=${from}`,
+      { signal: ac.signal }, USER_TIMEOUT_MS)
+      .then(r => { if (!r.ok) throw describeError(null, r.status); return r.json() })
+      .then(page => {
+        if (!active || !Array.isArray(page?.chapters)) return
+        setEntireChapters(prev => [...prev, ...page.chapters])
+        setEntireNext(page.next_after ?? null)
+        setEntireStalled(false)
+      })
+      .catch(() => { if (active) setEntireStalled(true) })
+    return () => { active = false; ac.abort() }
+  }, [entire, storyId, entireNext, entireRetry])
 
   // Paint the reader's page colour onto the ROOT element while the reader is open.
   //
@@ -384,18 +681,27 @@ export default function ChapterPage() {
   //
   // `chapter`, `scrollPct`, `totalChapters`, `title` and `author` are still
   // written at the top level because the story page and the library read them.
-  const writeProgress = useCallback((pct: number | null) => {
-    if (!story || !chapter) return
+  // `forCh` exists for the entire-work reader, which reads a whole book at once
+  // and so has no `chapter` of its own to point at — but whose position IS a
+  // position in some chapter, exactly as this record already models it. Passing
+  // the chapter in keeps ONE coordinate system for both readers rather than a
+  // second record the story page and the library would each have to learn: a
+  // reader who works through an entire work still gets "Continue Chapter 112"
+  // where they actually were.
+  const writeProgress = useCallback((pct: number | null, forCh?: number) => {
+    if (!story) return
+    const n = forCh ?? chapter?.number
+    if (n == null) return
     try {
       const all = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")
       const prev = all[story.id] || {}
       const positions = { ...(prev.positions || {}) }
-      if (pct != null) positions[chapter.number] = Math.min(1, Math.max(0, pct))
+      if (pct != null) positions[n] = Math.min(1, Math.max(0, pct))
       all[story.id] = {
         ...prev,
-        chapter: chapter.number,
+        chapter: n,
         positions,
-        scrollPct: positions[chapter.number] ?? 0,
+        scrollPct: positions[n] ?? 0,
         totalChapters: story.chapter_count,
         title: story.title,
         author: story.author,
@@ -510,6 +816,120 @@ export default function ChapterPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapter?.number, story?.id])
 
+  // Persist where the entire-work reader was, debounced exactly like the
+  // per-chapter save above — same 600ms, same flush on pagehide and
+  // visibilitychange, because a tab closed mid-read is how people leave a
+  // story on a phone.
+  //
+  // Asked of `whereWeAre` AT SAVE TIME rather than read out of `currentCh`:
+  // that state is only ever updated inside an animation frame, so a pending
+  // save would be lost whenever the effect re-registered — while the section
+  // under the reading line is a fact about the document, costs one layout read
+  // at this frequency, and cannot be stale by a frame.
+  useEffect(() => {
+    if (!entire || !story || !entireChapters.length) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const save = () => {
+      const here = whereWeAre(sectionsRef.current)
+      if (!here) return
+      // Into the same record the chapter reader writes, naming the chapter
+      // this position belongs to — so "Continue" on the story page follows a
+      // reader who read the book this way round.
+      writeProgress(here.frac, here.ch)
+    }
+    const onScroll = () => {
+      // Scrolls the placement loop caused are not a position the reader chose.
+      if (restoringRef.current) return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(save, 600)
+    }
+    const flush = () => { if (timer) { clearTimeout(timer); timer = null; save() } }
+    window.addEventListener("scroll", onScroll, { passive: true })
+    window.addEventListener("pagehide", flush)
+    document.addEventListener("visibilitychange", flush)
+    return () => {
+      window.removeEventListener("scroll", onScroll)
+      window.removeEventListener("pagehide", flush)
+      document.removeEventListener("visibilitychange", flush)
+      if (timer) clearTimeout(timer)
+    }
+  }, [entire, story, entireChapters.length, writeProgress])
+
+  // Place the entire-work reader where it was left.
+  //
+  // Restored by ANCHOR — the chapter, plus a fraction of THAT chapter — and not
+  // by a percentage of the document, which pages arriving below the reader
+  // would silently invalidate: 12% is twelve percent of one page before the
+  // rest land and twelve percent of the whole work after. The section's height
+  // is measured now, so the recorded fraction also survives a different font
+  // size or column width than the one it was taken under — not hypothetical,
+  // since both are reader settings.
+  //
+  // It waits for the chapter it is aiming at to have arrived, and gives up to
+  // the top only once there is nothing left to deliver.
+  useEffect(() => {
+    if (!entire || !storyId || !entireChapters.length) return
+    if (restoredRef.current === storyId) return
+    let savedCh: number | null = null
+    let frac = 0
+    try {
+      // The record the chapter reader and the story page already share, and its
+      // `chapter` is where the reader last was IN ANY MODE — which is the point.
+      // Someone who read chapters 1-12 one at a time, stopped mid-13, and then
+      // opened the entire work finds chapter 13 rather than chapter 1.
+      const prev = JSON.parse(localStorage.getItem("ficatlas:progress") ?? "{}")[storyId]
+      if (prev && typeof prev.chapter === "number") {
+        savedCh = prev.chapter
+        frac = Number(prev.positions?.[prev.chapter] ?? prev.scrollPct) || 0
+      }
+    } catch {}
+    if (savedCh != null && !sectionsRef.current.has(savedCh)) {
+      // Not here yet — another page may still be carrying it. Try again when
+      // that lands, rather than dropping the reader at the top of a work they
+      // were a third of the way through.
+      if (entireNext !== null) return
+      savedCh = null      // the work is complete and it is not there: a hole
+    }
+    restoredRef.current = storyId
+    if (savedCh == null) return
+
+    const target = savedCh
+    restoringRef.current = true
+    let frame = 0
+    let raf = 0
+    const place = () => {
+      if (!restoringRef.current) return
+      const el = sectionsRef.current.get(target)
+      if (el) {
+        const r = el.getBoundingClientRect()
+        // To the same reading line the fraction above was measured from, so a
+        // restore lands the page exactly where the breadcrumb will name it.
+        const top = window.scrollY + r.top + frac * r.height - READ_LINE
+        if (Math.abs(window.scrollY - top) > 1) {
+          window.scrollTo({ top, behavior: "instant" as ScrollBehavior })
+        }
+      }
+      // Same ~500ms of re-asserting as the chapter placement above: images and
+      // embedded media lay out after the text and grow the document under it,
+      // and the browser's own back/forward restoration can land after ours.
+      if (++frame < 30) raf = requestAnimationFrame(place)
+      else restoringRef.current = false
+    }
+    raf = requestAnimationFrame(place)
+    const yield_ = () => { restoringRef.current = false; frame = 30 }
+    window.addEventListener("wheel", yield_, { passive: true, once: true })
+    window.addEventListener("touchmove", yield_, { passive: true, once: true })
+    window.addEventListener("keydown", yield_, { once: true })
+    return () => {
+      cancelAnimationFrame(raf)
+      restoringRef.current = false
+      window.removeEventListener("wheel", yield_)
+      window.removeEventListener("touchmove", yield_)
+      window.removeEventListener("keydown", yield_)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entire, storyId, entireChapters, entireNext])
+
   // Leaving a page from inside the reader. Every exit here used to be a <Link>,
   // which is why the ✕ sometimes did nothing — see lib/navigation.ts.
   const navigate = useCallback((href: string) => {
@@ -564,6 +984,30 @@ export default function ChapterPage() {
     : (numbers.length === 0 && num > 1 ? num - 1 : null)
   const nextNum = above.length ? above[0]
     : (numbers.length === 0 && story && num < story.chapter_count ? num + 1 : null)
+
+  // ── The same question for the entire-work view: neighbours of the chapter the
+  // viewport is IN, since `num` is NaN there and there is no navigation to do.
+  const atIdx = currentCh != null ? numbers.indexOf(currentCh) : -1
+  const entirePrevCh = atIdx > 0 ? numbers[atIdx - 1] : null
+  const entireNextCh = atIdx >= 0 && atIdx < numbers.length - 1 ? numbers[atIdx + 1] : null
+
+  // Move to a chapter WITHIN the one page, by scrolling to its section.
+  //
+  // No `behavior` given on purpose: globals.css sets `html { scroll-behavior:
+  // smooth }` and turns it off under `prefers-reduced-motion`, so this inherits
+  // the reader's own motion setting instead of overriding it either way.
+  const scrollToCh = useCallback((n: number | null | undefined) => {
+    if (n == null) return
+    const el = sectionsRef.current.get(n)
+    if (!el) return
+    const top = window.scrollY + el.getBoundingClientRect().top - READ_LINE
+    window.scrollTo({ top })
+    setCurrentCh(n)
+    // Focus the heading so keyboard and screen-reader users arrive in the
+    // chapter too, rather than being left on the button they pressed.
+    const h = el.querySelector("h2")
+    if (h instanceof HTMLElement) h.focus({ preventScroll: true })
+  }, [])
 
   // Prefetch the neighbouring chapters into the router cache.
   //
@@ -637,7 +1081,15 @@ export default function ChapterPage() {
   // last chapter. Fired only once per story+chapter, and only when there IS a last
   // chapter — not on every page load for a 300-chapter work.
   useEffect(() => {
-    if (!storyId || nextNum != null || similarFor === storyId) return
+    if (!storyId || similarFor === storyId) return
+    if (entire) {
+      // The end of an entire work is when the LAST page has landed, not when
+      // the first has: `nextNum` is null for this whole mode, so without this
+      // the hook would offer "what next" while chapter one is still loading.
+      if (entireNext !== null || !entireChapters.length) return
+    } else if (nextNum != null) {
+      return
+    }
     setSimilarFor(storyId)
     setSimilar([])
     const ac = new AbortController()
@@ -647,7 +1099,7 @@ export default function ChapterPage() {
       .then((data: SimilarCard[]) => setSimilar(data))
       .catch(() => {})
     return () => ac.abort()
-  }, [storyId, nextNum, similarFor])
+  }, [storyId, nextNum, similarFor, entire, entireNext, entireChapters.length])
 
   // Keyboard navigation
   useEffect(() => {
@@ -661,8 +1113,17 @@ export default function ChapterPage() {
       // Escape closes the settings sheet rather than falling through to the
       // chapter shortcuts underneath it.
       if (e.key === "Escape") { setSettingsOpen(false); return }
-      if (e.key === "ArrowLeft" && prevNum != null) goChapter(prevNum)
-      if (e.key === "ArrowRight" && nextNum != null) goChapter(nextNum)
+      // ← → turn the page: by navigating on a single-chapter read, by scrolling
+      // to the adjacent section on an entire work. Same keys, same direction,
+      // and the hint line at the foot promises both.
+      if (e.key === "ArrowLeft") {
+        if (prevNum != null) goChapter(prevNum)
+        else if (entire) scrollToCh(entirePrevCh)
+      }
+      if (e.key === "ArrowRight") {
+        if (nextNum != null) goChapter(nextNum)
+        else if (entire) scrollToCh(entireNextCh)
+      }
       if (e.key === "+" || e.key === "=") setFontSize(s => Math.min(s + 1, 24))
       if (e.key === "-") setFontSize(s => Math.max(s - 1, 13))
       if (e.key === "t") setTheme(t => t === "default" ? "sepia" : t === "sepia" ? "dark" : "default")
@@ -670,11 +1131,14 @@ export default function ChapterPage() {
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  // prevNum/nextNum are declared below, in the render body; the handler only
-  // reads them when it fires, by which point they are bound. They are listed so
-  // the listener is re-registered whenever the chapter's neighbours change.
+  // These are declared in the render body above; the handler only reads them
+  // when it fires, by which point they are bound. All listed so the listener is
+  // re-registered whenever the neighbours change — and `entirePrevCh`/
+  // `entireNextCh` HAVE to be listed, because on a whole work they move on
+  // every scroll across a heading while nothing else here would have re-armed
+  // the listener. Omitting them left ← → walking a chapter out of date.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prevNum, nextNum, goChapter])
+  }, [prevNum, nextNum, goChapter, entirePrevCh, entireNextCh, scrollToCh, entire])
 
   // The shell — toolbar, exit button, settings — renders in every state.
   //
@@ -695,6 +1159,66 @@ export default function ChapterPage() {
   // server's own count and is stored on every record.
   const totalLabel =
     story?.chapter_count_total || numbers.length || story?.chapter_count || "?"
+
+  // ── Derived for the entire-work view ─────────────────────────────────────
+  //
+  // Derived here rather than inside the branches below, because the breadcrumb,
+  // the ReadAloud control, the loading footer and the nav all need the same
+  // three answers and computing them apart is how they come to disagree.
+  const entireLoaded = entire && entireChapters.length > 0
+  // Distinct from "loaded something": a work still paging in has both.
+  const entireComplete = entireLoaded && entireNext === null
+  const entireMinutes =
+    Math.max(1, Math.round((story?.word_count || 0) / WORDS_PER_MINUTE))
+  // How many chapters still lie beyond the last page the server sent. `numbers`
+  // is what the work has; `entireNext` is how far it has got. Stale-by-a-page
+  // at worst, and it is a status line rather than a control.
+  const entireRemaining = typeof entireNext === "number"
+    ? numbers.filter(n => n > entireNext).length
+    : 0
+  // How far the loaded text reaches, as one number: pages are fetched in
+  // ascending order and appended, so everything at or below this has arrived.
+  // Used to mark the chapters in the jump list that cannot be jumped to YET —
+  // which is the whole point of the check, because picking one that has not
+  // landed would otherwise scroll nowhere and say nothing.
+  const arrivedThrough = entireChapters.length
+    ? entireChapters[entireChapters.length - 1].number
+    : 0
+  // What ReadAloud reads: the whole work once the whole work is here, and the
+  // FIRST CHAPTER ALONE until then. Concatenating what has arrived instead
+  // would change `html` on every page that lands, and ReadAloud cancels
+  // narration whenever its text changes — stopping it dead every second or two
+  // while a long work finishes loading. One change, when loading finishes, and
+  // nothing at all for the nine works in ten whose first page is also the last.
+  const aloudHtml = !entireLoaded ? ""
+    : entireComplete ? entireChapters.map(c => c.content).join("\n\n")
+    : entireChapters[0]?.content ?? ""
+
+  // End-of-work suggestions. Deliberately below the fold and visually
+  // subordinate to the chapter nav — this reader is on the last page and the
+  // last thing they clicked was "Next" going nowhere, so the hook is the
+  // natural place to surface "what next". Uses the same /similar endpoint as
+  // the story page, so the picks are the ones the algorithm already trusts.
+  // Not shown to logged-out readers: the link targets go through /story/[id]
+  // which requires an account for hosted chapters, and a click that 401s
+  // erodes trust faster than it earns it.
+  const endSuggestions = similar.length > 0 && (
+    <div className="reader-end">
+      <h4 className="reader-end__title">Still reading?</h4>
+      <div className="reader-end__grid">
+        {similar.slice(0, 6).map(s => (
+          <Link key={s.id} href={`/story/${s.id}`} className="reader-end__card">
+            <span className="reader-end__title-link">{s.title}</span>
+            <span className="reader-end__author">by {s.author}</span>
+            <span className="reader-end__meta">
+              {s.word_count > 0 ? `${Math.round(s.word_count / 1000)}k words` : ""}
+              {s.relationships?.[0] ? ` · ${s.relationships[0]}` : ""}
+            </span>
+          </Link>
+        ))}
+      </div>
+    </div>
+  )
 
   return (
     <main id="main" className="reader-shell" data-width={width} data-font={fontFamily}
@@ -721,6 +1245,15 @@ export default function ChapterPage() {
             a popover on desktop. */}
         <div className="reader-controls">
           {chapter && <ReadAloud key={`${storyId}/${chapter.number}`} html={chapter.content} language={langCode} />}
+          {/* Keyed by the STORY, not by whatever chapter is under the viewport:
+              a whole work is one continuous thing to listen to, and remounting
+              per chapter would stop the narration dead at every heading. The
+              mount stays put while pages append — only the text changes, once,
+              when the whole work has arrived (see `aloudHtml`). */}
+          {entireLoaded && (
+            <ReadAloud key={`${storyId}/entire`} html={aloudHtml}
+              language={langCode} scope="work" />
+          )}
           <button
             className={`reader-ctrl reader-ctrl--aa ${settingsOpen ? "is-on" : ""}`}
             onClick={() => setSettingsOpen(o => !o)}
@@ -837,8 +1370,10 @@ export default function ChapterPage() {
           own browser font-size setting entirely, which is the setting people
           with low vision actually rely on; rem scales with it and still honours
           the in-app A+/A- buttons on top. */}
-      {!chapter && !loadError && (
-        <p className="loading" role="status" aria-live="polite">Loading…</p>
+      {!chapter && !entireLoaded && !loadError && (
+        <p className="loading" role="status" aria-live="polite">
+          {entire ? "Loading the work…" : "Loading…"}
+        </p>
       )}
 
       {/* An honest failure, in the vocabulary the rest of the site uses. This
@@ -848,13 +1383,22 @@ export default function ChapterPage() {
       {!chapter && loadError && (
         <div className="reader-error" role="alert">
           <h1 className="reader-error__title">
-            {loadError.kind === "offline" ? "Not saved on this device" : "Couldn't load this chapter"}
+            {loadError.kind === "offline"
+              ? "Not saved on this device"
+              : entire ? "Couldn't load this work" : "Couldn't load this chapter"}
           </h1>
           <p className="reader-error__body">
             {loadError.kind === "offline"
-              ? (numbers.length
-                  ? `You're offline and this chapter isn't among the ${numbers.length} saved on this device.`
-                  : "You're offline and this story isn't saved here. Open it while online, then tap “Save offline” on the story page to read it later.")
+              ? // A work that had ANY of it saved would be showing it, because
+                // the local copy is read before the network is asked — so this
+                // screen offline means none of it is here, and "this chapter
+                // isn't among the N saved" would be answering a question that
+                // was not asked.
+                (entire
+                  ? "You're offline and this work isn't saved on this device. Open it while online, then tap “Save offline” on the story page to read the whole thing later."
+                  : numbers.length
+                    ? `You're offline and this chapter isn't among the ${numbers.length} saved on this device.`
+                    : "You're offline and this story isn't saved here. Open it while online, then tap “Save offline” on the story page to read it later.")
               : loadError.message}
           </p>
           {/* A way out, using what the device actually holds.
@@ -894,7 +1438,8 @@ export default function ChapterPage() {
                 them a login would be telling them to try the same key again. */}
             {loadError.kind === "denied" && !user && (
               <a className="btn btn--primary"
-                href={`/login?next=${encodeURIComponent(`/story/${storyId}/chapter/${num}`)}`}>
+                href={`/login?next=${encodeURIComponent(
+                  entire ? `/story/${storyId}/entire` : `/story/${storyId}/chapter/${num}`)}`}>
                 Sign in to read
               </a>
             )}
@@ -944,6 +1489,66 @@ export default function ChapterPage() {
         </article>
       )}
 
+      {/* The same reader shell over the whole work rather than one chapter —
+          same width, size, theme, justification and language handling, because
+          a reader who set those on a phone should not get a second, different
+          typography for the same story told in the other direction. */}
+      {entireLoaded && (
+        <article className="reader" id="reader-body" data-width={width}
+          data-font={fontFamily} data-justify={justify ? "on" : "off"}
+          lang={langCode} dir={dir}
+          style={{ fontSize: `${(fontSize / 16).toFixed(3)}rem`, lineHeight }}>
+          <header className="reader__header">
+            <p className="reader__breadcrumb">
+              Entire work
+              <span className="dot"> · </span>
+              {currentCh != null
+                ? `Chapter ${currentCh} of ${totalLabel}`
+                // Before the first heading, or above the title block: say how
+                // much has ARRIVED rather than leaving a blank. The count is
+                // expected to move — it is the loading state, not an error.
+                : `${entireChapters.length} of ${totalLabel} chapters`}
+              <span className="dot"> · </span>
+              <span>{entireMinutes} min read</span>
+            </p>
+            <h1 className="reader__title" tabIndex={-1} ref={headingRef}>
+              {story?.title}
+            </h1>
+            {/* Named, because an entire work is read as a document in its own
+                right rather than continued from a page that had already said
+                whose it is. */}
+            {story?.author && <p className="reader__byline">by {story.author}</p>}
+            {story?.summary && <p className="reader__summary">{story.summary}</p>}
+          </header>
+
+          {entireChapters.map(ch => (
+            <ReaderPart key={ch.number} ch={ch} totalLabel={totalLabel}
+              onRef={setSectionRef} />
+          ))}
+
+          {/* Two honest states instead of one spinner: the work still coming
+              says how much is left, and the page that will not arrive says so
+              and offers it again — neither of which takes the several hundred
+              kilobytes already on screen away from the person reading them. */}
+          {entireStalled ? (
+            <p className="reader-more" role="status">
+              {entireRemaining > 0 &&
+                `${entireRemaining} more ${entireRemaining === 1 ? "chapter" : "chapters"} never arrived. `}
+              <button className="btn btn--ghost"
+                onClick={() => { setEntireStalled(false); setEntireRetry(r => r + 1) }}>
+                Load the rest
+              </button>
+            </p>
+          ) : typeof entireNext === "number" && (
+            <p className="reader-more" role="status" aria-live="polite">
+              {entireRemaining > 0
+                ? `Loading ${entireRemaining} more ${entireRemaining === 1 ? "chapter" : "chapters"}…`
+                : "Loading the rest…"}
+            </p>
+          )}
+        </article>
+      )}
+
       {chapter && (
         <>
           <nav className="reader-nav">
@@ -976,6 +1581,18 @@ export default function ChapterPage() {
                   ))}
                 </select>
               )}
+              {/* The other way through a multi-chapter work — AO3's "Entire
+                  Work", the whole thing on one continuous page. Offered only
+                  when there is more than one chapter to join up: 21,310 of the
+                  29,785 hosted works are a single chapter, and on those this
+                  button would promise a mode identical to the screen it is
+                  already on. */}
+              {numbers.length > 1 && (
+                <a href={`/story/${storyId}/entire`} className="reader-nav__index"
+                  onClick={e => { e.preventDefault(); navigate(`/story/${storyId}/entire`) }}>
+                  Entire work
+                </a>
+              )}
               <a href={`/story/${storyId}`} className="reader-nav__index"
                 onClick={exitReader}>All chapters</a>
             </div>
@@ -997,32 +1614,61 @@ export default function ChapterPage() {
 
           <p className="reader-hint">Keys: ← → chapters · + − text size · t theme · j justify. Line spacing, serif/sans &amp; column width: buttons above.</p>
 
-          {nextNum == null && similar.length > 0 && (
-            // End-of-work suggestions. Deliberately below the fold and visually
-            // subordinate to the chapter nav — this reader is on the last page
-            // and the last thing they clicked was "Next" going nowhere, so the
-            // hook is the natural place to surface "what next". Uses the same
-            // /similar endpoint as the story page, so the picks are the ones the
-            // algorithm already trusts. Not shown to logged-out readers: the link
-            // targets go through /story/[id] which requires an account for hosted
-            // chapters, and a click that 401s erodes trust faster than it earns
-            // it.
-            <div className="reader-end">
-              <h4 className="reader-end__title">Still reading?</h4>
-              <div className="reader-end__grid">
-                {similar.slice(0, 6).map(s => (
-                  <Link key={s.id} href={`/story/${s.id}`} className="reader-end__card">
-                    <span className="reader-end__title-link">{s.title}</span>
-                    <span className="reader-end__author">by {s.author}</span>
-                    <span className="reader-end__meta">
-                      {s.word_count > 0 ? `${Math.round(s.word_count / 1000)}k words` : ""}
-                      {s.relationships?.[0] ? ` · ${s.relationships[0]}` : ""}
-                    </span>
-                  </Link>
-                ))}
-              </div>
+          {nextNum == null && endSuggestions}
+        </>
+      )}
+
+      {/* The entire-work twin of the block above. Previous/Next still turn to
+          the adjacent chapter — they do it by scrolling instead of by
+          navigation, so the muscle memory, the hint line and the ← → keys all
+          carry over unchanged between the two ways of reading. */}
+      {entireLoaded && (
+        <>
+          <nav className="reader-nav">
+            <button className="reader-nav__btn" disabled={entirePrevCh == null}
+              onClick={() => scrollToCh(entirePrevCh)}>← Previous</button>
+            <div className="reader-nav__mid">
+              {/* The same native select as the chapter nav, for the same
+                  reasons: keyboard typeahead, a picker that knows how tall the
+                  screen is, no custom menu to rebuild badly. Here it SCROLLS
+                  rather than navigates, and it lists the work's whole outline —
+                  with the chapters whose text has not arrived yet marked and
+                  disabled, so the list never offers a jump that lands
+                  nowhere. */}
+              {numbers.length > 1 && (
+                <select className="reader-nav__jump"
+                  value={currentCh ?? numbers[0] ?? ""}
+                  aria-label="Jump to a chapter"
+                  onChange={e => scrollToCh(Number(e.target.value))}>
+                  {(story?.chapters ?? []).map(c => {
+                    const pending = c.number > arrivedThrough
+                    return (
+                      <option key={c.number} value={c.number} disabled={pending}>
+                        {c.title ? `${c.number}. ${c.title}` : `Chapter ${c.number}`}
+                        {pending ? " — loading" : ""}
+                      </option>
+                    )
+                  })}
+                </select>
+              )}
+              {/* Out of the continuous view and back into paging, at the chapter
+                  the reader is standing in rather than at chapter 1. */}
+              <a href={`/story/${storyId}/chapter/${currentCh ?? numbers[0] ?? 1}`}
+                className="reader-nav__index"
+                onClick={e => {
+                  e.preventDefault()
+                  navigate(`/story/${storyId}/chapter/${currentCh ?? numbers[0] ?? 1}`)
+                }}>
+                Chapter by chapter
+              </a>
             </div>
-          )}
+            <button className="reader-nav__btn" disabled={entireNextCh == null}
+              onClick={() => scrollToCh(entireNextCh)}>Next →</button>
+          </nav>
+
+          <p className="reader-hint">Keys: ← → chapter · + − text size · t theme · j justify. Line spacing, serif/sans &amp; column width: buttons above.</p>
+
+          {endSuggestions}
         </>
       )}
 </main>

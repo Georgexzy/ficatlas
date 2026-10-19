@@ -28,7 +28,7 @@ from fastapi import HTTPException, Response
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from api.auth import signup  # noqa: E402
-from models.user import User  # noqa: E402
+from models.user import User, UserData  # noqa: E402
 
 
 class _Req:
@@ -43,9 +43,16 @@ _LONG_ENOUGH = "pytest-value"
 
 
 def _signup(db, username, password=_LONG_ENOUGH, email="", **kw):
+    # `fandoms` is passed explicitly for the same reason `invite` and `remember`
+    # are: signup()'s default for it is a fastapi.params.Form, which the request
+    # path resolves to "". This helper calls signup() directly as a plain
+    # function, so anything left at its default arrives as the Form OBJECT — and
+    # signup() calls .strip() on it. FastAPI's own resolution is what is being
+    # reproduced here, not a special case for the tests.
     return signup(Response(), _Req(), username=username, password=password,
                   invite=kw.get("invite", ""), email=email,
-                  remember=kw.get("remember", True), db=db)
+                  remember=kw.get("remember", True),
+                  fandoms=kw.get("fandoms", ""), db=db)
 
 
 def test_the_old_form_shape_still_works(db):
@@ -97,6 +104,31 @@ def test_an_empty_address_is_null_not_empty_string(db):
     _signup(db, "emptymail", email="   ")
     row = db.query(User).filter(User.username == "emptymail").one()
     assert row.email is None
+
+
+# ── the optional fandom picker ─────────────────────────────────────────────
+
+def test_signup_fandoms_reach_user_data_and_absence_writes_nothing(db):
+    """The signup form's optional fandom picker, and the shape of every signup
+    made before it existed.
+
+    The picker sends a comma-joined slug list; signup() stores it under its own
+    `user_data` key. Two things are pinned, because only one of them is the
+    feature: the value must arrive intact when it is sent, and NOTHING may be
+    written when it is not. The second is the case every existing account
+    exercises — and the one whose default is a `Form` object rather than a
+    string, which is what broke these tests before `_signup` started passing it.
+    An empty row would be read by a future consumer as "chose nothing", which
+    is indistinguishable from "was never asked"."""
+    _signup(db, "picksfandoms", fandoms="harry-potter,drarry")
+    row = db.query(User).filter(User.username == "picksfandoms").one()
+    stored = db.query(UserData).filter_by(user_id=row.id, key="signup_fandoms").one()
+    assert stored.value == "harry-potter,drarry"
+
+    _signup(db, "picksnothing")
+    row2 = db.query(User).filter(User.username == "picksnothing").one()
+    assert db.query(UserData).filter_by(user_id=row2.id,
+                                        key="signup_fandoms").first() is None
 
 
 # ── an account with no password ────────────────────────────────────────────

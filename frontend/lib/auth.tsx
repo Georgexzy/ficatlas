@@ -37,7 +37,7 @@ interface AuthContextType {
   lastSyncAt: number | null
   login: (username: string, password: string, remember?: boolean) => Promise<void>
   signup: (username: string, password: string, invite?: string, remember?: boolean,
-           email?: string) => Promise<void>
+           email?: string, fandoms?: string) => Promise<void>
   logout: () => Promise<void>
   syncNow: () => Promise<void>
   changePassword: (current: string, next: string) => Promise<void>
@@ -372,7 +372,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [doMerge])
 
   const signup = useCallback(async (username: string, password: string, invite?: string, remember = true,
-                                    email?: string) => {
+                                    email?: string, fandoms?: string) => {
     const fd = new FormData()
     fd.append("username", username); fd.append("password", password)
     // Sent only when the server says it wants one (see /api/auth/signup-policy).
@@ -384,6 +384,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Only when given. The field is optional at the form and optional at the
     // API, and sending an empty one would be the same thing said twice.
     if (email && email.trim()) fd.append("email", email.trim())
+    if (fandoms && fandoms.trim()) fd.append("fandoms", fandoms.trim())
     fd.append("remember", String(remember))
     const r = await fetchWithTimeout("/api/auth/signup", { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
     if (!r.ok) {

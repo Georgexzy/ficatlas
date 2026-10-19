@@ -331,6 +331,13 @@ cmd_promote() {
     c_ok "Verified through nginx with ${live} stopped."
     c_ok "Stopped ${live}. Deploy complete."
 
+    step "Restarting worker to pick up new image"
+    if DEPLOY_TAG=$tag "${COMPOSE[@]}" up -d --no-deps worker; then
+        c_ok "Worker updated."
+    else
+        c_warn "Worker did not update; inspect it with docker compose -p ${PROJECT} -f docker-compose.public.yml logs worker."
+    fi
+
     step "Reclaiming disk"
     # Not optional housekeeping on this box. The backend image is ~12GB, the
     # database volume is ~41GB, and the disk runs at 80%. One build left 26GB of

@@ -133,6 +133,9 @@ class HubDetail(BaseModel):
     # Trope pages under this fandom (topic_hubs.py): on a fandom hub, its
     # tropes; on a trope hub, the fandom's OTHER tropes.
     topics: list[TopicLink] = []
+    # Author pages only: one profile URL per archive, so a reader can jump
+    # straight to "all their work on AO3" without searching again.
+    profile_urls: dict[str, str] = {}
     # Set on a trope hub only.
     fandom_slug: str | None = None
     fandom_name: str | None = None
@@ -575,7 +578,7 @@ def _topics_for(db: Session, fandom_slug: str, exclude: str | None = None,
 @router.get("", response_model=list[HubSummary])
 def list_hubs(
     response: Response,
-    limit: int = Query(2000, ge=1, le=10000),
+    limit: int = Query(2000, ge=1, le=50000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
@@ -615,7 +618,7 @@ def list_hubs(
 # 30 rather than 12, because twelve was a phone-screen budget applied to a
 # desktop page. Both lists are ordered by `work_count DESC, slug ASC` over
 # already-materialised rows, so the cost is the same.
-LANDING_LIMITS = {"fandom": 30, "ship": 30}
+LANDING_LIMITS = {"fandom": 30, "ship": 30, "author": 20, "topic": 20}
 
 
 @router.get("/landing", response_model=dict)
@@ -628,14 +631,43 @@ def landing_browse(
     already public through the hub pages it links to."""
     out: dict[str, list[dict]] = {}
     for kind, cap in LANDING_LIMITS.items():
-        table = "fandom_hubs" if kind == "fandom" else "ship_hubs"
-        # `slug` is selected, not just ordered by, because every row addresses a
-        # hub PAGE. It is returned rather than joined into a URL server-side
-        # because the frontend builds `/${kind}/${slug}`, and the kind it holds is
-        # the one this loop is iterating — so a row cannot be rendered against
-        # the wrong hub type.
+        if kind == "fandom":
+            table = "fandom_hubs"
+            select = "slug, name, work_count"
+        elif kind == "ship":
+            table = "ship_hubs"
+            select = "slug, name, work_count"
+        elif kind == "author":
+            # Rank by total cross-archive engagement (hits + kudos + bookmarks + comments)
+            # not by raw work count, so writers with fewer but more-read works rank higher.
+            # The engagement column is precomputed and refreshed by the hub builder.
+            rows = db.execute(text("""
+                SELECT slug, name, work_count
+                FROM author_hubs
+                ORDER BY engagement DESC NULLS LAST, work_count DESC
+                LIMIT :lim
+            """), {"lim": cap}).fetchall()
+            out[kind] = [{"slug": r[0], "name": r[1], "work_count": r[2]} for r in rows]
+            continue
+        elif kind == "topic":
+            # Aggregate tropes across fandoms: group by tag, sum work_counts,
+            # and pick one representative slug (the one with highest count).
+            rows = db.execute(text("""
+                SELECT
+                    tag as name,
+                    SUM(work_count) as work_count,
+                    (array_agg(slug ORDER BY work_count DESC))[1] as slug
+                FROM topic_hubs
+                GROUP BY tag
+                ORDER BY SUM(work_count) DESC
+                LIMIT :lim
+            """), {"lim": cap}).fetchall()
+            out[kind] = [{"slug": r[2], "name": r[0], "work_count": r[1]} for r in rows]
+            continue
+        else:
+            continue
         rows = db.execute(text(f"""
-            SELECT slug, name, work_count FROM {table}
+            SELECT {select} FROM {table}
              ORDER BY work_count DESC, slug ASC
              LIMIT :lim
         """), {"lim": cap}).fetchall()
@@ -680,7 +712,7 @@ def get_hub(slug: str, response: Response, db: Session = Depends(get_db)):
 @ships_router.get("", response_model=list[HubSummary])
 def list_ships(
     response: Response,
-    limit: int = Query(2000, ge=1, le=10000),
+    limit: int = Query(2000, ge=1, le=50000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
@@ -701,7 +733,7 @@ authors_router = APIRouter()
 @authors_router.get("", response_model=list[HubSummary])
 def list_authors(
     response: Response,
-    limit: int = Query(2000, ge=1, le=10000),
+    limit: int = Query(2000, ge=1, le=50000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
@@ -734,6 +766,33 @@ def get_author(slug: str, response: Response, db: Session = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="No such author page")
     works, sections, _f, _r = _works_and_sections(db, row[3], row[4], row[5])
+    # Per-archive profile links: "see everything they've posted on AO3" etc.
+    # AO3 and FictionAlley use the author name in the URL, so construct it
+    # directly. FF.net needs the numeric author ID, which lives in author_url
+    # on the works themselves — fall back to looking that up.
+    profile_urls: dict[str, str] = {}
+    author_name = row[1]
+    sites_present = {s.site for s in sections if s.site}
+    if "ao3" in sites_present:
+        from urllib.parse import quote
+        profile_urls["ao3"] = f"https://archiveofourown.org/users/{quote(author_name)}"
+    if "fictionalley" in sites_present:
+        from urllib.parse import quote
+        profile_urls["fictionalley"] = f"https://www.fictionalley.org/authors/{quote(author_name)}"
+    if "ffnet" in sites_present and row[3]:
+        try:
+            ff = db.execute(text("""
+                SELECT author_url FROM stories
+                 WHERE id = ANY(CAST(:ids AS uuid[]))
+                   AND site = 'ffnet'
+                   AND author_url IS NOT NULL AND author_url != ''
+                   AND delisted_at IS NULL
+                 LIMIT 1
+            """), {"ids": list(row[3])}).fetchone()
+            if ff and ff[0]:
+                profile_urls["ffnet"] = ff[0]
+        except Exception:
+            db.rollback()
     # Their fandoms, as links to those fandom hubs: the author page's lateral
     # links, and the way a crawler gets from a writer to the rest of the site.
     related: list[RelatedHub] = []
@@ -746,4 +805,40 @@ def get_author(slug: str, response: Response, db: Session = Depends(get_db)):
             related.append(RelatedHub(kind="fandom", slug=hub[0], name=hub[1],
                                       work_count=hub[2]))
     return HubDetail(slug=row[0], name=row[1], work_count=row[2], works=works,
-                     sections=sections, related=related)
+                     sections=sections, related=related,
+                     profile_urls=profile_urls)
+
+
+# ── Trope index ──────────────────────────────────────────────────────────────
+# Every trope across every fandom, aggregated by tag. The slug is the
+# most-popular fandom's slug for that tag (e.g. "harry-potter/fluff"), so
+# each entry links to a real hub page.
+tropes_router = APIRouter()
+
+
+@tropes_router.get("", response_model=list[HubSummary])
+def list_tropes(
+    response: Response,
+    limit: int = Query(10000, ge=1, le=50000),
+    db: Session = Depends(get_db),
+):
+    """Every trope, aggregated across fandoms by tag name."""
+    response.headers["Cache-Control"] = CACHE
+    try:
+        rows = db.execute(text("""
+            SELECT slug, name, work_count, content_at FROM (
+                SELECT tag AS name,
+                       SUM(work_count) AS work_count,
+                       (ARRAY_AGG(slug ORDER BY work_count DESC))[1] AS slug,
+                       MAX(content_at) AS content_at
+                  FROM topic_hubs
+                 GROUP BY tag
+            ) t
+             ORDER BY work_count DESC, slug ASC
+             LIMIT :lim
+        """), {"lim": limit}).fetchall()
+    except Exception:
+        db.rollback()
+        return []
+    return [HubSummary(slug=r[0], name=r[1], work_count=r[2],
+                       content_at=r[3].isoformat() if r[3] else None) for r in rows]

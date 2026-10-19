@@ -52,6 +52,9 @@ from sqlalchemy import text as sql_text
 from db.session import db_session
 from models.story import StatusEnum, Story
 
+import ao3_series
+from sqlalchemy.orm import object_session
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -172,6 +175,14 @@ def parse_work_page(html_text: str) -> dict | None:
         m = rx.search(html_text)
         if m:
             out[key] = _int(m.group(1))
+    # The series this work belongs to, stated by the archive on the same page.
+    #
+    # Every refresh pass reads this page for chapters, words and titles and
+    # threw the series block away, so a work indexed from the metadata dump —
+    # which carries no series field at all — kept whatever an inference had
+    # guessed about it until the fill queue happened to reach its series. It is
+    # already in the text being scanned; three regexes is the whole cost.
+    out["series"] = ao3_series.parse_series(html_text)
     return out
 
 # Ordering, which has to satisfy two things at once.
@@ -469,6 +480,11 @@ def apply_work(story: Story, data: dict) -> list[str]:
 
     if grew:
         story.chapter_count = data["chapter_count"]
+        # Evidence that the ARCHIVE says so, dated. See the migration comment:
+        # follow_email needs to tell this apart from a count that rose because
+        # a listing blurb contradicted the bulk dump, and this is only ever set
+        # by a reader of the work page itself.
+        story.chapters_bumped_at = datetime.now(timezone.utc)
         changed.append("chapter_count")
 
     if data.get("chapter_count_total") and story.chapter_count_total is None:
@@ -491,6 +507,30 @@ def apply_work(story: Story, data: dict) -> list[str]:
         if val is not None and val > (getattr(story, key) or 0):
             setattr(story, key, val)
             changed.append(key)
+
+    # The archive's own series, from the page we have just read. Recorded HERE
+    # so that every work-page reader has it — the title repair pass, the
+    # stale-WIP refresh and the follow refresh all funnel through this
+    # function — instead of only the two routes that remembered to ask
+    # (ao3_series_fill and ao3_series_backfill) and the listing blurb, which a
+    # row can go months without appearing in.
+    #
+    # What it fixes, measured on one work: "The Evans Boy" showed an invented
+    # one-work series ("Evans Boy Deathly Hallows stuff series", read off a
+    # SUMMARY line) and NOT the archive's own, because nothing had re-read its
+    # page since before ao3_series existed. The reader sees a series the author
+    # never wrote and misses the one she did.
+    entries = data.get("series") or []
+    if entries:
+        session = object_session(story)
+        if session is not None:
+            try:
+                if ao3_series.record(session, str(story.id), story.author, entries):
+                    changed.append("series")
+            except Exception as e:
+                # A series failure must never cost the caller the fields it
+                # fetched in this same request.
+                log.warning(f"series save failed for {story.id}: {type(e).__name__}: {e}")
 
     return changed
 

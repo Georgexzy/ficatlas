@@ -801,14 +801,23 @@ input, select { font-family: inherit; }
   font-family: var(--font-serif); font-size: 18px; font-weight: 600;
   margin-bottom: 10px;
 }
-/* "Chapters" and the jump to the newest one, on one line. */
+/* "Chapters" and the jumps out of the list, on one line. */
 .chapter-list__head {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
 }
+/* Two links now, and only one of them appears on most works — so they are
+   grouped rather than spaced out by `justify-content`, which would have pushed
+   them to opposite ends of the heading with "Chapters" stranded in the middle.
+   Wraps on a phone instead of overflowing. */
+.chapter-list__jumps {
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+}
+.chapter-list__entire,
 .chapter-list__latest {
   font-size: 12px; font-family: var(--font-mono); font-weight: 400;
   color: var(--accent); text-transform: none; letter-spacing: 0;
 }
+.chapter-list__entire:hover,
 .chapter-list__latest:hover { text-decoration: underline; }
 .chapter-list ol { list-style: none; padding: 0; }
 .chapter-list li { border-bottom: 1px solid var(--border); }
@@ -887,6 +896,56 @@ input, select { font-family: inherit; }
 .reader__summary {
   font-size: 14px; font-style: italic; color: var(--text-dim);
   margin-top: 10px; font-family: var(--font-sans);
+}
+
+/* ── Every chapter on one scroll (the "Entire Work" view) ───────────────────
+   The chapter boundary is the only structure left in a document that can run
+   to a hundred thousand words, so it has to be marked harder than anything
+   INSIDE the prose: a rule under each heading and a gap wider than the
+   paragraph spacing, or chapter 60's first paragraph reads as the continuation
+   of chapter 59's last — which is precisely the confusion this view is here to
+   avoid. */
+.reader__part { margin-top: 44px; }
+/* The first one sits under the header block, which has its own bottom margin;
+   `:first-of-type` matches on `section`, so the <header> above does not
+   displace it. */
+.reader__part:first-of-type { margin-top: 0; }
+.reader__part-title {
+  font-size: 15px; font-weight: 500; line-height: 1.4;
+  margin-bottom: 16px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+/* Focus arrives here when a jump or an arrow key lands on a chapter — for the
+   same reason `.reader__title` has no outline: the focus MOVE is the cue, and
+   an outline painted around a heading reads as an error box. */
+.reader__part-title:focus,
+.reader__part-title:focus-visible { outline: none; }
+.reader__part-num {
+  display: block; font-family: var(--font-mono); font-size: 10px;
+  font-weight: 400; text-transform: uppercase; letter-spacing: 0.15em;
+  color: var(--text-faint); margin-bottom: 4px;
+}
+/* Most chapters have no title — archives call them "Chapter 7" — and without
+   this the heading would be that small faint mono line alone, too quiet to find
+   by scrolling and too easy to read as metadata rather than as a boundary. */
+.reader__part-title .reader__part-num:only-child {
+  font-size: 13px; letter-spacing: 0.08em; color: var(--text-dim);
+}
+/* Serif whatever the body is set in, matching `.reader__title`: a chapter
+   heading is a title, not prose. */
+.reader__part-name { font-family: var(--font-serif); font-size: 20px; font-weight: 600; }
+/* The byline, because a work read as one document is not being continued from
+   a page that had already said whose it is. */
+.reader__byline {
+  font-family: var(--font-sans); font-size: 13px; color: var(--text-dim);
+  margin-top: 8px;
+}
+/* What is happening at the tail of a work that has not finished arriving — and
+   the button for the page that will not. */
+.reader-more {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
 }
 .reader__content { font-family: var(--font-text); }
 .reader__content p { margin-bottom: 1em; text-indent: 0; }
@@ -2115,6 +2174,26 @@ a.tag--ship:hover { border-color: var(--accent); color: var(--accent); }
   transition: border-color 0.15s, background 0.15s;
 }
 .auth-field input:focus { outline: none; border-color: var(--accent); background: var(--surface3); }
+
+/* Fandom picker on signup — checkbox grid with counts */
+.auth-field--fandoms { gap: 10px; }
+.auth-field--fandoms legend { display: flex; flex-direction: column; gap: 4px; }
+.fandom-picker {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px; max-height: 240px; overflow-y: auto; padding: 4px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface2);
+}
+.fandom-picker__item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+  cursor: pointer; transition: background 0.1s, border-color 0.1s;
+}
+.fandom-picker__item:hover { background: var(--surface2); }
+.fandom-picker__item input { accent-color: var(--accent); width: 16px; height: 16px; }
+.fandom-picker__name { font-size: 13px; color: var(--text); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fandom-picker__count { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 .auth-error {
   background: rgba(220, 80, 80, 0.1); border: 1px solid rgba(220, 80, 80, 0.3);
   color: #ff8a8a; padding: 10px 14px; border-radius: 6px; font-size: 13px;
@@ -5421,7 +5500,10 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .browse__tabs {
   display: flex; gap: 4px; margin-bottom: 14px;
   border-bottom: 1px solid var(--border);
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.browse__tabs::-webkit-scrollbar { display: none; }
 .browse__tab {
   background: none; border: 0; padding: 6px 12px;
   font: inherit; color: var(--text-faint); cursor: pointer;
@@ -5927,7 +6009,7 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   font-size: 14px; transition: border-color 0.15s, background 0.15s;
 }
 .hub__chip:hover { border-color: var(--accent); background: var(--surface2); }
-.hub__chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hub__chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .hub__chip-count {
   color: var(--text-faint); font-size: 12px; font-family: var(--font-mono); flex-shrink: 0;
 }
@@ -5960,6 +6042,52 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    /ships and 5,025 on /fandoms, which were the worst two pages on the site
    and are also the two search engines crawl most. */
 .hub__az-count { color: var(--text-faint); font-size: 11px; font-family: var(--font-mono); }
+
+/* ── Hub filter ────────────────────────────────────────────────────────────────
+   The client-side search box on the browse pages. Turns a thousands-entry
+   scroll into a type-to-find interaction, which is what a phone needs.
+   Positioned first (above the featured grid) so it is immediately visible. */
+.hub-filter__bar {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface2); border: 1.5px solid var(--border2);
+  border-radius: 8px; padding: 0 14px;
+  margin-bottom: 24px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  max-width: 520px;
+}
+.hub-filter__bar:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+.hub-filter__icon {
+  width: 18px; height: 18px; flex-shrink: 0;
+  color: var(--text-dim);
+}
+.hub-filter__input {
+  flex: 1; min-width: 0;
+  background: none; border: 0; outline: none;
+  font: inherit; font-size: 16px;
+  color: var(--text);
+  padding: 12px 0;
+}
+.hub-filter__input::placeholder { color: var(--text-faint); }
+.hub-filter__input::-webkit-search-cancel-button { display: none; }
+.hub-filter__clear {
+  background: none; border: 0; cursor: pointer;
+  font-size: 22px; line-height: 1; color: var(--text-faint);
+  padding: 4px 2px;
+}
+.hub-filter__clear:hover { color: var(--text); }
+.hub-filter__count {
+  color: var(--text-dim); font-size: 14px; margin-bottom: 12px;
+}
+.hub-filter__more {
+  color: var(--text-faint); font-size: 13px; font-style: italic;
+  padding: 8px 0;
+}
+@media (max-width: 640px) {
+  .hub-filter__bar { max-width: none; }
+}
 
 /* The works list on a single hub. */
 .hub__list { list-style: none; padding: 0; margin: 0; }
@@ -6028,7 +6156,7 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 
 @media (max-width: 640px) {
   .hub__az { columns: 1; }
-  .hub__grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .hub__chip { padding: 8px 10px; font-size: 13px; gap: 6px; }
 }
 
 /* ── Never show me (settings) ────────────────────────────────────────────── */
@@ -6207,6 +6335,7 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 .browse-switch {
   display: inline-flex; gap: 2px; margin-bottom: 18px;
   border: 1px solid var(--border); border-radius: var(--radius); padding: 2px;
+  flex-wrap: wrap; max-width: 100%;
 }
 .browse-switch__item {
   font-size: 13px; padding: 5px 14px; border-radius: calc(var(--radius) - 2px);
@@ -8035,6 +8164,9 @@ html { scroll-padding-top: 72px; }
     justify-content: center; text-align: center; min-height: 44px; margin: 0;
   }
   .story-detail__actions .btn--primary { grid-column: 1 / -1; }
+  /* The follow explainer is a sentence, not a control: it spans the row rather
+     than squeezing into a half-width cell beside the buttons. */
+  .story-detail__actions > .follow-email-hint { grid-column: 1 / -1; }
 }
 
 /* Browse indexes. Names wrap to two lines instead of "Harry Pott…": the name
@@ -8042,10 +8174,6 @@ html { scroll-padding-top: 72px; }
    columns on a phone (it was one, 166,000px tall), the browser skips laying
    out letters off screen (content-visibility), and the letter strip sticks
    under the header as a single scrollable row, the contacts-list pattern. */
-.hub__chip-name {
-  white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical; line-height: 1.3;
-}
 .hub__chip { align-items: center; min-height: 48px; }
 .hub__letter { content-visibility: auto; contain-intrinsic-size: auto 600px; }
 @media (max-width: 700px) {
@@ -8057,7 +8185,7 @@ html { scroll-padding-top: 72px; }
   }
   .hub__alphabet::-webkit-scrollbar { display: none; }
   .hub__alphabet a { min-width: 36px; min-height: 36px; flex: 0 0 auto; }
-  .hub__grid { grid-template-columns: 1fr 1fr; }
+  .hub__grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
 }
 
 /* Settings tabs scroll sideways on a phone; say so with a fade at the edge

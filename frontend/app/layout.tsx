@@ -120,6 +120,14 @@ export const metadata: Metadata = {
       + "read them on the archive that hosts them.",
     images: "/og.png",
   },
+  // Google Search Console verification. Set GOOGLE_SITE_VERIFICATION in the
+  // frontend environment; renders <meta name="google-site-verification">.
+  // Without it, GSC cannot be claimed and sitemap submission is unavailable.
+  ...(process.env.GOOGLE_SITE_VERIFICATION && {
+    verification: {
+      google: process.env.GOOGLE_SITE_VERIFICATION,
+    },
+  }),
 }
 
 // Proper mobile scaling — without this, phones render the page at desktop

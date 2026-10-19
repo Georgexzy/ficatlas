@@ -1,5 +1,6 @@
 """Runtime settings — small key/value store for user-configurable options."""
 from fastapi import APIRouter, Body, Depends, Form, HTTPException
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -49,6 +50,8 @@ DEFAULTS = {
     # feature, a crawl delay, or an outage that the automated health check
     # cannot explain. Blank keeps the public UI quiet.
     "site_notice":          "",
+    "site_notice_start_at": "",
+    "site_notice_until":    "",
     "live_fetch":          "true",
     # Feed-poll filters — post-filter the 25 newest works per tag
     "feed_min_words":      "",        # blank = no min
@@ -125,6 +128,7 @@ def put_setting(db: Session, key: str, value: str) -> None:
 PUBLIC_KEYS = {
     "default_sites", "default_sort", "results_per_page",
     "show_explicit", "reader_font", "reader_width", "site_notice",
+    "site_notice_start_at", "site_notice_until",
 }
 
 
@@ -150,9 +154,42 @@ def all_settings(db: Session = Depends(get_db),
     _ensure_table(db)
     rows = db.execute(text("SELECT key, value FROM app_settings")).fetchall()
     stored = {r[0]: r[1] for r in rows}
+    # Timed notices stay stored for the admin but are hidden before their start
+    # and cleared lazily after expiry, so they do not require a scheduler.
+    start_at = stored.get("site_notice_start_at", "")
+    notice_not_started = False
+    if start_at:
+        try:
+            starts = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
+            if starts.tzinfo is None:
+                starts = starts.replace(tzinfo=timezone.utc)
+            if starts > datetime.now(timezone.utc):
+                notice_not_started = True
+        except (ValueError, TypeError):
+            pass
+    until = stored.get("site_notice_until", "")
+    if until:
+        try:
+            expiry = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            if expiry <= datetime.now(timezone.utc):
+                db.execute(text("""
+                    UPDATE app_settings SET value = ''
+                    WHERE key IN ('site_notice', 'site_notice_start_at', 'site_notice_until')
+                """))
+                db.commit()
+                stored["site_notice"] = ""
+                stored["site_notice_start_at"] = ""
+                stored["site_notice_until"] = ""
+        except (ValueError, TypeError):
+            # Bad expiry data should not suppress a manually written notice.
+            pass
     merged = {**DEFAULTS, **stored}
     if _may_see_all(user, db):
         return merged
+    if notice_not_started:
+        merged["site_notice"] = ""
     return {k: v for k, v in merged.items() if k in PUBLIC_KEYS}
 
 

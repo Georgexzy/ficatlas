@@ -31,6 +31,12 @@ export default function SiteFooter() {
           other being crawled first. */}
       <Link prefetch={false} href="/ships">Browse pairings</Link>
       <span className="site-footer__sep">·</span>
+      <Link prefetch={false} href="/authors">Browse authors</Link>
+      <span className="site-footer__sep">·</span>
+      <Link prefetch={false} href="/tropes">Browse tropes</Link>
+      <span className="site-footer__sep">·</span>
+      <Link prefetch={false} href="/series">Browse series</Link>
+      <span className="site-footer__sep">·</span>
       <Link prefetch={false} href="/about">About</Link>
       <span className="site-footer__sep">·</span>
       <Link prefetch={false} href="/about#ai">AI policy</Link>

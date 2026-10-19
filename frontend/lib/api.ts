@@ -487,6 +487,8 @@ export interface LandingEntry { name: string; work_count: number; slug: string }
 export interface LandingBrowse {
   fandom?: LandingEntry[]
   ship?: LandingEntry[]
+  author?: LandingEntry[]
+  topic?: LandingEntry[]
 }
 
 function landingCache() {

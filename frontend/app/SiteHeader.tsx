@@ -157,10 +157,13 @@ function BrowseMenu({ current }: { current: boolean }) {
       {open && (
         <div className="user-menu__dropdown browse-menu__dropdown" role="menu">
           <p className="user-menu__hint">
-            Two ways in: by fandom, or by pairing.
+            Five ways in: by fandom, pairing, author, trope, or series.
           </p>
           {item("/fandoms", "Fandoms")}
           {item("/ships", "Pairings")}
+          {item("/authors", "Authors")}
+          {item("/tropes", "Tropes")}
+          {item("/series", "Series")}
         </div>
       )}
     </div>

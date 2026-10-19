@@ -20,7 +20,16 @@ function splitText(text: string): string[] {
   return out
 }
 
-export default function ReadAloud({ html, language }: { html: string; language: string }) {
+export default function ReadAloud({ html, language, scope = "chapter" }: {
+  html: string
+  language: string
+  // Which the button is asking for. The control is identical either way, but
+  // narration is not reversible cheaply: someone who pressed it expecting one
+  // chapter and got a 199-chapter novel read at them, or the reverse, should
+  // have been told which they were asking for BEFORE the first utterance.
+  scope?: "chapter" | "work"
+}) {
+  const listen = scope === "work" ? "Listen to the whole work" : "Listen to this chapter"
   const chunks = useMemo(() => {
     if (typeof DOMParser === "undefined") return []
     const doc = new DOMParser().parseFromString(html, "text/html")
@@ -44,7 +53,7 @@ export default function ReadAloud({ html, language }: { html: string; language: 
       if (run !== generation.current || event.error === "canceled" || event.error === "interrupted") return
       generation.current++
       setReading(false); setPaused(false)
-      setError("Your browser could not read this chapter aloud.")
+      setError("Your browser could not read this aloud.")
     }
     window.speechSynthesis.speak(utterance)
   }
@@ -82,7 +91,8 @@ export default function ReadAloud({ html, language }: { html: string; language: 
       return
     }
     if (!chunks.length) {
-      setError("There is no chapter text to read aloud.")
+      setError(scope === "work" ? "There is no text to read aloud."
+                                : "There is no chapter text to read aloud.")
       return
     }
     window.speechSynthesis.cancel()
@@ -94,8 +104,8 @@ export default function ReadAloud({ html, language }: { html: string; language: 
   return <>
     <button type="button" className={`reader-ctrl reader-ctrl--listen${reading ? " is-on" : ""}`}
       onClick={toggle} aria-pressed={reading && !paused}
-      aria-label={paused ? "Resume narration" : reading ? "Pause narration" : "Listen to this chapter"}
-      title={paused ? "Resume narration" : reading ? "Pause narration" : "Listen to this chapter"}>
+      aria-label={paused ? "Resume narration" : reading ? "Pause narration" : listen}
+      title={paused ? "Resume narration" : reading ? "Pause narration" : listen}>
       {paused ? "▶" : reading ? "Ⅱ" : "▶"}
     </button>
     {reading && <button type="button" className="reader-ctrl reader-ctrl--listen-stop"

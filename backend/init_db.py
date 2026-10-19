@@ -704,6 +704,14 @@ CREATE TABLE IF NOT EXISTS author_facets (
 -- lookup, because if the reader had it exactly they would not need rescuing.
 CREATE INDEX IF NOT EXISTS ix_author_facets_trgm ON author_facets USING gin (value gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_author_facets_count ON author_facets (count DESC);
+-- `rescue_greedy_operators` tests whether a multi-word `author:` value is a real
+-- pen name before splitting off trailing search words, and that test is an
+-- equality on lower(value). The primary key is case-sensitive, so it misses
+-- "lomonaaeren" for a stored "Lomonaaeren" and the split never happens for
+-- exactly the queries it exists to fix — lowercase is how people type. Without
+-- this index the check is a 186k-row scan, measured at 66ms, paid once per
+-- operator per query on a path that is otherwise 10-140ms warm.
+CREATE INDEX IF NOT EXISTS ix_author_facets_lower ON author_facets (lower(value));
 -- Titles of well-read works, for the zero-result spelling rescue. The reader's
 -- most repeated empty search was "the arithmancr" (5 runs in 30 days) and the
 -- rescue could only offer tags and authors: a fuzzy match over all 20M titles
@@ -1505,6 +1513,31 @@ CREATE TABLE IF NOT EXISTS tracking_secret (
     one_row BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (one_row),
     secret  TEXT NOT NULL
 );
+
+-- When a WORK PAGE last told us it had more chapters than we held.
+--
+-- follow_email.moved() used to require the work's own `updated_at` to have
+-- moved past what the reader last saw, and AO3 only reports that as a DATE.
+-- Two chapters in one day therefore hit a wall: the digest at 02:31 announced
+-- "Mental Gymnastics" (54), the reader marked it seen, and "Intimate
+-- Relations" (55) posted the same evening — same `updated_at`, so the mail was
+-- held back until the author posted again. The badge still showed it, which
+-- is how it was noticed at all.
+--
+-- This is the discriminator that lets us relax the date test without opening
+-- the door the date test was shut against. A count rising is ambiguous on its
+-- own: it is a new chapter, or it is a figure that was always wrong and has
+-- finally been read correctly, and mailing "new chapter!" about a repair gets
+-- a feature like this switched off. Only ao3_title_repair.apply_work sets
+-- this — the refresh loops that REVISIT a work we already hold, precisely to
+-- ask whether it gained a chapter. There a higher count is news.
+--
+-- Deliberately NOT set by the two paths where a higher count is most often a
+-- correction rather than news: live_fetch/persist.py, which reads a listing
+-- blurb that may contradict the bulk dump, and ao3_stub_enrich, whose 4.1M
+-- candidates are works the dump described without engagement and whose stored
+-- counts are the ones most likely to be wrong.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS chapters_bumped_at TIMESTAMPTZ;
 """
 
 # copy_sites: the function is CREATE OR REPLACE (no table lock). The trigger is

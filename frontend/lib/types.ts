@@ -83,6 +83,10 @@ export interface SearchResponse {
   fetch_state?: string | null
   /** The author this search names, when they have a page (author_hubs.py). */
   author_page?: { slug: string; name: string } | null
+  /** The fandom hub this search filters on, when there is exactly one. */
+  fandom_page?: { slug: string; name: string } | null
+  /** The ship hub this search filters on, when there is exactly one. */
+  ship_page?: { slug: string; name: string } | null
 }
 
 /** A sentence read as a search. */

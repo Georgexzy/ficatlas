@@ -8,18 +8,30 @@ type Values = {
   tracked_fandom: string; crawl_mode: string; crawl_rotate_count: string
   poll_on_load: string; live_fetch: string; feed_min_words: string
   feed_max_words: string; feed_complete_only: string; enable_direct_crawl: string
-  site_notice: string
+  site_notice: string; site_notice_start_at: string; site_notice_until: string
 }
 const KEYS = Object.keys({
   tracked_fandom: 1, crawl_mode: 1, crawl_rotate_count: 1, poll_on_load: 1,
   live_fetch: 1, feed_min_words: 1, feed_max_words: 1, feed_complete_only: 1,
-  enable_direct_crawl: 1, site_notice: 1,
+  enable_direct_crawl: 1, site_notice: 1, site_notice_start_at: 1, site_notice_until: 1,
 }) as (keyof Values)[]
 const EMPTY: Values = {
   tracked_fandom: "", crawl_mode: "mixed", crawl_rotate_count: "3",
   poll_on_load: "true", live_fetch: "true", feed_min_words: "",
   feed_max_words: "", feed_complete_only: "false", enable_direct_crawl: "false",
-  site_notice: "",
+  site_notice: "", site_notice_start_at: "", site_notice_until: "",
+}
+
+function toLocalInput(value: string) {
+  if (!value) return ""
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return ""
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 16)
+}
+
+function toUtcValue(value: string) {
+  return value ? new Date(value).toISOString() : ""
 }
 
 function Switch({ value, label, onChange }: {
@@ -66,8 +78,10 @@ export default function ConfigView() {
       }, USER_TIMEOUT_MS)
       const data = await r.json().catch(() => null)
       if (!r.ok) throw new Error(data?.detail ?? `Could not save settings (${r.status}).`)
-      setSaved(values); setMessage("Settings saved.")
-      window.dispatchEvent(new CustomEvent("ficatlas:site-notice-updated", { detail: values.site_notice }))
+      setValues(values); setSaved(values); setMessage("Settings saved.")
+      window.dispatchEvent(new CustomEvent("ficatlas:site-notice-updated", { detail: {
+        message: values.site_notice, startsAt: values.site_notice_start_at, until: values.site_notice_until,
+      } }))
     } catch (e: any) { setMessage(e?.message ?? "Could not save settings.") }
     finally { setSaving(false) }
   }
@@ -103,6 +117,18 @@ export default function ConfigView() {
         <textarea aria-label="Public announcement" className="setting-input site-notice-input" maxLength={500} rows={3}
           value={values.site_notice} onChange={e => set("site_notice", e.target.value)} />)}
       <p className="cc-dim">{values.site_notice.length}/500 characters</p>
+      {row("Show from", "Leave blank to publish as soon as you save.",
+        <input aria-label="Announcement start time" className="setting-input" type="datetime-local"
+          value={toLocalInput(values.site_notice_start_at)} onChange={e => set("site_notice_start_at", toUtcValue(e.target.value))} />)}
+      {row("Hide after", "Optional. Leave blank to keep the announcement until you clear it.",
+        <input aria-label="Announcement end time" className="setting-input" type="datetime-local"
+          value={toLocalInput(values.site_notice_until)} onChange={e => set("site_notice_until", toUtcValue(e.target.value))} />)}
+      <div className="setting-actions">
+        <button type="button" className="btn" disabled={!values.site_notice && !values.site_notice_start_at && !values.site_notice_until}
+          onClick={() => setValues(v => v ? { ...v, site_notice: "", site_notice_start_at: "", site_notice_until: "" } : v)}>
+          Clear announcement
+        </button>
+      </div>
     </section>
     <section className="cc-card">
       <header className="cc-card__head"><h3>Fresh content</h3><p>New works are found by walking AO3 tag pages. Rotation keeps indexing broad while mixed mode also revisits your chosen fandoms.</p></header>

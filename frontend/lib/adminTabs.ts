@@ -16,6 +16,7 @@ export type AdminTab =
   | "overview" | "configuration" | "tools" | "passes"
   | "coverage" | "crawler" | "storage"
   | "people" | "audience" | "outreach" | "moderation"
+  | "cloudflare" | "restart"
 
 /** The rail, in order, grouped by the job each view is for. One list, so the
  *  rail, the `?tab=` parser and the tests cannot disagree about what exists. */
@@ -25,6 +26,8 @@ export const ADMIN_GROUPS: { title: string; tabs: { key: AdminTab; label: string
     { key: "configuration", label: "Configuration" },
     { key: "tools", label: "Tools" },
     { key: "passes", label: "Passes" },
+    { key: "cloudflare", label: "Cloudflare" },
+    { key: "restart", label: "Restart" },
   ] },
   { title: "Index", tabs: [
     { key: "coverage", label: "Coverage" },

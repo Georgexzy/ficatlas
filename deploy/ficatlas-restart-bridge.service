@@ -1,0 +1,24 @@
+[Unit]
+Description=FicAtlas scheduled host restart bridge
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /usr/local/libexec/ficatlas-restart-bridge.py
+ExecStartPre=/usr/bin/rm -f /var/lib/ficatlas-restart-bridge/bridge.ready
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ficatlas-restart-bridge
+CapabilityBoundingSet=CAP_SYS_BOOT
+AmbientCapabilities=CAP_SYS_BOOT
+LockPersonality=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
