@@ -8,6 +8,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 install -d -o 1000 -g 1000 -m 2770 /var/lib/ficatlas-restart-bridge
+install -d -o root -g root -m 0755 /usr/local/libexec
 install -o root -g root -m 0755 \
   "$ROOT/deploy/ficatlas-restart-bridge.py" \
   /usr/local/libexec/ficatlas-restart-bridge.py
