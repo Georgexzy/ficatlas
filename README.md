@@ -2,11 +2,12 @@
 
 ### [ficatlas.com](https://ficatlas.com) — search AO3, FanFiction.net and FictionAlley at once
 
-A unified search engine for fanfiction. The live API reported **21,491,398
-works** on 19 October 2026 at 21:33 UTC: AO3 14,377,453, FanFiction.net 7,083,996
-and FictionAlley 29,949, plus smaller curated sets and user-supplied EPUBs. The
-live header rounds the changing count to 21.5M. About 30,000 works can be read in
-the app; the rest link out to the archive that hosts them.
+A unified search engine for fanfiction. **21.5M works** indexed, counted by the
+live API as 21,491,398 on 19 October 2026 at 21:33 UTC: AO3 14,377,453,
+FanFiction.net 7,083,996 and FictionAlley 29,949, plus smaller curated sets and
+user-supplied EPUBs. The live header rounds the changing count to 21.5M. About
+30,000 works can be read in the app; the rest link out to the archive that hosts
+them.
 
 Search a half-remembered plot in plain English — *"fic where harry is a
 wandmaker"*, *"hermione time turner ron dies"* — or use AO3-parity filters and
