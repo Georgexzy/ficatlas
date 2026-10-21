@@ -40,6 +40,8 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_RECOVERY_ACTIONS = {"spelling", "describe", "broaden", "relax", "split", "named"}
+
 
 # ── write ───────────────────────────────────────────────────────────────────
 
@@ -67,6 +69,7 @@ def _search_text(search: str) -> Optional[str]:
 def hit(request: Request, path: str = Form(...), ref: str = Form(""),
         kind: str = Form("page"), seen: str = Form(""),
         search: str = Form(""), pos: int = Form(0),
+        action: str = Form(""),
         viewer: Optional[User] = Depends(get_current_user)):
     """Record one pageview, or one click through to the archive.
 
@@ -113,9 +116,17 @@ def hit(request: Request, path: str = Form(...), ref: str = Form(""),
     # `click` is a reader opening a SEARCH RESULT: `path` is the work, `q` the
     # search it came from, `pos` its 1-based position across pages. Still a
     # fixed set of kinds, for the reason above.
-    kind = kind if kind in ("out", "click") else "page"
+    kind = kind if kind in ("out", "click", "recover", "missing") else "page"
+    if kind == "recover":
+        if action not in _RECOVERY_ACTIONS:
+            return Response(status_code=204)
+        path = f"/search/recovery/{action}"
+    elif kind == "missing":
+        path = "/search/missing"
     pos_v = pos if kind == "click" and 0 < pos <= 10000 else None
-    q_v = _search_text(search) if kind == "click" else None
+    q_v = _search_text(search) if kind in ("click", "recover", "missing") else None
+    if kind in ("recover", "missing") and not q_v:
+        return Response(status_code=204)
 
     # HAS THIS BROWSER BEEN HERE BEFORE — and nothing else about it.
     #
@@ -921,15 +932,34 @@ def searches(days: int = Query(30, ge=1, le=365),
         WHERE at >= :cut AND kind = 'search' AND NOT bot
           AND q IS NOT NULL AND q <> ''
     """), {"cut": cut}).first()
+    recovery = db.execute(text("""
+        SELECT count(*) FILTER (WHERE kind = 'recover') AS used_suggestions,
+               count(DISTINCT visitor) FILTER (WHERE kind = 'recover') AS rescuing_readers,
+               count(*) FILTER (WHERE kind = 'missing') AS missing_requests
+          FROM visit_events_readers
+         WHERE at >= :cut AND NOT bot
+           AND kind IN ('recover', 'missing')
+    """), {"cut": cut}).first()
+    requested = dict(db.execute(text("""
+        SELECT lower(q), count(DISTINCT visitor)
+          FROM visit_events_readers
+         WHERE at >= :cut AND NOT bot AND kind = 'missing'
+           AND q IS NOT NULL
+         GROUP BY 1
+    """), {"cut": cut}).fetchall())
     return {
         "top": [{"query": r[0], "runs": r[1], "visitors": r[2],
                  "results": r[3], "first_seen": r[4].isoformat(),
                  "last_seen": r[5].isoformat()} for r in top],
         "empty": [{"query": r[0], "runs": r[1],
+                   "requests": requested.get(r[0], 0),
                    "last_seen": r[2].isoformat()} for r in empty],
         "totals": {"runs": totals[0] or 0, "empty_runs": totals[1] or 0,
                    "distinct": totals[2] or 0,
-                   "search_only": totals[3] or 0},
+                   "search_only": totals[3] or 0,
+                   "used_suggestions": recovery[0] or 0,
+                   "rescuing_readers": recovery[1] or 0,
+                   "missing_requests": recovery[2] or 0},
     }
 
 

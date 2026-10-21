@@ -27,7 +27,7 @@ interface Work {
   /** "main" — part of the numbered run; "side" — a companion piece. */
   role: string
 }
-interface Series {
+export interface Series {
   id: string; name: string; author: string | null; site: string
   source: string; confidence: number; work_count: number
   total_words: number; main_count: number; works: Work[]
@@ -37,9 +37,11 @@ const SITE_LABELS: Record<string, string> = {
   ao3: "AO3", ffnet: "FF.net", fictionalley: "FictionAlley",
 }
 
-export default function SeriesClient({ params }: { params: Promise<{ id: string }> }) {
+export default function SeriesClient({ params, initialSeries }: {
+  params: Promise<{ id: string }>; initialSeries?: Series | null
+}) {
   const { id } = use(params)
-  const [data, setData] = useState<Series | null>(null)
+  const [data, setData] = useState<Series | null>(initialSeries ?? null)
   const [error, setError] = useState<Failure | null>(null)
 
   useEffect(() => {

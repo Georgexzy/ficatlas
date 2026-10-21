@@ -5687,6 +5687,7 @@ def search(          # NOT async — see below
     #     found 11 is not help.
     # It costs ~200-500ms and only on this path.
     _suggestions: list[Suggestion] = []
+    _early_rescue = False
     # THE RAW QUERY, not `q`. See `raw_query` above: a query that is entirely an
     # operator leaves `q` empty, and the old gate on `q` therefore meant "never
     # suggest anything for the queries where a suggestion is most obviously
@@ -5748,9 +5749,14 @@ def search(          # NOT async — see below
         # the reason for it; `_misspelt_title` and `_describe_suggestion` stay
         # here because they are a different kind of answer (a title, a reading of
         # a sentence) and are the last two things a reader should be offered.
+        # Prose interpretation below uses this same extractor and its own
+        # candidate probe. Try spelling and titles now; postpone the description
+        # suggestion until we know interpretation failed. Previously a
+        # successful interpretation still paid for both probes on the slowest
+        # (zero-result sentence) path.
         _suggestions = (_spelling_rescues(db, _typed)
-                        or _misspelt_title(db, _typed)
-                        or _describe_suggestion(db, _typed, request=request))
+                        or _misspelt_title(db, _typed))
+        _early_rescue = bool(_suggestions)
         # A short natural-language request can have useful named characters
         # even when its action word makes full-text search return nothing.
         # Keep this alongside the spelling rescue rather than allowing an
@@ -5889,6 +5895,15 @@ def search(          # NOT async — see below
         except Exception:
             log.debug("interpretation failed", exc_info=True)
 
+    if total == 0 and _typed and interpreted is None and not _early_rescue:
+        # Keep the description rescue when interpretation could not find a
+        # working query. It is redundant after a successful interpretation:
+        # the frontend immediately reruns that query and never displays the
+        # zero-result page's suggestions.
+        _described = _describe_suggestion(db, _typed, request=request)
+        if _described:
+            _suggestions = _described + _suggestions
+
     # ── And the failure that actually happens: one term too many ────────────
     #
     # The spelling rescue above is gated on TYPED TEXT, so the searches most
@@ -5902,7 +5917,7 @@ def search(          # NOT async — see below
     # offer the reader their own query minus the expensive part, and the count
     # it would return, rather than leaving them to guess which of five
     # constraints is the problem.
-    if total <= SUGGEST_MAX_RESULTS:
+    if total <= SUGGEST_MAX_RESULTS and interpreted is None:
         try:
             _live_terms = ([_Term("relationship", v) for v in (relationships or "").split(",") if v.strip()]
                            + [_Term("fandom", v) for v in (fandoms or "").split(",") if v.strip()]

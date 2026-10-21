@@ -656,7 +656,7 @@ def test_the_candidate_pool_is_wide_enough_to_survive_the_join():
     src = inspect.getsource(ffnet_enrich._pick_targets)
     assert "60_000" in src or "60000" in src, \
         "the candidate pool must be far larger than the batch"
-    assert "want * 300" in src
+    assert "remaining * 300" in src
 
 
 # ---- extractor: containment beats frequency ------------------------------
@@ -1273,13 +1273,9 @@ def test_the_ceiling_bounds_how_stale_anything_can_get():
 
 
 def test_the_warmer_warms_what_readers_search_not_what_we_do():
-    """It reads visit_events_public, which excludes our own admin queries.
-    Warming the Outreach panel's machine-built operator queries would spend the
-    effort on searches no reader will ever repeat -- and there were 1,925 of
-    those in the history."""
+    """The reader view removes admin activity and classified bot surges."""
     import cache_warm
-    assert "visit_events_public" in cache_warm.POPULAR
-    assert "visit_events " not in cache_warm.POPULAR
+    assert "FROM visit_events_readers" in cache_warm.POPULAR
 
 
 def test_popularity_is_counted_in_people_not_searches():

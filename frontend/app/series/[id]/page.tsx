@@ -1,6 +1,6 @@
 import type { Metadata } from "next"
 import { notFound } from "next/navigation"
-import SeriesClient from "./SeriesClient"
+import SeriesClient, { type Series } from "./SeriesClient"
 import { escapeJsonLd } from "@/lib/jsonLd"
 
 // Server wrapper, same purpose and shape as the one over the story page: a
@@ -64,13 +64,7 @@ export default async function SeriesPage(
   const { id } = await params
   const SITE = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
 
-  let series: {
-    name?: string
-    author?: string
-    work_count?: number
-    total_words?: number
-    works?: { id: string; title?: string }[]
-  } | null = null
+  let series: Series | null = null
   // A confirmed 404 from the API is a real 404 here; anything else renders and
   // lets the client fetch for itself.
   //
@@ -93,7 +87,7 @@ export default async function SeriesPage(
       signal: AbortSignal.timeout(8000),
     })
     if (r.status === 404) missing = true
-    else if (r.ok) series = await r.json()
+    else if (r.ok) series = await r.json() as Series
   } catch {
     // Transient: a timeout or a 5xx must NOT 404, or an API blip would delete a
     // real series from the index. Render and let the client fetch for itself.
@@ -130,7 +124,7 @@ export default async function SeriesPage(
       {/* Same landmark as the story route: without it a screen-reader user has
           no way past the header and the skip link has nothing to target. */}
       <main id="main">
-        <SeriesClient params={params} />
+        <SeriesClient params={params} initialSeries={series} />
       </main>
     </>
   )

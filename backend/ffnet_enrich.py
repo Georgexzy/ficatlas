@@ -439,6 +439,39 @@ def _pick_targets(limit: int | None) -> list:
     want = limit or 1000
     out: list = []
     with db_session() as db:
+        # Reader-opened FF.net works with missing pairing metadata are the
+        # highest-value captures. The ordinary queue only selects works with
+        # no characters, so a work with characters but no relationship could
+        # wait indefinitely even when several people opened it. The capture
+        # must be known and untried: do not spend archive.org requests on a
+        # speculative URL, or re-fetch a snapshot already checked for a pair.
+        demand = db.execute(sql_text("""
+            WITH opened AS (
+                SELECT substring(path FROM '^/story/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})')::uuid AS id,
+                       count(DISTINCT visitor) AS readers, count(*) AS visits
+                  FROM visit_events_readers
+                 WHERE at >= now() - interval '30 days'
+                   AND kind IN ('page', 'click', 'out')
+                   AND path ~ '^/story/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                 GROUP BY 1
+            )
+            SELECT s.id, s.site_id, c.snapshot_ts, c.original
+              FROM opened o
+              JOIN stories s ON s.id = o.id
+              JOIN ffnet_captures c ON c.site_id = CASE
+                    WHEN s.site_id ~ '^[0-9]+$' THEN s.site_id::bigint END
+             WHERE s.site = 'ffnet'
+               AND s.delisted_at IS NULL
+               AND cardinality(s.relationships) = 0
+               AND c.done_at IS NULL AND c.original IS NOT NULL
+             ORDER BY o.readers DESC, o.visits DESC, c.snapshot_ts DESC
+             LIMIT :lim
+        """), {"lim": want}).fetchall()
+        out = [(r[0], r[1], 0, (r[2], r[3])) for r in demand]
+        remaining = want - len(out)
+        if remaining <= 0:
+            return out
+
         # Stories archive.org demonstrably HOLDS come first.
         #
         # Measured, and the gap is not marginal. Ten stories drawn this way
@@ -497,8 +530,10 @@ def _pick_targets(limit: int | None) -> list:
                        + COALESCE(s.favourites,0)) DESC,
                       c.snapshot_ts DESC
              LIMIT :lim
-        """), {"lim": want, "pool": max(want * 300, 60_000)}).fetchall()
-        out = [(r[0], r[1], 0, (r[2], r[3])) for r in rows]
+        """), {"lim": remaining, "pool": max(remaining * 300, 60_000)}).fetchall()
+        selected = {r[0] for r in out}
+        out.extend((r[0], r[1], 0, (r[2], r[3])) for r in rows
+                   if r[0] not in selected)
 
         # Only if the capture index cannot fill the batch. It is still being
         # built -- the prefix walk covers ids 1000-9999 over several days -- so
@@ -533,8 +568,8 @@ def run(limit: int | None, dry_run: bool, delay: float, batch: int,
     last pass started at 22:56 and was still going nine hours later, which is
     why FF.net character coverage sat at 1.7% looking like a dead feature.
 
-    Stopping early costs nothing: _pick_targets only ever selects stories that
-    still have no characters, so the next pass resumes on what is left.
+    Stopping early costs nothing: _pick_targets only selects stories still
+    missing useful metadata, so the next pass resumes on what is left.
     """
     import time as _time
     deadline = (_time.monotonic() + max_seconds) if max_seconds else None

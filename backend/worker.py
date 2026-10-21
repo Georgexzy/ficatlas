@@ -71,8 +71,8 @@ async def _enrich_loop() -> None:
 
     One HTTP request per story against archive.org, so this is paced to run
     forever in the background rather than to finish quickly. Each pass is small
-    and the whole thing is idempotent — it only ever selects stories that still
-    have no characters.
+    and the whole thing is idempotent — it selects stories still missing useful
+    metadata, including reader-opened works missing pairings.
     """
     batch = int(_num("ENRICH_BATCH", 200))
     # How long to REST between passes, which is a different question from how

@@ -167,6 +167,29 @@ def test_a_beacon_never_raises_at_the_caller(db, monkeypatch):
     assert r.status_code == 204
 
 
+def test_search_feedback_uses_fixed_actions_and_keeps_the_query(db):
+    request = _FakeRequest()
+    traffic.hit(request, path="/", kind="recover", action="broaden",
+                search="q=wolfstar&sites=ffnet")
+    traffic.hit(request, path="/", kind="missing", search="q=wolfstar&sites=ffnet")
+    traffic.hit(request, path="/", kind="recover", action="invented",
+                search="q=wolfstar")
+    tracking.flush()
+
+    rows = db.execute(text("""
+        SELECT kind, path, q FROM visit_events ORDER BY id
+    """)).fetchall()
+    assert [(r[0], r[1]) for r in rows] == [
+        ("recover", "/search/recovery/broaden"),
+        ("missing", "/search/missing"),
+    ]
+    assert rows[0][2] == rows[1][2]
+    assert "wolfstar" in rows[0][2]
+    report = traffic.searches(days=7, limit=10, db=db, _owner=None)
+    assert report["totals"]["used_suggestions"] == 1
+    assert report["totals"]["missing_requests"] == 1
+
+
 # ── the reports ─────────────────────────────────────────────────────────────
 
 def test_searches_report_names_the_gaps(db):

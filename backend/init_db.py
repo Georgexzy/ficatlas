@@ -1523,7 +1523,7 @@ CREATE OR REPLACE VIEW visit_events_readers AS
                bool_or(kind = 'page' AND ref_host IS NOT NULL
                        AND ref_host NOT ILIKE '%ficatlas%') AS referred,
                bool_or(kind = 'page' AND seen IN ('week', 'return')) AS came_back,
-               bool_or(kind IN ('click', 'out')) AS interacted,
+               bool_or(kind IN ('click', 'out', 'recover', 'missing')) AS interacted,
                min(path) FILTER (WHERE kind = 'page') <>
                max(path) FILTER (WHERE kind = 'page') AS multi_page
           FROM visit_events_public

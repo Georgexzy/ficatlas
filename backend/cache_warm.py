@@ -20,11 +20,12 @@ of every window, and it does not have to be a reader.
 
 What it warms
 -------------
-Only what the traffic data says people search, from visit_events_public -- so
+Only what the traffic data says people search, from visit_events_readers -- so
 this warms what readers ask for rather than what anybody here guessed they
-would. The view excludes our own admin queries, which matters: warming the
-Outreach panel's machine-built operator queries would spend the effort on
-searches no reader will ever repeat.
+would. That view excludes internal traffic and the bot surges identified by
+the traffic report. On 21 October, 257 terms qualified in the broader public
+view but only 27 in the reader view; warming the former spent most of the
+budget on traffic the site does not count as readers.
 
 It is deliberately not a crawler of every possible query. A term nobody has
 searched twice is not worth holding in memory, and the cache has a bounded size
@@ -62,7 +63,7 @@ GAP = float(os.getenv("WARM_GAP_SECONDS", "1.5"))
 
 POPULAR = """
     SELECT q, count(*) AS searches, count(DISTINCT visitor) AS people
-      FROM visit_events_public
+      FROM visit_events_readers
      WHERE kind = 'search' AND q IS NOT NULL AND q <> ''
        AND at > now() - make_interval(days => :days)
      GROUP BY q

@@ -372,7 +372,7 @@ interface SearchRow {
   query: string; runs: number; visitors: number; results: number | null
   first_seen: string; last_seen: string
 }
-interface EmptyRow { query: string; runs: number; last_seen: string }
+interface EmptyRow { query: string; runs: number; requests: number; last_seen: string }
 interface RefRow {
   host: string; hits: number; visitors: number
   // What the people a source sent then did, counted over their whole session.
@@ -384,7 +384,8 @@ interface RefRow {
 }
 interface Searches {
   top: SearchRow[]; empty: EmptyRow[]
-  totals: { runs: number; empty_runs: number; distinct: number; search_only?: number }
+  totals: { runs: number; empty_runs: number; distinct: number; search_only?: number
+    used_suggestions?: number; rescuing_readers?: number; missing_requests?: number }
 }
 
 interface Routes {
@@ -1347,6 +1348,12 @@ export default function TrafficPanel(
               </a>
             )}
           </p>
+          <p className="admin-note">
+            {searches.totals.used_suggestions ?? 0} suggestions used by{" "}
+            {searches.totals.rescuing_readers ?? 0} readers;{" "}
+            {searches.totals.missing_requests ?? 0} searches flagged as missing.
+            These actions are counted from this release onward.
+          </p>
           {/* The doubt the user-agent check cannot answer. Pageviews come from
               the browser beacon, so a visitor that searched and never rendered
               a page was not a browser — a script, or a test session. Worth
@@ -1439,11 +1446,13 @@ export default function TrafficPanel(
           </div>
           <TableTools table={tEmpty} rows={tEmpty.view}
             columns={[{ id: "query", label: "Query" }, { id: "runs", label: "Runs" },
+                      { id: "requests", label: "Flags" },
                       { id: "last_seen", label: "Last run" }]} />
           <table className="traffic-table">
             <thead><tr>
               <Th id="query" label="Query" table={tEmpty} />
               <Th id="runs" label="Runs" table={tEmpty} align="r" />
+              <Th id="requests" label="Flags" table={tEmpty} align="r" />
               <Th id="last_seen" label="Last run" table={tEmpty} />
             </tr></thead>
             <tbody>
@@ -1461,6 +1470,7 @@ export default function TrafficPanel(
                       className="sharebar--warn" />
                     <span className="num__v">{s.runs}</span>
                   </td>
+                  <td className="num">{s.requests}</td>
                   <td title={`last run ${longStamp(s.last_seen)}`}>
                     <span className="traffic-table__abs">{stamp(s.last_seen)}</span>
                     <span className="traffic-table__ago">{ago(s.last_seen)}</span>

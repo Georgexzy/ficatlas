@@ -8,6 +8,7 @@ import HelpTip from "./HelpTip"
 import type { SearchParams, SearchResponse, StoryCard, Suggestion } from "@/lib/types"
 import { fetchWithTimeout, fetchBackground, USER_TIMEOUT_MS, BACKGROUND_TIMEOUT_MS } from "@/lib/net"
 import { recordResultClick } from "@/lib/resultClicks"
+import { recordSearchFeedback } from "@/lib/searchFeedback"
 import { searchStories, formatWordCount, formatNumber, chapterDisplay,
          SITE_LABELS, RATING_LABELS, SORT_OPTIONS, WORD_COUNT_PRESETS, formatStoryDate,
          DATE_PRESETS, AO3_WARNINGS, CATEGORIES, LANGUAGE_OPTIONS, getIndexTotals, watchIndexTotals, getLandingBrowse, type LandingBrowse, FICALLEY_SECTIONS, coverageWarning, sortCoverageNote, displayTitle, statusNote } from "@/lib/api"
@@ -1906,8 +1907,10 @@ function SearchPageInner() {
   // meant a frame of the front door, then six skeletons where the results had
   // been, then the new page. Three states for one click.
   const initialUrl = rawParams.toString()
+  const feedbackSearch = `?${initialUrl}`
   const [results,      setResults]      = useState<SearchResponse | null>(
     () => cachedFor(initialUrl))
+  const [reportedMiss, setReportedMiss] = useState("")
   const [error,        setError]        = useState<Failure | null>(null)
   // A search this instance is already mid-way through, not one it might start.
   const [loading,      setLoading]      = useState(
@@ -4273,7 +4276,10 @@ function SearchPageInner() {
                                 {spelling.map(sg => (
                                   <li key={sg.kind + sg.value}>
                                     <button className="dym__pick"
-                                      onClick={() => { setQuery(sg.query); doSearch(true, undefined, sg.query) }}>
+                                      onClick={() => {
+                                        recordSearchFeedback("spelling", feedbackSearch)
+                                        setQuery(sg.query); doSearch(true, undefined, sg.query)
+                                      }}>
                                       <span className="dym__value">{sg.value}</span>
                                       <span className="dym__kind">{DYM_KIND_LABEL[sg.kind] ?? sg.kind}</span>
                                       <span className="dym__count">{sg.kind === "title" ? `${fmtCount(sg.count)} kudos` : fmtCount(sg.count)}</span>
@@ -4293,7 +4299,10 @@ function SearchPageInner() {
                                 {describe.map(sg => (
                                   <li key={"describe" + sg.value}>
                                     <button className="dym__pick"
-                                      onClick={() => { setQuery(sg.query); doSearch(true, undefined, sg.query) }}>
+                                      onClick={() => {
+                                        recordSearchFeedback("describe", feedbackSearch)
+                                        setQuery(sg.query); doSearch(true, undefined, sg.query)
+                                      }}>
                                       <span className="dym__value">{sg.value}</span>
                                       <span className="dym__count">
                                         {sg.works != null
@@ -4316,7 +4325,10 @@ function SearchPageInner() {
                                 {wider.map(sg => (
                                   <li key={(sg.reason ?? "") + sg.value}>
                                     <button className="dym__pick"
-                                      onClick={() => { setQuery(sg.query); doSearch(true, undefined, sg.query) }}>
+                                      onClick={() => {
+                                        recordSearchFeedback(sg.reason ?? "spelling", feedbackSearch)
+                                        setQuery(sg.query); doSearch(true, undefined, sg.query)
+                                      }}>
                                       <span className="dym__value">{label(sg)}</span>
                                       <span className="dym__count">
                                         {sg.works != null
@@ -4353,6 +4365,18 @@ function SearchPageInner() {
                       <p className="no-results__sub">
                         Try removing a filter, broadening the word count, or checking a different site.
                       </p>
+                    )}
+                    {!shown.fetching && (
+                      <button type="button" className="btn btn--ghost no-results__fetch"
+                        disabled={reportedMiss === feedbackSearch}
+                        onClick={() => {
+                          recordSearchFeedback("missing", feedbackSearch)
+                          setReportedMiss(feedbackSearch)
+                        }}>
+                        {reportedMiss === feedbackSearch
+                          ? "Thanks — we’ll review this search"
+                          : "Can’t find it? Flag this search"}
+                      </button>
                     )}
                     {/* Offered alongside the reasons above rather than instead
                         of them, because it is rarely the likeliest cause and is
