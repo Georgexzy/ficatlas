@@ -8,6 +8,8 @@ import SiteHeader from "../SiteHeader"
 import { useAuth } from "@/lib/auth"
 import { writePref, mergePrefs, type Prefs } from "@/lib/prefs"
 import { fetchJson } from "@/lib/errors"
+import { getLandingBrowse, type LandingEntry } from "@/lib/api"
+import { parseFandomSlugs, joinFandomSlugs } from "@/lib/yourFandoms"
 import { EMPTY_MUTES, loadMutes, muteCount, saveMutes, type MuteList } from "@/lib/mutelist"
 import { DATA_GROUPS, clearGroup, downloadExport, groupSize,
          importFromFile } from "@/lib/localdata"
@@ -217,6 +219,58 @@ export default function SettingsPage() {
   const removeMute = (key: keyof MuteList, value: string) => {
     const next = { ...mutes, [key]: mutes[key].filter(v => v !== value) }
     setMutes(next); saveMutes(next)
+  }
+
+  // ── The fandoms you read ──────────────────────────────────────────────────
+  // The OPPOSITE list to the one above, and it exists because of a promise the
+  // signup form makes: picking fandoms there says "We'll prioritize these ...
+  // Change anytime in Settings." signup() wrote the choice to
+  // `user_data.signup_fandoms` and nothing read it — no screen showed the
+  // picks, no endpoint returned them, and the key was not even in
+  // ALLOWED_KEYS, so this control could not have been written against it.
+  //
+  // SERVER state, not a synced preference. It belongs to the account and was
+  // written before this device existed, so it is fetched when the reader opens
+  // Settings and PUT on every change. The save is optimistic in the list but
+  // not in the truth: a failed PUT puts the server's copy back rather than
+  // leaving a screen that says one thing and an account that holds another.
+  const [yourFandoms, setYourFandoms] = useState<string[]>([])
+  // The same top-30 pool the signup picker offers, so the set of fandoms you
+  // can choose here is the set you could have chosen there. Anything picked
+  // that is not in the pool is still listed below it, so it can be REMOVED —
+  // a list you can only add to is not a control.
+  const [fandomPool, setFandomPool] = useState<LandingEntry[]>([])
+  const [fandomErr, setFandomErr] = useState("")
+  useEffect(() => {
+    if (!user) { setYourFandoms([]); return }
+    let live = true
+    fetchJson<{ value: unknown }>(`${API_BASE}/api/userdata/signup_fandoms`)
+      .then(d => { if (live) setYourFandoms(parseFandomSlugs(d?.value)) })
+      .catch(() => { if (live) setFandomErr("Your fandoms could not be loaded.") })
+    getLandingBrowse().then(d => { if (live) setFandomPool(d.fandom ?? []) })
+    return () => { live = false }
+  }, [user])
+
+  const saveFandoms = (next: string[]) => {
+    setYourFandoms(next)
+    setFandomErr("")
+    fetchJson(`${API_BASE}/api/userdata/signup_fandoms`, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(joinFandomSlugs(next)),
+    }).catch(() => {
+      setFandomErr("That change did not save — your list has been put back to what the server holds.")
+      fetchJson<{ value: unknown }>(`${API_BASE}/api/userdata/signup_fandoms`)
+        .then(d => setYourFandoms(parseFandomSlugs(d?.value)))
+        .catch(() => {})
+    })
+  }
+
+  const toggleFandom = (slug: string) => {
+    saveFandoms(yourFandoms.includes(slug)
+      ? yourFandoms.filter(s => s !== slug)
+      : [...yourFandoms, slug])
   }
 
   const [prefs, setPrefs] = useState<Prefs | null>(null)
@@ -455,6 +509,83 @@ export default function SettingsPage() {
             label="Show works flagged for underage content"
             onToggle={v => setPref("show_underage", String(v))} />
         </div>
+      </section>
+
+      {/* ── Fandoms you read ─────────────────────────────────────────────────
+          The list that SHOWS rather than hides, and the control the signup
+          copy points at. Placed on this tab rather than "Never show me" on
+          purpose: the two are both about fandoms and are opposites, and a
+          reader who has just looked for "where do I change my picks" should
+          not land next to the list that removes things from their results. */}
+      <section className="settings-group">
+        <h2 className="settings-group__title">Fandoms you read</h2>
+        <p className="settings-group__hint">
+          Picked when you signed up, and shown as links at the top of your home
+          page — the front door opens on your fandoms instead of the same list
+          everyone gets. They are never used to hide or filter anything; that is
+          the next tab, and it is a different list.
+        </p>
+        {!user && (
+          <p className="settings-group__hint">
+            Sign in to choose them — this list belongs to your account, not to
+            this device.
+          </p>
+        )}
+        {user && <>
+          {fandomErr && <p className="settings-save-error">{fandomErr}</p>}
+
+          <div className="setting-row setting-row--stack">
+            <div className="setting-row__label">
+              <span className="setting-row__name">Your fandoms</span>
+              <span className="setting-row__hint">
+                {yourFandoms.length === 0
+                  ? "Nothing picked yet — pick some below, or leave it and the home page shows the general list."
+                  : `${yourFandoms.length} ${yourFandoms.length === 1 ? "fandom" : "fandoms"}, ` +
+                    "shown on your home page in this order."}
+              </span>
+            </div>
+            {yourFandoms.length > 0 && (
+              <div className="tag-input__chips">
+                {yourFandoms.map(slug => (
+                  <button key={slug} className="chip"
+                    title="Take this off your home page"
+                    onClick={() => toggleFandom(slug)}>
+                    {fandomPool.find(f => f.slug === slug)?.name
+                      ?? slug.replace(/-/g, " ")} ✕
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {fandomPool.length > 0 && (
+            <div className="setting-row setting-row--stack">
+              <div className="setting-row__label">
+                <span className="setting-row__name">Add or remove</span>
+                <span className="setting-row__hint">
+                  The biggest fandoms in the index — the same ones the signup
+                  form offered.
+                </span>
+              </div>
+              <div className="fandom-picker">
+                {fandomPool.map(f => (
+                  <label key={f.slug} className="fandom-picker__item">
+                    <input type="checkbox"
+                      checked={yourFandoms.includes(f.slug)}
+                      onChange={() => toggleFandom(f.slug)} />
+                    <span className="fandom-picker__name">{f.name}</span>
+                    <span className="fandom-picker__count">
+                      {f.work_count.toLocaleString()}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="settings-group__hint">
+                <Link href="/fandoms">Every fandom is listed here →</Link>
+              </p>
+            </div>
+          )}
+        </>}
       </section>
 
       </>}

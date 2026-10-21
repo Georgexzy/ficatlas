@@ -1305,7 +1305,10 @@ function ReadingActivity() {
     resume: {story_id: string; chapter: number} | null;
     has_email: boolean;
     continue_reading?: Array<{id: string; title: string; author?: string; word_count?: number;
-      chapters: number; site?: string; is_hosted?: boolean; chapter: number; at: string}>
+      chapters: number; site?: string; is_hosted?: boolean; chapter: number; at: string}>;
+    // The fandoms picked at signup, resolved to names and hub slugs by
+    // /api/follows/welcome — see _your_fandoms there for why the key exists.
+    your_fandoms?: Array<{slug: string; name: string; work_count: number}>;
   } | null>(null)
   const [dismissed, setDismissed] = useState(false)
   useEffect(() => {
@@ -1317,14 +1320,20 @@ function ReadingActivity() {
   }, [user])
   if (!user || !data || dismissed) return null
   const hasFollow = data.follow_unread > 0
+  const yourFandoms = data.your_fandoms ?? []
   const cr = data.continue_reading ?? []
   const latest = data.resume
     ? cr.find(s => s.id === data.resume!.story_id) ?? cr[0]
     : cr[0]
   const more = latest ? cr.filter(s => s.id !== latest.id) : cr
-  if (!hasFollow && cr.length === 0) return null
+  // ANY of the three is enough to be on the page. The fandoms row in
+  // particular must not be gated on having read something first: the reader
+  // who picked fandoms at signup and has done nothing else is exactly the
+  // person this row exists for, and requiring progress would show it to
+  // nobody new.
+  if (!hasFollow && cr.length === 0 && yourFandoms.length === 0) return null
   return (
-    <aside className="reading-activity" aria-label="Your reading activity">
+    <aside className="reading-activity" aria-label="Your reading activity and picked fandoms">
       {latest && (
         <div className="reading-activity__resume-row">
           <span className="reading-activity__label">Pick up where you left off</span>
@@ -1341,6 +1350,24 @@ function ReadingActivity() {
         <Link href="/library?tab=following" className="reading-activity__updates">
           {data.follow_unread} followed work{data.follow_unread === 1 ? " has" : "s have"} updates
         </Link>
+      )}
+      {/* The signup picker's promise, kept: these fandoms are the reader's own
+          choice, put on the front door ahead of the generic browse list below
+          it. Each chip is a HUB PAGE, not a search — the same destination the
+          browse rows link to, so it works without JavaScript and is the only
+          kind of link a crawler is allowed to follow into the index. */}
+      {yourFandoms.length > 0 && (
+        <div className="reading-activity__fandoms">
+          <span className="reading-activity__label">Fandoms you read</span>
+          <ul className="hub-chips">
+            {yourFandoms.map(f => (
+              <li key={f.slug}>
+                <Link href={`/fandom/${f.slug}`}>{f.name}</Link>
+                <span className="hub-chips-count">{formatNumber(f.work_count)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       {more.length > 0 && (
         <details className="reading-activity__more">

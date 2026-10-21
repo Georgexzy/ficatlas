@@ -8,6 +8,7 @@ import { fetchWithTimeout } from "@/lib/net"
 import WhyAccount from "../WhyAccount"
 import GoogleIcon from "../GoogleIcon"
 import { getLandingBrowse, type LandingBrowse } from "@/lib/api"
+import { joinFandomSlugs } from "@/lib/yourFandoms"
 
 function SignupPageInner() {
   const router = useRouter()
@@ -79,7 +80,8 @@ function SignupPageInner() {
       setBusy(false)
       return
     }
-    const fandomsStr = fandoms.join(",")
+    // One rule for both directions of this value — see lib/yourFandoms.
+    const fandomsStr = joinFandomSlugs(fandoms)
     try {
       await signup(username, password, invite, remember, email, fandomsStr)
       router.replace(next)
@@ -128,14 +130,18 @@ function SignupPageInner() {
           </p>
         </label>
 
-        {/* Optional: pick fandoms to personalize your Following and recommendations */}
+        {/* Optional: pick fandoms. The claim below is the one this control has
+            to earn — the picks are read back on the home page
+            (/api/follows/welcome → your_fandoms) and edited in Settings, and
+            NOTHING else is done with them. It used to promise Following and
+            recommendations, neither of which ever read the key. */}
         {fandomData?.fandom && fandomData.fandom.length > 0 && (
           <fieldset className="auth-field auth-field--fandoms">
             <legend>
               <span>Fandoms you read <span className="auth-optional">optional</span></span>
               <p className="auth-hint">
-                We'll prioritize these in your Following and recommendations.
-                Change anytime in Settings.
+                These come up first on your home page.{" "}
+                <Link href="/settings?tab=reading">Change them anytime in Settings</Link>.
               </p>
             </legend>
             <div className="fandom-picker">

@@ -40,8 +40,18 @@ router = APIRouter()
 # instruction, for consistency with the dozen preferences beside it in Settings.
 # The privacy argument is answered rather than ignored: /privacy names this list
 # among what is stored, and no screen promises any more that it stays put.
+#
+# "signup_fandoms" is the OPPOSITE list — the fandoms the reader chose at
+# signup to be RECOMMENDED, as the comma-joined slug string signup() writes.
+# It is allowed here so Settings can offer the control its signup copy promises
+# ("Change anytime in Settings"); /api/follows/welcome reads it for the front
+# door's strip. It must not be confused with `mutes.fandoms`: one is "show me
+# this first", the other is "never show me this". Its merge is replace, not
+# union — see _merge_value — because removing a fandom on the device you are
+# holding has to stick, and a union cannot express a removal.
 ALLOWED_KEYS = {"bookmarks", "progress", "recents", "settings", "explicit",
-                "offline", "saved", "dismissed", "mutes", "tips"}
+                "offline", "saved", "dismissed", "mutes", "tips",
+                "signup_fandoms"}
 MAX_BYTES    = 2 * 1024 * 1024   # 2 MB per key
 
 
@@ -64,6 +74,12 @@ def _merge_value(key: str, client: Any, server: Any) -> Any:
     - settings:  dict of unrelated preferences → merged per key, client winning
                  the keys it set, so one device never wipes another's choices
     - explicit:  scalar → client wins (it's the active device's choice)
+    - signup_fandoms: the signup-time fandom picks, a comma-joined slug string,
+                 falls to the same client-wins rule and SHOULD: a union here
+                 would make a fandom removed in Settings come back on the next
+                 sync from a device that had never opened the picker. This list
+                 is edited, not accumulated (unlike bookmarks), so replace is
+                 the honest merge.
     """
     if server is None:
         return client

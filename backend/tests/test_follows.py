@@ -13,6 +13,7 @@ Two behaviours carry most of that risk and are pinned here:
     like the digit-concatenation repair that took 188188 back to 188 — and the
     difference must clamp at zero rather than showing "-3 new chapters".
 """
+import json
 import os
 import sys
 import uuid
@@ -67,6 +68,18 @@ def _session(db, user_id):
     """), {"t": token, "u": user_id})
     db.commit()
     return token
+
+
+def _picks(db, user_id, value):
+    """What signup() writes: a comma-joined slug string in a JSONB column, so
+    the JSON encoding has to be explicit — the column will not take the raw
+    text, which is exactly the shape a hand-written INSERT gets wrong."""
+    db.execute(text("""
+        INSERT INTO user_data (user_id, key, value)
+        VALUES (:u, 'signup_fandoms', CAST(:v AS jsonb))
+        ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value
+    """), {"u": user_id, "v": json.dumps(value)})
+    db.commit()
 
 
 @pytest.fixture()
@@ -249,3 +262,70 @@ class TestWelcomeBack:
         # Second call — with threshold 0, even 1ms later counts as returning again
         r2 = client.get("/api/follows/welcome", cookies={"sat": tok})
         assert r2.json()["follow_unread"] == 1
+
+
+class TestYourFandoms:
+    """The signup picker's promise, on the page that is supposed to keep it.
+
+    `signup_fandoms` was written by signup() and read by nothing. These pin the
+    two halves the signup copy makes: the picks come back as hub pages (a name
+    and a link, not a raw slug), and they come back on EVERY landing page load
+    rather than only when the welcome banner fires — a standing recommendation
+    is not a "welcome back" notice, and gating it on the return threshold would
+    make the strip appear and disappear between two visits seconds apart.
+    """
+
+    def _seed(self, db):
+        for slug, name, n in [("harry-potter", "Harry Potter", 120000),
+                              ("star-wars", "Star Wars", 80000),
+                              ("pokemon", "Pokémon", 60000)]:
+            db.execute(text(
+                "INSERT INTO fandom_hubs (slug, name, variants, work_count) "
+                "VALUES (:s, :n, ARRAY[:n], :c)"
+            ), {"s": slug, "n": name, "c": n})
+        db.commit()
+
+    def test_resolved_to_hubs_in_the_order_the_reader_picked(self, db, client):
+        self._seed(db)
+        u = _user(db, "picks")
+        _picks(db, u, "harry-potter,star-wars,pokemon")
+        r = client.get("/api/follows/welcome", cookies={"sat": _session(db, u)})
+        assert r.status_code == 200
+        assert [(f["slug"], f["name"]) for f in r.json()["your_fandoms"]] == [
+            ("harry-potter", "Harry Potter"),
+            ("star-wars", "Star Wars"),
+            ("pokemon", "Pokémon"),
+        ]
+
+    def test_an_unknown_slug_is_dropped_not_rendered_raw(self, db, client):
+        """A chip that 404s is worse than no chip: the reader cannot tell a
+        broken site from a fandom that stopped existing. The picker only ever
+        offered real hubs, so anything else is a stale or hand-written value."""
+        self._seed(db)
+        u = _user(db, "stale")
+        _picks(db, u, "gone-forever,harry-potter,  ,harry-potter")
+        r = client.get("/api/follows/welcome", cookies={"sat": _session(db, u)})
+        f = r.json()["your_fandoms"]
+        # Dropped, and the duplicate/blank entries collapsed with it.
+        assert [x["slug"] for x in f] == ["harry-potter"]
+
+    def test_returned_even_when_the_banner_does_not_fire(self, db, client):
+        self._seed(db)
+        u = _user(db, "just_here")
+        _picks(db, u, "pokemon")
+        tok = _session(db, u)
+        assert len(client.get("/api/follows/welcome",
+                              cookies={"sat": tok}).json()["your_fandoms"]) == 1
+        # Second load inside the return threshold: the banner is suppressed and
+        # the fandoms must not be.
+        data = client.get("/api/follows/welcome", cookies={"sat": tok}).json()
+        assert data["follow_unread"] == 0
+        assert [f["slug"] for f in data["your_fandoms"]] == ["pokemon"]
+
+    def test_no_pick_and_no_account_are_both_empty(self, db, client):
+        self._seed(db)
+        u = _user(db, "nopick")
+        tok = _session(db, u)
+        assert client.get("/api/follows/welcome",
+                          cookies={"sat": tok}).json()["your_fandoms"] == []
+        assert client.get("/api/follows/welcome").json()["your_fandoms"] == []

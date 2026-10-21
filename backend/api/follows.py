@@ -149,6 +149,57 @@ class WelcomeBack(BaseModel):
     resume: dict | None = None
     has_email: bool = False
     continue_reading: list[dict] = []
+    # The fandoms this reader chose at signup, as hub pages. NOT part of the
+    # banner's return gate below — see _your_fandoms.
+    your_fandoms: list[dict] = []
+
+
+def _your_fandoms(db: Session, user_id) -> list[dict]:
+    """The signup form's fandom picks, resolved to names.
+
+    The signup page offers a fandom picker and says "We'll prioritize these in
+    your Following and recommendations. Change anytime in Settings." signup()
+    wrote the choice to `user_data.signup_fandoms` and NOTHING read it: the
+    front door showed every signed-in reader the same generic browse list, and
+    Settings had no control for it. A promise nobody reads is worse than no
+    promise, and it is the kind of drift that survives because the write
+    succeeds — the row is there, so it looks like a feature.
+
+    Names come from `fandom_hubs` rather than `facets`, for the reason
+    api/hubs.py gives: a lookup by slug against a few thousand already-sorted
+    rows, not a GROUP BY over the whole story table. A slug that is not in that
+    table is DROPPED rather than shown raw — the picker only ever offered real
+    hubs, so anything else is a stale or hand-written value, and rendering it
+    would produce a chip that links to a page that 404s.
+
+    Returned in the order the reader picked them, which is the order they care
+    about, and capped so a hand-written value cannot put an unbounded list on
+    the front door.
+    """
+    raw = db.execute(text(
+        "SELECT value FROM user_data WHERE user_id = :u AND key = 'signup_fandoms'"
+    ), {"u": str(user_id)}).scalar()
+    if not raw:
+        return []
+    # The stored shape is the comma-joined string signup() writes. A list is
+    # accepted too, because this key is now writable from Settings and a JSON
+    # array is the obvious thing a future client would send.
+    if isinstance(raw, list):
+        parts = [str(s) for s in raw]
+    elif isinstance(raw, str):
+        parts = raw.split(",")
+    else:
+        return []
+    slugs = list(dict.fromkeys(p.strip() for p in parts if p.strip()))[:24]
+    if not slugs:
+        return []
+    rows = db.execute(text("""
+        SELECT slug, name, work_count FROM fandom_hubs
+         WHERE slug = ANY(CAST(:slugs AS text[]))
+    """), {"slugs": slugs}).fetchall()
+    by_slug = {r[0]: r for r in rows}
+    return [{"slug": s, "name": by_slug[s][1], "work_count": by_slug[s][2]}
+            for s in slugs if s in by_slug]
 
 
 # A welcome banner on every home page load is noise. This is the gap (in minutes)
@@ -252,8 +303,15 @@ def welcome_back(db: Session = Depends(get_db),
         except Exception:
             pass
 
+    # Always read, like progress above: this is not part of the banner. A
+    # reader who was here a minute ago still gets their fandoms on the front
+    # door, because the strip is a standing recommendation rather than a
+    # "welcome back" notice.
+    your_fandoms = _your_fandoms(db, viewer.id)
+
     if not returning:
-        return WelcomeBack(continue_reading=continue_reading).dict()
+        return WelcomeBack(continue_reading=continue_reading,
+                           your_fandoms=your_fandoms).dict()
 
     unread_count = db.execute(text("""
         SELECT count(*)
@@ -293,7 +351,9 @@ def welcome_back(db: Session = Depends(get_db),
     ]
     has_email = bool((viewer.email or "").strip())
     return WelcomeBack(follow_unread=unread_count, follow_works=follow_works,
-                      resume=resume, has_email=has_email, continue_reading=continue_reading).dict()
+                      resume=resume, has_email=has_email,
+                      continue_reading=continue_reading,
+                      your_fandoms=your_fandoms).dict()
 
 
 class EmailPrefs(BaseModel):

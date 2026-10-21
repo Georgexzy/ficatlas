@@ -8540,6 +8540,16 @@ html { scroll-padding-top: 72px; }
   text-decoration-color: var(--accent-dim);
   text-underline-offset: 3px;
 }
+/* The picked fandoms. These are the hub pages' own chips inside a strip whose
+   other rows are 11px — left at their page size they would be the loudest thing
+   on a row built to stay quiet under the search box. */
+.reading-activity__fandoms {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+.reading-activity__fandoms .hub-chips li { padding: 3px 10px; font-size: 12px; }
 .reading-activity__more { position: relative; font-size: 11px; }
 .reading-activity__more summary {
   cursor: pointer;
