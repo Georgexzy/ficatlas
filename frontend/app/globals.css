@@ -4258,11 +4258,15 @@ body.is-resizing * { cursor: col-resize !important; }
    shell, but uses the accent as information rather than the fault colour. */
 .site-notice {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 9px 16px; font-size: 13px; line-height: 1.5;
-  color: var(--text); background: color-mix(in srgb, var(--accent) 10%, var(--surface));
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  position: sticky; top: 0; z-index: 320;
+  padding: 11px 18px; font-size: 14px; line-height: 1.5;
+  color: var(--text); background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  border-bottom: 2px solid var(--accent);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.18);
 }
+.site-notice__label { color: var(--accent); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
 .site-notice__message { flex: 1 1 260px; }
+body:has(.site-notice) .header { top: var(--site-notice-height, 0px); }
 .site-notice__dismiss {
   margin-left: auto; background: none; border: 1px solid var(--border);
   border-radius: 6px; padding: 3px 10px; font: inherit; font-size: 12px;

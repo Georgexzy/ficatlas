@@ -885,7 +885,8 @@ def cloudflare_analytics(db: Session = Depends(get_db),
 
 
 @router.get("/restart")
-def restart_status(_admin: User = Depends(require_admin)):
+def restart_status(_admin: User = Depends(require_admin),
+                   db: Session = Depends(get_db)):
     directory = _restart_dir()
     if not _bridge_ready(directory):
         return {"available": False, "pending": None, "bridge_status": _bridge_status(directory)}
@@ -896,8 +897,14 @@ def restart_status(_admin: User = Depends(require_admin)):
         confirmed = bool(request and bridge_status
                          and bridge_status.get("id") == request.get("id")
                          and bridge_status.get("state") == "armed")
+        notice_status = None
+        if request:
+            matches = (get_setting(db, "site_notice") == request.get("announcement")
+                       and get_setting(db, "site_notice_start_at") == request.get("announcement_start_at")
+                       and get_setting(db, "site_notice_until") == request.get("announcement_until"))
+            notice_status = ("live" if time.time() >= request["restart_at"] - 300 else "scheduled") if matches else "missing"
         return {"available": True, "pending": request, "confirmed": confirmed,
-                "bridge_status": bridge_status}
+                "notice_status": notice_status, "bridge_status": bridge_status}
     finally:
         fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         lock.close()

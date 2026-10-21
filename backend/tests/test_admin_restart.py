@@ -65,6 +65,9 @@ def test_scheduled_restart_publishes_notice_five_minutes_before(monkeypatch, mem
     assert abs(pending["restart_at"] - target) < 1
     start = datetime.fromisoformat(pending["announcement_start_at"]).timestamp()
     assert abs(start - (pending["restart_at"] - 300)) < 1
+    assert admin.restart_status(None, memory_db)["notice_status"] == "scheduled"
+    settings.put_setting(memory_db, "site_notice", "")
+    assert admin.restart_status(None, memory_db)["notice_status"] == "missing"
 
 
 def test_restart_must_be_at_least_five_minutes_away(memory_db, tmp_path, monkeypatch):

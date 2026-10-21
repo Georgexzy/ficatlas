@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 const DISMISSED_KEY = "ficatlas:site-notice:dismissed"
 
@@ -11,6 +11,24 @@ export default function SiteNotice() {
   const [message, setMessage] = useState("")
   const [noticeToken, setNoticeToken] = useState("")
   const [dismissed, setDismissed] = useState(false)
+  const noticeRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    const node = noticeRef.current
+    if (!node || !message || dismissed) {
+      document.documentElement.style.removeProperty("--site-notice-height")
+      return
+    }
+    const syncHeight = () => document.documentElement.style.setProperty(
+      "--site-notice-height", `${Math.ceil(node.getBoundingClientRect().height)}px`)
+    syncHeight()
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(syncHeight) : null
+    observer?.observe(node)
+    return () => {
+      observer?.disconnect()
+      document.documentElement.style.removeProperty("--site-notice-height")
+    }
+  }, [message, dismissed])
 
   useEffect(() => {
     let expiryTimer: number | undefined
@@ -69,7 +87,8 @@ export default function SiteNotice() {
 
   if (!message || dismissed) return null
   return (
-    <aside className="site-notice" role="status" aria-label="Site announcement">
+    <aside ref={noticeRef} className="site-notice" role="status" aria-label="Site announcement">
+      <strong className="site-notice__label">Site notice</strong>
       <span className="site-notice__message">{message}</span>
       <button type="button" className="site-notice__dismiss" aria-label="Dismiss announcement"
         onClick={() => {

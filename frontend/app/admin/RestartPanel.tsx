@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useState } from "react"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
-type Pending = { id: string; restart_at: number }
-type Status = { available: boolean; pending: Pending | null; confirmed?: boolean; bridge_status?: { state?: string; returncode?: number } | null }
+type Pending = { id: string; restart_at: number; announcement?: string; announcement_start_at?: string; announcement_until?: string }
+type Status = { available: boolean; pending: Pending | null; confirmed?: boolean; notice_status?: "scheduled" | "live" | "missing" | null; bridge_status?: { state?: string; returncode?: number } | null }
 
 function defaultRestartTime() {
   const date = new Date(Math.ceil((Date.now() + 5 * 60_000) / 60_000) * 60_000)
@@ -56,7 +56,8 @@ export default function RestartPanel() {
       }, USER_TIMEOUT_MS)
       const data = await r.json().catch(() => null)
       if (!r.ok) throw new Error(data?.detail || `Could not schedule restart (${r.status}).`)
-      setStatus({ available: true, pending: data.pending, confirmed: true })
+      setStatus({ available: true, pending: data.pending, confirmed: true,
+        notice_status: data.pending.restart_at - 300 <= Date.now() / 1000 ? "live" : "scheduled" })
       setMessage("Restart scheduled. The announcement will appear five minutes before the reboot.")
       window.dispatchEvent(new CustomEvent("ficatlas:site-notice-updated", {
         detail: { message: data.pending.announcement, startsAt: data.pending.announcement_start_at, until: data.pending.announcement_until },
@@ -104,6 +105,12 @@ export default function RestartPanel() {
         {status.confirmed ? "Restart confirmed by the host. The server will restart in " : "Waiting for the host to confirm this schedule… "}
         {status.confirmed && <strong>{remaining(status.pending.restart_at, now)}</strong>}
       </p>
+      <p className={status.notice_status === "missing" ? "cc-msg cc-msg--bad" : "cc-msg"} role="status">
+        {status.notice_status === "live" ? "The public announcement is live now and stays visible while readers scroll."
+          : status.notice_status === "scheduled" ? `The public announcement starts at ${new Date(status.pending.announcement_start_at || (status.pending.restart_at - 300) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`
+            : "The public announcement is missing. Cancel this restart and schedule it again."}
+      </p>
+      {status.notice_status === "live" && <p className="cc-dim">{status.pending.announcement}</p>}
       <button type="button" className="btn" disabled={busy || status.pending.restart_at <= now}
         onClick={cancel}>{busy ? "Working…" : "Cancel scheduled restart"}</button>
       </> : <>
