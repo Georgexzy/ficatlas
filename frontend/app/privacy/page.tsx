@@ -73,9 +73,10 @@ export default function Privacy() {
       <p>
         A private import may share a stored story copy with another reader who
         independently imports the same work. Deleting an account removes that
-        account&apos;s access record and synced reading data; the shared story
-        copy may remain if another reader has access to it, or if the work is
-        part of the public index.
+        account&apos;s access record and synced reading data, but does not
+        automatically erase the stored story copy. It may remain even when no
+        other reader has access. To request withdrawal of a copy of your own
+        work, use the <Link href="/takedown">removal form</Link>.
       </p>
 
       <h2>Cookies and browser storage</h2>
@@ -114,7 +115,7 @@ export default function Privacy() {
         data, and delete your account. Deletion removes your account, sessions,
         follows, private-library access and synced data. It does not remove
         unrelated operational logs, previously aggregated traffic records or
-        story copies retained for another reader or the public index.
+        stored story copies.
       </p>
       <p>
         For an access, correction, deletion or other privacy request that the
@@ -122,6 +123,17 @@ export default function Privacy() {
         <a href="mailto:help@ficatlas.com">help@ficatlas.com</a>. If a work in
         the index is yours, the <Link href="/permissions">author page</Link>
         explains how to restrict or remove it.
+      </p>
+      <p>
+        Account data is kept while the account exists, subject to copies in
+        backups. Author request records are kept to handle requests and maintain
+        an audit trail; they do not currently have an automatic deletion period.
+        You can ask about, correct or object to the use of information concerning
+        you at the address above. If you are in the UK, you can also raise a
+        concern with the{" "}
+        <a href="https://ico.org.uk/make-a-complaint/" target="_blank" rel="noopener noreferrer">
+          Information Commissioner&apos;s Office
+        </a>.
       </p>
     </main>
   )
