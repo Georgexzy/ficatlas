@@ -3,6 +3,7 @@ import Link from "next/link"
 import SiteHeader from "../../SiteHeader"
 import { notFound } from "next/navigation"
 import { escapeJsonLd } from "@/lib/jsonLd"
+import { ffnetNameSearchHref } from "@/lib/ffnetNameSearch"
 
 // A ship hub: one page per romantic pairing, and the long tail underneath the
 // fandom hubs.
@@ -338,6 +339,16 @@ export default async function ShipHub(
           )}
         </section>
       ))}
+
+      {ffnetNameSearchHref(hub.name) && (
+        <p className="hub__section-more">
+          FanFiction.net leaves most pairing fields blank.{" "}
+          <Link rel="nofollow" href={ffnetNameSearchHref(hub.name)!}>
+            Search its works for both names →
+          </Link>{" "}
+          These results may mention the characters without pairing them.
+        </p>
+      )}
 
       {/* The site's only lateral link, and the reason it exists is measured:
           Googlebot crawls this site 119 times a day and had reached 90 DISTINCT

@@ -193,6 +193,8 @@ const CAUSE: Record<string, string> = {
   // is actually measuring is how far enrichment has got.
   "ffnet:no_kudos":
     "FanFiction.net has no kudos of its own; its favourites are stored in this column as the nearest equivalent. The 6.6M-row bulk dump carries no engagement figures at all, so only the works the crawler has since enriched have one.",
+  "ffnet:no_ships":
+    "FanFiction.net marks a pairing only when an author uses brackets in the character field. The live listing harvester records those pairs, but most works have no marked pairing. Pairing pages now offer a separate search for both names in FF.net works; those broader results are not labelled as confirmed ships.",
 }
 
 // Who has an account, and — the column that actually matters — whether they

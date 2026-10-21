@@ -29,6 +29,7 @@ import { describeError, type Failure } from "@/lib/errors"
 import { importToLibrary } from "@/lib/importToLibrary"
 import { readAllPrefs, readPref, type Prefs } from "@/lib/prefs"
 import { urlQueryString } from "@/lib/searchUrl"
+import { ffnetNameSearchHref } from "@/lib/ffnetNameSearch"
 import { clampQuery } from "@/lib/displayText"
 import WordCountSlider from "./WordCountSlider"
 import DlpStars, { dlpRating } from "./DlpStars"
@@ -4092,6 +4093,16 @@ function SearchPageInner() {
                   <span className="author-jump__go">Browse the hub page →</span>
                 </Link>
               )}
+              {shown.ship_page && shown.sites_searched.includes("ffnet") && (() => {
+                const href = ffnetNameSearchHref(shown.ship_page.name)
+                return href ? (
+                  <p className="ffnet-broaden">
+                    FanFiction.net marks only some pairings.{" "}
+                    <Link href={href}>Search its works for both names →</Link>{" "}
+                    Results may mention both characters without pairing them.
+                  </p>
+                ) : null
+              })()}
               {/* On its own line under the results bar, not tucked inside it.
                   The first version was a small inline link among the counts and
                   was reported as invisible — which it effectively was: it is a
