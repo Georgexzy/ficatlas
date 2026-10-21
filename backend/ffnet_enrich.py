@@ -443,8 +443,10 @@ def _pick_targets(limit: int | None) -> list:
         # highest-value captures. The ordinary queue only selects works with
         # no characters, so a work with characters but no relationship could
         # wait indefinitely even when several people opened it. The capture
-        # must be known and untried: do not spend archive.org requests on a
-        # speculative URL, or re-fetch a snapshot already checked for a pair.
+        # Known, untried captures come first. Reserve at most a tenth of the
+        # batch for opened works absent from the capture index: these are worth
+        # one CDX lookup, while the bounded share protects the broader queue.
+        # A capture already checked for a pair is never retried here.
         demand = db.execute(sql_text("""
             WITH opened AS (
                 SELECT substring(path FROM '^/story/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})')::uuid AS id,
@@ -458,16 +460,25 @@ def _pick_targets(limit: int | None) -> list:
             SELECT s.id, s.site_id, c.snapshot_ts, c.original
               FROM opened o
               JOIN stories s ON s.id = o.id
-              JOIN ffnet_captures c ON c.site_id = CASE
+              LEFT JOIN ffnet_captures c ON c.site_id = CASE
                     WHEN s.site_id ~ '^[0-9]+$' THEN s.site_id::bigint END
              WHERE s.site = 'ffnet'
                AND s.delisted_at IS NULL
                AND cardinality(s.relationships) = 0
-               AND c.done_at IS NULL AND c.original IS NOT NULL
-             ORDER BY o.readers DESC, o.visits DESC, c.snapshot_ts DESC
+               AND (c.site_id IS NULL OR (c.done_at IS NULL AND c.original IS NOT NULL))
+             ORDER BY (c.site_id IS NOT NULL) DESC,
+                      o.readers DESC, o.visits DESC, c.snapshot_ts DESC
              LIMIT :lim
         """), {"lim": want}).fetchall()
-        out = [(r[0], r[1], 0, (r[2], r[3])) for r in demand]
+        unknown_cap = max(1, want // 10)
+        unknown_used = 0
+        for story_id, site_id, snapshot_ts, original in demand:
+            if snapshot_ts is None:
+                if unknown_used >= unknown_cap:
+                    continue
+                unknown_used += 1
+            out.append((story_id, site_id, 0,
+                        (snapshot_ts, original) if snapshot_ts else None))
         remaining = want - len(out)
         if remaining <= 0:
             return out
