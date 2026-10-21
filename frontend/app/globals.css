@@ -1409,9 +1409,6 @@ kbd {
   .curated-check, .filter-check { padding: 6px 0; }
 
   .main { padding: 12px 14px 32px; }
-  .search-bar { flex-wrap: wrap; }
-  .search-input-wrap { width: 100%; }
-  .search-btn { width: 100%; }
   .url-detected { flex-wrap: wrap; }
   .results-bar { flex-wrap: wrap; gap: 6px; }
   .card__title-row { flex-direction: column; }
@@ -1421,9 +1418,6 @@ kbd {
   .header { gap: 8px;
 }
   .header__link { font-size: 13px; }
-  /* Cards: comfortable touch spacing */
-  .card { padding: 16px; }
-  .card__title { font-size: 17px; }
 
   /* Pagination buttons full-width-ish and tappable */
   .pagination { gap: 12px; }
@@ -1748,20 +1742,11 @@ kbd {
   margin: 32px 0 0; padding-top: 18px; border-top: 1px solid var(--border);
 }
 
-/* Switch toggle */
-.switch {
-  width: 42px; height: 24px; border-radius: 999px; flex-shrink: 0;
-  background: var(--surface3); border: 1px solid var(--border2);
-  position: relative; cursor: pointer; transition: background 0.18s, border-color 0.18s;
-  padding: 0;
-}
-.switch--on { background: var(--accent); border-color: var(--accent); }
-.switch__thumb {
-  position: absolute; top: 2px; left: 2px;
-  width: 18px; height: 18px; border-radius: 50%;
-  background: var(--text); transition: transform 0.18s;
-}
-.switch--on .switch__thumb { transform: translateX(18px); background: var(--surface); }
+/* Switch toggle. The definition lives once, with the rest of the controls it
+   was rewritten for (search for `flex: none; position: relative; width: 48px`):
+   the 42px version that used to sit here was the same three selectors with
+   different values, so which thumb offset applied — 18px or 20px — depended on
+   where in this file you were reading. */
 
 /* ── Library item delete affordance ───────────────────────────────────────── */
 .library-item { position: relative; display: flex; align-items: stretch; gap: 0; }
@@ -3263,7 +3248,9 @@ body:has(.reader-shell[data-theme="default"]) {
 .badge--also .site-icon { margin-right: 1px; }
 
 /* ── No-results active fetch ─────────────────────────────────────────────── */
-.no-results__fetch { margin: 16px auto 8px; display: inline-flex; }
+/* The margin is the later rule's — see the styled `.no-results__fetch` further
+   down this file, which sets `0 auto 12px` along with everything else. */
+.no-results__fetch { display: inline-flex; }
 
 /* ── Offline reading ─────────────────────────────────────────────────────── */
 .offline-msg {
@@ -5473,7 +5460,9 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
   margin: 22px auto 0; max-width: 620px;
   display: flex; flex-wrap: wrap; justify-content: center;
   gap: 8px 18px;
-  font-family: var(--font-mono); font-size: 11px;
+  /* Face and size are set once, later in this file, where the promises became
+     reassurance rather than fine print (font-sans 13px); the mono 11px that
+     used to be declared here lost to it by source order and is gone. */
   color: var(--text-faint);
 }
 .empty__promises li { display: flex; align-items: center; gap: 6px; }
@@ -6861,44 +6850,16 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
 }
 
 /* ── Landing retention strip ───────────────────────────────────────────────────
- * Welcome-back banner and continue-reading carousel: grouped so they read as one
- * signal, with a single outer margin rather than two stacked blocks.
+ * The continue-reading strip's styles live ONCE, further down this file, under
+ * "Quiet reading shortcut" — the block that matches the classes
+ * ReadingActivity actually renders (__resume, __updates, __fandoms, __more,
+ * __close). The generation of this component that used __header, __title,
+ * __greeting and __item is gone from the markup; its rules stayed behind and
+ * redefined .reading-activity, .reading-activity__close and the 600px
+ * overrides with different margins and a 20px close glyph against the live
+ * block's 17px. Only source order separated the two, which is what
+ * tests/check-css.py refuses.
  */
-.reading-activity {
-  max-width: 56rem;
-  margin: 0 auto 1.25rem;
-  padding: 0 1rem;
-}
-@media (min-width: 72rem) { .reading-activity { max-width: 72rem; } }
-.reading-activity__header {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  margin-bottom: 8px;
-}
-.reading-activity__title {
-  font-size: 12px; font-weight: 500; margin: 0;
-  color: var(--text-dim); letter-spacing: 0.03em;
-}
-.reading-activity__close {
-  background: none; border: none; color: var(--text-faint);
-  font-size: 20px; padding: 2px 6px; cursor: pointer;
-  min-width: 32px; min-height: 32px;
-}
-.reading-activity__close:hover { color: var(--text-dim); }
-.reading-activity__greeting {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
-  font-size: 13.5px; color: var(--text-dim);
-}
-.reading-activity__item {
-  color: var(--accent); text-decoration: none; font-weight: 500;
-  white-space: nowrap;
-}
-.reading-activity__item--muted { color: var(--text-faint); }
-.reading-activity__item:hover { text-decoration: underline; }
-@media (max-width: 600px) {
-  .reading-activity { margin: 0 1rem 1rem; }
-  .reading-activity__greeting { flex-direction: column; align-items: flex-start; gap: 6px; }
-  .reading-activity__item { white-space: normal; }
-}
 
 /* ── Welcome back banner ──────────────────────────────────────────────────────
  *
@@ -8030,8 +7991,15 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
    Measured at 390px: the first result started 480px down, under five stacked
    rows — box, a full-width Search button, Filters, the "Searching …" pill,
    then sort/copy/save and two count lines. Most of a phone screen spent before
-   the thing searched for. Same controls, fewer rows. Last in the file so it
-   wins over the earlier ≤700px rules it adjusts. */
+   the thing searched for. Same controls, fewer rows.
+
+   This block used to win by being last: the ≤700px block near the top of this
+   file set `flex-wrap: wrap`, `width: 100%` on the box and the button and
+   `padding: 16px` / `font-size: 17px` on the card, and every one of them was
+   reversed here. Those five rules are deleted rather than left to be
+   overridden — two live rules with the same properties and different values is
+   exactly the ambiguity `tests/check-css.py` exists to refuse, and the card and
+   title rules here are supersets of what they replaced. */
 @media (max-width: 700px) {
   /* The button beside the box, as on desktop, rather than a row of its own. */
   .search-bar { flex-wrap: nowrap; }
@@ -8136,7 +8104,6 @@ html { scroll-padding-top: 72px; }
 .results-bar__count { order: -1; flex: 1 1 100%; }
 .results-bar__sort { flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 6px; }
 .results-bar__sort .select, .results-bar__sort select { width: auto; min-height: 32px; font-size: 13px; }
-.results-bar__sort .sidebar__hint { flex-basis: 100%; }
 .results-bar__share { min-height: 32px; font-size: 13px; border-radius: 8px; }
 .results-bar__actions { margin-left: auto; }
 @media (max-width: 700px) {
@@ -8610,6 +8577,9 @@ html { scroll-padding-top: 72px; }
   color: var(--text-faint);
   font-size: 17px;
   line-height: 1;
+  /* Carried over from the deleted earlier definition of this button: a <button>
+     has no default pointer, and the icon is the strip's only dismiss control. */
+  cursor: pointer;
 }
 .reading-activity__close:hover { background: var(--surface2); color: var(--text); }
 .reading-activity__resume:focus-visible,
