@@ -307,6 +307,12 @@ ALTER TABLE series ADD COLUMN IF NOT EXISTS member_count INT;
 CREATE INDEX IF NOT EXISTS ix_series_total_words
     ON series (total_words DESC) WHERE member_count > 1;
 CREATE UNIQUE INDEX IF NOT EXISTS ix_series_ao3 ON series (ao3_id) WHERE ao3_id IS NOT NULL;
+-- The sitemap's series listing asks for the NEWEST N (api/stories.py
+-- list_series), which is a sort of the whole 355k-row table per call without
+-- this. It runs off the nightly sitemap fetch, so not a hot path — but an
+-- unindexed 355k sort on a table the ingest path also writes is a cost with no
+-- reason behind it.
+CREATE INDEX IF NOT EXISTS ix_series_created ON series (created_at DESC, id);
 
 -- Denormalised membership flag for the in_series search filter. See Story.has_series.
 ALTER TABLE stories ADD COLUMN IF NOT EXISTS has_series boolean NOT NULL DEFAULT false;

@@ -392,7 +392,14 @@ def list_series(
 
     When with_names=true and limit is set, returns series with name, author and
     work_count ordered by work_count DESC — the payload for the /series browse
-    page. Without those params, returns the full flat list for the sitemap."""
+    page. Without those params, returns the flat list for the sitemap: ordered
+    by created_at DESC when `limit` is given, so a caller asking for N gets the
+    NEWEST N and not an arbitrary window of whatever UUIDs sort early.
+
+    The sitemap asks for limit=50000 and then keeps its own newest 10,000
+    (frontend/lib/sitemapData.ts, SERIES_SITEMAP_LIMIT). Unbounded, this branch
+    ships 355,139 rows a day for the sitemap to discard all but 10,000 — ~28MB
+    through the internal API to produce 10k URLs."""
     if with_names and limit:
         rows = db.execute(sql_text("""
             SELECT id, name, author, work_count, total_words, created_at
@@ -409,11 +416,21 @@ def list_series(
             "total_words": r[4],
             "content_at": r[5].isoformat() if r[5] else None,
         } for r in rows]
-    rows = db.execute(sql_text("""
-        SELECT id as slug, created_at as content_at
-        FROM series
-        ORDER BY slug
-    """)).fetchall()
+    if limit:
+        # Newest first: see the docstring. `slug` only as the tiebreak, so a
+        # bulk import sharing one created_at still comes back in a fixed order.
+        rows = db.execute(sql_text("""
+            SELECT id as slug, created_at as content_at
+              FROM series
+             ORDER BY created_at DESC, slug
+             LIMIT :lim
+        """), {"lim": limit}).fetchall()
+    else:
+        rows = db.execute(sql_text("""
+            SELECT id as slug, created_at as content_at
+              FROM series
+             ORDER BY slug
+        """)).fetchall()
     return [{"slug": str(r[0]), "content_at": r[1].isoformat() if r[1] else None} for r in rows]
 
 

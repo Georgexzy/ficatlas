@@ -25,6 +25,47 @@ async function listing(path: string): Promise<Hub[]> {
   }
 }
 
+// How many series pages the sitemap lists, out of the 355,139 that exist.
+//
+// Series URLs were 93.6% of everything this site declared: 178 of 192 files,
+// each a UUID path to a page of two or three works, while the 24,264 hub pages
+// that can actually rank got 13 files. Measured 2026-10-21 — over 68 days of
+// landing data Google's 177 visitors arrived through 159 hub pages and 12
+// through home, not one through a series page; and in the 24h origin log
+// bingbot took 230 series URLs against 84 hub URLs. The declared surface and
+// the useful surface were pointing in opposite directions.
+//
+// 10,000 is the same number author hubs use (AUTHOR_HUB_LIMIT): enough that a
+// crawler meets recent series through the sitemap instead of hunting for them
+// through 178 files, small enough that the hubs are not a rounding error next
+// to it. Newest-first by content_at is the selection, because a series created
+// last week is the one still being linked and shared; older ones stay reachable
+// through the story pages that carry them, the /series browse and IndexNow.
+export const SERIES_SITEMAP_LIMIT = 10000
+
+/** The newest `n` entries, returned in slug order like every other bulk list.
+ *
+ * The slug sort is not tidiness — see `split` for why bulk order has to be
+ * something that does not move. Selection by content_at is the only part that
+ * shifts as the set grows, and a series arriving is a real change, the same as
+ * a hub crossing into or out of core.
+ *
+ * A missing stamp counts as newest rather than oldest. `created_at` is NOT NULL
+ * so this is belt and braces, but the direction matters: the cost of listing
+ * one extra URL is nothing, and the cost of silently excluding a real series
+ * because a lookup came back empty is a coverage claim the sitemap cannot keep. */
+export function capNewest(hubs: Hub[], n: number = SERIES_SITEMAP_LIMIT): Hub[] {
+  if (hubs.length <= n) return [...hubs].sort((a, b) => a.slug.localeCompare(b.slug))
+  const kept = [...hubs]
+    .sort((a, b) => {
+      if (!a.content_at) return b.content_at ? -1 : a.slug.localeCompare(b.slug)
+      if (!b.content_at) return 1
+      return b.content_at.localeCompare(a.content_at)
+    })
+    .slice(0, n)
+  return kept.sort((a, b) => a.slug.localeCompare(b.slug))
+}
+
 export const loadHubs = () =>
   Promise.all([listing("/api/hubs"), listing("/api/ships"), listing("/api/hubs/topics/all"),
                listing("/api/authors"), listing("/api/stories/series")])
@@ -35,8 +76,8 @@ export const loadHubs = () =>
       topics: [...topics].sort((a, b) => a.slug.localeCompare(b.slug)),
       // Author pages (backend/author_hubs.py), in slug order for the same reason.
       authors: [...authors].sort((a, b) => a.slug.localeCompare(b.slug)),
-      // Series pages (backend/stories.py), in slug order.
-      series: [...series].sort((a, b) => a.slug.localeCompare(b.slug)),
+      // Series pages (backend/stories.py): the newest SERIES_SITEMAP_LIMIT only.
+      series: capNewest(series),
     }))
 
 // How many URLs go in one child file.

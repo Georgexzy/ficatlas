@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
-import { split, chunk, childNames, newest, urlset, sitemapindex,
-         CHUNK, CORE_HUBS, type Hub } from "./sitemapData"
+import { split, chunk, childNames, newest, urlset, sitemapindex, capNewest,
+         CHUNK, CORE_HUBS, SERIES_SITEMAP_LIMIT, type Hub } from "./sitemapData"
 
 // The sitemap is read by crawlers and by nobody else, so nothing about it fails
 // visibly. The whole file is only ever wrong in Search Console, six weeks later.
@@ -72,6 +72,61 @@ describe("chunk / childNames", () => {
     const got = names.flatMap(n => chunk(bulk, Number(n.split("-")[1])))
     expect(got).toHaveLength(bulk.length)
     expect(new Set(got.map(h => h.slug)).size).toBe(bulk.length)
+  })
+})
+
+describe("capNewest", () => {
+  const series = (n: number): Hub[] =>
+    Array.from({ length: n }, (_, i) => ({
+      slug: `00000000-0000-0000-0000-${String(i).padStart(12, "0")}`,
+      content_at: new Date(Date.UTC(2026, 0, 1) + i * 86400000).toISOString(),
+    }))
+
+  // The fault this cap exists for: 355,139 UUID series URLs were 93.6% of the
+  // sitemap (178 of 192 files) while the 24,264 hub pages that send traffic got
+  // 13. Nothing about the site changes visibly when this is wrong — it only
+  // shows up as crawl budget spent on pages no search has ever landed on.
+  it("keeps only the newest SERIES_SITEMAP_LIMIT entries", () => {
+    const all = series(SERIES_SITEMAP_LIMIT + 500)
+    const kept = capNewest(all)
+    expect(kept).toHaveLength(SERIES_SITEMAP_LIMIT)
+    // Newest first in selection: the kept set is the tail, the dropped set the
+    // head of a list ordered by content_at ascending.
+    const times = new Set(kept.map(h => h.content_at))
+    for (const h of all.slice(-SERIES_SITEMAP_LIMIT)) expect(times.has(h.content_at)).toBe(true)
+    for (const h of all.slice(0, 500)) expect(times.has(h.content_at)).toBe(false)
+  })
+
+  it("orders the kept set by slug, not by content_at", () => {
+    const kept = capNewest(series(SERIES_SITEMAP_LIMIT + 500))
+    const bySlug = [...kept].sort((a, b) => a.slug.localeCompare(b.slug))
+    expect(kept.map(h => h.slug)).toEqual(bySlug.map(h => h.slug))
+  })
+
+  it("drops nothing below the limit", () => {
+    const all = series(17)
+    expect(capNewest(all)).toHaveLength(17)
+    expect(capNewest(all).map(h => h.slug))
+      .toEqual([...all].sort((a, b) => a.slug.localeCompare(b.slug)).map(h => h.slug))
+  })
+
+  it("treats a missing stamp as newest, not as oldest", () => {
+    const stamped = series(4)                                    // oldest → newest
+    const unstamped = [{ slug: "zzz" }, { slug: "aaa" }]
+    const kept = capNewest([...stamped, ...unstamped], 4)
+    // `created_at` is NOT NULL so this cannot happen in production — the point
+    // of the test is the direction: an empty lookup must never be the reason a
+    // real series falls out of the sitemap. Both unstamped entries and only the
+    // two newest stamped ones survive.
+    expect(new Set(kept.map(h => h.slug))).toEqual(new Set(["zzz", "aaa", stamped[2].slug, stamped[3].slug]))
+  })
+
+  // The cap is the whole point of the number; a file count that grows past it
+  // means loadHubs stopped applying it.
+  it("holds the series surface to five files", () => {
+    const names = childNames({ ships: 0, fandoms: 0, series: capNewest(series(355139)).length })
+    expect(names.filter(n => n.startsWith("series-")))
+      .toHaveLength(Math.ceil(SERIES_SITEMAP_LIMIT / CHUNK))
   })
 })
 

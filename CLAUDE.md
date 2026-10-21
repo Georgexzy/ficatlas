@@ -2683,11 +2683,30 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   that did not happen. It does not change the fact that ONE hub moving means the
   single file this site publishes has moved, and a crawler learning that had to
   re-read all 11,196 URLs to find out which. `/sitemap.xml` is now a
-  `<sitemapindex>` over seven children — `core` (6 static pages + the top 500
-  ships + the top 500 fandoms) and `ships-1..3` / `fandoms-1..3` at 2,000 each.
+  `<sitemapindex>` over 19 children — `core` (6 static pages + the top 500
+  ships + the top 500 fandoms), `ships-1..4`, `fandoms-1..3`, `topics-1`,
+  `authors-1..5` and `series-1..5` at 2,000 each — 34,270 URLs in total.
   Each child carries its own `<lastmod>`, so churn is contained in one 2,000-URL
   file instead of touching everything.
-  - **No URL appears in two files** (verified: 11,196 emitted, 11,196 unique).
+  - **`series` is capped at the newest 10,000, and the cap is the reason the
+    child list above is 19 files rather than 192.** Measured 2026-10-21:
+    355,139 of the 379,409 URLs the index declared — **93.6%** — were UUID
+    series pages of two or three works, spread over 178 files, while the 24,264
+    hub pages that can actually rank got 13. In the same 24h window bingbot
+    took 230 series URLs at the origin against 84 hub URLs, and over 68 days
+    Google sent 177 visitors through 159 hub pages and **not one** through a
+    series page. `SERIES_SITEMAP_LIMIT` in `lib/sitemapData.ts` keeps the newest
+    10,000 — the number `AUTHOR_HUB_LIMIT` already uses for author pages — and
+    `/api/stories/series?limit=N` now answers newest-first so the listing ships
+    50,000 rows instead of all 355,139. Nothing about the pages changes: series
+    stay canonical, indexable and reachable from the story pages that carry
+    them, `/series` and IndexNow. They stop being 94% of what this site tells a
+    crawler to look at. Locked by `capNewest` tests in `lib/sitemapData.test.ts`
+    and `backend/tests/test_series_sitemap_listing.py`.
+  - **No URL appears in two files** (verified when the index landed: 11,196
+    emitted, 11,196 unique; the structure that made it true is unchanged —
+    core is carved out first, every bulk list is chunked without overlap, and
+    `capNewest` slices a list of unique slugs).
     Overlap is legal and crawlers dedupe, but it would make Search Console's
     per-file coverage double-count the top 500 — and being able to read those
     numbers per tier is most of the reason to segment at all. Against one file
