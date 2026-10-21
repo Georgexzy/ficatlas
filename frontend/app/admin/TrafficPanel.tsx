@@ -342,7 +342,12 @@ interface Summary {
     views: number; searches: number
     busiest_day_visitors: number; busiest_day: string | null
     active_days: number; bot_views: number; bot_searches: number
-    script_searches: number; script_visitors: number
+    // Both exclusion rules, sized: the script rule and the surge-day evidence
+    // rule in visit_events_readers. For each class of excluded row the three
+    // numbers are what was removed from `views` and `searches` above, and
+    // `*_visitors` is the sessions that had at least one row removed.
+    script_searches: number; script_views: number; script_visitors: number
+    unverified_searches: number; unverified_views: number; unverified_visitors: number
   }
   previous?: { from: string; to: string; views: number; searches: number
                visitor_days: number; days?: DayPoint[] }
@@ -407,6 +412,12 @@ const fmt = (iso: string, o: Intl.DateTimeFormatOptions) =>
 const shortDate = (iso: string) => fmt(iso, { day: "numeric", month: "short" })
 const longDate = (iso: string) =>
   fmt(iso, { weekday: "short", day: "numeric", month: "short", year: "numeric" })
+
+// "1 search", "3,918 searches" — the exclusion notes count three different
+// things in one sentence, and "3,918 search" / "1 searches" in a paragraph
+// about numbers being trustworthy undermines the paragraph.
+const count = (n: number, one: string, many: string) =>
+  `${n.toLocaleString()} ${n === 1 ? one : many}`
 
 // Search rows carry a full instant rather than a bare day, because when a query
 // was run is part of what it tells you (see the /searches docstring).
@@ -768,22 +779,40 @@ export default function TrafficPanel(
       {/* What was held back, said out loud.
           A number quietly removed from a total is indistinguishable from one
           that was never there, and the person reading this page should see the
-          size of the correction rather than take it on trust. These are
-          sessions that ran a search and never rendered a page — the search page
-          is what fires the pageview beacon, so they were scripts calling the
-          API, not readers. The funnel has always excluded them; until now the
-          headline counts did not, so the same sessions were scripts in one tile
-          and an audience two along. */}
-      {t.script_searches > 0 && (
+          size of the correction rather than take it on trust. TWO rules remove
+          rows, so both are sized here — until they were, this note named the
+          script rule's searches while the surge-day rule was taking a fifth of
+          the raw count beside them, with no number on the page at all.
+          Both script rules are described rather than one: _NOT_A_BROWSER takes
+          no views by construction (a session that rendered a page is not one),
+          while the swarm rule takes plenty — so "they never loaded a page"
+          beside a non-zero view count would be the note contradicting itself. */}
+      {t.script_searches > 0 || t.script_views > 0 ? (
         <p className="admin-note">
-          {t.script_searches.toLocaleString()} search
-          {t.script_searches === 1 ? "" : "es"} from{" "}
-          {t.script_visitors.toLocaleString()}{" "}
-          {t.script_visitors === 1 ? "session" : "sessions"} are excluded below:
-          they never loaded a page, so they look like API automation. A reader
-          whose privacy blocker stops the page beacon can look the same.
+          Excluded below as scripts: {count(t.script_searches, "search", "searches")}{" "}
+          and {count(t.script_views, "view", "views")} from{" "}
+          {count(t.script_visitors, "session", "sessions")}. One kind searched and
+          never rendered a page — the search page is what fires the pageview
+          beacon, so that is API calling, though a reader whose privacy blocker
+          stops the beacon looks the same. The other arrived as a rotating
+          address pool: twenty-five or more unreferred visitors in a single
+          minute, which no crowd coming from somewhere ever looks like.
         </p>
-      )}
+      ) : null}
+      {/* The second rule, and its size. The header note describes this rule in
+          words; a reader who wants to know how much of the window it took needs
+          a number, and "left out" with none is the same silence as not mentioning
+          it. Adding the two groups back to the totals gives the raw count. */}
+      {t.unverified_searches > 0 || t.unverified_views > 0 ? (
+        <p className="admin-note">
+          Also excluded below: {count(t.unverified_searches, "search", "searches")}{" "}
+          and {count(t.unverified_views, "view", "views")} from{" "}
+          {count(t.unverified_visitors, "session", "sessions")} that arrived on a
+          day of unusual volume with no referral, return, click or second page to
+          show they were a reader. These two notes account for every search and
+          view removed from the totals above.
+        </p>
+      ) : null}
 
       {/* The shapes, under the flag. Reported even when nothing is alarming,
           because "a slow trickle every week" is the baseline you need in order

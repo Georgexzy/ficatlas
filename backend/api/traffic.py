@@ -214,10 +214,55 @@ def summary(days: int = Query(30, ge=1, le=365),
     bots = "" if include_bots else "AND NOT e.bot"
     source = "visit_events_public" if include_bots else "visit_events_readers"
     rows = db.execute(text(f"""
+        -- BOTH exclusions are made here, in the same statement as the counts
+        -- they subtract from, so the three classes are a partition by
+        -- construction rather than three measurements that can drift apart.
+        -- `reported` is what the totals show. `held` is what the two rules
+        -- removed: the same window out of the raw table, minus whatever
+        -- `reported` kept. See the note below for why both have to be counted.
+        WITH reported AS (
+            SELECT e.* FROM {source} e
+             WHERE e.at >= CAST(:first AS date)
+               AND e.at <  CAST(:last AS date) + interval '1 day' {bots}
+              -- and not a session that only ever called the API. See
+              -- _NOT_A_BROWSER: this is the backstop for automation that sends
+              -- a browser's user agent, which is_bot cannot see.
+              AND NOT ({_NOT_A_BROWSER})
+              AND NOT ({_SWARM})),
+        held AS (
+            SELECT e.* FROM visit_events_public e
+             WHERE e.at >= CAST(:first AS date)
+               AND e.at <  CAST(:last AS date) + interval '1 day'
+               AND NOT e.bot
+               AND NOT ({_NOT_A_BROWSER})
+               AND NOT ({_SWARM})
+               AND e.id NOT IN (SELECT id FROM reported)),
+        -- Aggregated per day BEFORE the join, and not joined as rows: two
+        -- range-joined row sets multiply (3 reported rows against 118 held
+        -- ones on the same day is 354 phantom views), and grouping first
+        -- makes each side cost one pass over its own rows instead.
+        rep_day AS (
+            SELECT at::date AS day,
+                   count(*) FILTER (WHERE kind='page')   AS views,
+                   count(*) FILTER (WHERE kind='search') AS searches,
+                   count(DISTINCT visitor)               AS visitors
+              FROM reported GROUP BY 1),
+        held_day AS (
+            SELECT at::date AS day,
+                   count(*) FILTER (WHERE kind='page')   AS held_views,
+                   count(*) FILTER (WHERE kind='search') AS held_searches
+              FROM held GROUP BY 1)
         SELECT d::date                                    AS day,
-               count(e.id) FILTER (WHERE e.kind='page')    AS views,
-               count(e.id) FILTER (WHERE e.kind='search')  AS searches,
-               count(DISTINCT e.visitor)                   AS visitors
+               COALESCE(r.views, 0)                        AS views,
+               COALESCE(r.searches, 0)                     AS searches,
+               COALESCE(r.visitors, 0)                     AS visitors,
+               COALESCE(h.held_views, 0)                   AS held_views,
+               COALESCE(h.held_searches, 0)                AS held_searches,
+               -- Window-distinct, not a sum of the days: summed, a session that
+               -- was held back on two days would count twice, and it is named
+               -- as sessions in the note. One InitPlan over `held`, so the
+               -- same value on every row -- read off the first one.
+               (SELECT count(DISTINCT visitor) FROM held)  AS held_visitors
         FROM generate_series(CAST(:first AS date), CAST(:last AS date),
                              interval '1 day') d
         -- CAST(...), not the shorthand double-colon cast. SQLAlchemy scans
@@ -227,16 +272,13 @@ def summary(days: int = Query(30, ge=1, le=365),
         -- bind needing a cast has to be written the long way.
         -- (Naming the shorthand here would trip the guard in
         --  tests/test_series_detect_sql.py, which is the same rule.)
-        -- LEFT JOIN, and the window belongs in the ON clause. Moved to WHERE,
-        -- it discards the very days this query exists to keep.
-        LEFT JOIN {source} e
-               ON e.at >= d AND e.at < d + interval '1 day' {bots}
-              -- and not a session that only ever called the API. See
-              -- _NOT_A_BROWSER: this is the backstop for automation that sends
-              -- a browser's user agent, which is_bot cannot see.
-              AND NOT ({_NOT_A_BROWSER})
-              AND NOT ({_SWARM})
-        GROUP BY 1 ORDER BY 1
+        -- LEFT JOIN, and the window belongs to generate_series: grouped by the
+        -- dates that happened to have rows, a quiet window draws a chart with
+        -- no gaps in it, so the days come from the series and the rows only
+        -- fill them in.
+        LEFT JOIN rep_day r ON r.day = d
+        LEFT JOIN held_day h ON h.day = d
+        ORDER BY 1
     """), {"first": first, "last": last}).fetchall()
 
     # Crawlers are reported separately rather than folded in or left out
@@ -257,14 +299,41 @@ def summary(days: int = Query(30, ge=1, le=365),
     # being named anywhere is indistinguishable from a number that was never
     # there, and the next person to read this page deserves to see the size of
     # the correction rather than trust it.
-    script_searches, script_visitors = db.execute(text(f"""
-        SELECT count(*) FILTER (WHERE e.kind = 'search'), count(DISTINCT e.visitor)
+    #
+    # TWO rules remove rows from the totals above, and both have to be counted,
+    # because they remove different things: the script rule (_NOT_A_BROWSER /
+    # _SWARM), and the surge-day evidence rule that lives inside
+    # visit_events_readers. Measured live on 21 Oct 2026 over the 30-day
+    # window, the headline named the first rule's 5,916 searches while the
+    # second had quietly taken a further 1,880 searches and 6,949 views from
+    # sessions that were neither bot nor script — 6,895 visitors with no number
+    # on the page anywhere. The accounting only balances per class, and with
+    # the reader view (include_bots=False) it balances exactly:
+    #
+    #     searches = reported + script + unverified  (9,466 = 1,670 + 5,916 + 1,880)
+    #     views    = reported + script + unverified  (14,907 = 4,269 + 3,689 + 6,949)
+    #     visitors = reported + script + unverified  (17,298 = 1,199 + 9,204 + 6,895)
+    #
+    # Script first, so a session that matches both rules is named as the script
+    # it is rather than as an unevidenced one. `held` above is then exactly the
+    # residue: raw minus reported minus script, row by row.
+    script_searches, script_views, script_visitors = db.execute(text(f"""
+        SELECT count(*) FILTER (WHERE e.kind = 'search'),
+               count(*) FILTER (WHERE e.kind = 'page'),
+               count(DISTINCT e.visitor)
           FROM visit_events_public e
          WHERE e.at >= CAST(:first AS date)
            AND e.at <  CAST(:last AS date) + interval '1 day'
            AND NOT e.bot
            AND (({_NOT_A_BROWSER}) OR ({_SWARM}))
     """), {"first": first, "last": last}).first()
+
+    # Per-day sums for the two counts that add up (a search and a view happen on
+    # one day), and the window-distinct figure for sessions, which does not —
+    # `held_visitors` is one InitPlan, the same on every row of `rows`.
+    unverified_views = sum(r[4] or 0 for r in rows)
+    unverified_searches = sum(r[5] or 0 for r in rows)
+    unverified_visitors = (rows[0][6] or 0) if rows else 0
 
     busiest = max(rows, key=lambda r: r[3], default=None)
 
@@ -346,6 +415,15 @@ def summary(days: int = Query(30, ge=1, le=365),
             # Held back by _NOT_A_BROWSER: searched, never rendered a page.
             "script_searches": script_searches or 0,
             "script_visitors": script_visitors or 0,
+            # The OTHER rule's size, so the three add up to the raw count:
+            # searches = reported + script_searches + unverified_searches, and
+            # likewise for views and visitors. Named in the panel note, because
+            # "excluded below" naming one rule out of two was the fault here —
+            # measured, the unnamed rule was taking a fifth of the raw searches.
+            "script_views": script_views or 0,
+            "unverified_searches": unverified_searches or 0,
+            "unverified_views": unverified_views or 0,
+            "unverified_visitors": unverified_visitors or 0,
         },
         # Named "previous" rather than folded into a percentage: a delta on
         # small numbers is mostly noise, and the raw pair lets the reader see

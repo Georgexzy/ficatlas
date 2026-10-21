@@ -605,7 +605,15 @@ def test_a_swarm_is_not_an_audience(db):
 
 
 def test_surge_day_requires_reader_evidence_without_losing_referrals(db):
-    """A slow rotating pool stays below the per-minute swarm threshold."""
+    """A slow rotating pool stays below the per-minute swarm threshold.
+
+    And the sessions it costs are COUNTED, not just dropped: the totals that
+    exclude them have to name them too, which is the half of the invariant at
+    traffic.py's "reported, never silently dropped" that was missing. The rule
+    above was the second rule on the page and had no number anywhere — the note
+    named the script rule's searches and nothing else, so a fifth of the raw
+    count disappeared under a sentence describing a different rule.
+    """
     at = datetime.utcnow().replace(hour=1, minute=0, second=0, microsecond=0)
     for i in range(120):
         db.execute(text("""
@@ -621,12 +629,45 @@ def test_surge_day_requires_reader_evidence_without_losing_referrals(db):
             INSERT INTO visit_events (at, visitor, kind, path, seen)
             VALUES (:at, 'direct_reader01', 'page', :path, 'first')
         """), {"at": at + timedelta(minutes=122), "path": path})
+    # The OTHER rule, present so the two can be told apart in the totals: a
+    # script's searches are removed by the script rule, not by the evidence one,
+    # and each removal is named under its own heading.
+    for _ in range(2):
+        db.execute(text("""
+            INSERT INTO visit_events (at, visitor, kind, path, q)
+            VALUES (:at, 'api_client0001', 'search', '/api/search', 'x')
+        """), {"at": at + timedelta(minutes=123)})
     db.commit()
 
     assert db.execute(text("SELECT count(DISTINCT visitor) FROM visit_events_readers")).scalar() == 2
-    day = traffic.summary(days=1, include_bots=False, db=db, _owner=None)["days"][-1]
+    got = traffic.summary(days=1, include_bots=False, db=db, _owner=None)
+    day = got["days"][-1]
     assert day["visitors"] == 2
     assert day["views"] == 3
+
+    t = got["totals"]
+    # The evidence rule's size: the 120 one-page arrivals with nothing to show.
+    # (The two readers the view kept — referred and two-page — are reported, and
+    # the script's two searches are named under the other rule.)
+    assert t["unverified_visitors"] == 120
+    assert t["unverified_views"] == 120
+    assert t["unverified_searches"] == 0, "these were held back, not scripted"
+    # ...and the script rule's, separately, so neither number absorbs the other.
+    assert t["script_searches"] == 2
+    assert t["script_visitors"] == 1
+    assert t["script_views"] == 0, "a script never renders a page by definition"
+
+    # The accounting identity the panel now claims in words: everything the
+    # window holds, in three named parts. Checked against the table rather than
+    # against itself, so three wrong numbers cannot agree with each other.
+    raw = db.execute(text("""
+        SELECT count(*) FILTER (WHERE kind='search'), count(*) FILTER (WHERE kind='page')
+          FROM visit_events_public
+         WHERE at >= CAST(:first AS date) AND at < CAST(:last AS date) + interval '1 day'
+           AND NOT bot
+    """), {"first": (at).date(), "last": (at).date()}).first()
+    assert t["searches"] + t["script_searches"] + t["unverified_searches"] == raw[0]
+    assert t["views"] + t["script_views"] + t["unverified_views"] == raw[1]
 
 
 def test_the_day_the_site_works_is_not_mistaken_for_one(db):
