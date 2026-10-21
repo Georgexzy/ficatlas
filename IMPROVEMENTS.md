@@ -714,3 +714,169 @@ title recorded at view time would freeze rather than follow a retitle.
   temp import database. Low severity — a one-off importer against a scratch DB,
   not a live credential — but it is a password in a tracked file.
 * **Plan F (sanitise once)** from §6 remains outstanding.
+
+---
+
+## 9. Acquisition and SEO audit — 2026-10-21
+
+The acquisition/SEO workstream: where readers actually come from, what crawls
+this origin, and what the sitemap declares. Three windows, all measured on the
+day of writing:
+
+* **traffic** — `visit_events_public`, 2026-08-14 23:32 → 2026-10-21 16:18,
+  114,798 rows, bots and internal excluded. Engines matched on host suffix
+  (`www.google.com`, `www.bing.com` + `cn.bing.com`, `duckduckgo.com` +
+  `noai.duckduckgo.com`, `yandex.ru`/`.com`/`.com.tr`, `ecosia`, `yahoo`), with
+  `accounts.google.com` excluded as sign-in traffic.
+* **crawl** — the nginx origin log, 58,393 lines covering 2026-10-20 10:19 →
+  2026-10-21 14:19.
+* **surface** — the live sitemap index (192 children), the database counts
+  behind it, and request timings against `https://ficatlas.com`.
+
+### 9.1 Two engines send searchers, one sends navigators
+
+| Engine | Visitors | Reached a story page | Clicked out to an archive | Where the first page was |
+|---|---|---|---|---|
+| DuckDuckGo | 262 | 59 (23%) | 26 | home 244, ship 11, fandom 6 |
+| Bing | 230 | 69 (30%) | 40 | home 210, fandom 9, ship 9 |
+| Google | 177 | 71 (40%) | 25 | **ship 114, fandom 45**, home 12 |
+| Yandex | 62 | 30 (48%) | 13 | **ship 38, fandom 18**, home 3 |
+| Ecosia | 47 | 5 | 2 | home 44 |
+| Yahoo | 15 | 5 | 3 | home 12, ship 2 |
+
+"Reached a story" is per-visitor over their whole session, not per attributed
+hit — internal navigation carries no `ref_host`, so counting story rows with a
+referrer attached would report 5 Google story-readers instead of 71.
+
+Two readings fall out of this:
+
+* **DuckDuckGo and Bing are navigational.** 93% and 91% of their first pages are
+  `/`, which is a typed brand name, not a query being answered. Their volume
+  flatters the acquisition report and it is not acquisition.
+* **Google and Yandex are the search engines here**, and they arrive on hub
+  pages — 159 of 177 Google visitors landed on a ship or fandom hub. Google's
+  landings are long-tail pairings: `/ship/jamil-viper-kalim-al-asim` (16),
+  `/ship/percival-…-vex-ahlia` (9), `/ship/elliot-stabler-olivia-benson` (5),
+  `/fandom/robin-comics` (4), `/ship/lionel-messi-neymar` (4). The ship hubs
+  built in §8.3 are the pages doing this.
+
+Google monthly: **30 visitors in Aug** (17 days of data, 1.8/day), **96 in Sep**
+(3.2/day), **51 in Oct** (21 days, 2.4/day) — growth, then a dip worth watching
+rather than a trend worth declaring. What has held is depth: 13/30, 40/96 and
+18/51 of those visitors reached a story page (43%, 42%, 35%). Not one landed
+*directly* on a story in October — every story read starts on a hub, which is
+the structure §8.3 was built for working as intended.
+
+### 9.2 The origin is crawled by Bing alone
+
+24h of origin log, by bot:
+
+| Bot | Requests | Notes |
+|---|---|---|
+| bingbot | 498 | series 230 (214×200, 16×403), story 173 (165×200, 8×403), author 33, ship 33, fandom 17, `/sitemaps/*` 10 (8×200, 2×403), `/fandoms` 1, `/` 1 |
+| applebot | 30 | author 9, `/` 5, `/about` 5, `/permissions` 5, robots/sw 4 |
+| googlebot | 3 | robots.txt ×2 and the icon, all 304 |
+| duckduckbot | 2 | `/`, favicon |
+| semrushbot | 2 | robots.txt |
+| amzn (Amazon) | 2 | both 403 |
+
+* **Bing did 467 successful fetches; Google did none.** That does not contradict
+  §9.1 — Google has enough of this domain cached to keep sending readers to hub
+  pages — but no Googlebot content fetch reached this origin in 24h.
+* **30 of bingbot's 498 requests were refused, all inside one five-minute
+  window** — 12:30:56 → 12:35:49 on 2026-10-21, at its ten-second crawl delay:
+  16 series, 8 story, 2 `/sitemaps/*`, 2 ship, 1 author, 1 fandom. All 1,926
+  403s in the log carry the 555-byte body nginx's `return 403` produces, so they
+  came from the origin and not from the edge, and the cause was
+  `$forged_chrome` running on the bind mount without its crawler exemption
+  while it was being iterated. bingbot's agent string embeds
+  `Chrome/116.0.1938.76`, which is exactly what that rule refuses — the
+  exemption list is the only thing between it and a 403, and the log shows the
+  cutover precisely: refused at every hop, then nothing but 200s from 12:40
+  onwards. Verified fixed: the origin answers the bingbot agent with 200
+  directly (`docker exec ficatlas-public-nginx-1 curl -A "$UA"
+  http://127.0.0.1:8080/author/vecnawrites`), and no bingbot request has been
+  refused since. **New guard**: `tests/check-edge-rules.py` pulls the regex out
+  of `deploy/nginx.conf` and runs it over twelve real agent/header combinations
+  (the botnet, a Chrome with Client Hints suppressed, six crawlers, curl and
+  python-httpx), so the exemption cannot be edited out without a failure —
+  proven by removing it and watching the check fail on all six crawlers.
+* **Applebot and Amazon collapsed after the robots.txt work** — the pre-change
+  window measured 25,394 requests in 9.7 hours; today applebot made 30 and
+  amzn 2. The `Crawl-delay` and group discipline in §8/`tests/check-robots.py`
+  are doing what they were written for.
+
+### 9.3 The sitemap spent 93.6% of its budget on pages nothing lands on
+
+Declared vs. exists (live index + `select count(*)` on the same day):
+
+| Section | URLs | Files |
+|---|---|---|
+| fandom hubs | 5,764 | 3 |
+| ship hubs | 7,235 | 4 |
+| trope hubs | 1,265 | 1 |
+| author hubs | 10,000 | 5 |
+| `core` (6 static + top 500 ships + top 500 fandoms) | 1,006 | 1 |
+| **series** | **355,139** | **178** |
+| total | 379,409 | 192 |
+
+Every URL in the index is accounted for by a row in the database — coverage was
+complete, and no hub is thin (every ship hub ≥100 works, median 417; every
+fandom hub ≥100, median 631). The problem was never coverage. It is that
+**93.6% of the declared surface was `/series/{uuid}`**: pages of two or three
+works, no `<h1>`, no keyword-bearing slug, indexed by nobody — and in the same
+window bingbot spent 230 of its 498 requests on them while taking 84 hub URLs.
+
+**Fixed in this pass.** `SERIES_SITEMAP_LIMIT` in `frontend/lib/sitemapData.ts`
+keeps the newest 10,000 series (the number `AUTHOR_HUB_LIMIT` already uses for
+author pages), selected by `content_at` and then ordered by slug like every
+other bulk list so file membership does not churn. `/api/stories/series?limit=N`
+now answers newest-first instead of ignoring `limit`, so the listing ships 50,000
+rows rather than 355,139 (~28MB less through the internal API every day), and
+`ix_series_created` keeps that an index scan. Result: **19 children, 34,270
+URLs, series down to 29%** — 173 fewer files for a crawler to walk before it
+reaches the hubs. Series pages themselves are untouched: canonical, indexable,
+linked from every story that belongs to one, listed on `/series`, and announced
+by IndexNow. Locked by `capNewest` tests (`lib/sitemapData.test.ts`) and
+`backend/tests/test_series_sitemap_listing.py`, including the ordering property
+that would silently return the *oldest* series if `limit` regressed to a slug
+window.
+
+### 9.4 Already right — don't touch it
+
+* **Hub pages are fully formed for search.** `/fandom/harry-potter` returns
+  title, meta description, canonical, OG and Twitter tags, JSON-LD
+  (BreadcrumbList + CollectionPage + WebSite SearchAction), one `<h1>` and 146
+  server-rendered story links, edge-cached on `s-maxage=900,
+  stale-while-revalidate=86400` (HIT at 0.16s TTFB).
+* **Sitemap plumbing holds.** `next.config.ts` and
+  `deploy/cloudflare_cache_rule.py` both cover `/sitemap.xml` and `/sitemaps/*`;
+  the index is served with `s-maxage=3600, stale-while-revalidate=86400`.
+* **IndexNow is wired and accepted** — POST to `api.indexnow.org` returning 200,
+  957 URLs submitted 2026-10-21 12:18 and 1,055 the previous evening.
+* **Search Console is verified by DNS TXT** on both `ficatlas.com` and
+  `_google.ficatlas.com`. `GOOGLE_SITE_VERIFICATION` is empty in the running
+  public web container, so no meta tag renders — that is fine, DNS verification
+  is the stronger of the two.
+
+### 9.5 Open, and where each piece belongs
+
+* **IndexNow runs from the dev worker only.** The public worker has
+  `RUN_INDEXNOW: "false"`, in the same block as `REBUILD_HUBS` and the other
+  maintenance flags. If the public tier serves the same `content_at` rows that
+  dev's hub build stamps, submitting from dev is correct and the numbers above
+  are the real announcement rate. If public content can lead dev's, Bing is being
+  told about pages that have not changed there yet. This needs the sync answer
+  from whoever owns it — it is a one-line flag either way, not a code change.
+* **Google cannot be interrogated from here.** No Search Console API
+  credentials exist in this environment, so "is the domain indexed" can only be
+  inferred from the 177 visitors. The DNS verification means a human with the
+  account can check it directly; that check has not been run.
+* **Origin cost of the uncached surface** — `/`, `/fandoms`, `/ships`,
+  `/tropes`, `/authors`, `/series` all return `cache-control: no-cache` and
+  `cf-cache-status: DYNAMIC`, so every crawler and every reader hits the
+  origin: gzip 304KB (`/fandoms`), 480KB (`/ships`), 348KB (`/authors`), 492KB
+  (`/series`), 22.7KB (`/tropes`), 5KB (`/`) at 0.09–0.72s TTFB, and
+  uncompressed at the container those pages are 1.39–2.40MB each. A cold hub
+  render measured 4.47s TTFB at the edge (MISS) against 0.16s HIT; warm renders
+  direct to the container are 0.15–0.33s. Handled as workstream 4, not here.
