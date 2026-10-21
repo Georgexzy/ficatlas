@@ -65,7 +65,7 @@ def _exact(paths) -> str:
     new rule.
     """
     return (f'http.request.uri.query eq "" and http.request.uri.path in '
-            + "{" + ", ".join(f'"{p}"' for p in paths) + "}"
+            + "{" + " ".join(f'"{p}"' for p in paths) + "}"
             + ' and not http.cookie contains "sat="')
 
 
@@ -238,9 +238,9 @@ def main() -> int:
         })
         if not r.get("success"):
             print("failed:", rule["description"], r.get("errors"))
-            print("\nIf this is an authentication error the token is read-only, which is\n"
-                  "how it is meant to be. Add Zone > Cache Rules > Edit, or create the\n"
-                  "rule in the dashboard with the expression printed above.")
+            if any(e.get("code") in (10000, 10001) for e in r.get("errors", [])):
+                print("\nThe token lacks Cache Rules > Edit. Update its scope or "
+                      "create the rule in the Cloudflare dashboard.")
             return 1
         print(f"{'created' if act == 'add' else 'updated'}:", rule["description"])
 
