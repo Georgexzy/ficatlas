@@ -9,6 +9,7 @@ command. It never executes input from the document as a command or arguments.
 import fcntl
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import signal
@@ -21,6 +22,8 @@ REQUEST = DIRECTORY / "restart.json"
 READY = DIRECTORY / "bridge.ready"
 LOCK = DIRECTORY / "bridge.lock"
 log = logging.getLogger("ficatlas-restart-bridge")
+READY_MARKER = "ficatlas-restart-bridge-v2\n"
+LATE_GRACE_SECONDS = 60
 
 
 def write_status(value: dict) -> None:
@@ -37,9 +40,11 @@ def main() -> None:
     DIRECTORY.mkdir(mode=0o770, parents=True, exist_ok=True)
     LOCK.touch(mode=0o660, exist_ok=True)
     LOCK.chmod(0o660)
-    READY.write_text("ready\n")
+    READY.write_text(READY_MARKER)
     READY.chmod(0o644)
     log.info("restart bridge ready")
+    last_request_id = None
+    last_error = None
     try:
         while not stopping.is_set():
             due = None
@@ -47,16 +52,39 @@ def main() -> None:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
                 try:
                     request = json.loads(REQUEST.read_text())
+                    if not isinstance(request, dict):
+                        raise ValueError("restart request must be an object")
                     restart_at = request.get("restart_at")
-                    if isinstance(restart_at, (int, float)) and restart_at <= time.time():
+                    request_id = request.get("id")
+                    if (not isinstance(request_id, str)
+                            or not isinstance(restart_at, (int, float))
+                            or isinstance(restart_at, bool)
+                            or not math.isfinite(restart_at)):
+                        raise ValueError("restart request has no valid id or time")
+                    if request_id != last_request_id:
+                        write_status({"state": "armed", "id": request_id,
+                                      "restart_at": restart_at, "at": time.time()})
+                        last_request_id = request_id
+                    last_error = None
+                    if restart_at <= time.time() - LATE_GRACE_SECONDS:
+                        REQUEST.unlink(missing_ok=True)
+                        write_status({"state": "missed", "id": request_id,
+                                      "restart_at": restart_at, "at": time.time()})
+                        log.error("discarded a restart request more than %s seconds late", LATE_GRACE_SECONDS)
+                    elif restart_at <= time.time():
                         due = request
                         REQUEST.unlink(missing_ok=True)
                         write_status({"state": "restarting", "id": request.get("id"),
                                       "started_at": time.time()})
                 except FileNotFoundError:
-                    pass
-                except (ValueError, TypeError, AttributeError) as exc:
-                    log.error("ignoring invalid restart request: %s", exc)
+                    last_request_id = None
+                except (OSError, ValueError, TypeError, AttributeError) as exc:
+                    error = str(exc)
+                    if error != last_error:
+                        log.error("ignoring unreadable restart request: %s", exc)
+                        write_status({"state": "request-unreadable", "error": error,
+                                      "at": time.time()})
+                        last_error = error
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             if due:

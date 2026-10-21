@@ -154,19 +154,9 @@ def all_settings(db: Session = Depends(get_db),
     _ensure_table(db)
     rows = db.execute(text("SELECT key, value FROM app_settings")).fetchall()
     stored = {r[0]: r[1] for r in rows}
-    # Timed notices stay stored for the admin but are hidden before their start
-    # and cleared lazily after expiry, so they do not require a scheduler.
-    start_at = stored.get("site_notice_start_at", "")
-    notice_not_started = False
-    if start_at:
-        try:
-            starts = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
-            if starts.tzinfo is None:
-                starts = starts.replace(tzinfo=timezone.utc)
-            if starts > datetime.now(timezone.utc):
-                notice_not_started = True
-        except (ValueError, TypeError):
-            pass
+    # Send the start time with the message so an already-open page can show it
+    # at the right moment even if its next poll fails. The client applies the
+    # start time; expired notices are cleared here for every caller.
     until = stored.get("site_notice_until", "")
     if until:
         try:
@@ -188,8 +178,6 @@ def all_settings(db: Session = Depends(get_db),
     merged = {**DEFAULTS, **stored}
     if _may_see_all(user, db):
         return merged
-    if notice_not_started:
-        merged["site_notice"] = ""
     return {k: v for k, v in merged.items() if k in PUBLIC_KEYS}
 
 

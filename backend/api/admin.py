@@ -46,6 +46,7 @@ router = APIRouter()
 _RESTART_ANNOUNCEMENT = (
     "FicAtlas will restart in five minutes. Please save your place; we'll be back soon."
 )
+_RESTART_BRIDGE_MARKER = "ficatlas-restart-bridge-v2"
 
 
 class RestartRequest(BaseModel):
@@ -55,6 +56,31 @@ class RestartRequest(BaseModel):
 
 def _restart_dir() -> Path:
     return Path(os.environ.get("FICATLAS_RESTART_DIR", "/run/ficatlas-restart"))
+
+
+def _bridge_ready(directory: Path) -> bool:
+    try:
+        return (directory / "bridge.ready").read_text().strip() == _RESTART_BRIDGE_MARKER
+    except OSError:
+        return False
+
+
+def _bridge_status(directory: Path) -> dict | None:
+    try:
+        status = json.loads((directory / "bridge-status.json").read_text())
+        return status if isinstance(status, dict) else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _wait_for_bridge_ack(directory: Path, request_id: str, timeout: float = 4.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = _bridge_status(directory)
+        if status and status.get("id") == request_id and status.get("state") == "armed":
+            return True
+        time.sleep(0.1)
+    return False
 
 
 def _restart_lock(directory: Path):
@@ -78,6 +104,9 @@ def _read_restart(directory: Path) -> dict | None:
 def _write_restart(directory: Path, data: dict) -> None:
     fd, name = tempfile.mkstemp(prefix="restart-", dir=directory)
     try:
+        # The bridge runs as root with only CAP_SYS_BOOT and the shared group.
+        # mkstemp's 0600 default made every schedule unreadable to that service.
+        os.fchmod(fd, 0o640)
         with os.fdopen(fd, "w") as f:
             json.dump(data, f)
             f.flush()
@@ -858,16 +887,17 @@ def cloudflare_analytics(db: Session = Depends(get_db),
 @router.get("/restart")
 def restart_status(_admin: User = Depends(require_admin)):
     directory = _restart_dir()
-    if not (directory / "bridge.ready").is_file():
-        return {"available": False, "pending": None}
+    if not _bridge_ready(directory):
+        return {"available": False, "pending": None, "bridge_status": _bridge_status(directory)}
     lock = _restart_lock(directory)
     try:
         request = _read_restart(directory)
-        try:
-            bridge_status = json.loads((directory / "bridge-status.json").read_text())
-        except (OSError, ValueError, TypeError):
-            bridge_status = None
-        return {"available": True, "pending": request, "bridge_status": bridge_status}
+        bridge_status = _bridge_status(directory)
+        confirmed = bool(request and bridge_status
+                         and bridge_status.get("id") == request.get("id")
+                         and bridge_status.get("state") == "armed")
+        return {"available": True, "pending": request, "confirmed": confirmed,
+                "bridge_status": bridge_status}
     finally:
         fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         lock.close()
@@ -880,8 +910,8 @@ def schedule_restart(payload: RestartRequest = Body(...),
     if not payload.confirm:
         raise HTTPException(400, "Confirm the scheduled restart.")
     directory = _restart_dir()
-    if not (directory / "bridge.ready").is_file():
-        raise HTTPException(503, "Host restart service is not available.")
+    if not _bridge_ready(directory):
+        raise HTTPException(503, "Host restart service needs the updated bridge. Run sudo bash deploy/install-restart-bridge.sh on the server.")
     lock = _restart_lock(directory)
     try:
         if _read_restart(directory):
@@ -927,17 +957,30 @@ def schedule_restart(payload: RestartRequest = Body(...),
         except OSError as exc:
             _restore_restart_notice(db, request)
             raise HTTPException(503, "Could not schedule the host restart.") from exc
-        return {"ok": True, "pending": request}
     finally:
         fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         lock.close()
+    # The host service must prove it can read the request. The ready file alone
+    # only says its process started; it did not catch the original 0600 failure.
+    if _wait_for_bridge_ack(directory, request["id"]):
+        return {"ok": True, "pending": request}
+    lock = _restart_lock(directory)
+    try:
+        current = _read_restart(directory)
+        if current and current.get("id") == request["id"]:
+            (directory / "restart.json").unlink(missing_ok=True)
+            _restore_restart_notice(db, request)
+    finally:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
+    raise HTTPException(503, "Host restart service did not confirm the schedule. No restart is pending.")
 
 
 @router.post("/restart/cancel")
 def cancel_restart(db: Session = Depends(get_db),
                    _admin: User = Depends(require_admin)):
     directory = _restart_dir()
-    if not (directory / "bridge.ready").is_file():
+    if not _bridge_ready(directory):
         raise HTTPException(503, "Host restart service is not available.")
     lock = _restart_lock(directory)
     try:

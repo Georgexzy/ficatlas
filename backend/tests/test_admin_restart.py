@@ -1,4 +1,5 @@
 import time
+import stat
 from datetime import datetime
 
 import pytest
@@ -18,6 +19,7 @@ def test_restart_request_round_trips_atomically(tmp_path):
     }
     admin._write_restart(tmp_path, request)
     assert admin._read_restart(tmp_path) == request
+    assert stat.S_IMODE((tmp_path / "restart.json").stat().st_mode) == 0o640
     assert [p.name for p in tmp_path.iterdir()] == ["restart.json"]
 
 
@@ -37,7 +39,8 @@ def memory_db(monkeypatch):
 
 def test_restart_announces_then_cancel_restores_previous_notice(memory_db, tmp_path, monkeypatch):
     monkeypatch.setenv("FICATLAS_RESTART_DIR", str(tmp_path))
-    (tmp_path / "bridge.ready").touch()
+    (tmp_path / "bridge.ready").write_text(admin._RESTART_BRIDGE_MARKER)
+    monkeypatch.setattr(admin, "_wait_for_bridge_ack", lambda *_args: True)
     settings.put_setting(memory_db, "site_notice", "Archive maintenance today.")
     settings.put_setting(memory_db, "site_notice_until", "")
 
@@ -53,7 +56,8 @@ def test_restart_announces_then_cancel_restores_previous_notice(memory_db, tmp_p
 
 def test_scheduled_restart_publishes_notice_five_minutes_before(monkeypatch, memory_db, tmp_path):
     monkeypatch.setenv("FICATLAS_RESTART_DIR", str(tmp_path))
-    (tmp_path / "bridge.ready").touch()
+    (tmp_path / "bridge.ready").write_text(admin._RESTART_BRIDGE_MARKER)
+    monkeypatch.setattr(admin, "_wait_for_bridge_ack", lambda *_args: True)
     target = time.time() + 3600
     result = admin.schedule_restart(
         admin.RestartRequest(confirm=True, restart_at=target), memory_db, None)
@@ -65,7 +69,7 @@ def test_scheduled_restart_publishes_notice_five_minutes_before(monkeypatch, mem
 
 def test_restart_must_be_at_least_five_minutes_away(memory_db, tmp_path, monkeypatch):
     monkeypatch.setenv("FICATLAS_RESTART_DIR", str(tmp_path))
-    (tmp_path / "bridge.ready").touch()
+    (tmp_path / "bridge.ready").write_text(admin._RESTART_BRIDGE_MARKER)
     with pytest.raises(HTTPException) as exc:
         admin.schedule_restart(
             admin.RestartRequest(confirm=True, restart_at=time.time() + 60), memory_db, None)
@@ -77,3 +81,25 @@ def test_restart_refuses_when_host_bridge_is_missing(memory_db, tmp_path, monkey
     with pytest.raises(HTTPException) as exc:
         admin.schedule_restart(admin.RestartRequest(confirm=True), memory_db, None)
     assert exc.value.status_code == 503
+
+
+def test_restart_refuses_old_bridge_without_erasing_notice(memory_db, tmp_path, monkeypatch):
+    monkeypatch.setenv("FICATLAS_RESTART_DIR", str(tmp_path))
+    (tmp_path / "bridge.ready").write_text("ready\n")
+    with pytest.raises(HTTPException) as exc:
+        admin.schedule_restart(admin.RestartRequest(confirm=True), memory_db, None)
+    assert exc.value.status_code == 503
+    assert not (tmp_path / "restart.json").exists()
+    assert settings.get_setting(memory_db, "site_notice") == ""
+
+
+def test_restart_without_bridge_ack_rolls_back_notice(memory_db, tmp_path, monkeypatch):
+    monkeypatch.setenv("FICATLAS_RESTART_DIR", str(tmp_path))
+    (tmp_path / "bridge.ready").write_text(admin._RESTART_BRIDGE_MARKER)
+    monkeypatch.setattr(admin, "_wait_for_bridge_ack", lambda *_args: False)
+    settings.put_setting(memory_db, "site_notice", "Previous notice")
+    with pytest.raises(HTTPException) as exc:
+        admin.schedule_restart(admin.RestartRequest(confirm=True), memory_db, None)
+    assert exc.value.status_code == 503
+    assert not (tmp_path / "restart.json").exists()
+    assert settings.get_setting(memory_db, "site_notice") == "Previous notice"

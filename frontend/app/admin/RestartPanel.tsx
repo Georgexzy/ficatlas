@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react"
 import { fetchWithTimeout, USER_TIMEOUT_MS } from "@/lib/net"
 
 type Pending = { id: string; restart_at: number }
-type Status = { available: boolean; pending: Pending | null; bridge_status?: { state?: string; returncode?: number } | null }
+type Status = { available: boolean; pending: Pending | null; confirmed?: boolean; bridge_status?: { state?: string; returncode?: number } | null }
 
 function defaultRestartTime() {
   const date = new Date(Math.ceil((Date.now() + 5 * 60_000) / 60_000) * 60_000)
@@ -56,7 +56,7 @@ export default function RestartPanel() {
       }, USER_TIMEOUT_MS)
       const data = await r.json().catch(() => null)
       if (!r.ok) throw new Error(data?.detail || `Could not schedule restart (${r.status}).`)
-      setStatus({ available: true, pending: data.pending })
+      setStatus({ available: true, pending: data.pending, confirmed: true })
       setMessage("Restart scheduled. The announcement will appear five minutes before the reboot.")
       window.dispatchEvent(new CustomEvent("ficatlas:site-notice-updated", {
         detail: { message: data.pending.announcement, startsAt: data.pending.announcement_start_at, until: data.pending.announcement_until },
@@ -92,8 +92,8 @@ export default function RestartPanel() {
     {error && <p className="cc-msg cc-msg--bad" role="alert">{error}</p>}
     {message && <p className="cc-msg" role="status">{message}</p>}
     {status === null ? <p className="cc-dim">Checking the host restart service…</p> : !status.available ? <>
-      <p className="cc-msg cc-msg--bad" role="status">Host restart service is not installed or available. The schedule button is disabled.</p>
-      <p className="cc-dim">On the server computer, run <code>sudo bash deploy/install-restart-bridge.sh</code> from the FicAtlas checkout. This grants only the fixed reboot action to the host bridge.</p>
+      <p className="cc-msg cc-msg--bad" role="status">Host restart service is missing or needs an update. Scheduling is disabled until it can confirm restart requests.</p>
+      <p className="cc-dim">On the server computer, run <code>sudo bash deploy/install-restart-bridge.sh</code> from the FicAtlas checkout.</p>
     </> : <>
       {status.bridge_status?.state === "reboot-command-failed" && <p className="cc-msg cc-msg--bad" role="alert">
         The host refused the reboot command (exit {status.bridge_status.returncode ?? "unknown"}). Check
@@ -101,7 +101,8 @@ export default function RestartPanel() {
       </p>}
       {status.pending ? <>
       <p className="cc-msg" role="status">
-        Restart scheduled. The server will restart in <strong>{remaining(status.pending.restart_at, now)}</strong>.
+        {status.confirmed ? "Restart confirmed by the host. The server will restart in " : "Waiting for the host to confirm this schedule… "}
+        {status.confirmed && <strong>{remaining(status.pending.restart_at, now)}</strong>}
       </p>
       <button type="button" className="btn" disabled={busy || status.pending.restart_at <= now}
         onClick={cancel}>{busy ? "Working…" : "Cancel scheduled restart"}</button>

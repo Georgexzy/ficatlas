@@ -74,6 +74,10 @@ sudo systemctl status ficatlas-restart-bridge.service
 Then open Admin → Site → Restart. The page must report that the host restart
 service is available before scheduling anything. If it is unavailable, check
 the service status and `sudo journalctl -u ficatlas-restart-bridge.service -n 50`.
+The updated bridge confirms that it can read each request before Admin reports
+the restart as scheduled. If the confirmation fails, the request and its notice
+are removed and Admin reports an error. Re-run the installer after updating the
+checkout when the page says the bridge needs an update.
 Docker must start at boot (`sudo systemctl enable --now docker`); the existing
 compose services use `restart: unless-stopped` and come back after the host
 boots. A restart scheduled in Admin runs `systemctl reboot` on the physical

@@ -33,7 +33,10 @@ export default function SiteNotice() {
         expiryTimer = window.setTimeout(() => setMessage(""), expires - Date.now())
       }
       if (!next && Number.isFinite(starts) && starts > Date.now()) {
-        expiryTimer = window.setTimeout(() => fetchNotice(), starts - Date.now() + 50)
+        expiryTimer = window.setTimeout(() => {
+          update(detail)
+          fetchNotice()
+        }, Math.min(starts - Date.now() + 50, 2_147_483_647))
       }
     }
     let alive = true
@@ -52,12 +55,15 @@ export default function SiteNotice() {
       if (document.visibilityState === "visible") fetchNotice()
     }, 20_000)
     const changed = (e: Event) => update((e as CustomEvent).detail)
+    const visible = () => { if (document.visibilityState === "visible") fetchNotice() }
     window.addEventListener("ficatlas:site-notice-updated", changed)
+    document.addEventListener("visibilitychange", visible)
     return () => {
       alive = false
       window.clearInterval(poll)
       if (expiryTimer) window.clearTimeout(expiryTimer)
       window.removeEventListener("ficatlas:site-notice-updated", changed)
+      document.removeEventListener("visibilitychange", visible)
     }
   }, [])
 
