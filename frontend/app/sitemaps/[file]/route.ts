@@ -1,4 +1,4 @@
-import { loadHubs, newest, urlset, xml, SITE, split, chunk, type Hub }
+import { loadHubs, urlset, xml, SITE, split, chunk, type Hub }
   from "@/lib/sitemapData"
 
 // The children of /sitemap.xml. See that file for why this is segmented at all.
@@ -30,12 +30,12 @@ export async function GET(
   const s = split(ships), f = split(fandoms)
 
   if (name === "core") {
-    // The static pages carry no lastmod of their own, so they borrow the newest
-    // hub stamp in this file rather than claiming a date nothing can support.
-    // The alternative — now() — is the exact lie the rest of this avoids.
-    const lastmod = newest([...s.core, ...f.core])
+    // These pages have no per-page change stamp. Borrowing the newest hub's
+    // date claimed that /about and /permissions changed whenever a hub did.
+    // Omit lastmod for them; the core sitemap's own lastmod still reflects its
+    // changing hub entries.
     return xml(urlset([
-      ...STATIC.map(p => ({ loc: `${SITE}${p}`, ...(lastmod ? { lastmod } : {}) })),
+      ...STATIC.map(p => ({ loc: `${SITE}${p}` })),
       ...s.core.map(entry("/ship")),
       ...f.core.map(entry("/fandom")),
     ]))
