@@ -76,9 +76,9 @@ export default function TakedownClient() {
         <p>{sent.message}</p>
         {!sent.hidden && !sent.delisted && (
           <p className="page-prose__muted">
-            That address did not match a story whose text is held here. It may
-            already be listed without stored text, in which case there is
-            nothing to withdraw. The message will still be read.
+            No automatic withdrawal was confirmed. The address may not match a
+            work in the index, or the automatic safety limit may have been
+            reached. The request has been recorded for review.
           </p>
         )}
         {/* Does not promise an email, because none is sent.
@@ -92,9 +92,9 @@ export default function TakedownClient() {
             What replaces it is better news anyway — the thing they wanted has
             already happened and they are not waiting on anyone. */}
         <p>
-          You do not need to wait for a reply, and nothing further is required
-          from you. A person reviews these, but the removal has already taken
-          effect.
+          {sent.hidden || sent.delisted
+            ? "The confirmed withdrawal is in effect. A person can review the request if needed."
+            : "If the work is still visible, contact help@ficatlas.com with its address."}
         </p>
         <p><Link href="/" className="card-btn card-btn--primary">Back to search</Link></p>
 </main>
@@ -112,9 +112,9 @@ export default function TakedownClient() {
       <h1>Request a takedown</h1>
       <p>
         If you wrote a story whose text can be read on FicAtlas and you would
-        rather it were not, complete this form. The text is withdrawn{" "}
-        <strong>immediately</strong> — you do not have to wait for a reply, and
-        you do not have to prove anything first.
+        rather it were not, complete this form. No account or proof of identity
+        is required. When FicAtlas matches the work, withdrawal normally takes
+        effect as soon as the form is submitted.
       </p>
       <p className="page-prose__muted">
         By default the story stays listed as a title, author and link, so readers
@@ -133,12 +133,11 @@ export default function TakedownClient() {
         the wrong place. Most of the text held here came from FictionAlley, an
         archive that has closed, so in most cases there is no longer an account
         against which anything could be checked.</p>
-        <p><strong>Nothing is deleted.</strong> A request withdraws the text
-        immediately and permanently from readers, but it remains recoverable, so
-        a request made in error or in bad faith can be reversed. For the same
-        reason the form cannot be used to empty the library: withdrawal is
-        reversible, and an unusual volume of requests is reviewed by a person
-        rather than applied automatically.</p>
+        <p><strong>Withdrawal is reversible.</strong> It hides the text or
+        listing from readers without deleting the underlying record. An unusual
+        volume of requests is recorded for review rather than applied
+        automatically. The response after submission says what happened to
+        your request.</p>
       </div>
 
       {/* Check first, ask second.
@@ -150,7 +149,9 @@ export default function TakedownClient() {
         <p className="author-check__lead">
           <strong>To check whether anything of yours is held here,</strong> enter
           the name you publish under. This lists only stories whose full text
-          can be read on FicAtlas, not those indexed as a listing and a link.
+          can be read publicly on FicAtlas, not private reader imports or works
+          indexed as a listing and a link. You can still submit a known story
+          address below to request withdrawal of a private copy.
         </p>
         <div className="author-check__row">
           <input value={penName} onChange={e => setPenName(e.target.value)}

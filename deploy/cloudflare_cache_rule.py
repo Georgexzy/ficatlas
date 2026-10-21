@@ -14,8 +14,10 @@ header keeps them honest.
 WHAT IT DOES, and the reasoning, because a cache rule on a site with logins is
 the sort of thing that should never be pasted in unread:
 
-  * Caches only /story/, /series/, /fandom/, /ship/ and /s/. Never the home
-    page, /library, /account, /settings, or any /api path.
+  * Caches only /story/, /series/, /fandom/, /ship/, /author/, /s/, the hub
+    index routes (/ and /fandoms, /ships, /tropes, /authors, /series), the two
+    prose pages (/about, /privacy) and the sitemap. Never /library, /account,
+    /settings, or any /api path.
   * Only when the request carries no `sat` cookie -- the same guard the existing
     "Cache anonymous search + facet reads" rule uses. This is belt and braces:
     nothing under frontend/app/ calls `cookies()`, so the server HTML is already
@@ -50,6 +52,36 @@ def _anon(paths) -> str:
     ) + ') and not http.cookie contains "sat="')
 
 
+def _exact(paths) -> str:
+    """Match these paths exactly, with no query string, for a reader with no
+    session.
+
+    The query gate is about `/?q=…` sharing a path with the landing page.
+    Search URLs are an infinite space and robots.txt keeps crawlers out of
+    them (`Disallow: /*?`); giving them a cache entry would put that same
+    unbounded space into the edge's key space, where nothing downstream can
+    refuse it. Paths with no legitimate query lose nothing: a link carrying
+    `?utm_source=` falls through to the origin, which is one request and not a
+    new rule.
+    """
+    return (f'http.request.uri.query eq "" and http.request.uri.path in '
+            + "{" + ", ".join(f'"{p}"' for p in paths) + "}"
+            + ' and not http.cookie contains "sat="')
+
+
+# The hub index routes, the root and the two prose pages: the second half of
+# the fix that added `author` to the content-page rule above. Measured before
+# it: every one of these answered `no-cache` + `cf-cache-status: DYNAMIC`, so
+# each visit rendered HTML at a home server — 1.6MB for /fandoms, 2.2MB for
+# /ships, 1.4MB for /series, 5KB for / — and 955 requests across them reached
+# the origin in 24h, plus 437 to /about.
+#
+# Origin half: the `source: "/"` and `source: "/(fandoms|ships|…)"` entries in
+# frontend/next.config.ts. Same path set, gated the same way on the query.
+HUB_INDEX_PATHS = ("/", "/fandoms", "/ships", "/tropes", "/authors",
+                   "/series", "/about", "/privacy")
+
+
 # Every cache rule this repo owns, in one list, because the failure this file
 # exists to prevent is a rule and its origin header drifting apart — and that
 # gets likelier, not less likely, as rules accumulate in a dashboard nobody
@@ -57,8 +89,20 @@ def _anon(paths) -> str:
 RULES = [
     {
         "description": "Cache anonymous story/series/hub pages; respect origin TTL",
-        "expression": _anon(("/story/", "/series/", "/fandom/", "/ship/", "/s/")),
+        # /author/ was missing here and in next.config.ts alike: author hubs
+        # were built as the same kind of page as the fandom hubs and the rule
+        # was not widened with them, so all 10,000 answered DYNAMIC while
+        # /fandom/* answered HIT. Both halves are listed by the checker.
+        "expression": _anon(("/story/", "/series/", "/fandom/", "/ship/", "/author/", "/s/")),
         # Origin half: the headers() block in frontend/next.config.ts.
+    },
+    {
+        "description": "Cache the hub index and prose pages; respect origin TTL",
+        # Exact paths, empty query, no session — see _exact for why the query
+        # is gated.
+        "expression": _exact(HUB_INDEX_PATHS),
+        # Origin half: the `source: "/"` and `source: "/(fandoms|…)"` entries
+        # in frontend/next.config.ts.
     },
     {
         # The header widget and the landing page ask for this on every page

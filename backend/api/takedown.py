@@ -158,7 +158,13 @@ def submit_takedown(
             log.warning(f"takedown auto-hide ceiling reached ({recent} in the last "
                         f"hour) — recording without acting: {story_url[:120]}")
         else:
-            if story.is_hosted and story.text_withdrawn_at is None:
+            # Reader imports can hold text without making the story public.
+            # Withdrawal must cover those copies too: permit_text_read checks
+            # this flag before granting a private library reader access.
+            privately_imported = bool(db.execute(sql_text(
+                "SELECT 1 FROM user_hosted WHERE story_id = :id LIMIT 1"
+            ), {"id": str(story.id)}).first())
+            if (story.is_hosted or privately_imported) and story.text_withdrawn_at is None:
                 story.text_withdrawn_at = datetime.utcnow()
                 story.text_withdrawn_reason = "takedown request"
                 hidden = True

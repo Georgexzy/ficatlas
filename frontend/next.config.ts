@@ -55,6 +55,32 @@ if (process.env.FORCE_HTTPS === "true") CSP.push("upgrade-insecure-requests")
 
 const CSP_HEADER = CSP.join("; ")
 
+// The one Cache-Control for HTML a crawler is meant to read.
+//
+// One constant rather than the same 100 characters written out per route,
+// because the thing this value is most likely to drift against is ITSELF: it
+// already appears on the content routes, the hub index routes and the prose
+// pages, and the moment two of those disagree nobody can say what the edge TTL
+// of the site actually is.
+//
+// s-maxage=900 matches `export const revalidate = 900` on the story page so
+// Next's own incremental cache and Cloudflare's edge expire together. It is
+// also deliberately NOT a longer number for the hub index pages, which change
+// once a day: a deploy swaps the hashed JS chunks the HTML points at and does
+// not purge the edge (deploy/promote.sh has no purge step), so HTML sitting
+// for an hour instead of fifteen minutes is an hour of handing out references
+// to files that no longer exist. Keep stale revalidation brief as well, so old
+// HTML does not keep referring to removed chunks after a deploy. Re-rendering
+// a hub index 16 times a day
+// costs nothing next to the 4.47s a cold render of it took when it was
+// uncached.
+//
+// `max-age=0, must-revalidate` is the browser half and is load-bearing: a bad
+// CSP once went sticky in phone caches, so no visitor may ever serve this
+// HTML (and its headers) from their own cache without asking.
+const DOC_CACHE_CONTROL =
+  "public, max-age=0, must-revalidate, s-maxage=900, stale-while-revalidate=60"
+
 const SECURITY_HEADERS = [
   { key: "Content-Security-Policy", value: CSP_HEADER },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -136,7 +162,7 @@ const nextConfig: NextConfig = {
       // caching absorbs almost none of that and the 6.7% was mostly arithmetic
       // rather than a fault. What this does buy is real but smaller: repeat
       // visitors, several search engines fetching the same page, and re-crawls
-      // inside stale-while-revalidate. Verified 36ms from the edge against 52ms
+      // inside the short stale-while-revalidate window. Verified 36ms from the edge against 52ms
       // through to the origin.
       //
       // Safe to share between visitors because NOTHING under app/ calls
@@ -148,12 +174,48 @@ const nextConfig: NextConfig = {
       // 900s matches `export const revalidate = 900` on the story page, so the
       // edge and Next's own incremental cache expire together rather than one
       // holding content the other has already replaced.
+      //
+      // `author` is in this list for the same reason the others are, and it
+      // arrived late: the rule was written when the crawlable surface was
+      // "story pages and the hubs they link to", and author hubs
+      // (backend/author_hubs.py, 10,000 of them, `Allow: /author/` in
+      // robots.txt) were built later as the same kind of page. Measured
+      // 2026-10-21: `/author/astolat` answered `no-cache` + `cf-cache-status:
+      // DYNAMIC` on every request while `/fandom/naruto` — same template, same
+      // data shape, same crawler policy — answered s-maxage=900 and HIT. 236
+      // `/author/*` requests reached the origin in 24h, every one of them a
+      // render the edge could have answered.
       {
-        source: "/:prefix(story|series|fandom|ship|s)/:path*",
-        headers: [{
-          key: "Cache-Control",
-          value: "public, max-age=0, must-revalidate, s-maxage=900, stale-while-revalidate=86400",
-        }],
+        source: "/:prefix(story|series|fandom|ship|author|s)/:path*",
+        headers: [{ key: "Cache-Control", value: DOC_CACHE_CONTROL }],
+      },
+      // The index routes: the root, the five hub indexes robots.txt points at,
+      // and the two prose pages a crawler reads to work out what this site is.
+      //
+      // These were the other half of the same gap — every one of them answered
+      // `no-cache` + `DYNAMIC`, so each visit rendered HTML at a home server:
+      //   /fandoms   1.6MB   /ships   2.2MB   /series   1.4MB   /authors  1.4MB
+      // (uncompressed server HTML; 261KB / 374KB / 22KB / 351KB once brotli
+      // applied), TTFB 0.26–0.41s warm. 955 requests for these paths reached
+      // the origin in 24h — 637 to `/`, 236 to `/author/*`, 34 to `/fandoms`,
+      // 48 to `/ships` — plus 437 to `/about`.
+      //
+      // Nothing here varies by reader for the same reason the content pages do
+      // not: no `cookies()` anywhere under app/ (checked, zero matches), and
+      // the numbers on `/` are fetched after hydration. Safe to share.
+      //
+      // Written as an exact-path rule rather than a prefix rule because
+      // `/?q=…` shares the root's path with the landing page and `/?…` is the
+      // infinite search space robots.txt exists to keep crawlers out of. The
+      // Cloudflare half gates the same set on an empty query string for that
+      // reason — see deploy/cloudflare_cache_rule.py.
+      {
+        source: "/",
+        headers: [{ key: "Cache-Control", value: DOC_CACHE_CONTROL }],
+      },
+      {
+        source: "/(fandoms|ships|tropes|authors|series|about|privacy)",
+        headers: [{ key: "Cache-Control", value: DOC_CACHE_CONTROL }],
       },
       // The sitemap must survive the origin being unreachable.
       //
@@ -200,8 +262,23 @@ const nextConfig: NextConfig = {
       // winning, and a path that is only granted a rule above still gets
       // no-cache from here — which is how /sitemap.xml behaved before it was
       // named in both places.
+      //
+      // The same note now covers every route with an s-maxage above, and the
+      // prefixes are written bare for that reason: `fandom` excludes
+      // `/fandom/naruto` AND `/fandoms`, `series` excludes both, `author`
+      // excludes both, so the index routes cannot be added above and left to be
+      // caught here. `.+` rather than `.*` is what excludes the root: a
+      // lookahead that matches nothing cannot reject an EMPTY remainder, so `/`
+      // matched this rule and was the one path whose exclusion could not be
+      // written as a prefix.
+      //
+      // `tests/check-cache-rules.py` checks this property directly — it takes
+      // each s-maxage source's paths and asserts this pattern does not match
+      // them — because the failure is invisible in review and silent in
+      // production: the edge rule honours origin TTL, the origin says no-cache,
+      // and nothing is ever cached by anybody.
       {
-        source: "/((?!_next/static|_next/image|icon-|manifest.json|sitemap.xml|sitemaps/|story/|series/|fandom/|ship/|s/).*)",
+        source: "/((?!_next/static|_next/image|icon-|manifest.json|sitemap.xml|sitemaps/|story|series|fandom|ship|author|tropes|about|privacy|s/).+)",
         headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }],
       },
     ]

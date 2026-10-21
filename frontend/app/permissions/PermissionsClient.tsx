@@ -30,18 +30,18 @@ interface Work {
 // without anyone's permission; the actual request is to keep a complete copy of
 // someone's story on this server.
 const POLICIES = [
-  { id: "host", label: "Store the full text of my stories on FicAtlas",
-    detail: "A complete copy of each story is kept on FicAtlas and can be read here, in the app, without going to the archive. Your work still links back to where you posted it. This is the only option that needs you to verify." },
-  { id: "metadata_only", label: "List my work, but never store the text",
-    detail: "Title, summary and tags only, with a link out to the archive. No copy of the writing itself is kept." },
-  { id: "deny", label: "Do not index my work at all",
-    detail: "Your works are removed from the index entirely and not added again." },
+  { id: "host", label: "Allow FicAtlas to host the full text of my stories",
+    detail: "Allows a complete copy to be publicly readable here if imported; this choice does not itself import your work. The archive link remains. Verification is required." },
+  { id: "metadata_only", label: "List my work, but do not host its text publicly",
+    detail: "Keep the title, summary, tags and archive link. This prevents new public hosting; readers may still make private imports. Use the removal form to withdraw stored text." },
+  { id: "deny", label: "Do not list my work in the public index",
+    detail: "Removes public listings and prevents future public indexing. Readers may still import privately; use the removal form to withdraw stored text." },
 ]
 
 const POLICY_LABEL: Record<string, string> = {
   host: "FicAtlas may store the full text of your work",
-  metadata_only: "Listed and linked, but the text is never stored here",
-  deny: "Not indexed at all",
+  metadata_only: "Listed and linked; no new public hosting",
+  deny: "Not listed in the public index",
 }
 
 export default function PermissionsClient() {
@@ -91,8 +91,8 @@ export default function PermissionsClient() {
   const revoke = async () => {
     if (!window.confirm(
       `Withdraw the choice recorded under ${data.author}?\n\n`
-      + "Your work goes back to the default: listed with a link out, never "
-      + "stored here. You can set a new choice at any time.")) return
+      + "Future collection returns to the default listing and link. Existing "
+      + "stored text must be withdrawn separately. You can set a new choice at any time.")) return
     setBusy(true); setError(null); setMsg(null)
     try {
       const fd = new FormData()
@@ -202,10 +202,11 @@ export default function PermissionsClient() {
           nothing of them. */}
       <div className="perm-urgent">
         <p>
-          <strong>To have your work removed,</strong> you do not need to verify
-          anything, give a reason, or complete this page. The text stops being
-          readable as soon as you submit the form. Nothing is deleted, so a
-          request made in error can be reversed.
+          <strong>To request removal of your work,</strong> you do not need an
+          account, verification or a reason. A matching request normally takes
+          effect when submitted. Requests that cannot be matched or exceed the
+          automatic safety limit are recorded for review. Withdrawal is
+          reversible if a request was made in error.
         </p>
         <Link href="/takedown" className="btn btn--primary">Remove my work</Link>
       </div>
@@ -255,9 +256,9 @@ export default function PermissionsClient() {
               {data.verified
                 ? <>Verified — your standing choice is:{" "}
                     <strong>{POLICY_LABEL[data.policy] ?? data.policy}</strong>.</>
-                : <>This account is not verified, so FicAtlas does not store your
-text. That can be changed below, and individual works can be
-taken down without any verification at all.</>}
+                : <>No verified hosting permission is recorded for this name.
+                  Existing text, if any, is shown in the list below. You can
+                  request its withdrawal without verification.</>}
             </p>
           </div>
 
@@ -301,14 +302,13 @@ taken down without any verification at all.</>}
               <h2>Withdraw this entirely</h2>
               <p>
                 Removes the choice recorded under <strong>{data.author}</strong>,
-                returning your work to the default: listed with a link out, never
-                stored here. No verification is required, and a new choice can
-                be set at any time.
+                returning future public collection to the default listing and link.
+                This does not withdraw text already stored. No verification is
+                required, and a new choice can be set at any time.
               </p>
               <p className="perm-revoke__note">
                 This governs what happens from now on. To remove text FicAtlas
-                already holds, use <a href="/takedown">the takedown form</a> —
-                that comes down immediately.
+                already holds, use <a href="/takedown">the takedown form</a>.
               </p>
               <button className="btn btn--danger" onClick={revoke} disabled={busy}>
                 {busy ? "Working…" : "Withdraw my permission"}
@@ -354,8 +354,8 @@ taken down without any verification at all.</>}
             )}
 
           <p className="perm-why">
-            Nothing is deleted, so anything taken down can be restored. For
-            anything this page cannot do, the{" "}
+            Withdrawal hides a work from readers without deleting its stored
+            record. For anything this page cannot do, the{" "}
             <Link href="/takedown">removal form</Link> reaches a person.
           </p>
         </>

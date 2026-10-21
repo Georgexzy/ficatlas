@@ -42,17 +42,16 @@ export default function About() {
 
       <h2>Where the writing lives</h2>
       <p>
-        For nearly everything in the index, FicAtlas stores{" "}
-        <strong>only information about a story</strong> — its title, author,
-        summary, tags, length and a link — and sends you to the original archive
-        to read it. Authors keep their work, their comments and their kudos where
-        they posted them.
+        Most indexed works have a listing — title, author, summary, tags,
+        length and a link to the original archive. Readers follow that link to
+        read the work where it was published.
       </p>
       <p>
-        A small number of stories can be read here in full. These come from{" "}
-        <strong>FictionAlley</strong>, an archive that closed, and were preserved
-        so that they would not be lost. If you wrote one of them, see the section
-        below.
+        Some works can also be read here in full. These include works preserved
+        from the closed FictionAlley archive and works imported for reading on
+        FicAtlas. A reader&apos;s private import is visible only to accounts
+        that independently imported the same work. Authors can request removal
+        or restrict future hosting through the author page below.
       </p>
 
       {/* THE AUTHOR POLICY IS NOT WRITTEN HERE ANY MORE.
@@ -69,9 +68,11 @@ export default function About() {
           person most likely to need it. */}
       <h2 id="takedown">For authors</h2>
       <p>
-        If your work appears here and you would rather it did not, you can have
-        it removed. No account, no explanation and no proof are required, and the
-        text stops being readable as soon as you ask rather than after a review.
+        If your work appears here and you would rather it did not, you can
+        request that its text or listing be withdrawn. No account or proof of
+        identity is required. A matching request normally takes effect on
+        submission; requests that cannot be matched or exceed the automatic
+        safety limit are recorded for review.
       </p>
       <p>
         You can also review everything held under your name, remove individual
@@ -84,10 +85,8 @@ export default function About() {
         </Link>
       </p>
       <p className="page-prose__muted">
-        Removal is immediate and needs no verification; granting permission —
-        allowing FicAtlas to keep a complete copy of your text and serve it
-        here — is the one action that does, because an unverified grant would be
-        worth nothing to you. The full policy, and the form, are on that page.
+        Granting permission to host a complete copy requires verification of
+        your archive profile. The full policy and request forms are on that page.
       </p>
 
       {/* The page's own title has said "About & contact" since it was written,
@@ -113,55 +112,43 @@ export default function About() {
 
       <h2>Source code</h2>
       <p>
-        FicAtlas is open source. You can read every line, run your own copy, or
-        send a fix:{" "}
+        FicAtlas publishes its source code. You can read it or contribute a fix:{" "}
         <a href="https://github.com/Georgexzy/ficatlas" target="_blank" rel="noopener noreferrer">
           github.com/Georgexzy/ficatlas
         </a>.
       </p>
       <p className="page-prose__muted">
-        Licensed for non-commercial use: you may run your own copy, but you may
-        not sell it or run it with advertising. That restriction is there for the
-        authors whose work it indexes, who published for free on archives that
-        undertook not to profit from them.
+        The software is licensed under the{" "}
+        <a href="https://github.com/Georgexzy/ficatlas/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+          PolyForm Noncommercial License 1.0.0
+        </a>. That licence covers the software, not the works it indexes.
       </p>
 
       <h2 id="ai">AI and automated collection</h2>
       <p>
-        Fanfiction archives have been scraped for model training without their
-        authors&apos; consent, and readers are right to ask where any new index
-        stands on it. FicAtlas&apos;s position:
+        FicAtlas does not use indexed works to train generative models. Its
+        current approach to automated collection and AI is:
       </p>
       <ul>
         <li>
-          <strong>No generative model is applied to indexed work.</strong>{" "}
-          Nothing in the index is passed to a model that writes, rewrites,
-          summarises or continues stories. There is no chat interface over
-          indexed text, no recommendations generated from full text, and no
-          feature that reproduces or adapts an author&apos;s prose.
+          <strong>Search does not generate story text.</strong> Search and
+          recommendations use indexed information; FicAtlas does not offer a
+          chat interface for reproducing or continuing authors&apos; prose.
         </li>
         <li>
-          <strong>The index is not a training corpus.</strong> FicAtlas does not
-          publish bulk exports, does not license the index for machine learning,
-          and does not supply works to AI companies. Known training crawlers are
-          disallowed in <a href="/robots.txt">robots.txt</a>, the same position
-          the OTW takes for AO3.
+          <strong>The index is not offered for model training.</strong> FicAtlas
+          does not publish a bulk text export or license works for machine
+          learning. Known training crawlers are disallowed in{" "}
+          <a href="/robots.txt">robots.txt</a>.
         </li>
         <li>
-          <strong>Almost all of it is metadata and a link.</strong> For the great
-          majority of works FicAtlas holds the title, author, summary, tags,
-          length and a link to the original archive; the work itself remains
-          where its author published it. Full text is limited to the preserved
-          FictionAlley set described above, and any author may have that text
-          removed immediately.
+          <strong>Most works are listings.</strong> Full text is also held for
+          preserved works and imports, as described above. Authors can request
+          withdrawal of text or listings through the author page.
         </li>
         <li>
-          <strong>AI assistance in building the software is not the same
-          thing.</strong> Parts of FicAtlas&apos;s own code and search tooling
-          were written with AI programming assistance, as much open-source
-          software now is. No indexed work formed part of that, and no such tool
-          is run against the index. The distinction is between writing a search
-          engine and training on its contents.
+          <strong>Software development.</strong> AI programming assistance has
+          been used to write parts of FicAtlas&apos;s code and search tooling.
         </li>
         <li>
           <strong>Collection is rate-limited and bounded.</strong> Metadata is
@@ -170,9 +157,8 @@ export default function About() {
         </li>
       </ul>
       <p>
-        If any of this is still not what you want for your work, the{" "}
-        <Link href="/takedown">removal form</Link> asks nothing of you and takes
-        effect immediately.
+        To request removal of your work, use the{" "}
+        <Link href="/takedown">removal form</Link>.
       </p>
     </main>
   )
