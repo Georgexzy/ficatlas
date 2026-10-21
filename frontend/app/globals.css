@@ -7664,18 +7664,29 @@ body > *:not(.site-footer) { flex: 0 0 auto; }
      date nobody reads on a phone.
 
      Scoped to `.traffic-table--refs` rather than to `.traffic-table`, because
-     the fourth column means something different in each of these tables — it
-     is "First seen" in the referrers and pages tables but "Found" in the
+     the columns mean different things in each of these tables — "First seen" is
+     a date in the referrers and pages tables but "Found" is a count in the
      searches one, and a rule written against the bare class would have taken
      out the most-asked-for column of the most-read table on the page.
 
-     "First seen" is what goes. "Last seen" is the column that answers "is this
-     still happening", which is why `ago()` sits beside it. And the host column
-     is allowed to wrap rather than be hidden: a referrer list is unreadable
-     without the site names, and they are words rather than numbers, so wrapping
-     costs height instead of a column. */
-  .traffic-table--refs th:nth-child(4),
-  .traffic-table--refs td:nth-child(4) { display: none; }
+     "First seen" was the first to go, for the reason above: "Last seen" is the
+     column that answers "is this still happening", which is why `ago()` sits
+     beside it. And the host column is allowed to wrap rather than be hidden: a
+     referrer list is unreadable without the site names, and they are words
+     rather than numbers, so wrapping costs height instead of a column.
+
+     The table grew two columns on 2026-10-21 ("Read" and "Clicked out" — what a
+     source's visitors then did, which is the difference between the search
+     engines here and the navigational ones), so two columns now go instead of
+     one and the surviving five are the width measured above. "People" is the
+     one that goes next: it is a count of people beside two more counts of
+     people, all sharing one arrival ranking already shown as bars, and it is
+     the least-acted-on of the three on a screen this narrow. Read and clicked
+     out stay because they are the finding the section now exists to show. */
+  .traffic-table--refs th:nth-child(5),
+  .traffic-table--refs td:nth-child(5),
+  .traffic-table--refs th:nth-child(6),
+  .traffic-table--refs td:nth-child(6) { display: none; }
   .traffic-table__q, .ranked__label { white-space: normal; overflow-wrap: anywhere; }
 }
 

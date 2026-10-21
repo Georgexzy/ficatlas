@@ -375,6 +375,11 @@ interface SearchRow {
 interface EmptyRow { query: string; runs: number; last_seen: string }
 interface RefRow {
   host: string; hits: number; visitors: number
+  // What the people a source sent then did, counted over their whole session.
+  // Arrivals alone rank navigational traffic above search traffic — measured
+  // 2026-10-21: DuckDuckGo's 250 visitors produced 43 story readers, Google's
+  // 176 produced 70.
+  readers: number; clickers: number
   first_seen: string; last_seen: string
 }
 interface Searches {
@@ -1516,10 +1521,13 @@ export default function TrafficPanel(
         </Section>
       )}
       {refs?.length ? (
-        <Section id="referrers" title="Where readers came from" onActive={onActive}>
+        <Section id="referrers" title="Where readers came from" onActive={onActive}
+          note="Read is people who opened a story page; clicked out is people who went on to an archive. Both count the whole visit rather than the arrival row — internal navigation carries no referrer, so a reader who lands on a hub and opens a story from there is still credited to the source that sent them.">
         <TableTools table={tRefs} rows={tRefs.view}
             columns={[{ id: "host", label: "Site" }, { id: "hits", label: "Arrivals" },
-                      { id: "visitors", label: "People" }, { id: "first_seen", label: "First seen" },
+                      { id: "visitors", label: "People" }, { id: "readers", label: "Read" },
+                      { id: "clickers", label: "Clicked out" },
+                      { id: "first_seen", label: "First seen" },
                       { id: "last_seen", label: "Last seen" }]} />
         {/* The bars above the table rather than only in it. Referrers are read
             as a list — "where does our audience come from" is a ranking
@@ -1533,6 +1541,8 @@ export default function TrafficPanel(
             <Th id="host" label="Site" table={tRefs} />
             <Th id="hits" label="Arrivals" table={tRefs} align="r" />
             <Th id="visitors" label="People" table={tRefs} align="r" />
+            <Th id="readers" label="Read" table={tRefs} align="r" />
+            <Th id="clickers" label="Clicked out" table={tRefs} align="r" />
             <Th id="first_seen" label="First seen" table={tRefs} />
             <Th id="last_seen" label="Last seen" table={tRefs} />
           </tr></thead>
@@ -1546,6 +1556,8 @@ export default function TrafficPanel(
                   <span className="num__v">{r.hits}</span>
                 </td>
                 <td>{r.visitors}</td>
+                <td>{r.readers}</td>
+                <td>{r.clickers}</td>
                 <td>{shortDate(r.first_seen)}</td>
                 <td><span className="traffic-table__abs">{shortDate(r.last_seen)}</span>
                   <span className="traffic-table__ago">{ago(r.last_seen)}</span>

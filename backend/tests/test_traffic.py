@@ -1470,6 +1470,73 @@ def test_an_outbound_click_is_not_a_referral(db):
     assert "archiveofourown.org" not in hosts
 
 
+def _arrival(host: str, ip: str, path: str = "/"):
+    """One person arriving from `host` and landing on `path`."""
+    v = tracking.visitor_hash(ip, "Firefox")
+    tracking.record("page", path, v, ref=host)
+    return v
+
+
+def test_a_referrer_reports_what_its_readers_did(db):
+    """Arrivals alone rank the wrong source. Over 68 measured days DuckDuckGo
+    sent the most people here (262) and 93% of their first pages were `/`,
+    while Google sent 177 and landed 159 of them on a hub page — so the report
+    has to carry what a source's visitors then DID, not only how many there
+    were."""
+    g1 = _arrival("www.google.com", "198.51.100.1", "/ship/draco-malfoy-harry-potter")
+    g2 = _arrival("www.google.com", "198.51.100.2", "/fandom/harry-potter")
+    _arrival("www.google.com", "198.51.100.3")            # arrived, read nothing
+    tracking.record("page", "/story/abc", g2)             # internal: no referrer
+    tracking.record("out", "/story/abc", g2, ref="archiveofourown.org")
+    tracking.record("page", "/story/def", g1)
+    b1 = _arrival("www.bing.com", "198.51.100.4")
+    b2 = _arrival("www.bing.com", "198.51.100.5")
+    tracking.record("page", "/", b1)
+    tracking.flush()
+
+    rows = {r["host"]: r
+            for r in traffic.referrers(days=7, limit=10, db=db, _owner=None)["referrers"]}
+
+    assert rows["www.google.com"]["visitors"] == 3
+    assert rows["www.google.com"]["readers"] == 2      # g1 and g2 opened a story
+    assert rows["www.google.com"]["clickers"] == 1     # g2 went on to AO3
+    assert rows["www.bing.com"]["visitors"] == 2
+    assert rows["www.bing.com"]["readers"] == 0        # nothing past home
+    assert rows["www.bing.com"]["clickers"] == 0
+    for r in rows.values():
+        assert r["readers"] <= r["visitors"] <= r["hits"]
+
+
+def test_reading_is_credited_to_the_source_of_the_session_not_the_row(db):
+    """Internal navigation carries no referrer: the story row of a session that
+    arrived from Google has `ref_host IS NULL`. Requiring the referrer on the
+    row being counted is what turned 71 Google story-readers into 5 when the
+    first version of this report was measured by hand."""
+    v = tracking.visitor_hash("198.51.100.9", "Firefox")
+    tracking.record("page", "/ship/percival-vex-ahlia", v, ref="www.google.com")
+    tracking.record("page", "/story/xyz", v)
+    tracking.record("out", "/story/xyz", v, ref="archiveofourown.org")
+    tracking.flush()
+
+    rows = traffic.referrers(days=7, limit=10, db=db, _owner=None)["referrers"]
+    assert [(r["host"], r["visitors"], r["readers"], r["clickers"]) for r in rows] \
+        == [("www.google.com", 1, 1, 1)]
+
+
+def test_an_outbound_click_never_becomes_a_referrer_even_for_the_clickers_count(db):
+    """`out` rows keep their DESTINATION in ref_host. They are excluded from
+    arrivals (above) and they must not reappear as a source of readers either —
+    AO3 sends nobody here; it is where people go."""
+    v = tracking.visitor_hash("198.51.100.21", "Firefox")
+    tracking.record("page", "/", v, ref="www.google.com")
+    tracking.record("out", "/story/x", v, ref="archiveofourown.org")
+    tracking.flush()
+
+    rows = traffic.referrers(days=7, limit=10, db=db, _owner=None)["referrers"]
+    assert [(r["host"], r["readers"], r["clickers"]) for r in rows] \
+        == [("www.google.com", 0, 1)]
+
+
 def test_a_result_click_records_its_position_and_its_search(db):
     req = _FakeRequest(ip="203.0.113.40")
     v = tracking.visitor_hash("203.0.113.40", req.headers["user-agent"])

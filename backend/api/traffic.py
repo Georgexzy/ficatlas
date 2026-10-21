@@ -1067,24 +1067,63 @@ def referrers(days: int = Query(30, ge=1, le=365),
               limit: int = Query(30, ge=1, le=200),
               db: Session = Depends(get_db),
               _owner=Depends(require_owner)):
-    """Which other sites send readers here. Self-referrals are already dropped
-    at write time, so everything in this list is genuinely external."""
+    """Which other sites send readers here, and what those readers then did.
+
+    Self-referrals are already dropped at write time, so everything in this list
+    is genuinely external.
+
+    `readers` and `clickers` are the reason the report exists rather than a
+    ranking of volume. Measured 2026-10-21 over 68 days: DuckDuckGo sent the
+    most arrivals (262 people) and 93% of their first pages were `/` — typed
+    brand traffic — while Google sent 177 and landed 159 of them on a hub page.
+    Arrival counts alone put DuckDuckGo on top and say nothing about which of
+    the two sends readers. Both are PEOPLE, counted over the visitor's whole
+    session rather than on the row that carried the referrer: internal
+    navigation sends no `ref_host`, so requiring it on the story row itself
+    reports 5 of Google's 71 story-readers. And `clickers` cannot be read off
+    the row at all — an outbound click stores its DESTINATION in ref_host, so
+    it is an intersection of visitor sets (see the `out` exclusion below).
+    """
     rows = db.execute(text("""
-        SELECT ref_host, count(*) AS hits, count(DISTINCT visitor) AS visitors,
-               min(at)::date AS first_seen, max(at)::date AS last_seen
-        FROM visit_events_readers
-        WHERE at >= :cut AND NOT bot AND ref_host IS NOT NULL
-          -- An OUTBOUND click stores its destination in ref_host (see the
-          -- /hit docstring), so without this every "Read on AO3" counted as AO3
-          -- sending a reader here. Measured 2026-10-04: all 156 "AO3
-          -- referrals" and all 9 FF.net ones were outbound clicks, and AO3 sat
-          -- at the top of this list above Google's 108 real arrivals.
-          AND kind <> 'out'
-        GROUP BY 1 ORDER BY hits DESC LIMIT :lim
+        WITH arrived AS (
+            SELECT ref_host, visitor, min(at) AS first_at, max(at) AS last_at,
+                   count(*) AS hits
+              FROM visit_events_readers
+             WHERE at >= :cut AND NOT bot AND ref_host IS NOT NULL
+               -- An OUTBOUND click stores its destination in ref_host (see the
+               -- /hit docstring), so without this every "Read on AO3" counted as
+               -- AO3 sending a reader here. Measured 2026-10-04: all 156 "AO3
+               -- referrals" and all 9 FF.net ones were outbound clicks, and AO3
+               -- sat at the top of this list above Google's 108 real arrivals.
+               AND kind <> 'out'
+             GROUP BY 1, 2
+        ), did AS (
+            SELECT visitor,
+                   -- `kind = 'page'` on purpose: an outbound click records the
+                   -- story page it was made FROM, and letting that count as a
+                   -- read would make "clicked out" a superset that cannot be
+                   -- read as "opened a story".
+                   bool_or(kind = 'page' AND path LIKE '/story/%') AS read_a_story,
+                   bool_or(kind = 'out') AS clicked_out
+              FROM visit_events_readers
+             WHERE at >= :cut AND NOT bot
+             GROUP BY visitor
+        )
+        SELECT a.ref_host,
+               sum(a.hits)::int AS hits,
+               count(*) AS visitors,
+               count(*) FILTER (WHERE d.read_a_story) AS readers,
+               count(*) FILTER (WHERE d.clicked_out) AS clickers,
+               min(a.first_at)::date AS first_seen,
+               max(a.last_at)::date AS last_seen
+          FROM arrived a
+          LEFT JOIN did d USING (visitor)
+         GROUP BY 1 ORDER BY 2 DESC LIMIT :lim
     """), {"cut": _window(days), "lim": limit}).fetchall()
     return {"referrers": [{"host": r[0], "hits": r[1], "visitors": r[2],
-                           "first_seen": r[3].isoformat(),
-                           "last_seen": r[4].isoformat()} for r in rows]}
+                           "readers": int(r[3] or 0), "clickers": int(r[4] or 0),
+                           "first_seen": r[5].isoformat(),
+                           "last_seen": r[6].isoformat()} for r in rows]}
 
 
 # When `bot_kind` started being recorded. Before this the table knows a request
