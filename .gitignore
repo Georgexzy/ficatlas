@@ -23,6 +23,9 @@ backups/
 
 # Production secrets (see .env.example)
 .env
+# Downloaded Google OAuth desktop clients are local credentials, never source.
+client_secret*.json
+search-console-token*.json
 
 # tsc incremental build info, and the node_modules symlink used to typecheck a
 # worktree against the frontend image (see the tsc invocation in git log)
