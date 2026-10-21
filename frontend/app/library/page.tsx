@@ -20,19 +20,6 @@ import { useAuth } from "@/lib/auth"
 import { pollJob } from "@/lib/pollJob"
 import { importToLibrary } from "@/lib/importToLibrary"
 
-// Turn a failed import response into a message a reader can act on. Prefer the
-// backend's own `detail` (e.g. "FicHub is throttling us right now"); fall back
-// to classifying by status code. A response whose body is not JSON at all — a
-// proxy error page — degrades to a status message instead of a raw JSON.parse
-// crash.
-const importErrorText = async (r: Response): Promise<string> => {
-  try {
-    const b = await r.json()
-    if (b && typeof b.detail === "string" && b.detail) return b.detail
-  } catch { /* non-JSON body */ }
-  return describeError(null, r.status).message
-}
-
 const API_BASE_C = ""
 
 // Fandom input with index-first + AO3-canonical autocomplete. Suggesting from the
