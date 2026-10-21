@@ -1304,8 +1304,10 @@ function ReadingActivity() {
     follow_works: Array<{id: string; title: string; chapters: number}>;
     resume: {story_id: string; chapter: number} | null;
     has_email: boolean;
+    follows?: number;
     continue_reading?: Array<{id: string; title: string; author?: string; word_count?: number;
-      chapters: number; site?: string; is_hosted?: boolean; chapter: number; at: string}>;
+      chapters: number; site?: string; is_hosted?: boolean; status?: string;
+      chapter: number; at: string}>;
     // The fandoms picked at signup, resolved to names and hub slugs by
     // /api/follows/welcome — see _your_fandoms there for why the key exists.
     your_fandoms?: Array<{slug: string; name: string; work_count: number}>;
@@ -1326,6 +1328,10 @@ function ReadingActivity() {
     ? cr.find(s => s.id === data.resume!.story_id) ?? cr[0]
     : cr[0]
   const more = latest ? cr.filter(s => s.id !== latest.id) : cr
+  // The newest work that is still being written. Following a FINISHED work is
+  // a promise of updates that can never arrive, which is why the result card
+  // hides its follow button on completed works and this must too.
+  const nextUp = cr.find(s => s.status === "in_progress")
   // ANY of the three is enough to be on the page. The fandoms row in
   // particular must not be gated on having read something first: the reader
   // who picked fandoms at signup and has done nothing else is exactly the
@@ -1349,6 +1355,20 @@ function ReadingActivity() {
       {hasFollow && (
         <Link href="/library?tab=following" className="reading-activity__updates">
           {data.follow_unread} followed work{data.follow_unread === 1 ? " has" : "s have"} updates
+        </Link>
+      )}
+      {/* The follow nobody is being offered. Measured 2026-10-21: five accounts
+          had reading progress and three of them followed no work at all — the
+          feature built to bring readers back was unknown to most of the people
+          using the site to read. A LINK and not a button, because the control
+          lives on the work, and only an unfinished one is offered there. It is
+          gated on `follows` rather than on unread updates: zero unread also
+          describes a reader following ten finished works, and offering that
+          person a follow reads as the site not noticing what they did. */}
+      {(data.follows ?? 0) === 0 && nextUp && (
+        <Link href={`/story/${nextUp.id}`} className="reading-activity__updates"
+              title="Follow this work for updates — across AO3, FanFiction.net and FictionAlley">
+          Follow &ldquo;{nextUp.title}&rdquo; and be told when it updates
         </Link>
       )}
       {/* The signup picker's promise, kept: these fandoms are the reader's own

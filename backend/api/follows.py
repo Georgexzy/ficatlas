@@ -146,6 +146,11 @@ def unread_count(db: Session = Depends(get_db),
 class WelcomeBack(BaseModel):
     follow_unread: int = 0
     follow_works: list[dict] = []
+    # How many works the reader follows AT ALL, as opposed to how many have
+    # moved. The difference matters: an unread count of 0 also describes
+    # somebody who follows ten finished works, and offering that reader a
+    # "follow this" link reads as the site not noticing what they already did.
+    follows: int = 0
     resume: dict | None = None
     has_email: bool = False
     continue_reading: list[dict] = []
@@ -286,8 +291,13 @@ def welcome_back(db: Session = Depends(get_db),
             except (ValueError, AttributeError):
                 sids = []
             if sids:
+                # status rides along so the front door can offer a follow for a
+                # work that still HAS updates. Following a finished work is a
+                # promise this feature cannot keep, and the card's own follow
+                # button already hides for exactly that reason.
                 rows = db.execute(text("""
-                    SELECT id::text, title, author, word_count, chapter_count, site, is_hosted
+                    SELECT id::text, title, author, word_count, chapter_count, site,
+                           is_hosted, status
                       FROM stories
                      WHERE id = ANY(CAST(:ids AS uuid[])) AND delisted_at IS NULL
                 """), {"ids": sids}).fetchall()
@@ -298,19 +308,22 @@ def welcome_back(db: Session = Depends(get_db),
                         continue_reading.append({
                             "id": r[0], "title": r[1], "author": r[2],
                             "word_count": r[3], "chapters": r[4], "site": r[5],
-                            "is_hosted": r[6], "chapter": ch, "at": at,
+                            "is_hosted": r[6], "status": r[7], "chapter": ch, "at": at,
                         })
         except Exception:
             pass
 
-    # Always read, like progress above: this is not part of the banner. A
-    # reader who was here a minute ago still gets their fandoms on the front
-    # door, because the strip is a standing recommendation rather than a
+    # Always read, like progress above: neither of these is part of the banner.
+    # A reader who was here a minute ago still gets their fandoms and the follow
+    # nudge on the front door, because both are standing state rather than a
     # "welcome back" notice.
+    follows_total = db.execute(text(
+        "SELECT count(*) FROM follows WHERE user_id = :u"
+    ), {"u": str(viewer.id)}).scalar() or 0
     your_fandoms = _your_fandoms(db, viewer.id)
 
     if not returning:
-        return WelcomeBack(continue_reading=continue_reading,
+        return WelcomeBack(continue_reading=continue_reading, follows=follows_total,
                            your_fandoms=your_fandoms).dict()
 
     unread_count = db.execute(text("""
@@ -351,7 +364,7 @@ def welcome_back(db: Session = Depends(get_db),
     ]
     has_email = bool((viewer.email or "").strip())
     return WelcomeBack(follow_unread=unread_count, follow_works=follow_works,
-                      resume=resume, has_email=has_email,
+                      follows=follows_total, resume=resume, has_email=has_email,
                       continue_reading=continue_reading,
                       your_fandoms=your_fandoms).dict()
 

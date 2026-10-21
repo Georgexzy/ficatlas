@@ -215,6 +215,36 @@ class TestWelcomeBack:
         data = r.json()
         assert data["resume"] == {"story_id": str(s), "chapter": 2, "at": "2026-01-01T00:00:00"}
 
+    def test_carries_status_and_a_follow_total(self, db, client):
+        """The two facts the front door's follow nudge cannot work out itself.
+
+        Whether the work is still being written — following a finished one is a
+        promise of updates that will never arrive — and how many works the
+        reader follows AT ALL. Zero unread is also what a reader following ten
+        finished works looks like, so it cannot stand in for that number.
+        """
+        u = _user(db, "nudge")
+        s = _story(db, chapters=3)
+        db.execute(text("UPDATE stories SET status = 'in_progress' WHERE id = :s"),
+                   {"s": s})
+        db.execute(text("""
+            INSERT INTO user_data (user_id, key, value)
+            VALUES (:u, 'progress', :v)
+        """), {"u": u, "v": json.dumps({str(s): {"chapter": 1, "at": "2026-01-01T00:00:00"}})})
+        db.commit()
+        tok = _session(db, u)
+
+        data = client.get("/api/follows/welcome", cookies={"sat": tok}).json()
+        assert data["follows"] == 0
+        assert [c["status"] for c in data["continue_reading"]] == ["in_progress"]
+
+        _follow(db, u, s)
+        data = client.get("/api/follows/welcome", cookies={"sat": tok}).json()
+        assert data["follows"] == 1
+        # Following records the current state as seen, so a fresh follow has
+        # nothing unread. The two counts answer different questions.
+        assert data["follow_unread"] == 0
+
     def test_empty_for_signed_out(self, db, client):
         r = client.get("/api/follows/welcome")
         assert r.status_code == 200
