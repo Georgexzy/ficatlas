@@ -305,6 +305,15 @@ cmd_promote() {
     c_ok "ficatlas.com is now served by ${target} (${tag})"
     check_nginx_conf
 
+    # Old edge HTML references the previous build's hashed JavaScript chunks.
+    # Refresh it once nginx serves the new colour, before the old one retires.
+    step "Refreshing Cloudflare cache"
+    if python3 deploy/purge_cloudflare_cache.py; then
+        c_ok "Cloudflare will fetch pages from ${target}."
+    else
+        c_warn "Cloudflare cache could not be cleared; old HTML may remain for its TTL."
+    fi
+
     step "Keeping ${live} for ${GRACE_SECONDS}s so rollback is instant"
     echo "    deploy/promote.sh --rollback   # if anything looks wrong"
     sleep "$GRACE_SECONDS"
