@@ -212,6 +212,7 @@ def summary(days: int = Query(30, ge=1, le=365),
     """
     first, last = _span(days)
     bots = "" if include_bots else "AND NOT e.bot"
+    source = "visit_events_public" if include_bots else "visit_events_readers"
     rows = db.execute(text(f"""
         SELECT d::date                                    AS day,
                count(e.id) FILTER (WHERE e.kind='page')    AS views,
@@ -228,7 +229,7 @@ def summary(days: int = Query(30, ge=1, le=365),
         --  tests/test_series_detect_sql.py, which is the same rule.)
         -- LEFT JOIN, and the window belongs in the ON clause. Moved to WHERE,
         -- it discards the very days this query exists to keep.
-        LEFT JOIN visit_events e
+        LEFT JOIN {source} e
                ON e.at >= d AND e.at < d + interval '1 day' {bots}
               -- and not a session that only ever called the API. See
               -- _NOT_A_BROWSER: this is the backstop for automation that sends
@@ -301,7 +302,7 @@ def summary(days: int = Query(30, ge=1, le=365),
         -- generate_series and a LEFT JOIN for the same reason the main query
         -- uses them: grouped by the dates that happen to have rows, a quiet
         -- window draws a chart with no gaps in it and reads as continuous.
-        LEFT JOIN visit_events e
+        LEFT JOIN {source} e
                ON e.at >= d AND e.at < d + interval '1 day' {bots}
               AND NOT ({_NOT_A_BROWSER})
               AND NOT ({swarm})
@@ -521,7 +522,7 @@ def _funnel(db: Session, first, last) -> dict:
                    count(*) FILTER (WHERE kind = 'page')                          AS pages,
                    count(*) FILTER (WHERE kind = 'page' AND path LIKE '/story/%') AS stories,
                    count(*) FILTER (WHERE kind = 'out')                           AS outs
-              FROM visit_events_public
+              FROM visit_events_readers
              WHERE NOT bot AND at >= :first AND at < :end
              GROUP BY visitor
         )
@@ -706,7 +707,7 @@ def routes(days: int = Query(30, ge=1, le=365),
                    lag(path) OVER (PARTITION BY visitor ORDER BY at) AS prev_path,
                    lag(kind) OVER (PARTITION BY visitor ORDER BY at) AS prev_kind,
                    lag(at)   OVER (PARTITION BY visitor ORDER BY at) AS prev_at
-              FROM visit_events_public
+              FROM visit_events_readers
              WHERE NOT bot AND at >= :cut AND kind IN ('page', 'search')
         )
         SELECT CASE
@@ -734,7 +735,7 @@ def routes(days: int = Query(30, ge=1, le=365),
         SELECT count(*) FILTER (WHERE kind='page'
                                  AND (path LIKE '/ship/%' OR path LIKE '/fandom/%')),
                count(*) FILTER (WHERE kind='search')
-          FROM visit_events_public WHERE NOT bot AND at >= :cut
+          FROM visit_events_readers WHERE NOT bot AND at >= :cut
     """), {"cut": cut}).first()
 
     return {
@@ -753,7 +754,7 @@ def pages(days: int = Query(30, ge=1, le=365),
     rows = db.execute(text("""
         SELECT path, count(*) AS views, count(DISTINCT visitor) AS visitors,
                min(at)::date AS first_seen, max(at)::date AS last_seen
-        FROM visit_events_public
+        FROM visit_events_readers
         WHERE at >= :cut AND kind = 'page' AND NOT bot
         GROUP BY path ORDER BY views DESC LIMIT :lim
     """), {"cut": _window(days), "lim": limit}).fetchall()
@@ -802,7 +803,7 @@ def searches(days: int = Query(30, ge=1, le=365),
                count(DISTINCT visitor) AS visitors,
                max(results) AS best_results,
                min(at) AS first_seen, max(at) AS last_seen
-        FROM visit_events_public
+        FROM visit_events_readers
         WHERE at >= :cut AND kind = 'search' AND NOT bot AND q IS NOT NULL AND q <> ''
           AND path = '/api/search'
         GROUP BY 1 ORDER BY runs DESC LIMIT :lim
@@ -810,7 +811,7 @@ def searches(days: int = Query(30, ge=1, le=365),
     empty = db.execute(text("""
         SELECT lower(q) AS query, count(*) AS runs,
                max(at) AS last_seen
-        FROM visit_events_public
+        FROM visit_events_readers
         WHERE at >= :cut AND kind = 'search' AND NOT bot
           AND q IS NOT NULL AND q <> '' AND results = 0
           AND path = '/api/search'
@@ -836,9 +837,9 @@ def searches(days: int = Query(30, ge=1, le=365),
                count(*) FILTER (WHERE results = 0 AND path = '/api/search'),
                count(DISTINCT lower(q)),
                count(*) FILTER (WHERE path = '/api/search' AND visitor NOT IN (
-                   SELECT visitor FROM visit_events_public
+                   SELECT visitor FROM visit_events_readers
                     WHERE at >= :cut AND kind <> 'search'))
-        FROM visit_events_public
+        FROM visit_events_readers
         WHERE at >= :cut AND kind = 'search' AND NOT bot
           AND q IS NOT NULL AND q <> ''
     """), {"cut": cut}).first()
@@ -893,7 +894,7 @@ def clicks(days: int = Query(30, ge=1, le=365),
                     WHEN pos <= 5 THEN '4-5' WHEN pos <= 10 THEN '6-10'
                     WHEN pos <= 20 THEN '11-20' ELSE '21+' END AS bucket,
                count(*) AS clicks, count(DISTINCT visitor) AS people
-          FROM visit_events_public
+          FROM visit_events_readers
          WHERE kind = 'click' AND NOT bot AND pos IS NOT NULL AND at >= :cut
          GROUP BY 1
     """), {"cut": cut}).fetchall()
@@ -904,13 +905,13 @@ def clicks(days: int = Query(30, ge=1, le=365),
     unclicked = db.execute(text("""
         WITH s AS (
             SELECT lower(q) AS q, count(*) AS runs, max(results) AS results
-              FROM visit_events_public
+              FROM visit_events_readers
              WHERE kind = 'search' AND NOT bot AND at >= :cut AND q IS NOT NULL
                AND path = '/api/search' AND coalesce(results, 0) > 0
              GROUP BY 1),
         c AS (
             SELECT lower(q) AS q, count(*) AS clicks
-              FROM visit_events_public
+              FROM visit_events_readers
              WHERE kind = 'click' AND NOT bot AND at >= :cut AND q IS NOT NULL
              GROUP BY 1)
         SELECT s.q, s.runs, s.results, coalesce(c.clicks, 0)
@@ -919,7 +920,7 @@ def clicks(days: int = Query(30, ge=1, le=365),
          LIMIT 30
     """), {"cut": cut}).fetchall()
     since = db.execute(text(
-        "SELECT min(at)::date FROM visit_events_public WHERE kind = 'click'")).scalar()
+        "SELECT min(at)::date FROM visit_events_readers WHERE kind = 'click'")).scalar()
     return {
         "since": since.isoformat() if since else None,
         "total": total,
@@ -957,7 +958,7 @@ def performance(days: int = Query(30, ge=1, le=365),
                percentile_cont(0.95) WITHIN GROUP (ORDER BY extract_ms)
                    FILTER (WHERE extract_ms IS NOT NULL) AS extract_p95_ms,
                min(at) FILTER (WHERE duration_ms IS NOT NULL) AS measured_since
-          FROM visit_events_public e
+          FROM visit_events_readers e
          WHERE e.at >= CAST(:first AS date)
            AND e.at < CAST(:last AS date) + interval '1 day'
            AND e.kind = 'search'
@@ -993,7 +994,7 @@ def referrers(days: int = Query(30, ge=1, le=365),
     rows = db.execute(text("""
         SELECT ref_host, count(*) AS hits, count(DISTINCT visitor) AS visitors,
                min(at)::date AS first_seen, max(at)::date AS last_seen
-        FROM visit_events_public
+        FROM visit_events_readers
         WHERE at >= :cut AND NOT bot AND ref_host IS NOT NULL
           -- An OUTBOUND click stores its destination in ref_host (see the
           -- /hit docstring), so without this every "Read on AO3" counted as AO3
@@ -1197,7 +1198,7 @@ def entry(days: int = Query(30, ge=1, le=365),
     first, last = _span(days)
     rows = db.execute(text(f"""
         WITH ev AS (
-          SELECT * FROM visit_events_public e
+          SELECT * FROM visit_events_readers e
            WHERE e.at >= CAST(:first AS date)
              AND e.at <  CAST(:last AS date) + interval '1 day'
              AND NOT e.bot
@@ -1256,7 +1257,7 @@ def entry(days: int = Query(30, ge=1, le=365),
              "searched": r[4], "went_out": r[5], "search_referrals": r[6]}
             for r in db.execute(text(f"""
         WITH ev AS (
-          SELECT * FROM visit_events_public e
+          SELECT * FROM visit_events_readers e
            WHERE e.at >= CAST(:first AS date)
              AND e.at <  CAST(:last AS date) + interval '1 day'
              AND NOT e.bot AND NOT ({_NOT_A_BROWSER}) AND NOT ({_SWARM})),
@@ -1288,7 +1289,7 @@ def entry(days: int = Query(30, ge=1, le=365),
     # will not remember, or Do Not Track) is counted as unknown rather than as
     # a first visit, because those are different facts.
     returning = {r[0] or "unknown": r[1] for r in db.execute(text(f"""
-        SELECT seen, count(DISTINCT visitor) FROM visit_events_public e
+        SELECT seen, count(DISTINCT visitor) FROM visit_events_readers e
          WHERE e.at >= CAST(:first AS date)
            AND e.at <  CAST(:last AS date) + interval '1 day'
            AND NOT e.bot AND NOT ({_NOT_A_BROWSER}) AND NOT ({_SWARM})

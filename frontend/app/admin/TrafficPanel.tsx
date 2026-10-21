@@ -726,6 +726,11 @@ export default function TrafficPanel(
           </span>
         </p>
 
+        <p className="admin-note">Reader figures exclude known bots and scripts.
+          On days with an unusual surge, a session also needs an external referral,
+          a return, a result or archive click, or two distinct pages. Direct
+          one-page visits on those days remain unverified and are left out.</p>
+
         <SectionNav sections={SECTIONS} active={active} onJump={jump} />
         {/* One polite live region for every copy on the page. `role="status"`
             rather than an alert: a finished copy is information, and a screen
@@ -775,10 +780,8 @@ export default function TrafficPanel(
           {t.script_searches === 1 ? "" : "es"} from{" "}
           {t.script_visitors.toLocaleString()}{" "}
           {t.script_visitors === 1 ? "session" : "sessions"} are excluded below:
-          they never loaded a page, so they are something calling the API rather
-          than somebody using the site. A reader whose privacy blocker eats the
-          beacon would look the same here — every population measured so far has
-          been testing from this repo.
+          they never loaded a page, so they look like API automation. A reader
+          whose privacy blocker stops the page beacon can look the same.
         </p>
       )}
 
@@ -854,14 +857,10 @@ export default function TrafficPanel(
               sub={trend(t.views, prev.views, vs)} spark={viewsSeries} />
         <Tile label="Searches" value={t.searches}
               sub={trend(t.searches, prev.searches, vs)} spark={searchSeries} />
-        <Tile label="Visitors, busiest day" value={t.busiest_day_visitors}
+        <Tile label="Readers, busiest day" value={t.busiest_day_visitors}
               sub={t.busiest_day ? longDate(t.busiest_day) : undefined}
               spark={summary.days.map(d => d.visitors)} />
-        {/* Crawlers are excluded from every other number on this page, but
-            "nobody came" and "nobody but crawlers came" are different facts,
-            and while the site is waiting to be indexed the second one is the
-            encouraging one. */}
-        <Tile label="Crawler requests" value={t.bot_views + t.bot_searches}
+        <Tile label="Known bot requests" value={t.bot_views + t.bot_searches}
               sub={`${t.bot_searches.toLocaleString()} searches, ${t.bot_views.toLocaleString()} pages`} />
       </div>
 
@@ -870,8 +869,7 @@ export default function TrafficPanel(
           Nothing recorded in this window yet. Pageviews are reported by the app
           itself, so they start from the moment this build went live — and
           readers who send Do Not Track, or who block the request, are never
-          counted. Crawlers do not run the beacon, so they are counted only
-          where the server sees them itself, which is searches.
+          counted. Automation that runs a browser can send the beacon too.
         </p>
       ) : (
         <>
@@ -1541,14 +1539,11 @@ export default function TrafficPanel(
 
       {/* The half of the traffic this page otherwise cannot see.
 
-          Everything above comes from a beacon the BROWSER sends, so it counts
-          only pages a human's browser actually rendered — and crawlers do not
-          run JavaScript. On a site whose growth depends on being indexed, "is
-          anything crawling us?" is the question the rest of this page
-          structurally cannot answer. Cloudflare already counts every request at
-          the edge because it is the thing serving them. */}
+          Browser beacons can also come from automation. The reader figures
+          above remove known bots and require engagement evidence on surge
+          days; Cloudflare shows all requests at the edge. */}
       <Section id="edge" title="At the edge, from Cloudflare" onActive={onActive}
-        note="Everything else on this page comes from a beacon the BROWSER sends, so it counts only pages a human's browser rendered — and crawlers do not run JavaScript.">
+        note="Edge totals include every request. Reader figures above exclude known bots and low-evidence surge sessions; they are estimates, not proof of identity.">
       {!cf ? (
         <p className="loading">Asking Cloudflare…</p>
       ) : !cf.configured ? (
@@ -1590,8 +1585,8 @@ export default function TrafficPanel(
             while the beacon recorded <strong>{t.views.toLocaleString()} pageviews</strong>.
             They count different things and do not add up: the first is every file
             fetched by anyone including crawlers, the second is pages rendered by a
-            human&rsquo;s browser. A gap that grows while pageviews stay flat is
-            something crawling the site — which is what you want.
+            likely reader sessions. A widening gap can signal automation or
+            heavy asset traffic; inspect the edge breakdown to tell which.
           </p>
 
           {cf.cache_breakdown?.length ? (

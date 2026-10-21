@@ -552,9 +552,16 @@ async def _import_url_impl(url: str, private: bool, db: Session,
                     .first())
     if existing and existing.is_hosted:
         ch_count = db.query(Chapter).filter(Chapter.story_id == existing.id).count()
+        if private:
+            db.execute(sql_text("""
+                INSERT INTO user_hosted (user_id, story_id) VALUES (:u, :s)
+                ON CONFLICT DO NOTHING
+            """), {"u": str(viewer.id), "s": str(existing.id)})
+            db.commit()
         return {"id": str(existing.id), "title": existing.title,
                 "chapters": ch_count, "already_hosted": True,
-                "matched_via": "cross_post" if existing.url != url else "url"}
+                "matched_via": "cross_post" if existing.url != url else "url",
+                "private": bool(private)}
     # A previous private import may have completed after the browser timed out.
     # Reuse its stored chapters and grant this reader access rather than
     # downloading the whole work again (and replacing the chapters underneath
@@ -710,15 +717,17 @@ async def _import_url_impl(url: str, private: bool, db: Session,
 
 
 @router.post("/import-url-job")
-async def import_url_job(url: str = Form(...),
+async def import_url_job(url: str = Form(...), private: bool = Form(True),
     db: Session = Depends(get_db),
     viewer: Optional[User] = Depends(get_current_user),
 ):
-    """Start a reader import without holding the browser/proxy request open."""
+    """Start an import without holding the browser/proxy request open."""
     if viewer is None:
         raise HTTPException(401, "Sign in to save a story to your library.")
     if not _story_key_from_url(url):
         raise HTTPException(400, "Use an AO3 or FanFiction.net story URL.")
+    if not private:
+        _require_role(viewer, db, ROLE_ADMIN)
 
     from reader_import_jobs import create, update
     from live_fetch.jobs import run_in_background
@@ -739,7 +748,7 @@ async def import_url_job(url: str = Form(...),
                 if user is None:
                     raise HTTPException(401, "Sign in again to save this story.")
                 result = await _import_url_impl(
-                    url=url, private=True, db=work_db, viewer=user,
+                    url=url, private=private, db=work_db, viewer=user,
                     progress_callback=_progress)
             with db_session() as status_db:
                 update(status_db, job_id, status="done", progress="Saved to your library.",
@@ -885,7 +894,7 @@ def list_mine(limit: int = 100, offset: int = 0,
 
     rows = db.execute(sql_text("""
         SELECT s.id, s.title, s.author, s.site, s.word_count, s.chapter_count,
-               s.summary, s.tags, s.url, uh.created_at
+               s.summary, s.tags, s.url, uh.created_at, s.status
         FROM user_hosted uh JOIN stories s ON s.id = uh.story_id
         WHERE uh.user_id = :u
         ORDER BY uh.created_at DESC
@@ -900,6 +909,7 @@ def list_mine(limit: int = 100, offset: int = 0,
             "word_count": r[4] or 0, "chapter_count": r[5] or 0,
             "summary": r[6], "tags": r[7] or [], "url": r[8],
             "added_at": r[9].isoformat() if r[9] else None,
+            "status": r[10].value if hasattr(r[10], "value") else r[10],
         } for r in rows],
     }
 

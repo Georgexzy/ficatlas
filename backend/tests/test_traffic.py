@@ -604,6 +604,31 @@ def test_a_swarm_is_not_an_audience(db):
     assert rows >= _SWARM_PER_MINUTE
 
 
+def test_surge_day_requires_reader_evidence_without_losing_referrals(db):
+    """A slow rotating pool stays below the per-minute swarm threshold."""
+    at = datetime.utcnow().replace(hour=1, minute=0, second=0, microsecond=0)
+    for i in range(120):
+        db.execute(text("""
+            INSERT INTO visit_events (at, visitor, kind, path, seen)
+            VALUES (:at, :v, 'page', '/', 'first')
+        """), {"at": at + timedelta(minutes=i), "v": f"slowbot{i:09d}"})
+    db.execute(text("""
+        INSERT INTO visit_events (at, visitor, kind, path, ref_host, seen)
+        VALUES (:at, 'referred_reader1', 'page', '/', 'www.google.com', 'first')
+    """), {"at": at + timedelta(minutes=121)})
+    for path in ("/", "/story/one"):
+        db.execute(text("""
+            INSERT INTO visit_events (at, visitor, kind, path, seen)
+            VALUES (:at, 'direct_reader01', 'page', :path, 'first')
+        """), {"at": at + timedelta(minutes=122), "path": path})
+    db.commit()
+
+    assert db.execute(text("SELECT count(DISTINCT visitor) FROM visit_events_readers")).scalar() == 2
+    day = traffic.summary(days=1, include_bots=False, db=db, _owner=None)["days"][-1]
+    assert day["visitors"] == 2
+    assert day["views"] == 3
+
+
 def test_the_day_the_site_works_is_not_mistaken_for_one(db):
     """The objection to any arrival-rate rule, and the reason it is safe.
 

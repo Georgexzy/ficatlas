@@ -18,6 +18,7 @@ import FollowingTab from "./FollowingTab"
 import SavedSearchesTab from "./SavedSearchesTab"
 import { useAuth } from "@/lib/auth"
 import { pollJob } from "@/lib/pollJob"
+import { importToLibrary } from "@/lib/importToLibrary"
 
 // Turn a failed import response into a message a reader can act on. Prefer the
 // backend's own `detail` (e.g. "FicHub is throttling us right now"); fall back
@@ -115,7 +116,48 @@ const API_BASE = ""  // relative — handled by Next.js rewrite to backend
 
 interface Bookmark { id: string; title: string; author: string; site: string; url: string; savedAt: string }
 interface ProgressEntry { chapter: number; at: string; title: string }
-interface HostedStory { id: string; title: string; author: string; site: string; word_count: number; chapter_count: number; summary?: string; tags: string[]; indexed_at?: string | null; added_at?: string | null }
+interface HostedStory { id: string; title: string; author: string; site: string; word_count: number; chapter_count: number; summary?: string; tags: string[]; status?: string; indexed_at?: string | null; added_at?: string | null }
+
+function ShelfFollow({ id, title }: { id: string; title: string }) {
+  const [following, setFollowing] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    let live = true
+    fetchWithTimeout(`/api/follows/${id}`, { credentials: "include" }, BACKGROUND_TIMEOUT_MS)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (live && d) setFollowing(!!d.following) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [id])
+
+  const toggle = async () => {
+    if (busy) return
+    const next = !following
+    setBusy(true); setError("")
+    try {
+      const r = await fetchWithTimeout(`/api/follows/${id}`, {
+        method: next ? "POST" : "DELETE", credentials: "include",
+      }, USER_TIMEOUT_MS)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      setFollowing(next)
+    } catch {
+      setError("Could not update. Try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <>
+    <button type="button" className="shelf-follow" onClick={toggle}
+      disabled={busy} aria-pressed={following === true}
+      aria-label={`${following ? "Stop following" : "Get chapter updates for"} ${title}`}>
+      {following ? "✓ Following updates" : "+ Get chapter updates"}
+    </button>
+    {error && <span className="shelf-follow__error" role="status">{error}</span>}
+  </>
+}
 // "searches" is gone — recent searches now sit under the search bar, which is
 // where you are when you want to re-run one.
 // "following" leads, and it is the only one of these lists that changes on its
@@ -213,6 +255,11 @@ export default function LibraryPage() {
   const [mineError, setMineError] = useState<Failure | null>(null)
   // "My shelf" loads off `user`, so retrying needs its own trigger.
   const [mineReload, setMineReload] = useState(0)
+  const [saveUrl, setSaveUrl] = useState("")
+  const [saveBusy, setSaveBusy] = useState(false)
+  const [saveProgress, setSaveProgress] = useState("")
+  const [saveError, setSaveError] = useState("")
+  const [savedStory, setSavedStory] = useState<{ id: string; title: string } | null>(null)
   // The reader's own shelf. Separate state from `hosted` rather than a filter
   // over it, because they come from different endpoints and mean different
   // things: `hosted` is what anyone may read, `mine` is what only you may.
@@ -412,6 +459,23 @@ export default function LibraryPage() {
     const r = await fetchWithTimeout(`${API_BASE}/api/library/mine/${id}`,
       { method: "DELETE", credentials: "include" }, USER_TIMEOUT_MS)
     if (r.ok) { setMine(m => m.filter(x => x.id !== id)); setMineTotal(t => Math.max(0, t - 1)) }
+  }
+
+  const saveByUrl = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!user || saveBusy || !saveUrl.trim()) return
+    setSaveBusy(true); setSaveError(""); setSavedStory(null)
+    setSaveProgress("Starting your private copy…")
+    try {
+      const story = await importToLibrary(saveUrl.trim(), setSaveProgress)
+      setSavedStory(story)
+      setSaveUrl("")
+      setMineReload(n => n + 1)
+    } catch (err: any) {
+      setSaveError(err?.message || "Could not save this story. Please try again.")
+    } finally {
+      setSaveBusy(false)
+    }
   }
 
   // Reading recency comes from the progress map, which is keyed by story id and
@@ -624,12 +688,7 @@ export default function LibraryPage() {
     if (!importUrl.trim()) return
     setImporting(true); setImportError(null); setImportMsg(null)
     try {
-      const fd = new FormData()
-      fd.append("url", importUrl.trim())
-      const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
-      if (!r.ok) throw new Error(await importErrorText(r))
-      const data = await r.json().catch(() => null)
-      if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
+      const data = await importToLibrary(importUrl.trim(), setImportMsg, false)
       const ch = data.chapters ?? "?"
       setImportMsg(`Imported "${data.title}" (${ch} chapters). Find it in the Hosted tab.`)
       setImportUrl(""); loadHosted()
@@ -655,13 +714,7 @@ export default function LibraryPage() {
     for (let i = 0; i < urls.length; i++) {
       const url = urls[i]
       try {
-        const fd = new FormData(); fd.append("url", url)
-        const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
-        if (!r.ok) {
-          throw new Error(await importErrorText(r))
-        }
-        const data = await r.json().catch(() => null)
-        if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
+        const data = await importToLibrary(url, undefined, false)
         ok++
         results.push({ url, ok: true, detail: `${data.title || "Imported"} (${data.chapters ?? "?"} ch)` })
       } catch (e: any) {
@@ -767,12 +820,8 @@ export default function LibraryPage() {
   }
 
   const importDiscoveredUrl = async (url: string) => {
-    const fd = new FormData(); fd.append("url", url)
     try {
-      const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
-      if (!r.ok) throw new Error(await importErrorText(r))
-      const data = await r.json().catch(() => null)
-      if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
+      const data = await importToLibrary(url, undefined, false)
       setImportMsg(`Imported "${data.title}" (${data.chapters} chapters).`)
       setFfnUrls(urls => urls.filter(u => u.url !== url))
       loadHosted()
@@ -976,12 +1025,8 @@ export default function LibraryPage() {
   const importDlpEntry = async (entry: any) => {
     const url = entry.urls?.ao3 || entry.urls?.ffn
     if (!url) { setImportError("This entry has no FFN/AO3 URL to import"); return }
-    const fd = new FormData(); fd.append("url", url)
     try {
-      const r = await fetchWithTimeout(`${API_BASE}/api/library/import-url`, { method: "POST", body: fd }, USER_TIMEOUT_MS)
-      if (!r.ok) throw new Error(await importErrorText(r))
-      const data = await r.json().catch(() => null)
-      if (!data) throw new Error("The server answered, but not with an import result. Try again in a moment.")
+      const data = await importToLibrary(url, undefined, false)
       setImportMsg(`Imported "${data.title}" (${data.chapters} chapters).`)
       setDlpEntries(entries => entries.filter(e => e !== entry))
       loadHosted()
@@ -1042,9 +1087,9 @@ export default function LibraryPage() {
       ) : null}
       {!authLoading && user && !user.can_import && (
         <p className="library-signin-note">
-          Your bookmarks, reading progress and offline copies are yours and sync
-          across your devices. Importing stories and running archive scrapes are
-          handled by whoever runs this instance.
+          Your bookmarks, reading progress and saved stories sync across devices.
+          You can save a private AO3 or FanFiction.net copy below; shared index
+          imports and archive tools are managed by the site operator.
         </p>
       )}
 
@@ -1081,6 +1126,27 @@ export default function LibraryPage() {
 
       {activeTab === "shelf" && (
         <>
+          {user && (
+            <section className="shelf-save" aria-label="Save a story to your library">
+              <h2>Save a story from a link</h2>
+              <p>Paste an AO3 or FanFiction.net story URL. The readable copy is private to your account.</p>
+              <form className="import-row" onSubmit={saveByUrl}>
+                <label className="visually-hidden" htmlFor="shelf-save-url">Story URL</label>
+                <input id="shelf-save-url" className="import-input" type="url" required
+                  placeholder="https://archiveofourown.org/works/12345"
+                  value={saveUrl} onChange={e => setSaveUrl(e.target.value)} disabled={saveBusy} />
+                <button className="btn btn--primary" type="submit" disabled={saveBusy || !saveUrl.trim()}>
+                  {saveBusy ? "Saving…" : "Save to my shelf"}
+                </button>
+              </form>
+              {saveBusy && <p className="shelf-save__status" role="status">{saveProgress}</p>}
+              {saveError && <p className="shelf-save__error" role="alert">{saveError}</p>}
+              {savedStory && <p className="shelf-save__status" role="status">
+                Saved <strong>{savedStory.title}</strong>.{" "}
+                <Link href={`/story/${savedStory.id}/chapter/1`}>Start reading →</Link>
+              </p>}
+            </section>
+          )}
           {/* Filters, not tabs. Every work is in this list once; these narrow
               it. The counts sum to more than "All" on purpose — that overlap
               IS the thing four separate tabs were hiding. */}
@@ -1188,6 +1254,8 @@ export default function LibraryPage() {
                       {it.offline ? <span className="shelf-state shelf-state--offline">Offline</span> : null}
                       {it.bookmark ? <span className="shelf-state shelf-state--mark">☆ Bookmarked</span> : null}
                       {it.imported ? <span className="shelf-state shelf-state--mine">Yours</span> : null}
+                      {it.imported?.status === "in_progress" &&
+                        <ShelfFollow id={it.id} title={it.title} />}
                     </p>
                   </>
                 )

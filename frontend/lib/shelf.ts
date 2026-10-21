@@ -22,7 +22,8 @@ export interface ShelfProgress { chapter: number; at: string; title: string }
 export interface ShelfOffline { id: string; title: string; author?: string; savedAt?: string | number
                                 word_count?: number; chapter_count?: number }
 export interface ShelfImport { id: string; title: string; author?: string; site?: string
-                               word_count?: number; chapter_count?: number; added_at?: string | null }
+                               word_count?: number; chapter_count?: number; added_at?: string | null
+                               status?: string }
 
 export interface ShelfItem {
   id: string

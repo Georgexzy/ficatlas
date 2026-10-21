@@ -48,7 +48,7 @@ window is the entire reason rollback is instant rather than a rebuild.
 Admin → Site → Restart publishes a notice, waits five minutes, then reboots the
 host. Readers already on the site see the notice within about twenty seconds;
 the admin panel shows a countdown and can cancel it before it starts. The notice
-expires automatically after the expected return window. Other public notices
+expires at the scheduled reboot time, so it is gone when the host returns. Other public notices
 are managed in Admin → Site → Configuration → Reader communication. Set a local
 start time to schedule one, optionally set when it should disappear, then save;
 leave the start blank to publish immediately. Clear the message and save to

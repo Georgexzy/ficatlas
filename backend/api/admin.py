@@ -934,7 +934,10 @@ def schedule_restart(payload: RestartRequest = Body(...),
         if requested_at > now + timedelta(days=30):
             raise HTTPException(400, "Schedule the restart within the next 30 days.")
         announcement_start = requested_at - timedelta(minutes=5)
-        expiry = requested_at + timedelta(minutes=20)
+        # The maintenance warning is only useful before the scheduled reboot.
+        # Keeping it for another twenty minutes leaves a stale warning on the
+        # site once the host is back online.
+        expiry = requested_at
         request = {
             "id": str(uuid.uuid4()),
             "created_at": now.isoformat(),

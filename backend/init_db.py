@@ -1461,6 +1461,7 @@ CREATE TABLE IF NOT EXISTS visit_events (
 ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS pos SMALLINT;
 CREATE OR REPLACE VIEW visit_events_public AS
     SELECT * FROM visit_events WHERE NOT internal;
+
 -- Every report is "the last N days", so the ordering column is the one to
 -- index. kind is in the second index because the searches report filters on it
 -- before it sorts, over a table where pageviews will outnumber searches.
@@ -1499,6 +1500,35 @@ ALTER TABLE visit_events ADD COLUMN IF NOT EXISTS extract_ms INTEGER;
 -- meant fresh installs could have a view without the latest telemetry fields.
 CREATE OR REPLACE VIEW visit_events_public AS
     SELECT * FROM visit_events WHERE NOT internal;
+
+-- A browser beacon alone is not evidence of a person: agent browsers execute
+-- JavaScript and the rotating pool sends one beacon per new address. On days
+-- with an implausible session spike, retain only sessions with a referral,
+-- return, result/archive click, or two distinct pages. Ordinary low-volume
+-- days keep direct one-page visits; the raw view remains available to the
+-- scraper detector so excluded traffic is still visible to operators.
+CREATE OR REPLACE VIEW visit_events_readers AS
+    WITH daily_volume AS (
+        SELECT CAST(at AS date) AS day, count(DISTINCT visitor) AS sessions
+          FROM visit_events_public WHERE NOT bot
+         GROUP BY 1
+    ), reader_sessions AS (
+        SELECT visitor,
+               bool_or(kind = 'page' AND ref_host IS NOT NULL
+                       AND ref_host NOT ILIKE '%ficatlas%') AS referred,
+               bool_or(kind = 'page' AND seen IN ('week', 'return')) AS came_back,
+               bool_or(kind IN ('click', 'out')) AS interacted,
+               min(path) FILTER (WHERE kind = 'page') <>
+               max(path) FILTER (WHERE kind = 'page') AS multi_page
+          FROM visit_events_public
+         GROUP BY visitor
+    )
+    SELECT e.* FROM visit_events_public e
+    JOIN reader_sessions s USING (visitor)
+    JOIN daily_volume d ON d.day = CAST(e.at AS date)
+    WHERE NOT e.bot AND
+          (d.sessions < 120 OR s.referred OR s.came_back OR s.interacted
+           OR s.multi_page);
 
 CREATE INDEX IF NOT EXISTS ix_visit_events_at ON visit_events (at DESC);
 CREATE INDEX IF NOT EXISTS ix_visit_events_kind_at ON visit_events (kind, at DESC);

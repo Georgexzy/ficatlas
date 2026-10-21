@@ -34,6 +34,8 @@ export interface PollOptions {
   signal?: AbortSignal
   /** Override the legacy in-memory job endpoint with a durable job resource. */
   endpoint?: string
+  /** Keep polling durable jobs through temporary proxy/network failures. */
+  retryTransient?: boolean
 }
 
 export class JobPollError extends Error {
@@ -44,7 +46,7 @@ export class JobPollError extends Error {
 
 export async function pollJob(
   jobId: string,
-  { onProgress, timeoutMs = 15 * 60_000, intervalMs = 1500, signal,
+  { onProgress, timeoutMs = 15 * 60_000, intervalMs = 1500, signal, retryTransient = false,
     endpoint = `/api/library/jobs/${jobId}` }: PollOptions = {},
 ): Promise<JobState> {
   const deadline = Date.now() + timeoutMs
@@ -71,12 +73,17 @@ export async function pollJob(
       res = await fetchWithTimeout(endpoint,
         { signal }, USER_TIMEOUT_MS)
     } catch (e: any) {
-      if (signal?.aborted || e?.name === "AbortError") {
+      if (signal?.aborted) {
         throw new JobPollError("cancelled", "aborted")
+      }
+      if (retryTransient) continue
+      if (e?.name === "AbortError") {
+        throw new JobPollError("The job status request timed out", "http")
       }
       throw new JobPollError(e?.message || "network error", "http")
     }
     if (!res.ok) {
+      if (retryTransient && (res.status === 429 || res.status >= 500)) continue
       throw new JobPollError(`Lost track of job ${jobId} (HTTP ${res.status})`, "http")
     }
 

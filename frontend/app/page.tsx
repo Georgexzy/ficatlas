@@ -2010,16 +2010,7 @@ function SearchPageInner() {
     if (!detectedUrl) return
     setImporting(true); setImportMsg(null)
     try {
-      let data
-      if (user?.can_manage) {
-        const fd = new FormData(); fd.append("url", detectedUrl.url); fd.append("private", "false")
-        const r = await fetchWithTimeout(`/api/library/import-url`,
-          { method: "POST", body: fd, credentials: "include" }, USER_TIMEOUT_MS)
-        if (!r.ok) throw new Error(await r.text())
-        data = await r.json()
-      } else {
-        data = await importToLibrary(detectedUrl.url)
-      }
+      const data = await importToLibrary(detectedUrl.url, undefined, !user?.can_manage)
       setImportMsg(user?.can_manage
         ? `Added "${data.title}" to the index — ${data.chapters} chapters, searchable by everyone.`
         : `"${data.title}" is on your shelf — ${data.chapters} chapters. Find it in Library › My shelf.`)
@@ -4345,6 +4336,9 @@ function SearchPageInner() {
                     <p className="no-results__hint">
                       Have a specific story in mind? Paste its AO3 or FF.net URL into the search bar to import it.
                     </p>
+                    <Link href="/fandoms" prefetch={false} className="btn no-results__fetch">
+                      Browse fandoms instead
+                    </Link>
                   </div>
                 ) : (
                   // 1-based across pages, so position 23 is the third on page 2.

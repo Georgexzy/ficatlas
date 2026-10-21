@@ -1218,6 +1218,25 @@ kbd {
   color: var(--text); outline: none;
 }
 .import-input:focus { border-color: var(--accent); }
+.shelf-save {
+  max-width: 760px; margin: 0 0 18px; padding: 16px 18px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.shelf-save h2 { margin: 0 0 4px; font: 600 17px var(--font-serif); color: var(--text); }
+.shelf-save p { margin: 0 0 12px; font-size: 13px; line-height: 1.5; color: var(--text-dim); }
+.shelf-save .import-row { align-items: stretch; }
+.shelf-save__status, .shelf-save__error { margin: 10px 0 0 !important; }
+.shelf-save__status a { color: var(--accent); font-weight: 600; }
+.shelf-save__error { color: var(--red) !important; }
+.shelf-follow {
+  border: 1px solid var(--accent-dim); border-radius: 4px;
+  background: var(--accent-bg); color: var(--accent);
+  padding: 3px 8px; font: inherit; cursor: pointer;
+}
+.shelf-follow:hover { border-color: var(--accent); }
+.shelf-follow:disabled { opacity: .6; cursor: wait; }
+.shelf-follow__error { color: var(--red); }
 .alert--success {
   background: var(--green-bg); border: 1px solid rgba(90,185,120,0.3);
   color: var(--green); padding: 10px 14px; border-radius: var(--radius); font-size: 13px;

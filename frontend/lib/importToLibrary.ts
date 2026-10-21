@@ -12,9 +12,11 @@ export interface ImportedStory {
 export async function importToLibrary(
   url: string,
   onProgress?: (message: string) => void,
+  privateCopy = true,
 ): Promise<ImportedStory> {
   const form = new FormData()
   form.append("url", url)
+  form.append("private", String(privateCopy))
   const started = await fetchWithTimeout("/api/library/import-url-job", {
     method: "POST", body: form,
   }, USER_TIMEOUT_MS)
@@ -33,6 +35,7 @@ export async function importToLibrary(
     endpoint: `/api/library/import-url-jobs/${encodeURIComponent(jobId)}`,
     timeoutMs: 10 * 60_000,
     intervalMs: 1500,
+    retryTransient: true,
     onProgress: (job) => {
       if (typeof job.progress === "string") onProgress?.(job.progress)
     },
