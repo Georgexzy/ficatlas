@@ -40,7 +40,10 @@ python3 tools/search_console.py inspect https://ficatlas.com/
 python3 tools/search_console.py performance --days 28 --dimension query
 ```
 
-`auth` prints a Google URL and tries to open it in the local browser. Sign in
+`auth` prints a short local start link and the full Google URL, then tries to
+open the short link in the local browser. The local link redirects to the full
+Google request, avoiding problems when a long URL is copied or opened from chat.
+Sign in
 with the Google account that has access to `ficatlas.com`. The browser redirects
 to a temporary listener on `127.0.0.1`; the listener closes after the response
 or a five-minute timeout. If the browser is on a different computer, run

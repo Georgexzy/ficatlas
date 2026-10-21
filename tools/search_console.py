@@ -134,7 +134,14 @@ def authorize(credentials: Path, token_path: Path, scope: str,
             pass  # Never log the one-time authorization code.
 
         def do_GET(self) -> None:
-            if urlparse(self.path).path != "/":
+            path = urlparse(self.path).path
+            if path == "/start":
+                self.send_response(302)
+                self.send_header("Location", url)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            if path != "/":
                 self.send_error(404)
                 return
             values = parse_qs(urlparse(self.path).query)
@@ -152,10 +159,13 @@ def authorize(credentials: Path, token_path: Path, scope: str,
         redirect_uri = f"http://127.0.0.1:{server.server_port}/"
         url = _authorization_url(client["client_id"], redirect_uri, scope,
                                  state, verifier)
+        start_url = f"http://127.0.0.1:{server.server_port}/start"
+        print("Open this short link in a browser on this computer:")
+        print(start_url, flush=True)
         print("Open this Google authorization URL in a browser on this computer:")
         print(url, flush=True)
         if open_browser:
-            webbrowser.open(url)
+            webbrowser.open(start_url)
         deadline = time.monotonic() + 300
         while not received and time.monotonic() < deadline:
             server.timeout = min(1, max(0.1, deadline - time.monotonic()))

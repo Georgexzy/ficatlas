@@ -1,5 +1,6 @@
 """Exercise the local OAuth callback without sending credentials to Google."""
 import importlib.util
+from http.client import HTTPConnection
 import json
 import os
 from pathlib import Path
@@ -32,12 +33,24 @@ class SearchConsoleOAuthTests(TestCase):
             callbacks = []
 
             def open_browser(url):
-                query = parse_qs(urlparse(url).query)
-                self.assertEqual(query["scope"], [gsc.READ_SCOPE])
-                self.assertEqual(query["code_challenge_method"], ["S256"])
-                redirect = query["redirect_uri"][0]
-                callback = redirect + "?code=sample-code&state=" + query["state"][0]
-                callbacks.append(Thread(target=lambda: urlopen(callback, timeout=3).read()))
+                def visit_start():
+                    start = urlparse(url)
+                    self.assertEqual(start.path, "/start")
+                    connection = HTTPConnection(start.hostname, start.port, timeout=3)
+                    connection.request("GET", start.path)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 302)
+                    google_url = response.getheader("Location")
+                    response.read()
+                    connection.close()
+                    query = parse_qs(urlparse(google_url).query)
+                    self.assertEqual(query["scope"], [gsc.READ_SCOPE])
+                    self.assertEqual(query["code_challenge_method"], ["S256"])
+                    redirect = query["redirect_uri"][0]
+                    callback = redirect + "?code=sample-code&state=" + query["state"][0]
+                    urlopen(callback, timeout=3).read()
+
+                callbacks.append(Thread(target=visit_start))
                 callbacks[-1].start()
 
             def exchange(url, fields):
