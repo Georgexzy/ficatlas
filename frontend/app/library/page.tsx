@@ -676,8 +676,7 @@ export default function LibraryPage() {
     setImporting(true); setImportError(null); setImportMsg(null)
     try {
       const data = await importToLibrary(importUrl.trim(), setImportMsg, false)
-      const ch = data.chapters ?? "?"
-      setImportMsg(`Imported "${data.title}" (${ch} chapters). Find it in the Hosted tab.`)
+      setImportMsg(`Added "${data.title}" to the shared index as a metadata and source-link listing.`)
       setImportUrl(""); loadHosted()
     } catch (e: any) {
       setImportError(e.message || "Import failed")
@@ -703,7 +702,7 @@ export default function LibraryPage() {
       try {
         const data = await importToLibrary(url, undefined, false)
         ok++
-        results.push({ url, ok: true, detail: `${data.title || "Imported"} (${data.chapters ?? "?"} ch)` })
+        results.push({ url, ok: true, detail: `${data.title || "Added"} (listing)` })
       } catch (e: any) {
         failed++
         results.push({ url, ok: false, detail: (e.message || "failed").slice(0, 120) })
@@ -795,7 +794,7 @@ export default function LibraryPage() {
       const data = await r.json()
       if (data.ok) {
         setFfnUrls(data.urls || [])
-        setFfnMsg(`Found ${data.found} FF.net URLs in the Wayback index. Click any to import via FicHub.`)
+        setFfnMsg(`Found ${data.found} FF.net URLs in the Wayback index. Click any to add a metadata listing.`)
       } else {
         setFfnMsg(data.error || "Discovery failed")
       }
@@ -809,7 +808,7 @@ export default function LibraryPage() {
   const importDiscoveredUrl = async (url: string) => {
     try {
       const data = await importToLibrary(url, undefined, false)
-      setImportMsg(`Imported "${data.title}" (${data.chapters} chapters).`)
+      setImportMsg(`Added "${data.title}" as a metadata and source-link listing.`)
       setFfnUrls(urls => urls.filter(u => u.url !== url))
       loadHosted()
     } catch (e: any) {
@@ -1484,8 +1483,8 @@ export default function LibraryPage() {
           <section className="import-section">
             <h3>Import from URL</h3>
             <p className="import-help">
-              Paste an AO3 or FanFiction.net link. The full text is fetched via
-              FicHub and made searchable and readable in-app.
+              Paste an AO3 or FanFiction.net link to add a shared listing with
+              metadata and a source link. No chapter text is published.
             </p>
             <div className="import-row">
               <input type="url" className="import-input"
@@ -1501,8 +1500,8 @@ export default function LibraryPage() {
           <section className="import-section">
             <h3>Bulk import from URL list</h3>
             <p className="import-help">
-              Paste many AO3 / FanFiction.net links — one per line. Each is fetched
-              via FicHub in turn (politely, ~1–3s each), so a long list takes a while.
+              Paste many AO3 / FanFiction.net links, one per line. Each source
+              is checked in turn for listing metadata, so a long list takes a while.
               Leave the tab open while it runs.
             </p>
             <textarea
@@ -1920,8 +1919,8 @@ sudo docker compose exec backend python ao3_dump_importer.py \\
               <p>
                 The best free seed source for FFnet, which (unlike AO3) is Cloudflare-blocked
                 for direct server scraping regardless of the IP. Covers FFnet story IDs 1 to
-                ~10.9M (roughly 2014-era). After import, click any story&apos;s &quot;Import &amp; Read&quot;
-                button in search and FicHub will fetch the full text on-demand.
+                ~10.9M (roughly 2014-era). Readers can save a private reading copy
+                from a story link when a source copy is available.
               </p>
               <pre className="bulk-importer__cmd">{`# One command — downloads ~2GB via huggingface_hub and imports HP subset.
 # Skip --fandom and --limit to ingest all 6.6M rows (~30 min, all fandoms).

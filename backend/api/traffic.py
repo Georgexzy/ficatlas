@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_RECOVERY_ACTIONS = {"spelling", "describe", "broaden", "relax", "split", "named"}
+_RECOVERY_ACTIONS = {"spelling", "describe", "broaden", "relax", "split", "named", "interpret"}
 
 
 # ── write ───────────────────────────────────────────────────────────────────
@@ -933,8 +933,9 @@ def searches(days: int = Query(30, ge=1, le=365),
           AND q IS NOT NULL AND q <> ''
     """), {"cut": cut}).first()
     recovery = db.execute(text("""
-        SELECT count(*) FILTER (WHERE kind = 'recover') AS used_suggestions,
-               count(DISTINCT visitor) FILTER (WHERE kind = 'recover') AS rescuing_readers,
+        SELECT count(*) FILTER (WHERE kind = 'recover' AND path <> '/search/recovery/interpret') AS used_suggestions,
+               count(DISTINCT visitor) FILTER (WHERE kind = 'recover' AND path <> '/search/recovery/interpret') AS rescuing_readers,
+               count(*) FILTER (WHERE kind = 'recover' AND path = '/search/recovery/interpret') AS auto_interpretations,
                count(*) FILTER (WHERE kind = 'missing') AS missing_requests
           FROM visit_events_readers
          WHERE at >= :cut AND NOT bot
@@ -959,7 +960,8 @@ def searches(days: int = Query(30, ge=1, le=365),
                    "search_only": totals[3] or 0,
                    "used_suggestions": recovery[0] or 0,
                    "rescuing_readers": recovery[1] or 0,
-                   "missing_requests": recovery[2] or 0},
+                   "auto_interpretations": recovery[2] or 0,
+                   "missing_requests": recovery[3] or 0},
     }
 
 

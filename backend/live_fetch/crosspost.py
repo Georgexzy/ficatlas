@@ -1,8 +1,8 @@
 """Cross-post detection and merging.
 
 The same fic is often posted on multiple sites (AO3 + FFN, etc). We want one
-search result per *work*, not one per site, with links to every copy and the
-hosted full text taken from the most recently updated copy.
+search result per *work*, not one per site, with links to every copy. Rows
+holding private reader copies are excluded from merging.
 
 Matching strategy (conservative — we'd rather miss a match than merge two
 different stories):
@@ -106,7 +106,9 @@ def group_existing(db: Session, limit: int | None = None) -> list[list[Story]]:
                                         '\\s+', ' ', 'g')) AS nt,
                    regexp_replace(lower(author), '[^a-z0-9]', '', 'g')  AS na
             FROM stories
-            WHERE title IS NOT NULL AND author IS NOT NULL
+            WHERE NOT private_only
+              AND NOT EXISTS (SELECT 1 FROM user_hosted uh WHERE uh.story_id = stories.id)
+              AND title IS NOT NULL AND author IS NOT NULL
         )
         SELECT array_agg(id) AS ids
         FROM normed
@@ -158,6 +160,12 @@ def merge_group(db: Session, stories: list[Story]) -> Story:
     - the non-canonical rows are deleted (their chapters cascade)
     Returns the surviving canonical Story.
     """
+    if any(s.private_only for s in stories):
+        raise ValueError("private copies cannot be merged into the shared index")
+    if any(db.execute(sql_text(
+            "SELECT 1 FROM user_hosted WHERE story_id = :s LIMIT 1"
+        ), {"s": str(s.id)}).first() for s in stories):
+        raise ValueError("reader copies cannot be merged into the shared index")
     canonical = _best_updated(stories)
     others = [s for s in stories if s.id != canonical.id]
 
@@ -220,7 +228,9 @@ def find_crosspost_for(db: Session, title: str, author: str, exclude_url: str | 
     # of 60 results spent ten minutes scanning the table.
     candidates = (
         db.query(Story)
-        .filter(func.lower(Story.author) == author.strip().lower())
+        .filter(func.lower(Story.author) == author.strip().lower(),
+                Story.private_only.is_(False),
+                sql_text("NOT EXISTS (SELECT 1 FROM user_hosted uh WHERE uh.story_id = stories.id)"))
         .limit(50)
         .all()
     )

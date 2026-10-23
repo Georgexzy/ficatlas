@@ -1,11 +1,4 @@
-"""Regression tests for the /import-url opt-out gate.
-
-A PUBLIC import republishes someone's work under this site's name, so a summary
-that explicitly refuses external reposting must be refused (403) — even when the
-EPUB fetch succeeded. A PRIVATE import republishes nothing, so it is allowed
-through. These call the endpoint function directly with the network fetchers
-stubbed, so no real FicHub/AO3 traffic and no lifespan/init run against prod.
-"""
+"""Regression tests for metadata-only public listings and private copies."""
 import sys
 import os
 import asyncio
@@ -19,6 +12,7 @@ from fastapi import HTTPException
 from models.user import User
 from api import library as library_api
 from models.story import Chapter, RatingEnum, SiteEnum, StatusEnum, Story
+from api.stories import may_read_text
 
 AO3_URL = "https://archiveofourown.org/works/123456"
 OPTOUT_SUMMARY = "Please do not repost this work on any other website."
@@ -59,6 +53,11 @@ def _stub_fetchers(monkeypatch, summary):
     monkeypatch.setattr(library_api, "fetch_from_fichub", fake_fetch_from_fichub)
     monkeypatch.setattr(library_api, "fetch_epub_bytes", fake_fetch_epub_bytes)
     monkeypatch.setattr(library_api, "parse_epub", fake_parse_epub)
+    monkeypatch.setattr(library_api, "_fetch_shared_metadata", lambda url: {
+        "url": url, "site_id": "123456", "title": "My Story",
+        "author": "Jane Doe", "summary": summary, "chapter_count": 1,
+        "status": "complete", "language": "English",
+    })
 
 
 def test_public_import_with_optout_raises_403(monkeypatch, db, admin_user):
@@ -81,8 +80,51 @@ def test_private_import_with_optout_is_allowed(monkeypatch, db, admin_user):
 
 def test_public_import_without_optout_proceeds(monkeypatch, db, admin_user):
     _stub_fetchers(monkeypatch, "A perfectly ordinary summary.")
+    async def no_epub(_url):
+        raise AssertionError("shared listing must not request an EPUB")
+    monkeypatch.setattr(library_api, "fetch_from_fichub", no_epub)
     result = asyncio.run(library_api.import_url(url=AO3_URL, private=False, db=db, viewer=admin_user))
     assert "id" in result
+    assert result["listing_only"] is True
+    story = db.query(Story).filter(Story.url == AO3_URL).one()
+    assert story.is_hosted is False
+    assert story.private_only is False
+    assert db.query(Chapter).filter(Chapter.story_id == story.id).count() == 0
+
+
+def test_public_import_does_not_expose_private_copy(monkeypatch, db, admin_user):
+    _stub_fetchers(monkeypatch, "A perfectly ordinary summary.")
+    private = asyncio.run(library_api.import_url(
+        url=AO3_URL, private=True, db=db, viewer=admin_user))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(library_api.import_url(
+            url=AO3_URL, private=False, db=db, viewer=admin_user))
+    assert exc.value.status_code == 409
+    story = db.query(Story).filter(Story.id == private["id"]).one()
+    assert story.private_only is True
+    assert story.is_hosted is False
+    assert db.query(Chapter).filter(Chapter.story_id == story.id).count() == 1
+
+
+def test_private_copy_on_public_listing_stays_owner_only(monkeypatch, db, admin_user):
+    _stub_fetchers(monkeypatch, "A perfectly ordinary summary.")
+    listing = asyncio.run(library_api.import_url(
+        url=AO3_URL, private=False, db=db, viewer=admin_user))
+    _stub_fetchers(monkeypatch, "Private EPUB summary that must not replace the listing.")
+    private = asyncio.run(library_api.import_url(
+        url=AO3_URL, private=True, db=db, viewer=admin_user))
+    story = db.query(Story).filter(Story.id == listing["id"]).one()
+    assert private["id"] == listing["id"]
+    assert story.is_hosted is False
+    assert story.private_only is False  # The metadata listing remains searchable.
+    assert story.summary == "A perfectly ordinary summary."
+    assert db.query(Chapter).filter(Chapter.story_id == story.id).count() == 1
+    assert may_read_text(db, story, admin_user) is True
+    assert may_read_text(db, story, None) is False
+    other = User(username="another_reader", password_hash="x")
+    db.add(other)
+    db.commit()
+    assert may_read_text(db, story, other) is False
 
 
 def test_private_import_reuses_indexed_url_variant_and_existing_chapters(monkeypatch, db, admin_user):

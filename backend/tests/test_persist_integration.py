@@ -11,12 +11,13 @@ import sys
 import os
 import pytest
 from datetime import datetime, timezone
+from sqlalchemy import text
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from live_fetch.persist import persist_live_results, _enrich_existing
-from live_fetch.crosspost import find_crosspost_for, merge_group
-from models.story import Story, SiteEnum, StatusEnum
+from live_fetch.crosspost import find_crosspost_for, group_existing, merge_group
+from models.story import Chapter, Story, SiteEnum, StatusEnum
 
 AO3_URL = "https://archiveofourown.org/works/111111"
 FFN_URL = "https://www.fanfiction.net/s/9999999/1/My-Story"
@@ -98,6 +99,72 @@ def test_optout_deletes_existing_row(db):
     persist_live_results(db, [blob], stats)
     assert stats["already_indexed"] == 1
     assert db.query(Story).filter(Story.url == AO3_URL).count() == 0
+
+
+def test_public_refresh_never_deletes_or_enriches_private_copy(db):
+    private = Story(site=SiteEnum.ao3, site_id="111111", url=AO3_URL,
+                    title="My Story", author="Jane Doe", private_only=True,
+                    is_hosted=False, summary="Private summary")
+    db.add(private)
+    db.flush()
+    db.add(Chapter(story_id=private.id, number=1, content="<p>Private chapter.</p>"))
+    user_id = db.execute(text(
+        "INSERT INTO users (username,role) VALUES ('reader','reader') RETURNING id"
+    )).scalar_one()
+    db.execute(text(
+        "INSERT INTO user_hosted (user_id,story_id) VALUES (:u,:s)"
+    ), {"u": user_id, "s": private.id})
+    db.commit()
+
+    persist_live_results(db, [_ao3_blob(summary="Do not repost this work anywhere.")])
+    persist_live_results(db, [_ao3_blob(summary="Public blurb", kudos=100)])
+    db.expire_all()
+    kept = db.query(Story).filter(Story.id == private.id).one()
+    assert kept.private_only and not kept.is_hosted
+    assert kept.summary == "Private summary"
+    assert db.query(Chapter).filter(Chapter.story_id == private.id).count() == 1
+    assert db.execute(text(
+        "SELECT count(*) FROM user_hosted WHERE user_id=:u AND story_id=:s"
+    ), {"u": user_id, "s": private.id}).scalar() == 1
+
+
+def test_private_copy_is_not_a_public_crosspost_candidate(db):
+    private = Story(site=SiteEnum.ao3, site_id="111111", url=AO3_URL,
+                    title="My Story", author="Jane Doe", private_only=True,
+                    is_hosted=False)
+    db.add(private)
+    db.commit()
+    assert find_crosspost_for(db, "My Story", "Jane Doe", exclude_url=FFN_URL) is None
+    persist_live_results(db, [_ffn_blob()])
+    assert db.query(Story).count() == 2
+    assert group_existing(db) == []
+    public = db.query(Story).filter(Story.url == FFN_URL).one()
+    with pytest.raises(ValueError, match="private copies"):
+        merge_group(db, [private, public])
+
+
+def test_granted_copy_on_listing_survives_optout_and_crosspost(db):
+    persist_live_results(db, [_ao3_blob()])
+    story = db.query(Story).filter(Story.url == AO3_URL).one()
+    db.add(Chapter(story_id=story.id, number=1, content="<p>Owner copy.</p>"))
+    user_id = db.execute(text(
+        "INSERT INTO users (username,role) VALUES ('reader','reader') RETURNING id"
+    )).scalar_one()
+    db.execute(text(
+        "INSERT INTO user_hosted (user_id,story_id) VALUES (:u,:s)"
+    ), {"u": user_id, "s": story.id})
+    db.commit()
+
+    assert find_crosspost_for(db, "My Story", "Jane Doe", exclude_url=FFN_URL) is None
+    assert group_existing(db) == []
+    persist_live_results(db, [_ao3_blob(summary="Do not repost this work anywhere.")])
+    db.expire_all()
+    story = db.query(Story).filter(Story.id == story.id).one()
+    assert story.private_only and not story.is_hosted
+    assert db.query(Chapter).filter(Chapter.story_id == story.id).count() == 1
+    assert db.execute(text(
+        "SELECT count(*) FROM user_hosted WHERE user_id=:u AND story_id=:s"
+    ), {"u": user_id, "s": story.id}).scalar() == 1
 
 
 def test_crosspost_merges_no_duplicate(db):

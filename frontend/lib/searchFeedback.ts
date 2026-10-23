@@ -1,6 +1,6 @@
 import { fetchBackground } from "./net"
 
-/** Record a deliberate recovery action for a search already logged by the API. */
+/** Record a recovery action, including an automatic interpretation attempt. */
 export function recordSearchFeedback(action: string, search: string): void {
   if (!search) return
   const fd = new FormData()

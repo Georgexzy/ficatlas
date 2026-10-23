@@ -177,9 +177,11 @@ function joinCsv(arr: string[]): string | undefined {
 //   * ratings — "G,T,M,NR" is the explicit toggle restated (see the note in
 //     api/search.py), regenerated from `explicit` on the other side.
 function detectFicUrl(s: string): { site: string; url: string } | null {
-  const t = s.trim()
-  if (/^https?:\/\/(www\.)?archiveofourown\.org\/works\/\d+/.test(t)) return { site: "ao3", url: t }
-  if (/^https?:\/\/(www\.|m\.)?fanfiction\.net\/s\/\d+/.test(t)) return { site: "ffnet", url: t }
+  // The search bar can also contain operators after a pasted link. Send only
+  // the link to import; passing the whole bar makes FicHub fetch an invalid URL.
+  const t = s.trim().split(/\s+/, 1)[0]
+  if (/^https?:\/\/(www\.)?archiveofourown\.org\/works\/\d+(?:[/?#]|$)/i.test(t)) return { site: "ao3", url: t }
+  if (/^https?:\/\/(www\.|m\.)?fanfiction\.net\/s\/\d+(?:[/?#]|$)/i.test(t)) return { site: "ffnet", url: t }
   return null
 }
 
@@ -2018,7 +2020,7 @@ function SearchPageInner() {
   // doSearch calls itself to run an interpretation, and a useCallback cannot
   // name itself in its own dependency list. The ref is the usual way out and
   // is more honest than disabling the lint rule.
-  const doSearchRef = useRef<((r?: boolean, p?: number, q?: string) => void) | null>(null)
+  const doSearchRef = useRef<((r?: boolean, p?: number, q?: string, fetchPoll?: boolean) => void) | null>(null)
   // Auto-search-on-filter-change machinery (see effect below).
   const hasSearchedRef = useRef(false)
   // Monotonic token so a slow, stale search response can never overwrite a
@@ -2063,7 +2065,7 @@ function SearchPageInner() {
     try {
       const data = await importToLibrary(detectedUrl.url, undefined, !user?.can_manage)
       setImportMsg(user?.can_manage
-        ? `Added "${data.title}" to the index — ${data.chapters} chapters, searchable by everyone.`
+        ? `Added "${data.title}" to the shared index as a listing with metadata and a source link.`
         : `"${data.title}" is on your shelf — ${data.chapters} chapters. Find it in Library › My shelf.`)
       setQuery("")
       if (user?.can_manage) doSearch()
@@ -2642,7 +2644,7 @@ function SearchPageInner() {
 
 
   const doSearch = useCallback(async (resetPage = true, explicitPage?: number,
-                                      explicitQuery?: string) => {
+                                      explicitQuery?: string, fetchPoll = false) => {
     // explicitPage lets pagination pass the target page directly, avoiding the
     // stale-closure bug where setPage(p=>p+1) hadn't flushed before doSearch ran.
     hasSearchedRef.current = true   // filter changes start queueing from here on
@@ -2737,7 +2739,8 @@ function SearchPageInner() {
       const waiting = prefetched.get(qs.toString())
       if (waiting) prefetched.delete(qs.toString())
       const data = waiting
-        ?? await searchStories({ ...p, live: true } as any, { signal: ctl.signal })
+        ?? await searchStories({ ...p, live: true } as any,
+                               { signal: ctl.signal, fetchPoll })
       if (seq !== searchSeqRef.current) return   // a newer search superseded this one
       setResults(data)
       setPageTurnLoading(false)
@@ -2770,6 +2773,7 @@ function SearchPageInner() {
       // Guarded on the typed text, so "search for what I typed instead" runs
       // their words and stays there rather than bouncing back here.
       if (data.interpreted && interpretedRef.current !== effectiveQuery) {
+        recordSearchFeedback("interpret", effectiveQuery)
         setResults(null)
         setStale(null)
         interpretedRef.current = effectiveQuery
@@ -2796,7 +2800,7 @@ function SearchPageInner() {
       if (data.fetching) {
         if (fetchPollsRef.current < 8) {
           fetchPollsRef.current += 1
-          setTimeout(() => doSearchRef.current?.(false, undefined, effectiveQuery), 3500)
+          setTimeout(() => doSearchRef.current?.(false, undefined, effectiveQuery, true), 3500)
         }
       } else {
         fetchPollsRef.current = 0
@@ -3607,8 +3611,8 @@ function SearchPageInner() {
                     {!user
                       ? "Sign in and the full text will be fetched so you can read it here. Your copy stays yours — it is not added to the public index."
                       : user.can_manage
-                      ? "Fetched via FicHub and added to the shared index — readable in-app and searchable by everyone."
-                      : "Fetched via FicHub onto your own shelf — readable in-app, and visible only to you."}
+                      ? "Add a shared listing with story metadata and a link to the source. No chapter text is published."
+                      : "Fetch a private reading copy from FicHub or AO3 onto your shelf. Only you can read that copy here."}
                   </span>
                 </div>
                 {user ? (

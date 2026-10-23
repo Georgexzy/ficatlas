@@ -385,7 +385,8 @@ interface RefRow {
 interface Searches {
   top: SearchRow[]; empty: EmptyRow[]
   totals: { runs: number; empty_runs: number; distinct: number; search_only?: number
-    used_suggestions?: number; rescuing_readers?: number; missing_requests?: number }
+    used_suggestions?: number; rescuing_readers?: number; auto_interpretations?: number
+    missing_requests?: number }
 }
 
 interface Routes {
@@ -1351,6 +1352,7 @@ export default function TrafficPanel(
           <p className="admin-note">
             {searches.totals.used_suggestions ?? 0} suggestions used by{" "}
             {searches.totals.rescuing_readers ?? 0} readers;{" "}
+            {searches.totals.auto_interpretations ?? 0} automatic description searches tried;{" "}
             {searches.totals.missing_requests ?? 0} searches flagged as missing.
             These actions are counted from this release onward.
           </p>
@@ -1413,7 +1415,7 @@ export default function TrafficPanel(
       )}
       {!!searches?.empty?.length && (
         <Section id="empty" title="Searches that found nothing" onActive={onActive}
-          note="The most direct answer there is to “what should be crawled next”: each of these is a reader who left with nothing, and it names the gap exactly. The date says whether it is still being asked.">
+          note="These first searches returned no visible results. Some may have been retried as a description, blocked by content settings, or followed by another query. Check the wording and filters before treating one as a gap in the index.">
           {/* The hand-off, and the reason it sits here rather than only being a
               table. A zero-result search is the same shape of thing the
               Outreach tab exists to answer: somebody asked for a story in
@@ -1424,10 +1426,9 @@ export default function TrafficPanel(
               different report. */}
           <div className="traffic-handoff">
             <p>
-              Each of these is a reader asking for something this index does not
-              have. That is the request the Outreach tab is built to answer: it
-              takes the words, finds what does exist, and writes a reply worth
-              posting.
+              These searches are candidates for investigation. Check whether
+              the work is already indexed, hidden by a content setting, or
+              recoverable from a description before taking a query to Outreach.
             </p>
             <div className="traffic-handoff__actions">
               <button type="button" className="traffic-tools__copy"

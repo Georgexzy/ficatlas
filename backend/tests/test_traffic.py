@@ -171,6 +171,8 @@ def test_search_feedback_uses_fixed_actions_and_keeps_the_query(db):
     request = _FakeRequest()
     traffic.hit(request, path="/", kind="recover", action="broaden",
                 search="q=wolfstar&sites=ffnet")
+    traffic.hit(request, path="/", kind="recover", action="interpret",
+                search="q=looking+for+wolfstar+fluff")
     traffic.hit(request, path="/", kind="missing", search="q=wolfstar&sites=ffnet")
     traffic.hit(request, path="/", kind="recover", action="invented",
                 search="q=wolfstar")
@@ -181,12 +183,14 @@ def test_search_feedback_uses_fixed_actions_and_keeps_the_query(db):
     """)).fetchall()
     assert [(r[0], r[1]) for r in rows] == [
         ("recover", "/search/recovery/broaden"),
+        ("recover", "/search/recovery/interpret"),
         ("missing", "/search/missing"),
     ]
-    assert rows[0][2] == rows[1][2]
+    assert rows[0][2] == rows[2][2]
     assert "wolfstar" in rows[0][2]
     report = traffic.searches(days=7, limit=10, db=db, _owner=None)
     assert report["totals"]["used_suggestions"] == 1
+    assert report["totals"]["auto_interpretations"] == 1
     assert report["totals"]["missing_requests"] == 1
 
 

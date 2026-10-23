@@ -1583,6 +1583,20 @@ _NL_MIN_GAIN = int(os.getenv("SEARCH_NL_MIN_GAIN", "5"))
 _HAS_OPERATOR = re.compile(r'-?\b\w+:(?:"|\S)')
 
 
+def _repeated_named_fandom(text: str, fandom: str) -> bool:
+    """Keep a fandom the reader names twice despite conflicting name guesses.
+
+    A single ordinary word can coincide with a fandom ("wanted" is one), so
+    one mention is weak evidence. Repetition of the actual fandom name is much
+    stronger than a loose first-name lookup against another franchise.
+    """
+    name = fandom.split(" - ")[0].split(" (")[0].strip()
+    if len(name) < 4:
+        return False
+    pattern = rf"(?<!\w){re.escape(name)}(?!\w)"
+    return len(re.findall(pattern, text, re.I)) >= 2
+
+
 def _should_interpret_search(typed: str, total: int, candidate_total: int = 0,
                              selected_terms: int = 0,
                              specific_entities: int = 0) -> bool:
@@ -3127,15 +3141,30 @@ def _note_total(request, payload) -> None:
 
 
 def _pasted_work(text: str):
-    """(SiteEnum, site_id) when `text` is just a link to one archive work."""
+    """(SiteEnum, site_id, filters) for a work link, optionally with operators.
+
+    Readers paste a link and then choose a category or site in the same bar.
+    The link remains the identity of the work; the trailing operators still
+    need to reach the normal filter parser. Free prose after the link is not
+    treated as a work lookup, since silently discarding it would change intent.
+    """
     t = (text or "").strip()
-    if not t or " " in t or not re.match(r"^(?:https?://)?(?:www\.|m\.)?[a-z0-9.-]+\.(?:org|net)/", t, re.I):
+    if not t:
         return None
+    parts = t.split(maxsplit=1)
+    link = parts[0]
+    tail = parts[1].strip() if len(parts) > 1 else ""
+    if not re.match(r"^(?:https?://)?(?:www\.|m\.)?[a-z0-9.-]+\.(?:org|net)/", link, re.I):
+        return None
+    if tail:
+        parsed = parse_query(tail)
+        if parsed.clean_text or not parsed.tokens:
+            return None
     from live_fetch.persist import _SITE_PATTERNS
     for site, rx in _SITE_PATTERNS:
-        m = rx.search(t)
+        m = rx.search(link)
         if m:
-            return site, m.group(1)
+            return site, m.group(1), tail
     return None
 
 
@@ -3330,8 +3359,8 @@ def search(          # NOT async — see below
             q = None
             raw_query = ""
     if url_work:
-        q = None
-        raw_query = ""
+        q = url_work[2] or None
+        raw_query = q or ""
         # Which work the link means — its own row, or the copy it was merged
         # into — and, for an AO3 work the index lacks, fetch it. See
         # work_lookup.py. Answered immediately: the fetch is a background job.
@@ -5818,9 +5847,17 @@ def search(          # NOT async — see below
     # carries the original words and result count in the URL so the change is
     # visible, shareable and reversible.
     interpreted: Optional[Interpreted] = None
+    # A verified title or named-work rescue already answers the reader's
+    # request. Running the prose extractor as well added 13–24 seconds to
+    # several real title misses and could replace the precise title with a
+    # speculative fandom reading. Facet spelling hints are weaker, so they do
+    # not suppress interpretation of an actual sentence.
+    _named_work_rescue = any(
+        sg.kind == "title" or sg.reason == "named" for sg in _suggestions)
     if (_typed and not _HAS_OPERATOR.search(_typed)
             and len(_typed.split()) >= _NL_MIN_WORDS
             and total <= _NL_MAX_RESULTS
+            and not _named_work_rescue
             and _interpretation_context_supported(request)):
         try:
             _ex = _extract_once(_typed, db, request=request)
@@ -9402,7 +9439,8 @@ def extract(
                            None)
         if _chars_now and _fand_count is not None:
             _best_char = max(t.count for t in _chars_now)
-            if (_best_char >= _fand_count * _FANDOM_OUTWEIGHED
+            if (not _repeated_named_fandom(raw, _post_fandom)
+                    and _best_char >= _fand_count * _FANDOM_OUTWEIGHED
                     and _fandom_contradicts(
                         db, [t.value for t in _chars_now], _post_fandom)):
                 log.debug("extract: fandom %r (%s works) dropped — characters "

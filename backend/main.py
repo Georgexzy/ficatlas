@@ -116,6 +116,10 @@ async def track_search_middleware(request: Request, call_next):
         import tracking
         if (tracking.ENABLED
                 and request.url.path.rstrip("/") == "/api/search"
+                # The frontend retries a pasted AO3 work while its background
+                # fetch runs. Count the original lookup once, not every 3.5s
+                # progress poll as a new search from the same reader.
+                and request.headers.get("x-ficatlas-fetch-poll") != "1"
                 and not is_internal_render(request)):
             q = (request.query_params.get("q") or "").strip()
             # A search made entirely from the filter panel is still a search.

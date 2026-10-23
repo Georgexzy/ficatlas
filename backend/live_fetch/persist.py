@@ -3,6 +3,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from provenance import PROVENANCE_TAGS
 from models.story import Story, SiteEnum, RatingEnum, StatusEnum
@@ -140,9 +141,19 @@ def persist_live_results(db: Session, live_results: list[dict],
             author=d.get("author") or "", summary=d.get("summary"), private=False,
         )
         if not allowed:
-            if db.query(Story.id).filter(Story.url == url).first() is not None:
-                db.query(Story).filter(Story.url == url).delete(
-                    synchronize_session=False)
+            # A public listing can also carry an owner-only chapter copy.
+            # Withdraw that listing from search, but preserve the owner's row,
+            # chapters and user_hosted grant.
+            row = db.query(Story).filter(Story.url == url).first()
+            if row is not None:
+                has_private_copy = db.execute(text(
+                    "SELECT 1 FROM user_hosted WHERE story_id = :s LIMIT 1"
+                ), {"s": str(row.id)}).first() is not None
+                if has_private_copy:
+                    row.private_only = True
+                    row.is_hosted = False
+                elif not row.private_only:
+                    db.delete(row)
                 db.commit()
             skipped_existing += 1
             continue
@@ -386,7 +397,7 @@ def _enrich_existing(db: Session, url: str, d: dict) -> bool:
     """
     try:
         story = db.query(Story).filter(Story.url == url).first()
-        if story is None:
+        if story is None or story.private_only:
             return False
 
         changed = False

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form
 from sqlalchemy import func, text as sql_text
 from sqlalchemy.orm import Session
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from db.session import get_db
 from api.auth import (require_admin, require_owner, get_current_user,
@@ -482,6 +483,34 @@ async def upload_epubs(files: list[UploadFile] = File(...), db: Session = Depend
 PRIVATE_IMPORT_QUOTA = int(os.getenv("PRIVATE_IMPORT_QUOTA", "50"))
 
 
+def _canonical_story_url(raw: str) -> str:
+    """Accept one AO3/FF.net work link and discard search-bar filters after it.
+
+    The archive ID is the stable identity. Canonicalising before FicHub also
+    removes chapter and tracking parameters that its API need not interpret.
+    Check the parsed host rather than finding an archive name anywhere in the
+    string; the latter would send arbitrary URLs to an upstream fetcher.
+    """
+    token = (raw or "").strip().split(maxsplit=1)[0] if (raw or "").strip() else ""
+    parsed = urlsplit(token)
+    try:
+        bad_authority = bool(parsed.username or parsed.password or parsed.port)
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        bad_authority, host = True, ""
+    if parsed.scheme not in ("http", "https") or bad_authority:
+        raise HTTPException(400, "Use an AO3 or FanFiction.net story URL.")
+    if host in ("archiveofourown.org", "www.archiveofourown.org"):
+        match = re.match(r"^/works/(\d+)(?:/chapters/\d+)?/?$", parsed.path)
+        if match:
+            return f"https://archiveofourown.org/works/{match.group(1)}"
+    if host in ("fanfiction.net", "www.fanfiction.net", "m.fanfiction.net"):
+        match = re.match(r"^/s/(\d+)(?:/\d+(?:/[^/]*)?)?/?$", parsed.path)
+        if match:
+            return f"https://www.fanfiction.net/s/{match.group(1)}/1/"
+    raise HTTPException(400, "Use an AO3 or FanFiction.net story URL.")
+
+
 @router.post("/import-url")
 async def import_url(url: str = Form(...), private: bool = Form(False),
     db: Session = Depends(get_db),
@@ -490,25 +519,69 @@ async def import_url(url: str = Form(...), private: bool = Form(False),
     return await _import_url_impl(url=url, private=private, db=db, viewer=viewer)
 
 
+def _fetch_shared_metadata(url: str) -> dict | None:
+    """Fetch archive listing fields only. Never request an EPUB or chapter text."""
+    if "archiveofourown.org" in url:
+        from ao3_title_repair import RateLimiter, RESTRICTED, THROTTLED, UA, fetch_work
+        from wayback_harvest import parse_work_snapshot
+        work_id = _story_key_from_url(url)[1]
+        with httpx.Client(headers=UA) as client:
+            result = fetch_work(client, work_id, RateLimiter(2.0),
+                                parse=lambda html: parse_work_snapshot(html, int(work_id)))
+        if result is RESTRICTED:
+            raise HTTPException(422, "AO3 restricts this work to signed-in readers.")
+        if result is THROTTLED:
+            raise HTTPException(503, "AO3 is temporarily limiting requests. Try again later.")
+        return result if isinstance(result, dict) else None
+    from fichub_meta import HEADERS, fetch_meta
+    with httpx.Client(headers=HEADERS) as client:
+        return fetch_meta(client, url)
+
+
+async def _add_shared_listing(url: str, existing: Story | None, db: Session,
+                              progress_callback=None) -> dict:
+    """Index a source link and metadata without publishing any imported text."""
+    if existing and existing.private_only:
+        raise HTTPException(409, "A private copy exists for this link; it cannot be published as a shared listing automatically.")
+    if existing:
+        return {"id": str(existing.id), "title": existing.title,
+                "chapters": 0, "listing_only": not existing.is_hosted,
+                "already_indexed": True, "private": False}
+    if progress_callback:
+        progress_callback("Fetching source metadata for a shared listing…")
+    data = await asyncio.to_thread(_fetch_shared_metadata, url)
+    if not data or not data.get("title"):
+        raise HTTPException(502, "The source did not provide a usable listing. Try again later.")
+    allowed, refusal = author_permission.decide_hosting(
+        db, site=_story_key_from_url(url)[0], author=data.get("author") or "",
+        summary=data.get("summary"), private=False,
+    )
+    if not allowed:
+        raise HTTPException(403, refusal)
+    # The shared persistence route saves only Story fields and source links.
+    # Check again after fetching so a simultaneous private import stays private.
+    key = _story_key_from_url(url)
+    private_row = db.query(Story.id).filter(
+        Story.site == SiteEnum(key[0]), Story.site_id == key[1],
+        Story.private_only.is_(True)).first()
+    if private_row:
+        raise HTTPException(409, "A private copy exists for this link; it cannot be published as a shared listing automatically.")
+    from live_fetch.persist import persist_live_results
+    persist_live_results(db, [data])
+    from work_lookup import resolve
+    story_id = resolve(db, key[0], key[1])
+    if story_id is None:
+        raise HTTPException(502, "The listing could not be saved. Check the source link and try again.")
+    story = db.query(Story).filter(Story.id == story_id).first()
+    if story is None or story.private_only:
+        raise HTTPException(409, "The listing could not be shared without exposing a private copy.")
+    return {"id": str(story.id), "title": story.title, "chapters": 0,
+            "listing_only": not story.is_hosted, "private": False}
+
+
 async def _import_url_impl(url: str, private: bool, db: Session,
                            viewer: Optional[User], progress_callback=None):
-    """Fetch a story from AO3/FFnet via FicHub and import it.
-
-    Two quite different operations behind one endpoint, separated by `private`:
-
-      private=false  Admin only. Adds the story to the SHARED index, readable by
-                     everyone. This is publishing someone else's work under this
-                     site's name, which is why it stays restricted.
-
-      private=true   Any signed-in reader. The story and its chapters go into
-                     the same shared tables — so dedup and cross-post matching
-                     still see them — but `is_hosted` stays false and the reader
-                     gets a row in `user_hosted`. Only they can read it.
-
-    The distinction is the whole point of allowing reader imports at all: the
-    risk was never "is this fanfiction", it was "did the author agree to it
-    being republished here". A private import republishes nothing.
-    """
+    """Add a public metadata listing or an owner-readable private copy."""
     if private:
         if viewer is None:
             raise HTTPException(401, "Sign in to import a story to your own library.")
@@ -532,6 +605,7 @@ async def _import_url_impl(url: str, private: bool, db: Session,
             "This is a metadata-only entry with no source page. "
             "Use the AO3 search link on the story to find the work itself.",
         )
+    url = _canonical_story_url(url)
 
     # Check exact URL match first
     existing = db.query(Story).filter(Story.url == url).first()
@@ -550,6 +624,8 @@ async def _import_url_impl(url: str, private: bool, db: Session,
                     .filter(Story.site == SiteEnum(source_key[0]),
                             Story.site_id == source_key[1])
                     .first())
+    if not private:
+        return await _add_shared_listing(url, existing, db, progress_callback)
     if existing and existing.is_hosted:
         ch_count = db.query(Chapter).filter(Chapter.story_id == existing.id).count()
         if private:
@@ -630,15 +706,7 @@ async def _import_url_impl(url: str, private: bool, db: Session,
                 "Try again in a few minutes.",
             )
 
-    # Honour the author's opt-out: a public import republishes the work under
-    # this site's name, so a summary that explicitly refuses external reposting
-    # must refuse it here. A private import republishes nothing (the reader
-    # keeps a personal copy only they can read), so it is left alone.
-    # Routed through decide_hosting so a verified author statement can override
-    # the heuristic in either direction — an author who has proved control of
-    # their account and said "yes" is no longer blocked by a regex reading of
-    # their own summary, and one who said "no" is blocked whatever it says.
-    # Private imports are exempt exactly as before.
+    # A personal copy is readable only with the owner's user_hosted grant.
     allowed, refusal = author_permission.decide_hosting(
         db, site=("ao3" if "archiveofourown.org" in url else "ffnet"),
         author=parsed.get("author") or "",
@@ -647,14 +715,12 @@ async def _import_url_impl(url: str, private: bool, db: Session,
     if not allowed:
         raise HTTPException(403, refusal)
 
-    # If story already exists in DB (just metadata, not hosted), upgrade it
+    # If a listing already exists, attach an owner-readable copy to its row.
     if existing:
-        # A private import must never flip a story onto the public shelf: that
-        # would publish it for everybody on one reader's action.
-        if not private:
-            existing.is_hosted = True
-            existing.private_only = False
-        existing.summary = existing.summary or parsed["summary"]
+        # An owner's private import must not enrich public search metadata
+        # from that copy. Only public source metadata may change a listing.
+        if existing.private_only:
+            existing.summary = existing.summary or parsed["summary"]
         story = existing
         # Clear old chapters if any
         db.query(Chapter).filter(Chapter.story_id == story.id).delete()
@@ -686,13 +752,12 @@ async def _import_url_impl(url: str, private: bool, db: Session,
             fandoms=[], characters=[], relationships=[],
             # Private-only rows are storage records, not index entries. Do not
             # seed the public facet vocabulary with their import marker.
-            tags=[] if private else ["imported"],
+            tags=[],
             warnings=[], categories=[], genres=[],
-            # A private import is not on the public shelf. The row and its
-            # chapters exist in the shared tables so dedup and cross-post
-            # matching still see them; only the grant below opens the text.
-            is_hosted=not private,
-            private_only=bool(private),
+            # This row is storage for an owner-readable copy, never a public
+            # search listing or a candidate for cross-post merging.
+            is_hosted=False,
+            private_only=True,
             published_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
@@ -724,8 +789,7 @@ async def import_url_job(url: str = Form(...), private: bool = Form(True),
     """Start an import without holding the browser/proxy request open."""
     if viewer is None:
         raise HTTPException(401, "Sign in to save a story to your library.")
-    if not _story_key_from_url(url):
-        raise HTTPException(400, "Use an AO3 or FanFiction.net story URL.")
+    url = _canonical_story_url(url)
     if not private:
         _require_role(viewer, db, ROLE_ADMIN)
 
@@ -742,7 +806,8 @@ async def import_url_job(url: str = Form(...), private: bool = Form(True),
                 update(progress_db, job_id, progress=message,
                        updated_at=time.time())
         try:
-            _progress("Preparing your library copy…")
+            _progress("Preparing your private copy…" if private
+                      else "Preparing the shared index import…")
             with db_session() as work_db:
                 user = work_db.query(User).filter(User.id == user_id).first()
                 if user is None:
@@ -751,7 +816,9 @@ async def import_url_job(url: str = Form(...), private: bool = Form(True),
                     url=url, private=private, db=work_db, viewer=user,
                     progress_callback=_progress)
             with db_session() as status_db:
-                update(status_db, job_id, status="done", progress="Saved to your library.",
+                update(status_db, job_id, status="done",
+                       progress="Saved to your library." if private
+                                else "Added to the shared index.",
                        result=result, finished_at=time.time())
         except HTTPException as exc:
             with db_session() as status_db:
@@ -877,9 +944,10 @@ def list_mine(limit: int = 100, offset: int = 0,
     """Stories this reader imported privately — theirs alone, newest first.
 
     The counterpart to /hosted. /hosted is the public shelf; this is the shelf
-    behind your own door, and the two never mix: a row here has is_hosted=false,
-    so it is invisible to search and unreadable by anyone else including admins
-    (see may_read_text in stories.py, which checks ownership rather than role).
+    behind your own door. Its chapters are unreadable by anyone else, including
+    admins. A reader may also import a private copy of an already indexed
+    metadata listing; that listing stays searchable but its chapters stay gated
+    by the owner's grant (see may_read_text in stories.py).
 
     Unauthenticated gets an empty shelf rather than a 401. The Library page
     renders this tab for everyone, and a signed-out visitor should see "nothing
@@ -1193,19 +1261,11 @@ async def discover_ffnet(
     if not auto_import:
         return {"ok": True, "found": len(urls), "urls": urls, "imported": 0}
 
-    # Auto-import each — slow because FicHub is serial-only
+    # Add source listings sequentially; never download an EPUB for the index.
     imported, failed = 0, 0
     for u in urls:
         try:
-            meta = await fetch_from_fichub(u["url"])
-            epub_url = meta.get("epub_url") or meta.get("urls", {}).get("epub")
-            if not epub_url:
-                failed += 1
-                continue
-            epub_bytes = await fetch_epub_bytes(epub_url)
-            _ingest_epub_from_url(db, u["url"], epub_bytes, SiteEnum.ffnet,
-                                  provenance=["imported", "via_wayback"])
-            db.commit()
+            await _add_shared_listing(_canonical_story_url(u["url"]), None, db)
             imported += 1
         except Exception as e:
             db.rollback()
@@ -1213,47 +1273,6 @@ async def discover_ffnet(
             failed += 1
 
     return {"ok": True, "found": len(urls), "urls": urls, "imported": imported, "failed": failed}
-
-
-def _ingest_epub_from_url(db: Session, url: str, epub_bytes: bytes, site: SiteEnum,
-                          provenance: list[str] | None = None) -> dict:
-    """Helper: parse epub bytes and persist as a hosted story for a given URL.
-    `provenance` controls the marker tags on a newly created Story row
-    (e.g. ["imported", "via_dlp"] vs ["imported", "via_wayback"]).
-    """
-    if provenance is None:
-        provenance = ["imported"]
-    parsed = parse_epub(epub_bytes)
-    existing = db.query(Story).filter(Story.url == url).first()
-    if existing:
-        existing.is_hosted = True
-        db.query(Chapter).filter(Chapter.story_id == existing.id).delete()
-        story = existing
-    else:
-        # Same as above: prefer the archive's id so the row can be matched.
-        key = _story_key_from_url(url)
-        site_id = key[1] if key else f"import_{url.rstrip('/').split('/')[-1]}"
-        story = Story(
-            id=uuid.uuid4(), site=site, site_id=site_id, url=url,
-            title=parsed["title"] or "Imported", author=parsed["author"] or "Unknown",
-            summary=parsed["summary"], language=parsed["language"],
-            rating=RatingEnum.not_rated, status=StatusEnum.complete,
-            word_count=parsed["word_count"], chapter_count=len(parsed["chapters"]),
-            chapter_count_total=len(parsed["chapters"]),
-            fandoms=[], characters=[], relationships=[],
-            tags=list(provenance),
-            warnings=[], categories=[], genres=[],
-            is_hosted=True,
-            published_at=datetime.utcnow(), updated_at=datetime.utcnow(),
-        )
-        db.add(story)
-    db.flush()
-    for ch in parsed["chapters"]:
-        db.add(Chapter(
-            story_id=story.id, number=ch["number"], title=ch["title"],
-            content=ch["content"], word_count=ch["word_count"],
-        ))
-    return {"id": str(story.id), "title": story.title, "chapters": len(parsed["chapters"])}
 
 
 # ── DLP (DarkLordPotter) library discovery ───────────────────────────────────
@@ -1301,8 +1320,8 @@ async def discover_dlp(
 ):
     """
     Scrape the DLP library list. Returns parsed entries with FFN/AO3/etc URLs.
-    If auto_import=true, also imports each entry's preferred external URL via FicHub
-    and merges the DLP-curated tags onto the resulting Story row.
+    If auto_import=true, adds metadata listings for external URLs and applies
+    the DLP-curated tags to those listings.
     """
     from live_fetch.dlp_scraper import fetch_dlp_library
 
@@ -1325,7 +1344,7 @@ async def discover_dlp(
         if not cand:
             continue
         hit = _find_indexed_story(db, cand)
-        if hit is not None:
+        if hit is not None and not hit.private_only:
             before = set(hit.tags or [])
             _merge_dlp_tags(hit, e.get("dlp_tags") or [])
             _record_cross_posts(hit, cand)
@@ -1373,24 +1392,18 @@ async def discover_dlp(
                     ).first()
                     if existing: break
 
-            if existing and existing.is_hosted:
-                # Already imported under some URL — merge DLP tags and record any
-                # cross-posts we hadn't seen before, but don't re-fetch the EPUB.
+            if existing and existing.private_only:
+                skipped += 1
+                continue
+            if existing:
                 _merge_dlp_tags(existing, e["dlp_tags"])
                 _record_cross_posts(existing, candidates)
                 db.commit()
                 skipped += 1
                 continue
 
-            meta = await fetch_from_fichub(chosen_url)
-            epub_url = meta.get("epub_url") or meta.get("urls", {}).get("epub")
-            if not epub_url:
-                failed += 1; continue
-            epub_bytes = await fetch_epub_bytes(epub_url)
-
-            site = SiteEnum.ao3 if "archiveofourown.org" in chosen_url else SiteEnum.ffnet
-            result = _ingest_epub_from_url(db, chosen_url, epub_bytes, site,
-                                           provenance=["imported", "via_dlp"])
+            result = await _add_shared_listing(
+                _canonical_story_url(chosen_url), None, db)
 
             # Merge DLP tags AND record cross-posts onto the newly imported story
             story = db.query(Story).get(uuid.UUID(result["id"]))

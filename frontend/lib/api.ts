@@ -21,7 +21,7 @@ import { loadMutes, withMutes } from "./mutelist"
 
 export async function searchStories(
   params: SearchParams,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; fetchPoll?: boolean },
 ): Promise<SearchResponse> {
   const qs = new URLSearchParams()
 
@@ -51,7 +51,12 @@ export async function searchStories(
   opts?.signal?.addEventListener("abort", relay)
 
   try {
-    const res = await fetch(`${API_BASE}/api/search?${qs.toString()}`, { signal: ctl.signal })
+    const res = await fetch(`${API_BASE}/api/search?${qs.toString()}`, {
+      signal: ctl.signal,
+      // A pasted AO3 link can take several polls to enter the index. Those
+      // repeat requests are progress checks, not new reader searches.
+      headers: opts?.fetchPoll ? { "X-FicAtlas-Fetch-Poll": "1" } : undefined,
+    })
 
     if (!res.ok) {
       const body = await res.text()
