@@ -3,7 +3,15 @@
 FF.net has even less metadata than AO3 — no tags, no relationships field,
 only genres, characters (limited), category, and basic stats.
 We map what's available and clearly mark gaps.
+
+The crawler now covers the top fandoms by FF.net work count, not just Harry
+Potter. Category URLs are derived from the fandom hub data and known FF.net
+category structure (book/, anime/, tv/, game/, movie/, cartoon/, comic/,
+play/, misc/). Each story's fandom is extracted from the listing page, so
+cross-category contamination is not a problem — a Naruto story found under
+/anime/Naruto/ will still be tagged with the correct fandom.
 """
+import os
 import re
 from datetime import datetime
 from typing import Optional
@@ -20,6 +28,44 @@ FFNET_RATING_MAP = {
     "M":  RatingEnum.mature,
 }
 
+# Top fandoms by FF.net work count, mapped to their FF.net category URLs.
+# Derived from fandom_hubs.site_counts + known FF.net category structure.
+# Format: (category_url, fandom_name_for_logging)
+# The fandom name is for logging only; the actual fandom is extracted per-story.
+FFNET_CATEGORY_URLS = [
+    ("/book/Harry-Potter/", "Harry Potter"),
+    ("/anime/Naruto/", "Naruto"),
+    ("/book/Twilight/", "Twilight"),
+    ("/anime/Hetalia-Axis-Powers/", "Hetalia"),
+    ("/anime/Inuyasha/", "Inuyasha"),
+    ("/tv/Glee/", "Glee"),
+    ("/tv/Supernatural/", "Supernatural"),
+    ("/anime/Bleach/", "Bleach"),
+    ("/anime/Pokemon/", "Pokemon"),
+    ("/game/Kingdom-Hearts/", "Kingdom Hearts"),
+    ("/book/Percy-Jackson-and-the-Olympians/", "Percy Jackson"),
+    ("/tv/Doctor-Who/", "Doctor Who"),
+    ("/anime/Yu-Gi-Oh/", "Yu-Gi-Oh"),
+    ("/tv/Sherlock/", "Sherlock"),
+    ("/book/Lord-of-the-Rings/", "Lord of the Rings"),
+    ("/anime/Fullmetal-Alchemist/", "Fullmetal Alchemist"),
+    ("/anime/Death-Note/", "Death Note"),
+    ("/anime/One-Piece/", "One Piece"),
+    ("/anime/Fairy-Tail/", "Fairy Tail"),
+    ("/anime/Attack-on-Titan/", "Attack on Titan"),
+    ("/anime/My-Hero-Academia/", "My Hero Academia"),
+    ("/anime/Demon-Slayer/", "Demon Slayer"),
+    ("/anime/Jujutsu-Kaisen/", "Jujutsu Kaisen"),
+    ("/anime/Spy-x-Family/", "Spy x Family"),
+    ("/anime/Chainsaw-Man/", "Chainsaw Man"),
+]
+
+# Allow override via environment variable (comma-separated category URLs)
+_env_urls = os.getenv("FFNET_CATEGORY_URLS")
+if _env_urls:
+    FFNET_CATEGORY_URLS = [(u.strip(), u.strip().split("/")[-2].replace("-", " "))
+                           for u in _env_urls.split(",") if u.strip()]
+
 
 class FFNetCrawler(BaseCrawler):
     SITE = SiteEnum.ffnet
@@ -29,17 +75,13 @@ class FFNetCrawler(BaseCrawler):
     async def run(self, job_type: str = "incremental") -> dict:
         stats = {"found": 0, "new": 0, "updated": 0}
 
-        # FF.net browse URL sorted by update time
-        # Category: Harry Potter = /book/Harry-Potter/
-        # For MVP we crawl the general updated list
-        browse_urls = [
-            f"{self.BASE}/book/Harry-Potter/?srt=1",   # updated
-        ]
+        # FF.net browse URLs sorted by update time
+        max_pages = 5 if job_type == "incremental" else 100
 
-        for browse_url in browse_urls:
+        for category_url, category_name in FFNET_CATEGORY_URLS:
+            browse_url = f"{self.BASE}{category_url}?srt=1"
+            
             page = 1
-            max_pages = 5 if job_type == "incremental" else 100
-
             while page <= max_pages:
                 url = browse_url + f"&p={page}"
                 html = await self.fetch(url)

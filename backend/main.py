@@ -265,6 +265,9 @@ app.include_router(queue.router, prefix="/api/queue", tags=["queue"])
 # Channels playbook and weekly digest beside the worklist. See api/outreach.py.
 from api import outreach  # noqa: E402
 app.include_router(outreach.router, prefix="/api/outreach", tags=["outreach"])
+# Public feedback form — no auth required, writes to owner email + DB queue.
+from api import feedback  # noqa: E402
+app.include_router(feedback.router, prefix="/api", tags=["feedback"])
 
 # ── Degrade honestly when the database is saturated ─────────────────────────
 #

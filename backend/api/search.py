@@ -1831,6 +1831,129 @@ def _crossover_suggestion(db, terms: list, status, wc_min, wc_max, crossovers,
         query=_as_query(terms, status, wc_min, wc_max, None, site))]
 
 
+def _retry_less_greedy(db, raw_query: str, fandoms: str | None, relationships: str | None,
+                        characters: str | None, tags: str | None, warnings: str | None,
+                        categories: str | None, status: str | None, word_count_min: int | None,
+                        word_count_max: int | None, crossovers: str | None,
+                        sites: str | None, explicit: bool, include_underage: bool,
+                        author: str | None, language: str | None,
+                        request, response) -> "SearchResponse | None":
+    """
+    Retry a zero-result search with a less-greedy operator parse.
+
+    The parser is greedy: an unquoted operator value runs to the NEXT operator
+    or the end of the string. So `fandom:naruto time travel` becomes
+    fandom="naruto time travel" (no such fandom, 0 results). This retries with
+    the trailing words moved to free text: fandom="naruto" + q="time travel".
+
+    Only offered when:
+      * The original search returned exactly 0 results
+      * The query has at least one unquoted multi-word operator value
+      * The fallback parse would actually change something
+
+    Tries progressively: move 1 word, then 2 words, etc., stopping when the
+    shortened operator value has an exact vocabulary match (e.g. "Batman - All
+    Media Types" should NOT be split).
+    """
+    # Parse the raw query to find greedy operators
+    from query_parser import parse_query
+    pq = parse_query(raw_query)
+    
+    # Find tokens that are multi-word and unquoted (no quotes in raw)
+    greedy_tokens = []
+    for token in pq.tokens:
+        raw_val = token["value"]
+        raw_token = token["raw"]
+        if " " in raw_val and not ('"' in raw_token or "'" in raw_token):
+            words = raw_val.split()
+            if len(words) > 1:
+                greedy_tokens.append((token["key"], words))
+    
+    if not greedy_tokens:
+        return None
+    
+    # Only retry for the LAST operator (the one that ran to end of string)
+    last_token_key, last_words = greedy_tokens[-1]
+    if len(last_words) < 2:
+        return None
+    
+    # Try moving 1 word, then 2 words, etc. Stop when shortened value has
+    # an exact vocabulary match (don't split "Batman - All Media Types").
+    from api.search import _facet_exact
+    
+    for n_move in range(1, len(last_words)):
+        # Check if the shortened value has an exact match
+        shortened = " ".join(last_words[:len(last_words) - n_move])
+        if _facet_exact(db, last_token_key, shortened):
+            # This is a known multi-word fandom/ship/etc. - don't split further
+            break
+        
+        # Build the fallback
+        new_fandoms = fandoms
+        new_relationships = relationships
+        new_characters = characters
+        new_tags = tags
+        new_warnings = warnings
+        new_categories = categories
+        new_q = pq.clean_text
+        
+        new_val = shortened
+        moved = " ".join(last_words[len(last_words) - n_move:])
+        
+        # Update the appropriate parameter
+        if last_token_key == "fandoms":
+            new_fandoms = new_val
+        elif last_token_key == "relationships":
+            new_relationships = new_val
+        elif last_token_key == "characters":
+            new_characters = new_val
+        elif last_token_key == "tags":
+            new_tags = new_val
+        elif last_token_key == "warnings":
+            new_warnings = new_val
+        elif last_token_key == "categories":
+            new_categories = new_val
+        else:
+            continue  # Don't retry for other operator types
+        
+        # Add moved words to free text
+        if new_q:
+            new_q = f"{new_q} {moved}"
+        else:
+            new_q = moved
+        
+        # Re-run search with adjusted parameters
+        import inspect
+        from fastapi import Response as FastAPIResponse
+        sig = inspect.signature(search)
+        kw = {}
+        for name, p in sig.parameters.items():
+            if name in ("db", "viewer", "request", "response"):
+                continue
+            d = p.default
+            kw[name] = getattr(d, "default", d)
+        
+        kw.update({
+            "q": new_q,
+            "fandoms": new_fandoms,
+            "relationships": new_relationships,
+            "characters": new_characters,
+            "tags": new_tags,
+            "warnings": new_warnings,
+            "categories": new_categories,
+        })
+        
+        try:
+            result = search(db=db, response=FastAPIResponse(), request=request, viewer=None, **kw)
+            if result and result.total > 0:
+                return result
+        except Exception:
+            log.debug("greedy fallback retry failed", exc_info=True)
+            continue
+    
+    return None
+
+
 def _relax_suggestions(db, terms: list, status, wc_min, wc_max, crossovers,
                        site, base: int) -> list[Suggestion]:
     """Which ONE of the reader's own filters is costing them the results.
@@ -3390,6 +3513,8 @@ def search(          # NOT async — see below
         if not relationships and parsed_params.get("relationships"): relationships = parsed_params["relationships"]
         if not characters    and parsed_params.get("characters"):    characters    = parsed_params["characters"]
         if not tags          and parsed_params.get("tags"):          tags          = parsed_params["tags"]
+        if not warnings      and parsed_params.get("warnings"):      warnings      = parsed_params["warnings"]
+        if not categories    and parsed_params.get("categories"):    categories    = parsed_params["categories"]
         if not ratings       and parsed_params.get("ratings"):       ratings       = parsed_params["ratings"]
         if not status        and parsed_params.get("status"):        status        = parsed_params["status"]
         # `series:count` from the bar. OR, not "explicit wins": it only ever
@@ -3410,6 +3535,8 @@ def search(          # NOT async — see below
         if not exclude_relationships and parsed_params.get("exclude_relationships"): exclude_relationships = parsed_params["exclude_relationships"]
         if not exclude_characters    and parsed_params.get("exclude_characters"):    exclude_characters    = parsed_params["exclude_characters"]
         if not exclude_tags          and parsed_params.get("exclude_tags"):          exclude_tags          = parsed_params["exclude_tags"]
+        if not exclude_warnings    and parsed_params.get("exclude_warnings"):    exclude_warnings    = parsed_params["exclude_warnings"]
+        if not exclude_categories  and parsed_params.get("exclude_categories"):  exclude_categories  = parsed_params["exclude_categories"]
         # series:true / series:false in the search bar. Explicit ?in_series=
         # still wins, matching every other operator.
         if in_series is None and parsed_params.get("in_series") is not None:
@@ -3548,7 +3675,29 @@ def search(          # NOT async — see below
                 cast(list(_UNDERAGE_TAGS), PG_ARRAY(Text))))
             filters.append(_p_underage_t)
 
-    if not explicit and ADULT_FILTER_ON:
+    # A PASTED WORK LINK IS A LOOKUP, NOT A BROWSE, and the adult tier is a
+    # browsing control: it exists so a shared search URL and a stranger's
+    # results page do not surface Explicit works. None of that applies to a
+    # reader who has typed the exact URL of one work they already know.
+    #
+    # Measured 2026-10-23: a reader pasting
+    # `https://archiveofourown.org/works/77535806` was told the index returned
+    # nothing, while the row sat in the table with `gate_adult` set — the link
+    # resolved correctly, `work_lookup.resolve()` returned the id, and the
+    # filter list then removed the one work it named. Four independent
+    # predicates did this: this block, the E-rating predicate below, the
+    # ratings the search bar sends automatically with the toggle off, and the
+    # broken-title hide — the last of which ALREADY exempts `url_work` for
+    # exactly this reason (see `include_broken_titles`), so the principle was
+    # established and this was the same bug left unfixed in three places.
+    #
+    # Narrow on purpose. The UNDERAGE tier above still applies: that is a
+    # policy line about sexualised minors, not a taste control, and a pasted
+    # link is not a reason to cross it. A deliberate filter the reader chose —
+    # `cat:M/M` on the same line, a sidebar chip — still applies too. What is
+    # removed is only the automatic exclusion of a tier the reader never
+    # switched off for this request.
+    if not explicit and ADULT_FILTER_ON and not url_work:
         _p_adult_col = Story.gate_adult.is_(False)
         filters.append(_p_adult_col)
         if _ADULT_WARNINGS:
@@ -3572,8 +3721,12 @@ def search(          # NOT async — see below
     _adult_drop = {id(p) for p in (_p_adult_col, _p_adult_w, _p_adult_t)
                    if p is not None}
     # And what it means for a work to BE adult — the union of the three.
+    # Guarded by the same `not url_work` as the predicates above: with the
+    # tier off for a pasted link, no predicate was appended, so nothing was
+    # hidden, and a union here would count works the results already contain
+    # as "hidden" — a notice inventing its own evidence.
     _is_adult = []
-    if not explicit and ADULT_FILTER_ON:
+    if not explicit and ADULT_FILTER_ON and not url_work:
         _is_adult.append(Story.gate_adult.is_(True))
         if _ADULT_WARNINGS:
             _is_adult.append(Story.warnings.op("&&")(
@@ -3741,9 +3894,13 @@ def search(          # NOT async — see below
     # Kept as a named object, not just appended, so the count of what it hid can
     # be rebuilt later from the same filter list minus this one predicate. See
     # `hidden_explicit` below.
+    # Not for a pasted link: the same exemption as the adult tier above, and
+    # for the same measured reason — a work rated Explicit is the most common
+    # kind of work a reader pastes the URL of, and this predicate would hide it
+    # as reliably as `gate_adult` does.
     _explicit_pred = None
     ship_canonical = None      # set below if the text resolved to a pairing
-    if not explicit:
+    if not explicit and not url_work:
         # Hide only stories KNOWN to be explicit. `rating != 'E'` is NULL (not TRUE)
         # for NULL-rating rows in SQL, which silently dropped the entire NULL-rating
         # bulk import (HF FFN dump etc.) from every default search. Permit NULL.
@@ -4291,8 +4448,6 @@ def search(          # NOT async — see below
         r_vals = [r.strip().upper() for r in ratings.split(",")]
         valid  = [RatingEnum(r) for r in r_vals if r in RatingEnum._value2member_map_]
         if valid:
-            _ratings_pred = _or_unknown(Story.rating.in_(valid), Story.rating.is_(None))
-            filters.append(_ratings_pred)
             # Only the synthetic "everything except explicit" set is treated as
             # the toggle restated. A reader who deliberately ticked Teen alone
             # has asked for Teen, and turning the explicit toggle on would not
@@ -4300,6 +4455,15 @@ def search(          # NOT async — see below
             # is the truth.
             _ratings_is_all_but_explicit = (
                 set(valid) == set(RatingEnum) - {RatingEnum.explicit})
+            # The search bar sends that set on EVERY search with the explicit
+            # toggle off, so it arrives alongside a pasted link as a restatement
+            # of a setting the reader never changed — not a filter they chose.
+            # Skipping it is the exemption the adult tier above already has; the
+            # distinction that matters is synthetic versus deliberate, which is
+            # what `_ratings_is_all_but_explicit` was already computed to detect.
+            if not (url_work and _ratings_is_all_but_explicit):
+                _ratings_pred = _or_unknown(Story.rating.in_(valid), Story.rating.is_(None))
+                filters.append(_ratings_pred)
 
     if exclude_ratings:
         r_vals = [r.strip().upper() for r in exclude_ratings.split(",")]
@@ -5983,6 +6147,39 @@ def search(          # NOT async — see below
             # A suggestion is a nicety on a page that already says "no
             # results". It must never be the reason the response fails.
             log.debug("relax/broaden suggestions failed", exc_info=True)
+
+    # ── Greedy-operator fallback: "fandom:naruto time travel" -> 0 results,
+    #    retry as fandom="naruto" + q="time travel".
+    #
+    # The parser is greedy: an unquoted operator value runs to the NEXT operator
+    # or the end of the string. This is right for multi-word fandoms like
+    # "Batman - All Media Types" but wrong when a reader types "fandom:naruto
+    # time travel" meaning fandom=naruto AND free text "time travel". Measured
+    # 2026-10-23: `fandom:naruto time travel` returned 4,023 works for the
+    # non-existent fandom "naruto time travel", while fandom:naruto alone
+    # returns 463k. The fallback only triggers on ZERO results (not thin
+    # results), and only when the last operator's unquoted value has >1 word.
+    _greedy_retry = None
+    if total == 0 and interpreted is None and not _early_rescue:
+        _greedy_retry = _retry_less_greedy(
+            db, raw_query, fandoms, relationships, characters, tags, warnings,
+            categories, status, word_count_min, word_count_max, crossovers,
+            sites, explicit, include_underage, author, language, request, response
+        )
+    if _greedy_retry and _greedy_retry.total > 0:
+        # The fallback succeeded: use its results and append a suggestion
+        # so the reader knows what happened.
+        _greedy_suggestion = Suggestion(
+            kind="greedy_fallback", value=_greedy_retry.results[0].title if _greedy_retry.results else "retry",
+            count=_greedy_retry.total, works=_greedy_retry.total,
+            reason="greedy_fallback", drops="",
+            query=_greedy_retry.parsed_tokens[0]["raw"] if _greedy_retry.parsed_tokens else raw_query
+        )
+        _suggestions.append(_greedy_suggestion)
+        total = _greedy_retry.total
+        merged = _greedy_retry.results
+        site_counts = _greedy_retry.site_counts
+        parsed_tokens = _greedy_retry.parsed_tokens
 
     _response = SearchResponse(
         total=total,                          # stable across pages — indexed count only

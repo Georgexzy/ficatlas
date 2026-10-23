@@ -56,7 +56,8 @@ export default function WhatYouCanDo({ shown }: { shown: boolean }) {
     <aside className="tips" role="note" aria-label="What an account adds">
       <div className="tips__body">
         <p className="tips__lead">
-          You can use all of this without an account. With one, it follows you:
+          No account needed to search. Sign up and your follows, saved searches
+          and reading spot move with you:
         </p>
         <ul className="tips__list">
           <li>

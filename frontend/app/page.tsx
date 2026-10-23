@@ -1159,7 +1159,7 @@ function LandingIntro() {
           reader navigating by headings found nothing on the site's front door,
           and search engines had no anchor either. The class carries the styling,
           so nothing moves. */}
-      <h1 className="empty__title">Find fic across three archives at once</h1>
+      <h1 className="empty__title">Search AO3, FanFiction.net and FictionAlley at once</h1>
       {/* Accurate about what the live fetch does. It runs AFTER the response is
           sent — indexed results come back in milliseconds and the fresh works
           land in the index for next time — so "pulled in as you search" was
@@ -1169,7 +1169,7 @@ function LandingIntro() {
           19.7M on the same screen — and it only ever grows, so any literal here
           starts going stale the moment the workers add a row. */}
       <p className="empty__sub">
-        Search <IndexTotal /> stories from AO3, FanFiction.net and FictionAlley together.
+        <IndexTotal /> stories indexed. One search bar, three archives.
       </p>
       {/* Says where reading happens, on the screen where someone decides whether
           to trust the site. FicAtlas is a way of finding work, not a place that
@@ -1179,8 +1179,8 @@ function LandingIntro() {
           subscriptions are. Saying so up front is both the honest framing and
           the reassuring one. */}
       <p className="empty__sub empty__sub--secondary">
-        Most results open on the archive where they were posted, so authors keep
-        their readers, kudos and comments there.
+        Results link back to the original archive — authors keep their readers,
+        kudos and comments right where they posted.
       </p>
       {/* The three archives as marks and counts, immediately under the sentence
           that names them. See ArchiveBadges. */}
@@ -1294,8 +1294,11 @@ function LandingPromises() {
         <li>No adverts, ever</li>
         <li><a href="/privacy">No third-party analytics</a></li>
         <li>No AI trained on fic — <a href="/about#ai">what that means</a></li>
-        <li>Non-commercial &amp; <a href="https://github.com/Georgexzy/ficatlas"
+        <li>Non-commercial & <a href="https://github.com/Georgexzy/ficatlas"
               target="_blank" rel="noopener noreferrer">open source</a></li>
+        <li className="empty__promises__suggest">
+          <a href="/feedback">Have a suggestion?</a>
+        </li>
       </ul>
     </>
   )
@@ -1439,7 +1442,8 @@ function LandingFeatureHighlights() {
     <aside className="tips" role="note" aria-label="What an account adds">
       <div className="tips__body">
         <p className="tips__lead">
-          You can use all of this without an account. With one, it follows you:
+          No account needed to search. Sign up and your follows, saved searches
+          and reading spot move with you:
         </p>
         <ul className="tips__list">
           <li>

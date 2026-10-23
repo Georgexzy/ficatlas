@@ -876,6 +876,20 @@ CREATE TABLE IF NOT EXISTS takedowns (
 );
 CREATE INDEX IF NOT EXISTS ix_takedowns_state ON takedowns (state, created_at DESC);
 
+-- Reader feedback queue — no auth required, writes to owner email + DB.
+-- Kept separate from takedowns/permissions so a suggestion never clutters
+-- the author workflows, but still reaches the same inbox.
+CREATE TABLE IF NOT EXISTS feedback (
+    id         BIGSERIAL PRIMARY KEY,
+    text       TEXT NOT NULL,
+    email      TEXT,                 -- optional, for follow-up
+    page       TEXT,                 -- where they were
+    user_agent TEXT,
+    ip         INET,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_feedback_created ON feedback (created_at DESC);
+
 -- Strike record for withdraw_deleted.py. A single 404 during an AO3 deploy must
 -- not withdraw thousands of stories, so a work has to be confirmed gone twice on
 -- separate passes before its text is hidden.
