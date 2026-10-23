@@ -2447,6 +2447,39 @@ async def _follow_email_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _scrape_watch_loop() -> None:
+    """Mail the owner when the swarm detector fires. See scrape_watch.py.
+
+    The detectors in api/traffic.py already classified the 2026-10-20 ->
+    10-23 scrape; what that incident showed is that nobody was reading them
+    for three days, because every channel here is a page someone has to
+    remember to open. This one is not.
+    """
+    import scrape_watch
+    from db.session import db_session
+
+    interval = _num("SCRAPE_WATCH_SEC", 900)
+    await asyncio.sleep(_num("SCRAPE_WATCH_DELAY_SEC", 180))
+    while True:
+        try:
+            def _pass():
+                with db_session() as db:
+                    return scrape_watch.run(db)
+
+            outcome = await asyncio.to_thread(_pass)
+            if outcome != "quiet":
+                log.info("scrape watch: %s", outcome)
+        except Exception as e:
+            # Swallowed like every other loop here, and for the same stated
+            # reason as the digest loop above: an exception raised inside an
+            # except block is not caught by it, so a handler that forgot its
+            # own import would kill the coroutine and silence the alerting
+            # itself — the mechanism that is supposed to notice outages must
+            # not be the thing an outage takes down.
+            log.warning("scrape watch failed: %s: %s", type(e).__name__, e)
+        await asyncio.sleep(interval)
+
+
 async def _engagement_refresh_loop() -> None:
     """Keep author_hubs.engagement current as the index grows.
 
@@ -2737,6 +2770,13 @@ async def main() -> None:
     if _flag("FOLLOW_EMAIL", "true"):
         tasks.append(asyncio.create_task(_supervised("follow_email_loop", _follow_email_loop)))
         log.info("follow update mail enabled (opt-in readers only)")
+
+    # The swarm alert. Named here rather than folded into the traffic panel's
+    # job because it is the only loop whose purpose is to interrupt somebody:
+    # everything else in this file either does work or records it.
+    if _flag("SCRAPE_WATCH", "true"):
+        tasks.append(asyncio.create_task(_supervised("scrape_watch_loop", _scrape_watch_loop)))
+        log.info("swarm alert mail enabled (owner, on the scraper detector firing)")
 
     # Cloudflare analytics snapshot — daily, stores in app_settings for admin panel
     if _flag("CF_ANALYTICS", "true"):

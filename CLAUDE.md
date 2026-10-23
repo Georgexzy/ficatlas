@@ -3588,3 +3588,54 @@ visitor → Cloudflare (TLS) → cloudflared → nginx :8080 → web-{blue,green
   works do get summaries. FF.net is at 0% missing. Anything that reasons about
   search relevance should know that `fic_doc` is missing summary text for most
   AO3 works, and that the only way to fill it is re-crawling.
+- **A crawler that runs our own SPA passes every layer we have, and the one
+  layer that should have caught it was exempted by a header it can write.**
+  2026-10-20 04:00 → 10-23 11:50 UTC: **45,664 non-bot searches, 45,551 of them
+  distinct, of which 43,397 were `author:` lookups against 43,344 distinct pen
+  names**, plus **3,012 distinct story pages on 10-21 alone** (baseline 50–90
+  story reads a day from 10–18 people). 61,003 new "visitors", peaking at 121
+  in one minute (10-22 23:29) and running 96–1,926 per HOUR — hours the
+  per-minute `_SWARM` threshold of 25 never sees, which is why the last
+  18,486 of them are counted as a slow surge rather than a swarm.
+  - **What it actually is:** a headless browser executing our frontend. Sampled
+    in its last hour: 28,203 origin requests from 1,351 distinct addresses,
+    **27,422 of them one identical UA string** (normal hour: 31% top UA), 7,860
+    asset fetches (chunks, `sw.js`, favicon) and — decisively — **our own
+    `POST /api/traffic/hit` beacon firing**, so the page really rendered. It
+    walks `/login`, `/settings`, `/library`, `/permissions`, `/signup` beside
+    the author searches.
+  - **Every named defence passes it by construction:** `$forged_chrome` needs a
+    Chrome UA *without* `sec-ch-ua`/`Sec-Fetch-Mode` — it sends both; `$js_gate`
+    only matches `/?…`, and its referrer is our own domain anyway; `limit_req`
+    is 1r/s **per IP** against 1,351 addresses (~0.5 r/s aggregate); the UA
+    regex sees a real Chrome.
+  - **The `/story/` managed challenge never fired, and the reason is provable
+    from the log.** The rule ends `and not http.referer contains "ficatlas.com"`
+    — added so a reader navigating within the site is never challenged — and
+    every one of its requests carried `Referer: https://ficatlas.com/?author=…`,
+    so the whole expression was false before the path was considered. **A
+    referrer is the one header a client writes for itself.** Tightening it needs
+    `Sec-Fetch-Site: same-origin` in the same clause (a browser sets that for
+    the clicker; a replay must forge it) — but `sec-fetch-site` is NOT in
+    `log_format`, so the discriminator is unmeasured. Add the field before
+    relying on it: `deploy/nginx.conf` appends fields at the END deliberately,
+    so it is one line, and it costs a container recreate (bind-mount note above).
+  - **The panel was NOT fooled, and that matters more than it looks.**
+    `traffic.summary(days=7)` reports the same rows in three named parts —
+    headline 724 searches / 1,532 views / busiest day 73 visitors, beside
+    `script_*` 43,212 and `unverified_*` 10,255 — so the accounting identity
+    holds and "have we improved" still has an answer. Detection is done; the
+    hole is on the serving side.
+  - **The per-minute threshold also missed an earlier scrape nobody noticed:**
+    10-16 ran **614 new unreferred visitors (20–49/hour)** and 09-30 had 88 in
+    one hour. Measured over 30 days, an ordinary hour has **1–8** (329 hours in
+    that band). So an HOUR-level gate at the same constant would have caught
+    Oct 16, Sep 30 and this one without ever coming near a real day — the
+    trade being that it hides a whole hour rather than one minute.
+  - **What it costs us rather than what it takes.** ~10,000 full Next renders an
+    hour at peak, on routes (`/settings`, `/login`, `/library`, `/permissions`)
+    that are `no-cache`, identical for every visitor, and that no crawler and
+    few readers need rendered at all. Making those edge-cacheable is the one
+    lever that helps regardless of who arrives; per-IP caps cannot work against
+    a rotating pool, and no free-plan WAF field separates a real browser session
+    from a scripted one.
